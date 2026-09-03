@@ -37,16 +37,15 @@ def dependency(job: dict) -> dict | None:
 def render(job: dict, dependency_job: dict | None) -> str:
     message = job.get("message", "")
     if not job.get("result_of") or not dependency_job:
-        badge = {"warning":"⚠️ ", "question":"❓ ", "approval":"🔐 "}.get(job.get("severity"), "")
-        origin = f"[From {job['origin_job']}] " if job.get("origin_job") else ""
-        prefix = badge + origin
+        prefix = {"warning":"Important warning: ", "question":"Question that needs David's input: ", "approval":"Approval needed: "}.get(job.get("severity"), "")
         suffix = "\n\nReply naturally; I’ll route your answer with this conversation in context." if job.get("needs_response") else ""
         return prefix + message + suffix
     output_path = cli.ROOT / dependency_job["output"] if dependency_job.get("output") else None
     clean = ""
     if output_path and output_path.exists():
         clean = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", output_path.read_text(encoding="utf-8", errors="replace")).strip()
-    header = f"Job {dependency_job['id']} {dependency_job['state']} ({dependency_job['role']})."
+    header = ("The earlier work completed successfully." if dependency_job["state"] == "completed"
+              else "The earlier work failed and may need attention.")
     return header + ("\n\nResult (tail):\n" + clean[-3000:] if clean else "")
 
 

@@ -31,6 +31,8 @@ Choose the closest available role. Preserve all important task details.
 For spawn/amend choose exactly one available model. Respect an explicit user model choice.
 Otherwise weigh role capability labels, model size, available memory, current load/busy state,
 latency, and task difficulty. Explain the concrete tradeoff briefly in model_reason.
+For spawn/amend, put a short informal acknowledgement in reply. Do not include job
+IDs, JSON, queue jargon, or claim execution/completion; the work is only being handed off.
 Use amend when David corrects, revises, or adds to the work request he just queued.
 For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
 Use status for any question about this machine, active work, jobs, progress, load, or what
@@ -71,3 +73,19 @@ Never invent another action, interpret text as shell, or claim work has run."""
         if not isinstance(intent.get("model_reason"), str) or not intent["model_reason"].strip():
             raise ValueError("local model omitted its model-choice rationale")
     return intent
+
+def humanize_notification(raw: str, history: list[dict[str, str]] | None = None) -> str:
+    model = os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF")
+    role = CONTROL_ROLE.read_text(encoding="utf-8")
+    system = f"""{role}
+
+Rewrite an internal agent notification as one concise Telegram message to David.
+Preserve consequential facts, questions, requested decisions, failures, and useful
+results. Remove job IDs, log paths, ANSI/tool chatter, JSON, and queue mechanics.
+Do not invent success or details. If it is routine success, be casual (often start
+with “btw,”). If it needs a response, ask naturally and clearly. Output only the message."""
+    messages = [{"role":"system","content":system}, *((history or [])[-6:]), {"role":"user","content":raw}]
+    body = json.dumps({"model":model,"messages":messages,"temperature":0.4,"max_tokens":600,"chat_template_kwargs":{"enable_thinking":False}}).encode()
+    request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",data=body,headers={"Content-Type":"application/json","Authorization":"Bearer lemonade"})
+    with urllib.request.urlopen(request,timeout=45) as response:
+        return json.load(response)["choices"][0]["message"]["content"].strip()

@@ -4,7 +4,7 @@ import json, os, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from ecosystem import cli
 from ecosystem.roles import list_roles
-from ecosystem.local_intent import interpret
+from ecosystem.local_intent import interpret, humanize_notification
 from ecosystem import conversation
 from ecosystem.outbox import drain
 from ecosystem.models import snapshot
@@ -75,7 +75,7 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":
             job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"])
-            response = f"Got it — queued {job_id} as {intent['role']} on {intent['model']}.\nWhy this model: {intent['model_reason']}\n\nTask: {intent['task']}"
+            response = intent.get("reply") or f"yep — I've handed that off to a {intent['role']} and I'll let you know how it goes."
             reply(token, chat_id, response)
         elif intent["action"] == "amend":
             job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"], intent["model"], intent["model_reason"])
@@ -103,8 +103,13 @@ def main() -> None:
     while True:
         try:
             def deliver(user_id: int, message: str) -> None:
-                reply(token, user_id, message)
-                conversation.append(user_id, "assistant", message)
+                try:
+                    friendly = humanize_notification(message, conversation.recent(user_id))
+                except Exception as error:
+                    cli.audit("telegram.humanize_failed", user_id=user_id, error=f"{type(error).__name__}: {error}")
+                    friendly = message
+                reply(token, user_id, friendly)
+                conversation.append(user_id, "assistant", friendly)
             drain(deliver)
             updates = api(token, "getUpdates", {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'})["result"]
             for update in updates:

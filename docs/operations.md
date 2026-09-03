@@ -103,6 +103,9 @@ outbox message with severity and an optional response requirement. Executor jobs
 receive their job ID through `AGENT_JOB_ID`, so messages are traceable. Delivered
 messages are appended to the private bot conversation, allowing David's natural
 reply to be interpreted with the originating question or warning in context.
+Before delivery, the pinned control model rewrites internal notifications into a
+concise informal message. Job IDs, raw JSON, log paths, tool chatter, and queue
+jargon remain in local records unless David explicitly asks for technical detail.
 
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available
