@@ -19,6 +19,8 @@ Updated: 2026-09-03 (Australia/Sydney)
   long-polling gateway with structured commands.
 - A serialized OpenCode executor using local Lemonade models, dedicated permissions,
   per-job output capture, timeouts, and durable completion/failure states.
+- Resource-aware per-job model selection with explicit overrides, recorded rationale,
+  and an immutable-at-enqueue inventory snapshot.
 
 ## Deliberately deferred
 

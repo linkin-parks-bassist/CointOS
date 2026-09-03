@@ -6,6 +6,7 @@ from ecosystem.roles import list_roles
 from ecosystem.local_intent import interpret
 from ecosystem import conversation
 from ecosystem.outbox import drain
+from ecosystem.models import snapshot
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -41,14 +42,14 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     else:
         reply(token, chat_id, "Got it — thinking locally…")
         history = conversation.recent(user_id)
-        intent = interpret(command, list_roles(), history)
+        intent = interpret(command, list_roles(), history, snapshot())
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":
-            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}")
-            response = f"Got it — queued {job_id} as {intent['role']}. The local executor will pick it up shortly.\n\nTask: {intent['task']}"
+            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"])
+            response = f"Got it — queued {job_id} as {intent['role']} on {intent['model']}.\nWhy this model: {intent['model_reason']}\n\nTask: {intent['task']}"
             reply(token, chat_id, response)
         elif intent["action"] == "amend":
-            job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"])
+            job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"], intent["model"], intent["model_reason"])
             if job_id:
                 response = f"Corrected {job_id}.\n\nUpdated task: {intent['task']}"
             else:

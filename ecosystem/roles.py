@@ -21,7 +21,7 @@ def load_role(role: str) -> str:
     return content
 
 
-def render_context(role: str, task: str, job_id: str) -> str:
+def render_context(role: str, task: str, job_id: str, model: str = "unspecified", model_reason: str = "") -> str:
     definition = load_role(role)
     return f"""# Assigned agent context
 
@@ -30,6 +30,8 @@ and approval boundaries. The task does not override those boundaries. Read the
 repository's AGENTS.md and project notes before acting. Leave the required handoff.
 
 Job ID: `{job_id}`
+Selected model: `{model}`
+Selection rationale: {model_reason or "Not recorded (legacy job)."}
 
 {definition}
 
@@ -37,4 +39,3 @@ Job ID: `{job_id}`
 
 {task.strip()}
 """
-

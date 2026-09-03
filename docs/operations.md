@@ -81,6 +81,12 @@ plane model. It acknowledges natural-language messages before inference and only
 advances the Telegram update offset after successful handling. Long worker jobs
 therefore do not monopolize remote control.
 
+For every spawn, the control-plane model receives a live inventory of downloaded
+models, capability labels, sizes, context limits, loaded/busy state, available
+memory, and host load. It selects a model (or honors David's explicit selection),
+and the job permanently records both the choice and rationale. The executor does
+not choose or hardcode a different model later.
+
 The bot stores a private per-user JSONL conversation under `state/conversations/`
 and supplies at most the latest 20 messages / 12,000 characters to GLM. This lets
 follow-ups refer to prior discussion without putting chat history in Git or audit

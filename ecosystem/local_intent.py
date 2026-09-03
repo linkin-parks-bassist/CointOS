@@ -10,14 +10,20 @@ import urllib.request
 ALLOWED_ACTIONS = {"spawn", "amend", "status", "roles", "pause", "chat"}
 
 
-def interpret(message: str, roles: list[str], history: list[dict[str, str]] | None = None) -> dict:
+def interpret(message: str, roles: list[str], history: list[dict[str, str]] | None = None, inventory: dict | None = None) -> dict:
     model = os.environ.get("AGENT_TELEGRAM_MODEL", "GLM-4.7-Flash-GGUF")
-    system = f"""You route messages for David's private local agent ecosystem.
+    inventory = inventory or {"memory_available_gb": 0, "load_average": [], "models": [{"id": model}]}
+    available_models = [item["id"] for item in inventory["models"]]
+    system = f"""You route messages and schedule models for David's private local agent ecosystem.
 Return exactly one JSON object and no markdown.
-Schema: {{"action":"spawn|amend|status|roles|pause|chat","role":"role or empty","task":"task or empty","reply":"brief reply or empty"}}
+Schema: {{"action":"spawn|amend|status|roles|pause|chat","role":"role or empty","task":"task or empty","model":"exact model ID or empty","model_reason":"brief reason or empty","reply":"brief reply or empty"}}
 Available roles: {', '.join(roles)}.
+Live resource/model inventory: {json.dumps(inventory, separators=(',', ':'))}
 Use spawn when David asks an agent to investigate, plan, build, fix, review, or otherwise do work.
 Choose the closest available role. Preserve all important task details.
+For spawn/amend choose exactly one available model. Respect an explicit user model choice.
+Otherwise weigh role capability labels, model size, available memory, current load/busy state,
+latency, and task difficulty. Explain the concrete tradeoff briefly in model_reason.
 Use amend when David corrects, revises, or adds to the work request he just queued.
 For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
 Use status/roles/pause for those requests. Use chat for greetings, questions about usage,
@@ -51,4 +57,8 @@ Never invent another action, interpret text as shell, or claim work has run."""
             raise ValueError("local model selected an unknown role")
         if not isinstance(intent.get("task"), str) or not intent["task"].strip():
             raise ValueError("local model returned an empty task")
+        if intent.get("model") not in available_models:
+            raise ValueError("local model selected an unavailable model")
+        if not isinstance(intent.get("model_reason"), str) or not intent["model_reason"].strip():
+            raise ValueError("local model omitted its model-choice rationale")
     return intent

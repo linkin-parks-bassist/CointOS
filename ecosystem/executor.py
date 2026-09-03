@@ -40,7 +40,8 @@ def execute_next(run=subprocess.run) -> bool:
             cli.audit("task.started", job_id=job["id"], role=job["role"], executor="opencode")
             env = os.environ.copy()
             env["OPENCODE_CONFIG"] = str(cli.ROOT / "config/executor-opencode.json")
-            model = env.get("AGENT_EXECUTOR_MODEL", "Lemonade/GLM-4.7-Flash-GGUF")
+            selected = job.get("model") or env.get("AGENT_EXECUTOR_MODEL", "GLM-4.7-Flash-GGUF")
+            model = selected if "/" in selected else f"Lemonade/{selected}"
             command = [str(Path.home() / ".local/bin/opencode"), "run", "--auto", "--model", model, "--dir", str(Path.home())]
             try:
                 with prompt_path.open("rb") as prompt, output_path.open("wb") as output:
