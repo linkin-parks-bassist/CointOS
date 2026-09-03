@@ -61,6 +61,16 @@ class IntakeTest(unittest.TestCase):
         self.assertIn("# Worker", prompt)
         self.assertIn("Inspect the widget", prompt)
 
+    def test_pending_task_can_be_amended(self):
+        roles = self.root / "roles"; roles.mkdir(exist_ok=True)
+        (roles / "worker.md").write_text("# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nRoot.\n## Handoff\nReport.\n")
+        job_id = cli.enqueue_task("worker", "make an agreement", source="telegram:42")
+        cli.prepare_next()
+        self.assertEqual(cli.amend_latest_task("telegram:42", "worker", "have an argument"), job_id)
+        job = json.loads((self.root / f"state/jobs/{job_id}.json").read_text())
+        self.assertEqual(job["task"], "have an argument")
+        self.assertEqual(job["state"], "queued")
+
 
 if __name__ == "__main__":
     unittest.main()

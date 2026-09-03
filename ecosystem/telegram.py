@@ -45,13 +45,20 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
             job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}")
             response = f"Got it — queued {job_id} as {intent['role']}. The local executor will pick it up shortly.\n\nTask: {intent['task']}"
             reply(token, chat_id, response)
+        elif intent["action"] == "amend":
+            job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"])
+            if job_id:
+                response = f"Corrected {job_id}.\n\nUpdated task: {intent['task']}"
+            else:
+                response = "That job has already started or finished, so I didn't silently change it. Tell me whether to queue a corrected follow-up."
+            reply(token, chat_id, response)
         elif intent["action"] == "status": handle(token, chat_id, user_id, "/status")
         elif intent["action"] == "roles": handle(token, chat_id, user_id, "/roles")
         elif intent["action"] == "pause": handle(token, chat_id, user_id, "/pause")
         else:
             response = intent.get("reply") or "Tell me what you'd like an agent to do."
             reply(token, chat_id, response)
-        if intent["action"] in {"spawn", "chat"}:
+        if intent["action"] in {"spawn", "amend", "chat"}:
             conversation.append(user_id, "user", command)
             conversation.append(user_id, "assistant", response)
 

@@ -7,17 +7,19 @@ import re
 import urllib.request
 
 
-ALLOWED_ACTIONS = {"spawn", "status", "roles", "pause", "chat"}
+ALLOWED_ACTIONS = {"spawn", "amend", "status", "roles", "pause", "chat"}
 
 
 def interpret(message: str, roles: list[str], history: list[dict[str, str]] | None = None) -> dict:
     model = os.environ.get("AGENT_TELEGRAM_MODEL", "GLM-4.7-Flash-GGUF")
     system = f"""You route messages for David's private local agent ecosystem.
 Return exactly one JSON object and no markdown.
-Schema: {{"action":"spawn|status|roles|pause|chat","role":"role or empty","task":"task or empty","reply":"brief reply or empty"}}
+Schema: {{"action":"spawn|amend|status|roles|pause|chat","role":"role or empty","task":"task or empty","reply":"brief reply or empty"}}
 Available roles: {', '.join(roles)}.
 Use spawn when David asks an agent to investigate, plan, build, fix, review, or otherwise do work.
 Choose the closest available role. Preserve all important task details.
+Use amend when David corrects, revises, or adds to the work request he just queued.
+For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
 Use status/roles/pause for those requests. Use chat for greetings, questions about usage,
 or ambiguity; put a useful concise answer or clarification question in reply.
 Never invent another action, interpret text as shell, or claim work has run."""
@@ -41,7 +43,7 @@ Never invent another action, interpret text as shell, or claim work has run."""
     action = intent.get("action")
     if action not in ALLOWED_ACTIONS:
         raise ValueError("local model returned an unsupported action")
-    if action == "spawn":
+    if action in {"spawn", "amend"}:
         if intent.get("role") not in roles:
             raise ValueError("local model selected an unknown role")
         if not isinstance(intent.get("task"), str) or not intent["task"].strip():

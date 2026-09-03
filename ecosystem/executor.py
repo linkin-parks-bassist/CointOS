@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import subprocess
+import re
 from pathlib import Path
 
 from ecosystem import cli
@@ -17,6 +18,11 @@ def notify(job: dict) -> None:
         return
     from ecosystem.telegram import reply
     summary = f"Job {job['id']} {job['state']} ({job['role']}).\nLog: {job.get('output', 'none')}"
+    output_path = cli.ROOT / job["output"] if job.get("output") else None
+    if output_path and output_path.exists():
+        clean = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", output_path.read_text(encoding="utf-8", errors="replace")).strip()
+        if clean:
+            summary += "\n\nResult (tail):\n" + clean[-3000:]
     for recipient in recipients:
         try:
             reply(token, int(recipient), summary)

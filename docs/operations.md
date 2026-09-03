@@ -77,6 +77,8 @@ The bot stores a private per-user JSONL conversation under `state/conversations/
 and supplies at most the latest 20 messages / 12,000 characters to GLM. This lets
 follow-ups refer to prior discussion without putting chat history in Git or audit
 events. `/forget` clears conversational memory without deleting jobs or audit logs.
+Corrections to the most recent queued/prepared task use the validated `amend`
+intent and regenerate its context. Running or completed jobs are never rewritten.
 
 For first-time users, `./scripts/setup-telegram` walks through bot creation,
 validates the token, discovers the user ID from a message, and writes the protected

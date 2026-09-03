@@ -67,6 +67,27 @@ def enqueue_task(role: str, task: str, source: str = "local-cli") -> str:
     return job_id
 
 
+def amend_latest_task(source: str, role: str, task: str) -> str | None:
+    from ecosystem.roles import load_role
+    load_role(role)
+    candidates = []
+    for path in (ROOT / "state/jobs").glob("*.json"):
+        job = json.loads(path.read_text(encoding="utf-8"))
+        if job.get("kind") == "agent-task" and job.get("source") == source and job.get("state") in {"queued", "ready"}:
+            candidates.append((job["created_at"], path, job))
+    if not candidates:
+        return None
+    _, path, job = max(candidates, key=lambda item: item[0])
+    prompt = ROOT / job.get("prompt", "") if job.get("prompt") else None
+    if prompt:
+        prompt.unlink(missing_ok=True)
+    job.update(role=role, task=task.strip(), state="queued", updated_at=now())
+    job.pop("prompt", None)
+    atomic_json(path, job)
+    audit("task.amended", job_id=job["id"], role=role, source=source)
+    return job["id"]
+
+
 def prepare_next() -> None:
     from ecosystem.roles import render_context
 
