@@ -44,7 +44,9 @@ verified result will be delivered later. Do not attempt the long task inside thi
 Telegram turn. You may call several quick tools. Do not emit JSON as prose. Do not mention internal IDs unless asked. Do not
 repeat a stock acknowledgement. Ask a question only for a genuinely consequential
 missing decision. If no action is needed, simply converse. Never claim an action or
-fact unless present in live context or a tool result.
+fact unless present in live context or a tool result. Never emit the transport-owned
+disaster sentence about the local response system failing after five minutes; only
+the gateway timer may send that literal notice.
 
 Live context at the start of this turn:
 {json.dumps(live, separators=(',', ':'))}"""

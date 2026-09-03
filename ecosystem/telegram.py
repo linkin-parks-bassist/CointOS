@@ -11,6 +11,8 @@ from ecosystem.models import snapshot
 from ecosystem.facts import lifecycle
 from ecosystem.control_agent import respond as control_response
 
+DISASTER_FALLBACK = "the local response system has failed to answer this for five minutes. that's not normal."
+
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
     with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{method}", data=data, timeout=40) as response:
@@ -81,7 +83,7 @@ def recent_errors_text(limit: int = 5) -> str:
 
 def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None:
     def disaster_fallback() -> None:
-        message = "the local response system has failed to answer this for five minutes. that's not normal."
+        message = DISASTER_FALLBACK
         reply(token, chat_id, message)
         conversation.append(user_id, "assistant", message)
         cli.audit("telegram.disaster_fallback", user_id=user_id)
@@ -90,7 +92,8 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
     delayed.start()
     answered = False
     try:
-        history = conversation.recent(user_id)
+        history = [entry for entry in conversation.recent(user_id)
+                   if entry.get("content") != DISASTER_FALLBACK]
         live = snapshot(); live["job_status"] = status_text()
         live["lifecycle_facts"] = lifecycle()
         live["recent_errors"] = recent_errors_text()
