@@ -111,7 +111,9 @@ jargon remain in local records unless David explicitly asks for technical detail
 Each Telegram-spawned job receives a name invented by the control-plane model under
 `config/naming-policy.json`. The generator sees active names, honors explicit user
 choices, and targets a modest 8% tasteful-odd-name rate without a fixed pool.
-Names should subtly suit the assignment while avoiding forced puns or mascot energy.
+The ordinary baseline is intentionally international rather than Anglocentric;
+rare variants include pronounceable alien names and genuinely clever task-linked
+puns. The policy explicitly rejects cultural caricature, lazy wordplay, and mascot energy.
 Non-Telegram jobs use the same pinned control model to generate their identity.
 Names are validated before use. Identity is injected
 into context and retained through retries, audit events, agent-originated messages,

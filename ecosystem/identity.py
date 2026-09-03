@@ -28,7 +28,10 @@ Role: {role}
 Task: {task[:1000]}
 Active names to avoid: {', '.join(sorted(active_names())) or 'none'}
 Policy: {policy['style']}
-Odd-name probability: {policy['odd_name_probability']}. Do not force an odd name.
+Odd-name probability: {policy['odd_name_probability']}; alien-name probability:
+{policy.get('alien_name_probability', 0.0)}; clever-pun probability:
+{policy.get('clever_pun_probability', 0.0)}. Treat these as rare style hints, not
+quotas, and do not force a joke that is not genuinely good.
 Return JSON only: {{"name":"..."}}"""
     body = json.dumps({"model":policy["generator_model"],"messages":[{"role":"user","content":prompt}],"temperature":0.8,"max_tokens":80,"chat_template_kwargs":{"enable_thinking":False}}).encode()
     request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",data=body,headers={"Content-Type":"application/json","Authorization":"Bearer lemonade"})

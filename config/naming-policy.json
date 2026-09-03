@@ -1,7 +1,9 @@
 {
   "generator_model": "Qwen3.5-4B-GGUF",
   "odd_name_probability": 0.08,
+  "alien_name_probability": 0.03,
+  "clever_pun_probability": 0.04,
   "maximum_characters": 40,
-  "style": "Choose a short human name that subtly fits the role or task. Usually it should be completely ordinary. Occasionally invent a dry, plausible linguistic accident in the spirit of Journathan. Avoid forced puns, memes, fantasy names, quirky startup mascots, alliteration gimmicks, and anything that feels try-hard or cringe. Never use slurs, titles implying authority, or names confusingly similar to system services.",
+  "style": "Choose a concise name that subtly fits the role or task. Human names should draw naturally from the breadth of world languages and cultures, not default repeatedly to white Anglophone names; vary origins over time without stereotyping, exoticizing, or combining cultures carelessly. Usually use a believable human name. Occasionally invent a dry linguistic accident in the spirit of Journathan, a slightly alien but pronounceable name, or a task-linked pun only when the wordplay is genuinely clever. Avoid lazy occupational surnames, meme references, fantasy-name sludge, mascot energy, repetitive alliteration, and anything try-hard or cringe. Never use slurs, sacred names irreverently, titles implying authority, or names confusingly similar to system services.",
   "fallback": "Nameless Dave"
 }
