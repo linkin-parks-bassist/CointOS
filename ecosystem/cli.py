@@ -240,6 +240,9 @@ def main() -> None:
     parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "enqueue", "prepare-next", "roles", "tell-david"))
     parser.add_argument("--role", default="worker")
     parser.add_argument("--task")
+    parser.add_argument("--model")
+    parser.add_argument("--model-reason", default="")
+    parser.add_argument("--agent-name")
     parser.add_argument("--message")
     parser.add_argument("--severity", choices=("info", "warning", "question", "approval"), default="info")
     parser.add_argument("--needs-response", action="store_true")
@@ -255,7 +258,8 @@ def main() -> None:
     elif args.command == "enqueue":
         if not args.task:
             parser.error("enqueue requires --task")
-        print(enqueue_task(args.role, args.task))
+        print(enqueue_task(args.role, args.task, model=args.model,
+                           model_reason=args.model_reason, agent_name=args.agent_name))
     elif args.command == "prepare-next": prepare_next()
     elif args.command == "roles":
         from ecosystem.roles import list_roles
