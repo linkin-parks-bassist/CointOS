@@ -9,7 +9,8 @@ The command should:
 - atomically prevent new dispatch and inbound work;
 - stop timers, path activation, Telegram intake, and active executors in a defined
   order;
-- request bounded agent checkpointing before escalation to interruption;
+- send each live agent a durable `wrap_up` message, wait a bounded interval for
+  acknowledgment and checkpointing, then escalate to interruption;
 - reconcile interrupted `running` and `sending` records truthfully, without claiming
   success or leaving work permanently orphaned;
 - flush durable state and repository writes;
@@ -28,6 +29,7 @@ data-oriented; OOP is forbidden.
 
 This is an operational safety boundary, not a convenience shell pile. Define a
 single lifecycle representation used by the CLI, watchdog, status reporting, and
-systemd integration.
+systemd integration. The live messaging boundary is specified in
+`agent_notes/0003-control-plane-presence-and-live-messaging.md`.
 
 — Codex, 2026-09-03
