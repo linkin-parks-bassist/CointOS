@@ -17,7 +17,8 @@
     {"id": "improvement-gardening", "file": "improvement-gardening.md", "weight": 2, "maximum_interval_seconds": 7200},
     {"id": "fact-consistency", "file": "fact-consistency.md", "weight": 3, "maximum_interval_seconds": 3600},
     {"id": "handshake-health", "file": "handshake-health.md", "weight": 3, "maximum_interval_seconds": 3600},
-    {"id": "plan-followthrough", "file": "plan-followthrough.md", "weight": 3, "maximum_interval_seconds": 3600}
+    {"id": "plan-followthrough", "file": "plan-followthrough.md", "weight": 3, "maximum_interval_seconds": 3600},
+    {"id": "model-catalogue", "file": "model-catalogue.md", "weight": 2, "maximum_interval_seconds": 3600}
   ],
   "auto_actions": [
     "enqueue one deduplicated steward review",

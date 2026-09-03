@@ -37,6 +37,15 @@ Inspect with `systemctl --user status agent-ecosystem.path
 agent-ecosystem.timer agent-watchdog.timer` and `journalctl --user -u
 agent-ecosystem.service -u agent-watchdog.service`.
 
+## Scoped package installation
+
+`scripts/install-package NAME...` lets Workers and Refactorers install named
+packages from existing APT repositories without general sudo. The installed
+root-owned boundary comes from `services/privileged/agent-package-install`; its
+sudo policy authorizes only that wrapper. Direct APT commands, options, local files,
+repository changes, removals, upgrades, and other privileged operations remain
+blocked. Inspect records with `journalctl -t agent-package-install`.
+
 ## Roles and remote spawning
 
 Roles are Markdown files in `roles/`. A valid role includes `Mission`,

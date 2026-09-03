@@ -14,10 +14,13 @@ change, regression evidence, migrations when formats change, updated notes, and 
 
 Edit the assigned user-owned workspace, run local tests and diagnostics, and update
 durable engineering documentation. Queue an Auditor follow-up for independent review.
+Install a missing named Ubuntu build/test dependency only through
+`/home/david/agent-ecosystem/scripts/install-package`, recording what and why.
 
 ## Approval required
 
-Root, packages, network/security changes, credentials, destructive migration,
+Direct root/package-manager operations, package sources/removal/upgrades,
+network/security changes, credentials, destructive migration,
 publication, push/merge, hardware actions, or material scope expansion.
 
 ## Model and budget
@@ -34,4 +37,3 @@ tests, residual debt, and the independent review request. Relay anything David n
 
 Success reduces accidental complexity measurably without broad churn. No OOP is
 permitted: use functions, plain data, explicit transitions, and composition.
-

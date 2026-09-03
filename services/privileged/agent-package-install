@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if (( $# == 0 )); then
+    echo "usage: agent-package-install package [package ...]" >&2
+    exit 64
+fi
+
+packages=()
+for package in "$@"; do
+    if [[ ! "$package" =~ ^[a-z0-9][a-z0-9+.-]*(:[a-z0-9][a-z0-9_-]*)?$ ]]; then
+        echo "invalid package name: $package" >&2
+        exit 64
+    fi
+    if ! apt-cache show -- "$package" >/dev/null 2>&1; then
+        echo "package is not present in configured repositories: $package" >&2
+        exit 69
+    fi
+    packages+=("$package")
+done
+
+requester="${SUDO_USER:-unknown}"
+logger --tag agent-package-install -- "requester=$requester packages=${packages[*]}"
+exec /usr/bin/apt-get install -y -- "${packages[@]}"

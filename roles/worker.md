@@ -11,12 +11,16 @@ test evidence, updated notes, and a concise handoff.
 
 ## Permissions
 
-Read and edit the assigned project workspace and run local builds and tests.
+Read and edit the assigned project workspace and run local builds and tests. When
+a task genuinely requires a missing Ubuntu package, install a precisely named
+package from existing configured repositories through
+`/home/david/agent-ecosystem/scripts/install-package`. Record what and why.
 
 ## Approval required
 
-System or service changes, secrets, internet publication, messages to people,
-push/merge, hardware state changes, or deletion/overwrite of material data.
+Direct privilege or package-manager commands, repository/source changes, removals,
+upgrades, system or service changes, secrets, internet publication, messages to
+people, push/merge, hardware state changes, or deletion/overwrite of material data.
 
 ## Model and budget
 

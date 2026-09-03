@@ -1,0 +1,2 @@
+# Named packages from existing APT repositories through one validating wrapper.
+david ALL=(root) NOPASSWD: /usr/local/sbin/agent-package-install *

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from ecosystem import cli
 from ecosystem.steward_tasks import select
+from ecosystem.models import snapshot
 
 CONFIG = cli.ROOT / "config/watchdog.json"
 SOURCE = "watchdog:periodic-steward"
@@ -29,6 +30,15 @@ def findings(config: dict) -> list[str]:
     now = datetime.now(timezone.utc)
     found = []
     if service_state("agent-telegram.service") != "active": found.append("Telegram gateway is not active.")
+    try:
+        inventory = snapshot()
+        executor_config = json.loads((cli.ROOT / "config/executor-opencode.json").read_text(encoding="utf-8"))
+        configured = set(executor_config.get("provider", {}).get("Lemonade", {}).get("models", {}))
+        unregistered = sorted(item["id"] for item in inventory.get("models", []) if item["id"] not in configured)
+        if unregistered:
+            found.append("Downloaded models are not integrated into the executor catalogue: " + ", ".join(unregistered))
+    except Exception as error:
+        found.append(f"Model inventory handshake failed: {type(error).__name__}: {error}")
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
         if job.get("kind") == "agent-task" and job.get("state") == "running":
