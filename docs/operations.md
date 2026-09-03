@@ -92,6 +92,12 @@ with conversation history, live queue status, resources, model residency, and th
 model scheduling policy. Spawned agents receive their role plus a concise ecosystem
 situation preamble and their recorded model decision.
 
+Periodic Steward instances draw one assignment from `steward-tasks/*.md`. Selection
+is randomized with overdue weighting and per-card maximum intervals, providing
+variation without proliferating roles or neglecting low-frequency maintenance.
+The chosen card, overdue ratio, job, and findings are recorded in watchdog state
+and append-only audit events.
+
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available
 memory, and host load. It selects a model (or honors David's explicit selection),

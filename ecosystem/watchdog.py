@@ -4,6 +4,7 @@ import fcntl, json, subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from ecosystem import cli
+from ecosystem.steward_tasks import select
 
 CONFIG = cli.ROOT / "config/watchdog.json"
 SOURCE = "watchdog:periodic-steward"
@@ -29,7 +30,7 @@ def findings(config: dict) -> list[str]:
 def pending_review() -> bool:
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
-        if job.get("source") == SOURCE and job.get("state") in {"queued", "ready", "running"}: return True
+        if job.get("source", "").startswith(SOURCE) and job.get("state") in {"queued", "ready", "running"}: return True
     return False
 
 def tick() -> str:
@@ -46,8 +47,13 @@ def tick() -> str:
         due = not last or (now-last).total_seconds() >= config["steward_review_seconds"]
         issues = findings(config)
         if (due or issues) and not pending_review() and not (cli.ROOT / "state/PAUSED").exists():
+            task_id, task_card, selection_reason = select(config, state, now=now)
             issue_text = "\n".join(f"- {item}" for item in issues) or "- No deterministic warning; perform the scheduled qualitative review."
             task = f"""Perform the periodic ecosystem sanity review.
+
+Selected Steward assignment (`{task_id}`):
+
+{task_card}
 
 Work from `/home/david/agent-ecosystem`. Read the last 30 conversational entries
 in `/home/david/agent-ecosystem/state/conversations` without copying secrets into
@@ -59,9 +65,10 @@ Deterministic findings at enqueue time:
 {issue_text}
 
 Look for confusing or dishonest bot replies, missed context, jobs that did not produce what David requested, stalls, notification failures, unsafe behavior, and documentation drift. Make bounded user-level fixes when evidence is clear; run tests; update status/ADRs when warranted. You may enqueue a focused follow-up job if another role/model is more appropriate. Do not perform approval-required actions. Send David a concise evidence-based handoff."""
-            job_id = cli.enqueue_task("steward", task, source=SOURCE, model=config["review_model"], model_reason="Pinned small control model chosen for frequent low-latency transcript and health review.")
-            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_findings=issues)
-            cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues))
+            job_id = cli.enqueue_task("steward", task, source=f"{SOURCE}:{task_id}", model=config["review_model"], model_reason="Pinned small control model chosen for frequent low-latency transcript and health review.")
+            history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
+            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues)
+            cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)
             return f"enqueued {job_id}"
         state.update(last_tick_at=now.isoformat(), last_findings=issues)
         cli.atomic_json(state_path, state)

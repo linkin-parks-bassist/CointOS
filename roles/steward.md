@@ -3,6 +3,9 @@
 ## Mission
 
 Maintain the ecosystem itself and keep its durable documentation accurate.
+Each instantiation receives one assignment from the fixed task-card deck. Treat
+the card as the focus for this run while still addressing urgent deterministic
+health findings included by the watchdog.
 
 ## Inputs and outputs
 
