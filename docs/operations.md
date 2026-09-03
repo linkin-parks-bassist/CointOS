@@ -16,24 +16,26 @@ implemented. Logs in `logs/runs/YYYY-MM-DD.jsonl` are append-only.
 
 ## Optional systemd user units
 
-The checked-in units have not been installed or enabled. After explicit approval:
+Install or refresh the checked-in units with:
 
 ```bash
 mkdir -p ~/.config/systemd/user
 cp services/systemd/agent-ecosystem.{service,path,timer} ~/.config/systemd/user/
+cp services/systemd/agent-watchdog.{service,timer} ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now agent-ecosystem.path agent-ecosystem.timer
+systemctl --user enable --now agent-ecosystem.path agent-ecosystem.timer agent-watchdog.timer
 ```
 
 Stop all automatic intake with:
 
 ```bash
 ./scripts/ecosystem pause
-systemctl --user stop agent-ecosystem.path agent-ecosystem.timer
+systemctl --user stop agent-ecosystem.path agent-ecosystem.timer agent-watchdog.timer
 ```
 
 Inspect with `systemctl --user status agent-ecosystem.path
-agent-ecosystem.timer` and `journalctl --user -u agent-ecosystem.service`.
+agent-ecosystem.timer agent-watchdog.timer` and `journalctl --user -u
+agent-ecosystem.service -u agent-watchdog.service`.
 
 ## Roles and remote spawning
 

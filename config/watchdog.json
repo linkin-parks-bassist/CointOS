@@ -9,8 +9,9 @@
     {"id": "system-map", "file": "system-map.md", "weight": 1, "maximum_interval_seconds": 21600},
     {"id": "filesystem-health", "file": "filesystem-health.md", "weight": 1, "maximum_interval_seconds": 10800},
     {"id": "log-audit", "file": "log-audit.md", "weight": 2, "maximum_interval_seconds": 3600},
-    {"id": "control-plane-qa", "file": "control-plane-qa.md", "weight": 2, "maximum_interval_seconds": 3600}
-    ,{"id": "architecture-integrity", "file": "architecture-integrity.md", "weight": 2, "maximum_interval_seconds": 7200}
+    {"id": "control-plane-qa", "file": "control-plane-qa.md", "weight": 2, "maximum_interval_seconds": 3600},
+    {"id": "architecture-integrity", "file": "architecture-integrity.md", "weight": 2, "maximum_interval_seconds": 7200},
+    {"id": "improvement-gardening", "file": "improvement-gardening.md", "weight": 2, "maximum_interval_seconds": 7200}
   ],
   "auto_actions": [
     "enqueue one deduplicated steward review",

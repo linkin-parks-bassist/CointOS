@@ -38,3 +38,12 @@ lifecycle language is resolved to a typed query, authoritative projections answe
 it, and the model is limited to ambiguity and presentation rather than factual authority.
 
 No more major feature growth should bypass this consolidation milestone.
+
+## Background ownership
+
+Stewards continuously reconcile system health and choose maintenance assignments.
+Auditors investigate architectural and behavioral correctness without casually
+implementing their own recommendations. Refactorers consume evidenced, bounded
+findings and produce independently reviewable improvements. This separation is a
+workflow, not an excuse for role proliferation; all share the binding principles
+in `docs/core-engineering-principles.md`, including the total prohibition on OOP.

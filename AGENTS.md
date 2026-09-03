@@ -8,4 +8,13 @@
 - Runtime records are append-only JSONL. Never rewrite them as part of summarization.
 - Keep generated runtime state out of Git; keep schemas, templates, tests, and
   operational instructions in Git.
+- Object-oriented programming is forbidden everywhere in this ecosystem. Do not
+  introduce classes, inheritance, objects carrying hidden mutable state, or
+  class-oriented frameworks. Prefer small functions, plain data, explicit state
+  transitions, modules with narrow interfaces, and composition. Existing class-based
+  tests are known migration debt and should be converted incrementally.
+- Treat maintainability, taste, simplicity, honest behavior, and architectural
+  coherence as product requirements. Background Stewards, Auditors, and Refactorers
+  should improve the system in bounded, tested increments without waiting for a
+  visible failure or allowing autonomous scope to outrun approval boundaries.
 
