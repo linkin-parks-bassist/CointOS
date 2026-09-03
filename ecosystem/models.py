@@ -1,6 +1,6 @@
 """Live Lemonade model and host-resource inventory for scheduling decisions."""
 from __future__ import annotations
-import json, os, urllib.request
+import glob, json, os, re, urllib.request
 from pathlib import Path
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
@@ -8,6 +8,25 @@ BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 def _get(path: str) -> dict:
     with urllib.request.urlopen(BASE + path, timeout=10) as response:
         return json.load(response)
+
+def gpu_memory() -> dict:
+    result = {"firmware_carveout_gb": None, "gtt_total_gb": None, "gtt_used_gb": None}
+    for device in glob.glob("/sys/class/drm/card*/device"):
+        uma = Path(device) / "uma"
+        try:
+            index = (uma / "carveout").read_text(encoding="utf-8").strip()
+            options = (uma / "carveout_options").read_text(encoding="utf-8")
+            match = re.search(rf"^{re.escape(index)}:.*\((\d+) (MB|GB)\)$", options, re.MULTILINE)
+            if match:
+                value = float(match.group(1)) / (1024 if match.group(2) == "MB" else 1)
+                result["firmware_carveout_gb"] = round(value, 3)
+            for name in ("gtt_total", "gtt_used"):
+                raw = int((Path(device) / f"mem_info_{name}").read_text(encoding="utf-8"))
+                result[f"{name}_gb"] = round(raw / 1024 ** 3, 1)
+            return result
+        except (FileNotFoundError, PermissionError, ValueError):
+            continue
+    return result
 
 def snapshot() -> dict:
     registry = _get("/v1/models").get("data", [])
@@ -31,11 +50,12 @@ def snapshot() -> dict:
     machine = json.loads(machine_path.read_text(encoding="utf-8"))
     linux_total = round(memory.get("MemTotal", 0) / 1024 / 1024, 1)
     linux_available = round(memory.get("MemAvailable", 0) / 1024 / 1024, 1)
+    gpu = gpu_memory()
     return {
         "memory_available_gb": linux_available,
         "memory": {
             "physical_unified_gb": machine["physical_unified_memory_gb"],
-            "firmware_gpu_reservation_gb": machine["firmware_gpu_reservation_gb"],
+            **gpu,
             "linux_total_gb": linux_total,
             "linux_available_gb": linux_available,
             "meaning": machine["memory_note"],

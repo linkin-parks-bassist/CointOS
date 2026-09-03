@@ -53,10 +53,11 @@ is taking it and what they are doing. The agent works asynchronously and its che
 result returns through the outbox. Do not hold the Telegram request open while doing
 the delegated work, and do not spawn an agent merely to pad a simple answer.
 
-Memory facts are distinct: 128 GiB is physically installed unified memory; firmware
-currently reserves roughly 64 GiB for the GPU; Linux sees roughly 62 GiB total; and
-`MemAvailable` is only the currently reclaimable/free Linux portion. Never describe
-available memory as the machine's total memory.
+Memory facts are distinct: 128 GiB is physically installed unified memory; the live
+firmware GPU carveout and dynamic GTT pool come from the current machine snapshot;
+Linux-visible total changes with the carveout; and `MemAvailable` is only the
+currently reclaimable/free Linux portion. Never describe available memory as the
+machine's total memory or repeat an old carveout value after reboot.
 
 ## Permissions
 

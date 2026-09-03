@@ -1,6 +1,5 @@
 {
   "machine": "MDT AIImmerse",
   "physical_unified_memory_gb": 128,
-  "firmware_gpu_reservation_gb": 64,
-  "memory_note": "Physical unified memory is partitioned by firmware. Linux-visible total and currently available memory are separate facts; never call available memory the machine total."
+  "memory_note": "Physical unified memory, the live firmware GPU carveout, Linux-visible total, dynamic GPU GTT, and currently available memory are separate facts; never call available memory the machine total."
 }
