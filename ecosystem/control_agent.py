@@ -45,11 +45,10 @@ Live context at the start of this turn:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
-    force_answer = False
     for _ in range(MAX_TOOL_ROUNDS):
         body = json.dumps({"model": model, "messages": messages, "tools": TOOLS,
                            "tool_choice": "auto", "temperature": 0.35,
-                           "chat_template_kwargs": {"enable_thinking": not force_answer},
+                           "chat_template_kwargs": {"enable_thinking": False},
                            "max_tokens": 1800}).encode()
         request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",
                                          data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer lemonade"})
@@ -64,7 +63,6 @@ Live context at the start of this turn:
             content = (assistant.get("content") or "").strip()
             if content:
                 return content
-            force_answer = True
             continue
         messages.append(assistant)
         for call in tool_calls:
@@ -76,5 +74,4 @@ Live context at the start of this turn:
                 result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "name": name, "content": json.dumps(result, separators=(",", ":"))})
-        force_answer = True
     raise RuntimeError("control agent exceeded its bounded tool loop")
