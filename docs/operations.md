@@ -98,6 +98,12 @@ variation without proliferating roles or neglecting low-frequency maintenance.
 The chosen card, overdue ratio, job, and findings are recorded in watchdog state
 and append-only audit events.
 
+All main roles can call `scripts/tell-david` to create a durable agent-originated
+outbox message with severity and an optional response requirement. Executor jobs
+receive their job ID through `AGENT_JOB_ID`, so messages are traceable. Delivered
+messages are appended to the private bot conversation, allowing David's natural
+reply to be interpreted with the originating question or warning in context.
+
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available
 memory, and host load. It selects a model (or honors David's explicit selection),

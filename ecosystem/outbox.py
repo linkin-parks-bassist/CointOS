@@ -12,12 +12,14 @@ from ecosystem import cli
 TERMINAL_STATES = {"completed", "failed"}
 
 
-def enqueue(user_id: int, message: str = "", depends_on: str | None = None, result_of: str | None = None) -> str:
+def enqueue(user_id: int, message: str = "", depends_on: str | None = None, result_of: str | None = None,
+            origin_job: str | None = None, severity: str = "info", needs_response: bool = False) -> str:
     job_id = f"outbox-{uuid.uuid4().hex[:16]}"
     job = {
         "id": job_id, "kind": "outbound-message", "state": "waiting" if depends_on else "queued",
         "attempts": 0, "created_at": cli.now(), "updated_at": cli.now(),
         "user_id": user_id, "message": message, "depends_on": depends_on, "result_of": result_of,
+        "origin_job": origin_job, "severity": severity, "needs_response": needs_response,
     }
     cli.atomic_json(cli.ROOT / "state/jobs" / f"{job_id}.json", job)
     cli.audit("outbox.queued", job_id=job_id, depends_on=depends_on, user_id=user_id)
@@ -35,7 +37,11 @@ def dependency(job: dict) -> dict | None:
 def render(job: dict, dependency_job: dict | None) -> str:
     message = job.get("message", "")
     if not job.get("result_of") or not dependency_job:
-        return message
+        badge = {"warning":"⚠️ ", "question":"❓ ", "approval":"🔐 "}.get(job.get("severity"), "")
+        origin = f"[From {job['origin_job']}] " if job.get("origin_job") else ""
+        prefix = badge + origin
+        suffix = "\n\nReply naturally; I’ll route your answer with this conversation in context." if job.get("needs_response") else ""
+        return prefix + message + suffix
     output_path = cli.ROOT / dependency_job["output"] if dependency_job.get("output") else None
     clean = ""
     if output_path and output_path.exists():
@@ -65,4 +71,3 @@ def drain(send: Callable[[int, str], None]) -> int:
             cli.audit("outbox.delivery_failed", job_id=job["id"], error=job["error"])
         cli.atomic_json(path, job)
     return delivered
-

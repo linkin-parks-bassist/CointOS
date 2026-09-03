@@ -234,9 +234,12 @@ def status() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ecosystem")
-    parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "enqueue", "prepare-next", "roles"))
+    parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "enqueue", "prepare-next", "roles", "tell-david"))
     parser.add_argument("--role", default="worker")
     parser.add_argument("--task")
+    parser.add_argument("--message")
+    parser.add_argument("--severity", choices=("info", "warning", "question", "approval"), default="info")
+    parser.add_argument("--needs-response", action="store_true")
     args = parser.parse_args()
     if args.command == "init": initialize()
     elif args.command == "scan": print(f"queued={scan()}")
@@ -254,6 +257,14 @@ def main() -> None:
     elif args.command == "roles":
         from ecosystem.roles import list_roles
         print("\n".join(list_roles()))
+    elif args.command == "tell-david":
+        from ecosystem.outbox import enqueue
+        if not args.message: parser.error("tell-david requires --message")
+        origin = os.environ.get("AGENT_JOB_ID")
+        recipients = [v for v in os.environ.get("AGENT_TELEGRAM_ALLOWED_USER_IDS", "").split(",") if v.strip()]
+        if not recipients: raise SystemExit("no configured Telegram recipient")
+        for recipient in recipients:
+            print(enqueue(int(recipient), message=args.message, origin_job=origin, severity=args.severity, needs_response=args.needs_response))
 
 
 if __name__ == "__main__":

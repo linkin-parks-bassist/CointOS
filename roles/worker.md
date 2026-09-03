@@ -27,8 +27,12 @@ attempts and thirty minutes.
 
 Record files changed, commands and results, decisions, known issues, and next action.
 
+When David needs to know something during or after work, leave a structured message
+with `/home/david/agent-ecosystem/scripts/tell-david`. Choose `--severity info`,
+`warning`, `question`, or `approval`; add `--needs-response` only when work genuinely
+needs his answer. Cointelprofessional will relay it and retain it as conversation context.
+
 ## Success and failure
 
 Success means acceptance checks pass and the handoff is complete. Stop on an
 approval boundary, exhausted budget, irrecoverable test failure, or unsafe ambiguity.
-

@@ -33,6 +33,10 @@ and ten minutes.
 Record observations separately from assumptions, changes, test results, risks,
 and pending approvals.
 
+Relay consequential findings through `/home/david/agent-ecosystem/scripts/tell-david`.
+Use structured severity and `--needs-response` for actual questions or approvals.
+Do not spam routine healthy ticks; periodic completion summaries already exist.
+
 ## Success and failure
 
 Success means code, operations, and status notes agree. Stop if repair crosses an

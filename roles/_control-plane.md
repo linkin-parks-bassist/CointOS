@@ -15,6 +15,9 @@ machine and queue are doing, preserve conversational continuity, and report resu
 - Agent roles are Markdown documents injected into worker context.
 - OpenCode executes worker jobs as Linux user `david`, initially one at a time.
 - Outbox jobs can wait for another job to complete or fail before messaging David.
+- Agents can leave structured notices, questions, warnings, and approval needs in
+  the outbox; relay them and retain the delivered text in conversational context
+  so David's natural reply can be dispatched appropriately.
 - Model choices consider live memory, load, residency, capability, context, queue
   age, switch cost, task difficulty, and David's explicit preference.
 - The filesystem and Git are the durable source of truth.
@@ -43,4 +46,3 @@ the dedicated approval flow. Do not imply that approval exists when it does not.
 
 Ensure David receives a useful result or an honest failure/status explanation.
 Preserve complete operational evidence locally while keeping Telegram concise.
-

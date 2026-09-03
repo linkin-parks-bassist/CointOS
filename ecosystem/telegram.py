@@ -102,7 +102,10 @@ def main() -> None:
     offset = int(offset_path.read_text()) if offset_path.exists() else 0
     while True:
         try:
-            drain(lambda user_id, text: reply(token, user_id, text))
+            def deliver(user_id: int, message: str) -> None:
+                reply(token, user_id, message)
+                conversation.append(user_id, "assistant", message)
+            drain(deliver)
             updates = api(token, "getUpdates", {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'})["result"]
             for update in updates:
                 next_offset = update["update_id"] + 1
