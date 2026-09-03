@@ -1,6 +1,6 @@
 """Minimal allowlisted Telegram command gateway using outbound polling."""
 from __future__ import annotations
-import json, os, time, urllib.parse, urllib.request
+import json, os, threading, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from ecosystem import cli
 from ecosystem.roles import list_roles
@@ -40,6 +40,47 @@ def status_text() -> str:
     active = "\n".join(jobs) if jobs else "No active agent tasks."
     return f"Paused: {(cli.ROOT / 'state/PAUSED').exists()}\nJobs: {counts}\n\nActive work:\n{active}"
 
+def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None:
+    delayed = threading.Timer(6.0, reply, args=(token, chat_id, "still chewing on that — one sec…"))
+    delayed.daemon = True
+    delayed.start()
+    try:
+        history = conversation.recent(user_id)
+        normalized = command.lower().strip(" ?.!")
+        status_phrases = ("what is the machine doing", "what's the machine doing", "whats the machine doing", "what is running", "what's running", "status", "what are you doing")
+        if any(phrase in normalized for phrase in status_phrases):
+            response = status_text()
+            reply(token, chat_id, response)
+            conversation.append(user_id, "user", command)
+            conversation.append(user_id, "assistant", response)
+            return
+        live = snapshot(); live["job_status"] = status_text()
+        from ecosystem.identity import active_names
+        live["active_agent_names"] = sorted(active_names())
+        intent = interpret(command, list_roles(), history, live)
+        cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
+        if intent["action"] == "spawn":
+            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"], agent_name=intent["agent_name"])
+            job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
+            response = f"yep — {job['agent_name']}'s on it. I'll let you know how they go."
+            reply(token, chat_id, response)
+        elif intent["action"] == "amend":
+            job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"], intent["model"], intent["model_reason"])
+            response = (f"yep, fixed that up — the task now says: {intent['task']}" if job_id else
+                        "that one's already started or finished, so I haven't silently changed it. want me to queue a corrected follow-up?")
+            reply(token, chat_id, response)
+        elif intent["action"] == "status": handle(token, chat_id, user_id, "/status"); return
+        elif intent["action"] == "roles": handle(token, chat_id, user_id, "/roles"); return
+        elif intent["action"] == "pause": handle(token, chat_id, user_id, "/pause"); return
+        else:
+            response = intent.get("reply") or "what would you like an agent to do?"
+            reply(token, chat_id, response)
+        if intent["action"] in {"spawn", "amend", "chat"}:
+            conversation.append(user_id, "user", command)
+            conversation.append(user_id, "assistant", response)
+    finally:
+        delayed.cancel()
+
 def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     cli.audit("telegram.command", chat_id=chat_id, user_id=user_id, command=command.split(maxsplit=1)[0])
     if command == "/roles": reply(token, chat_id, "Roles: " + ", ".join(list_roles()))
@@ -60,43 +101,7 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     elif command.startswith("/"):
         reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause, /forget — or just speak normally.")
     else:
-        reply(token, chat_id, "Got it — thinking locally…")
-        history = conversation.recent(user_id)
-        normalized = command.lower().strip(" ?.!")
-        status_phrases = ("what is the machine doing", "what's the machine doing", "whats the machine doing", "what is running", "what's running", "status", "what are you doing")
-        if any(phrase in normalized for phrase in status_phrases):
-            response = status_text()
-            reply(token, chat_id, response)
-            conversation.append(user_id, "user", command)
-            conversation.append(user_id, "assistant", response)
-            return
-        live = snapshot()
-        live["job_status"] = status_text()
-        from ecosystem.identity import active_names
-        live["active_agent_names"] = sorted(active_names())
-        intent = interpret(command, list_roles(), history, live)
-        cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
-        if intent["action"] == "spawn":
-            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"], agent_name=intent["agent_name"])
-            job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
-            response = f"yep — {job['agent_name']}'s on it. I'll let you know how they go."
-            reply(token, chat_id, response)
-        elif intent["action"] == "amend":
-            job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"], intent["model"], intent["model_reason"])
-            if job_id:
-                response = f"Corrected {job_id}.\n\nUpdated task: {intent['task']}"
-            else:
-                response = "That job has already started or finished, so I didn't silently change it. Tell me whether to queue a corrected follow-up."
-            reply(token, chat_id, response)
-        elif intent["action"] == "status": handle(token, chat_id, user_id, "/status")
-        elif intent["action"] == "roles": handle(token, chat_id, user_id, "/roles")
-        elif intent["action"] == "pause": handle(token, chat_id, user_id, "/pause")
-        else:
-            response = intent.get("reply") or "Tell me what you'd like an agent to do."
-            reply(token, chat_id, response)
-        if intent["action"] in {"spawn", "amend", "chat"}:
-            conversation.append(user_id, "user", command)
-            conversation.append(user_id, "assistant", response)
+        handle_natural(token, chat_id, user_id, command)
 
 def main() -> None:
     token = os.environ.get("AGENT_TELEGRAM_BOT_TOKEN")

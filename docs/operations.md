@@ -77,7 +77,8 @@ cannot emit shell operations or bypass role validation. Override the local routi
 model with `AGENT_TELEGRAM_MODEL` in the protected environment file.
 
 The installed gateway uses the smaller `Qwen3.5-4B-GGUF` as a dedicated control
-plane model. It acknowledges natural-language messages before inference and only
+plane model. Fast responses have no acknowledgement preamble; a low-key progress
+message appears only when interpretation exceeds six seconds. It only
 advances the Telegram update offset after successful handling. Long worker jobs
 therefore do not monopolize remote control.
 
