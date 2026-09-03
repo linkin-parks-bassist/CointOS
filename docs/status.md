@@ -21,6 +21,8 @@ Updated: 2026-09-03 (Australia/Sydney)
   per-job output capture, timeouts, and durable completion/failure states.
 - Resource-aware per-job model selection with explicit overrides, recorded rationale,
   and an immutable-at-enqueue inventory snapshot.
+- A three-minute deterministic watchdog plus deduplicated fifteen-minute reasoning
+  Steward reviews of recent bot conversation, jobs, logs, models, and services.
 
 ## Deliberately deferred
 

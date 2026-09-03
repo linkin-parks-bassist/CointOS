@@ -1,0 +1,20 @@
+{
+  "tick_seconds": 180,
+  "steward_review_seconds": 900,
+  "running_job_warn_seconds": 600,
+  "running_job_hard_seconds": 1800,
+  "output_idle_warn_seconds": 300,
+  "review_model": "Qwen3.5-4B-GGUF",
+  "auto_actions": [
+    "enqueue one deduplicated steward review",
+    "report unhealthy services, failed jobs, and stalled output",
+    "allow steward repairs within its user-level role permissions"
+  ],
+  "approval_required": [
+    "root or package operations",
+    "security or network changes",
+    "deleting durable records",
+    "destructive process or hardware actions"
+  ]
+}
+

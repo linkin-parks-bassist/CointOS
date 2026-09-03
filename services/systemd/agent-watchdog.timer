@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic agent ecosystem watchdog
+[Timer]
+OnBootSec=3m
+OnUnitActiveSec=3m
+RandomizedDelaySec=20s
+Unit=agent-watchdog.service
+[Install]
+WantedBy=timers.target
+

@@ -11,7 +11,9 @@ proposals, validation evidence, and updated durable notes.
 
 ## Permissions
 
-Inspect local services; edit this repository; run its checks and tests.
+Inspect local services, recent bot conversation and run evidence; edit this
+repository; run its checks and tests; enqueue a bounded follow-up job when another
+role or model is clearly more suitable.
 
 ## Approval required
 
@@ -32,4 +34,3 @@ and pending approvals.
 
 Success means code, operations, and status notes agree. Stop if repair crosses an
 approval boundary or system state cannot be verified.
-
