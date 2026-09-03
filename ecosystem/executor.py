@@ -14,6 +14,10 @@ from ecosystem.scheduler import choose
 
 def queue_notifications(job: dict) -> None:
     from ecosystem.outbox import enqueue
+    for path in (cli.ROOT / "state/jobs").glob("outbox-*.json"):
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if existing.get("result_of") == job["id"] and existing.get("state") != "delivered":
+            return
     recipients = [value for value in os.environ.get("AGENT_TELEGRAM_ALLOWED_USER_IDS", "").split(",") if value.strip()]
     for recipient in recipients:
         enqueue(int(recipient), depends_on=job["id"], result_of=job["id"])
