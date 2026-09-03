@@ -3,13 +3,13 @@ from __future__ import annotations
 import json, random
 from ecosystem import cli
 
-DEFAULT_ROSTER = {"worker":["Rob","Nina","Dex"], "steward":["Mabel","Percy"], "intake":["Pip","Dot"], "default":["Alex","Sam"]}
+DEFAULT_ROSTER = {"worker":["Rob","Nina","Dex"], "steward":["Mabel","Percy"], "intake":["Pip","Dot"], "default":["Alex","Sam"], "silly_chance":0.12, "silly":["Journathan","Bort"]}
 
 def assign(role: str, rng: random.Random | random.SystemRandom | None = None) -> str:
     rng = rng or random.SystemRandom()
     path = cli.ROOT / "config/agent-names.json"
     roster = json.loads(path.read_text(encoding="utf-8")) if path.exists() else DEFAULT_ROSTER
-    choices = roster.get(role, roster["default"])
+    choices = roster["silly"] if rng.random() < roster.get("silly_chance", 0.0) else roster.get(role, roster["default"])
     active = set()
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))

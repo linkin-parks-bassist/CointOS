@@ -111,6 +111,8 @@ Each spawned job receives a durable role-aware name from `config/agent-names.jso
 The allocator avoids names held by active jobs where possible. Identity is injected
 into context and retained through retries, audit events, agent-originated messages,
 and completion notices; it does not create a separate role or pretend agents are human.
+The roster has a deliberately modest 12% chance of drawing from a tasteful odd-name
+pool. This keeps names like `Journathan` surprising rather than exhausting.
 
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available

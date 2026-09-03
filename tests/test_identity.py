@@ -9,3 +9,11 @@ class IdentityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.object(cli,"ROOT",Path(temporary)):
             (cli.ROOT / "state/jobs").mkdir(parents=True)
             self.assertIn(assign("worker",random.Random(1)),{"Rob","Nina","Dex"})
+
+    def test_rare_silly_pool(self):
+        class DefinitelySilly:
+            def random(self): return 0.01
+            def choice(self, values): return values[0]
+        with tempfile.TemporaryDirectory() as temporary, patch.object(cli,"ROOT",Path(temporary)):
+            (cli.ROOT / "state/jobs").mkdir(parents=True)
+            self.assertEqual(assign("worker",DefinitelySilly()),"Journathan")
