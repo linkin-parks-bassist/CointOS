@@ -31,8 +31,11 @@ record the package and reason.
 ## Approval required
 
 Direct privilege/package-manager commands, repository or package-source changes,
-removals or upgrades, credentials, network/security changes, publication, push or
-merge, hardware actions, destructive migration, and material scope expansion.
+removals or upgrades, credentials, network/security changes, publication outside
+the approved repository workflow, merging a pull request, hardware actions,
+destructive migration, and material scope expansion. In an approved personal
+repository, create a topic branch, commit coherent work, push the branch, and open
+a pull request for David's review.
 
 ## Model and scheduling
 

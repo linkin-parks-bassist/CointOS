@@ -5,7 +5,10 @@
       "path": "/home/david/personal_projects/pigen",
       "provenance": "personal",
       "mode": "active",
-      "push_requires_explicit_approval": true
+      "topic_branch_commits": true,
+      "push_topic_branch": true,
+      "open_pull_request": true,
+      "merge_requires_explicit_approval": true
     },
     {
       "id": "kestrel-interface-style-reference",

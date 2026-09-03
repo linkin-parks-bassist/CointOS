@@ -26,6 +26,7 @@
       "su *": "deny",
       "rm *": "deny",
       "shred *": "deny",
+      "git -C /home/david/personal_projects/pigen push*": "allow",
       "git push*": "deny",
       "systemctl *": "deny",
       "apt *": "deny",
