@@ -21,3 +21,11 @@ does not authorize mixing personal, Avnet, AMD, partner, or customer information
   coherence as product requirements. Background Stewards, Auditors, and Refactorers
   should improve the system in bounded, tested increments without waiting for a
   visible failure or allowing autonomous scope to outrun approval boundaries.
+- Treat scope as an enforced resource boundary. Every run needs one deliverable, a
+  necessary-evidence boundary, explicit authority, a time/resource budget, and a
+  stopping condition. Substantial or multi-concern work must be decomposed into
+  independently verifiable tasks and delegated through durable handoffs; adjacent
+  findings become follow-ups instead of silently expanding the current run.
+- Prompted budgets are not sufficient enforcement. The scheduler and executor must
+  eventually enforce role and task budgets mechanically and preserve a useful
+  partial handoff when a run reaches its boundary.

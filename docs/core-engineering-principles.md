@@ -16,6 +16,24 @@ generate speculative abstractions, or confuse activity with improvement. Prefer
 measured simplification, deletion of accidental complexity (with approval where
 material), explicit contracts, and recovery-friendly changes.
 
+## Scope, decomposition, and delegation
+
+Scope is a resource and authority boundary, not merely a prompt suggestion. Every
+run has one explicit deliverable, a necessary-evidence boundary, authority, a
+time/resource budget, acceptance criteria, and a stopping condition. Continuing to
+inspect merely relevant material after enough evidence exists is a malfunction.
+
+Test every substantial request for decomposition before execution. Split independent
+concerns into the smallest meaningful, independently verifiable tasks and delegate
+specialized pieces through durable handoffs. Keep synthesis as an explicit
+coordinator task; the coordinator must not redo each child's work. Do not create
+ceremonial subtasks, recursive delegation loops, or swarms for atomic operations.
+Adjacent discoveries become prioritized follow-ups rather than implicit expansion.
+
+Budgets must become scheduler facts. Prompts may explain them, but the control plane
+and executor must enforce wall-time, attempt, item, output, and concurrency limits,
+request a compact checkpoint or handoff at the boundary, and make overruns visible.
+
 ## No object-oriented programming
 
 OOP is strictly forbidden. This includes classes, inheritance, class-based domain
@@ -46,4 +64,3 @@ move tests to function style without pausing higher-risk architectural repairs.
 - Test invariants, replay, crash boundaries, and failure recovery—not only happy paths.
 - Preserve inspectability, local inference, auditability, and global pause behavior.
 - Record debt honestly. Never describe a prototype as production architecture.
-

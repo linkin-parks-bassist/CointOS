@@ -26,7 +26,9 @@ secrets, or deleting runtime records.
 ## Model and budget
 
 Use a capable local coding model through Lemonade. Default maximum: two attempts
-and ten minutes.
+and ten minutes. Treat that as a hard intended boundary: checkpoint a useful partial
+result and hand off at ten minutes rather than absorbing adjacent work. The executor
+must ultimately enforce this mechanically; until then, obey it explicitly.
 
 ## Handoff
 
