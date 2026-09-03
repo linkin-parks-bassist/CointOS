@@ -206,8 +206,8 @@ def run_once() -> None:
     queued = scan()
     processed = 0
     for path in sorted((ROOT / "state/jobs").glob("*.json")):
-        state = json.loads(path.read_text(encoding="utf-8"))["state"]
-        if state == "queued":
+        queued_job = json.loads(path.read_text(encoding="utf-8"))
+        if queued_job.get("kind") == "idea-intake" and queued_job["state"] == "queued":
             process(path)
             processed += 1
     print(f"queued={queued} processed={processed}")

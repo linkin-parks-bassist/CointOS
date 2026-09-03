@@ -71,6 +71,14 @@ class IntakeTest(unittest.TestCase):
         self.assertEqual(job["task"], "have an argument")
         self.assertEqual(job["state"], "queued")
 
+    def test_intake_runner_does_not_consume_agent_tasks(self):
+        roles = self.root / "roles"; roles.mkdir(exist_ok=True)
+        (roles / "worker.md").write_text("# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nRoot.\n## Handoff\nReport.\n")
+        job_id = cli.enqueue_task("worker", "Do a task")
+        cli.run_once()
+        job = json.loads((self.root / f"state/jobs/{job_id}.json").read_text())
+        self.assertEqual(job["state"], "queued")
+
 
 if __name__ == "__main__":
     unittest.main()
