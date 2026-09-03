@@ -88,10 +88,11 @@ It supports `/spawn ROLE TASK`, `/roles`, `/status`, and `/pause`; arbitrary tex
 is never shell input. Installing/enabling `agent-telegram.service` waits for an
 explicit decision on credentials and remote data handling.
 
-Ordinary English is routed by a locally served control-plane model into
-one of five validated intents: spawn, status, roles, pause, or chat. The model
-cannot emit shell operations or bypass role validation. Override the local routing
-model with `AGENT_TELEGRAM_MODEL` in the protected environment file.
+Ordinary English goes directly to a locally served conversational control agent.
+It can converse or combine narrow validated tools for status inspection, role
+discovery, dispatch control, task amendment, and task creation. It cannot emit
+shell operations or bypass role validation. Override the control model with
+`AGENT_TELEGRAM_MODEL` in the protected environment file.
 
 The installed gateway uses `Qwen3.8-27B-GGUF` as its conversational control agent
 with a reserved request slot. It receives conversation, live state, roles, resources,
@@ -100,12 +101,20 @@ presentation layer. Ordinary responses are always model-generated. A literal
 failure notice appears only after five minutes without an answer. Each inbound
 update is consumed once to prevent duplicated actions and retry storms.
 
-Machine-status questions have a deterministic local fast path rather than relying
-on model knowledge. Status includes active job identity, role, selected model,
-elapsed time, output-idle time, and a possible-stall warning after five minutes.
-User-facing status is rendered as ordinary prose; the detailed structured version
-is retained for control-plane context. All natural-language actions—including
-status, roles, and pause—are retained in conversation memory with the actual reply.
+The resident 27B weights are shared by four llama.cpp request sequences. Its
+131,072-token context pool therefore provides roughly 32k tokens per simultaneous
+sequence without loading four copies of the coefficients. One sequence is reserved
+for the conversational control plane. This request-level concurrency is distinct
+from worker scheduling: durable worker turns must remain bounded and resumable so
+the scheduler can rotate work instead of allowing one long generation to monopolize
+a sequence.
+
+The control agent can request exact local status through a validated read-only tool.
+Status includes active job identity, role, selected model, elapsed time, output-idle
+time, and a possible-stall warning after five minutes. The model turns that evidence
+into ordinary prose; detailed structured state remains internal. All natural-language
+actions—including status, roles, and pause—are retained in conversation memory with
+the actual reply.
 
 The bot's durable identity and operating knowledge live in
 `roles/_control-plane.md`. The underscore marks it as infrastructure rather than a
