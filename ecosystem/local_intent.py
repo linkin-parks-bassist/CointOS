@@ -42,6 +42,9 @@ clever. Avoid fixed rosters, lazy puns, memes, fantasy sludge, mascot energy, or
 try-hard whimsy. Respect explicit name requests and avoid active_agent_names.
 Use amend when David corrects, revises, or adds to the work request he just queued.
 For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
+Do not use amend for feedback about the bot, its wording, or the ecosystem. If David
+asks for that feedback to be recorded, investigated, engineered out, or fixed, spawn
+the appropriate Steward, Auditor, or Refactorer. Otherwise acknowledge it as chat.
 Use status only for a question actually about this machine, active work, jobs,
 progress, load, schedules, or what the ecosystem is doing—not merely because a
 question contains “when” or refers to prior conversation. Put a natural direct
@@ -99,10 +102,28 @@ Preserve consequential facts, questions, requested decisions, failures, and usef
 results. Remove job IDs, log paths, ANSI/tool chatter, JSON, and queue mechanics.
 Preserve the agent's assigned name and use it naturally; names make the system fun
 and help David follow who did what.
-Do not invent success or details. If it is routine success, be casual (often start
-with “btw,”). If it needs a response, ask naturally and clearly. Output only the message."""
+Do not invent success or details. An executor exiting is not evidence that its task
+was accomplished: report only concrete artifacts and verified outcomes present in
+the notification. If it is routine success, be casual (often start with “btw,”).
+Ask a question only when the internal notification explicitly requires David's
+response. Never append generic invitations such as “want me to”, “shall we”,
+“or should we chat”, or “let me know”. Output only the message."""
     messages = [{"role":"system","content":system}, *((history or [])[-6:]), {"role":"user","content":raw}]
     body = json.dumps({"model":model,"messages":messages,"temperature":0.4,"max_tokens":600,"chat_template_kwargs":{"enable_thinking":False}}).encode()
     request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",data=body,headers={"Content-Type":"application/json","Authorization":"Bearer lemonade"})
     with urllib.request.urlopen(request,timeout=45) as response:
-        return json.load(response)["choices"][0]["message"]["content"].strip()
+        return sanitize_notification(json.load(response)["choices"][0]["message"]["content"])
+
+
+def sanitize_notification(message: str) -> str:
+    """Remove opt-in chatbot tails which are never an operational requirement."""
+    text = message.strip()
+    tails = (
+        r"\s+Want to (?:dive into|chat about|go over|discuss)[^?]*\?\s*$",
+        r"\s+Want me to [^?]*\?\s*$",
+        r"\s+(?:Or )?[Ss]hould we [^?]*\?\s*$",
+        r"\s+Let me know if [^.?!]*[.?!]\s*$",
+    )
+    for tail in tails:
+        text = re.sub(tail, "", text, flags=re.IGNORECASE)
+    return text.strip()

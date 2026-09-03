@@ -2,7 +2,7 @@ import io
 import json
 import unittest
 from unittest.mock import patch
-from ecosystem.local_intent import interpret
+from ecosystem.local_intent import interpret, sanitize_notification
 
 
 class FakeResponse:
@@ -13,6 +13,10 @@ class FakeResponse:
 
 
 class IntentTest(unittest.TestCase):
+    def test_removes_generic_chatbot_tail(self):
+        raw = "Cyrus updated the system map. Want to dive into it or should we chat about something else?"
+        self.assertEqual(sanitize_notification(raw), "Cyrus updated the system map.")
+
     @patch("urllib.request.urlopen")
     def test_valid_spawn(self, opened):
         opened.return_value = FakeResponse('{"action":"spawn","role":"worker","task":"fix it","model":"model-a","model_reason":"small enough","agent_name":"Rob","reply":""}')

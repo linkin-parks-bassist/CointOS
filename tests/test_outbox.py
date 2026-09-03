@@ -19,6 +19,6 @@ class OutboxTest(unittest.TestCase):
             cli.atomic_json(cli.ROOT / "state/jobs/task-one.json", dependency)
             self.assertEqual(outbox.drain(lambda user, text: sent.append((user, text))), 1)
             self.assertEqual(sent[0][0], 42)
-            self.assertIn("finished the earlier work successfully", sent[0][1])
+            self.assertIn("run ended without an executor error", sent[0][1])
             saved = json.loads((cli.ROOT / f"state/jobs/{message_id}.json").read_text())
             self.assertEqual(saved["state"], "delivered")

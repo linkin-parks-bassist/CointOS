@@ -18,6 +18,8 @@ Status: functional prototype requiring consolidation before scale.
 - Presentation is stringly typed and distributed across transport/outbox/model prompts.
 - Executors cannot yet checkpoint/resume, enforce all destructive boundaries, or
   provide trustworthy multi-worker resource admission.
+- Executor exit status is currently mistaken for semantic task completion. Declared
+  artifacts and acceptance checks need validation before success can be reported.
 - Tests cover components but not crash consistency and full service-level scenarios.
 
 ## Refactor direction

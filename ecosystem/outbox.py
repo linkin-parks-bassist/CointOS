@@ -45,7 +45,7 @@ def render(job: dict, dependency_job: dict | None) -> str:
     if output_path and output_path.exists():
         clean = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", output_path.read_text(encoding="utf-8", errors="replace")).strip()
     name = dependency_job.get("agent_name", "The agent")
-    header = (f"{name} finished the earlier work successfully." if dependency_job["state"] == "completed"
+    header = (f"{name}'s run ended without an executor error." if dependency_job["state"] == "completed"
               else f"{name} ran into trouble with the earlier work and it may need attention.")
     return header + ("\n\nResult (tail):\n" + clean[-3000:] if clean else "")
 
