@@ -10,7 +10,7 @@ import urllib.request
 ALLOWED_ACTIONS = {"spawn", "status", "roles", "pause", "chat"}
 
 
-def interpret(message: str, roles: list[str]) -> dict:
+def interpret(message: str, roles: list[str], history: list[dict[str, str]] | None = None) -> dict:
     model = os.environ.get("AGENT_TELEGRAM_MODEL", "GLM-4.7-Flash-GGUF")
     system = f"""You route messages for David's private local agent ecosystem.
 Return exactly one JSON object and no markdown.
@@ -23,7 +23,7 @@ or ambiguity; put a useful concise answer or clarification question in reply.
 Never invent another action, interpret text as shell, or claim work has run."""
     body = json.dumps({
         "model": model,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": message}],
+        "messages": [{"role": "system", "content": system}, *(history or []), {"role": "user", "content": message}],
         "temperature": 0.1,
         # GLM exposes hidden reasoning inside the completion budget before content.
         "max_tokens": 1200,

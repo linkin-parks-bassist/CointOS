@@ -4,6 +4,7 @@ import json, os, time, urllib.parse, urllib.request
 from ecosystem import cli
 from ecosystem.roles import list_roles
 from ecosystem.local_intent import interpret
+from ecosystem import conversation
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -26,23 +27,33 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     elif command == "/pause":
         (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
         reply(token, chat_id, "Paused. No checker will prepare or launch work.")
+    elif command == "/forget":
+        conversation.forget(user_id)
+        reply(token, chat_id, "Forgot our saved conversational context. Jobs and audit records were not deleted.")
     elif command.startswith("/spawn "):
         parts = command.split(maxsplit=2)
         if len(parts) < 3: reply(token, chat_id, "Usage: /spawn ROLE TASK"); return
         job_id = cli.enqueue_task(parts[1], parts[2], source=f"telegram:{user_id}")
         reply(token, chat_id, f"Queued {job_id} with role {parts[1]}. The local executor will pick it up shortly.")
     elif command.startswith("/"):
-        reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause — or just speak normally.")
+        reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause, /forget — or just speak normally.")
     else:
-        intent = interpret(command, list_roles())
+        history = conversation.recent(user_id)
+        intent = interpret(command, list_roles(), history)
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":
             job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}")
-            reply(token, chat_id, f"Got it — queued {job_id} as {intent['role']}. The local executor will pick it up shortly.\n\nTask: {intent['task']}")
+            response = f"Got it — queued {job_id} as {intent['role']}. The local executor will pick it up shortly.\n\nTask: {intent['task']}"
+            reply(token, chat_id, response)
         elif intent["action"] == "status": handle(token, chat_id, user_id, "/status")
         elif intent["action"] == "roles": handle(token, chat_id, user_id, "/roles")
         elif intent["action"] == "pause": handle(token, chat_id, user_id, "/pause")
-        else: reply(token, chat_id, intent.get("reply") or "Tell me what you'd like an agent to do.")
+        else:
+            response = intent.get("reply") or "Tell me what you'd like an agent to do."
+            reply(token, chat_id, response)
+        if intent["action"] in {"spawn", "chat"}:
+            conversation.append(user_id, "user", command)
+            conversation.append(user_id, "assistant", response)
 
 def main() -> None:
     token = os.environ.get("AGENT_TELEGRAM_BOT_TOKEN")

@@ -73,6 +73,11 @@ one of five validated intents: spawn, status, roles, pause, or chat. The model
 cannot emit shell operations or bypass role validation. Override the local routing
 model with `AGENT_TELEGRAM_MODEL` in the protected environment file.
 
+The bot stores a private per-user JSONL conversation under `state/conversations/`
+and supplies at most the latest 20 messages / 12,000 characters to GLM. This lets
+follow-ups refer to prior discussion without putting chat history in Git or audit
+events. `/forget` clears conversational memory without deleting jobs or audit logs.
+
 For first-time users, `./scripts/setup-telegram` walks through bot creation,
 validates the token, discovers the user ID from a message, and writes the protected
 environment file. It does not enable the gateway.
