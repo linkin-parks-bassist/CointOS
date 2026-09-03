@@ -6,6 +6,7 @@
     "pinned": true,
     "reserved_slots": 1,
     "parallel_requests": 2,
+    "shared_context_tokens": 32768,
     "purpose": "Telegram, queue control, model routing, and health responses"
   },
   "workers": {
@@ -31,4 +32,3 @@
     "Record every model selection, scheduling preference, and later substitution."
   ]
 }
-

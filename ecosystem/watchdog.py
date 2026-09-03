@@ -49,7 +49,11 @@ def tick() -> str:
             issue_text = "\n".join(f"- {item}" for item in issues) or "- No deterministic warning; perform the scheduled qualitative review."
             task = f"""Perform the periodic ecosystem sanity review.
 
-Read the last 30 conversational entries in state/conversations without copying secrets into durable notes. Review recent audit events, failed/running jobs, executor output tails, model choices and rationales, systemd user-service state, and current docs/status.md.
+Work from `/home/david/agent-ecosystem`. Read the last 30 conversational entries
+in `/home/david/agent-ecosystem/state/conversations` without copying secrets into
+durable notes. Review recent audit events, failed/running jobs, executor output
+tails, model choices and rationales, systemd user-service state, and
+`/home/david/agent-ecosystem/docs/status.md`.
 
 Deterministic findings at enqueue time:
 {issue_text}
@@ -64,4 +68,3 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
         return "healthy; review not due" if not issues else f"findings={len(issues)}; review already pending"
 
 if __name__ == "__main__": print(tick())
-
