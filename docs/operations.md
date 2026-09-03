@@ -85,6 +85,9 @@ therefore do not monopolize remote control.
 Machine-status questions have a deterministic local fast path rather than relying
 on model knowledge. Status includes active job identity, role, selected model,
 elapsed time, output-idle time, and a possible-stall warning after five minutes.
+User-facing status is rendered as ordinary prose; the detailed structured version
+is retained for control-plane context. All natural-language actions—including
+status, roles, and pause—are retained in conversation memory with the actual reply.
 
 The bot's durable identity and operating knowledge live in
 `roles/_control-plane.md`. The underscore marks it as infrastructure rather than a

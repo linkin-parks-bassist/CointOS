@@ -40,6 +40,29 @@ def status_text() -> str:
     active = "\n".join(jobs) if jobs else "No active agent tasks."
     return f"Paused: {(cli.ROOT / 'state/PAUSED').exists()}\nJobs: {counts}\n\nActive work:\n{active}"
 
+def friendly_status() -> str:
+    jobs = [json.loads(path.read_text()) for path in (cli.ROOT / "state/jobs").glob("*.json")]
+    active = [job for job in jobs if job.get("kind") == "agent-task" and job.get("state") in {"queued","ready","running"}]
+    if active:
+        descriptions = []
+        for job in active:
+            name = job.get("agent_name") or "an older unnamed agent"
+            descriptions.append(f"{name} is {job['state']} on {job.get('task','something')[:120]}")
+        opening = "; ".join(descriptions) + "."
+    else:
+        opening = "nothing's running right now — the machine's ready for whatever's next."
+    completed = sum(job.get("kind") == "agent-task" and job.get("state") == "completed" for job in jobs)
+    failed = sum(job.get("kind") == "agent-task" and job.get("state") == "failed" for job in jobs)
+    history = f" {completed} agent jobs have finished"
+    if failed: history += f", and {failed} older attempts failed"
+    return opening + history + "."
+
+def natural_reply(value: object, fallback: str) -> str:
+    text = value.strip() if isinstance(value, str) else ""
+    if not text or text.startswith(("{", "[")):
+        return fallback
+    return text
+
 def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None:
     delayed = threading.Timer(6.0, reply, args=(token, chat_id, "still chewing on that — one sec…"))
     delayed.daemon = True
@@ -49,7 +72,7 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
         normalized = command.lower().strip(" ?.!")
         status_phrases = ("what is the machine doing", "what's the machine doing", "whats the machine doing", "what is running", "what's running", "status", "what are you doing")
         if any(phrase in normalized for phrase in status_phrases):
-            response = status_text()
+            response = friendly_status()
             reply(token, chat_id, response)
             conversation.append(user_id, "user", command)
             conversation.append(user_id, "assistant", response)
@@ -69,15 +92,21 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
             response = (f"yep, fixed that up — the task now says: {intent['task']}" if job_id else
                         "that one's already started or finished, so I haven't silently changed it. want me to queue a corrected follow-up?")
             reply(token, chat_id, response)
-        elif intent["action"] == "status": handle(token, chat_id, user_id, "/status"); return
-        elif intent["action"] == "roles": handle(token, chat_id, user_id, "/roles"); return
-        elif intent["action"] == "pause": handle(token, chat_id, user_id, "/pause"); return
-        else:
-            response = intent.get("reply") or "what would you like an agent to do?"
+        elif intent["action"] == "status":
+            response = natural_reply(intent.get("reply"), friendly_status())
             reply(token, chat_id, response)
-        if intent["action"] in {"spawn", "amend", "chat"}:
-            conversation.append(user_id, "user", command)
-            conversation.append(user_id, "assistant", response)
+        elif intent["action"] == "roles":
+            response = natural_reply(intent.get("reply"), "I've currently got intake, worker, and steward roles.")
+            reply(token, chat_id, response)
+        elif intent["action"] == "pause":
+            (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
+            response = natural_reply(intent.get("reply"), "yep, paused. nothing new will start until you resume it.")
+            reply(token, chat_id, response)
+        else:
+            response = natural_reply(intent.get("reply"), "what would you like an agent to do?")
+            reply(token, chat_id, response)
+        conversation.append(user_id, "user", command)
+        conversation.append(user_id, "assistant", response)
     finally:
         delayed.cancel()
 
@@ -85,7 +114,7 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     cli.audit("telegram.command", chat_id=chat_id, user_id=user_id, command=command.split(maxsplit=1)[0])
     if command == "/roles": reply(token, chat_id, "Roles: " + ", ".join(list_roles()))
     elif command == "/status":
-        reply(token, chat_id, status_text())
+        reply(token, chat_id, friendly_status())
     elif command == "/pause":
         (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
         reply(token, chat_id, "Paused. No checker will prepare or launch work.")

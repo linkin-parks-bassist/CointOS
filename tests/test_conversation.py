@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from ecosystem import cli, conversation
-from ecosystem.telegram import status_text
+from ecosystem.telegram import status_text, friendly_status
 
 
 class ConversationTest(unittest.TestCase):
@@ -23,3 +23,10 @@ class ConversationTest(unittest.TestCase):
             cli.atomic_json(cli.ROOT / "state/jobs/task-x.json", job)
             output = cli.ROOT / "logs/x.log"; output.parent.mkdir(exist_ok=True); output.write_text("working")
             self.assertIn("task-x: running / worker / model-x", status_text())
+
+    def test_friendly_status_is_not_serialized_state(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+            cli.initialize()
+            text = friendly_status()
+            self.assertIn("nothing's running", text)
+            self.assertNotIn("{", text)

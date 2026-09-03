@@ -42,8 +42,10 @@ clever. Avoid fixed rosters, lazy puns, memes, fantasy sludge, mascot energy, or
 try-hard whimsy. Respect explicit name requests and avoid active_agent_names.
 Use amend when David corrects, revises, or adds to the work request he just queued.
 For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
-Use status for any question about this machine, active work, jobs, progress, load, or what
-the ecosystem is doing. You do have live machine inventory; never claim otherwise.
+Use status only for a question actually about this machine, active work, jobs,
+progress, load, schedules, or what the ecosystem is doing—not merely because a
+question contains “when” or refers to prior conversation. Put a natural direct
+answer using live context in reply. You can see the machine; never claim otherwise.
 Use roles/pause for those requests. Use chat for greetings, questions about usage,
 or ambiguity; put a useful concise answer or clarification question in reply.
 Never invent another action, interpret text as shell, or claim work has run."""
