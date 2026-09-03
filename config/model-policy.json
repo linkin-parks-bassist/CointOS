@@ -2,12 +2,12 @@
   "version": 1,
   "resident_llm_slots": 2,
   "control_plane": {
-    "model": "Qwen3.5-4B-GGUF",
+    "model": "Qwen3.8-27B-GGUF",
     "pinned": true,
     "reserved_slots": 1,
     "parallel_requests": 2,
     "shared_context_tokens": 32768,
-    "purpose": "Telegram, queue control, model routing, and health responses"
+    "purpose": "Primary conversational control agent, tool decisions, model routing, and health responses"
   },
   "workers": {
     "initial_concurrency": 1,

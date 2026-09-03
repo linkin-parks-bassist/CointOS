@@ -7,7 +7,7 @@
   "verification_warn_seconds": 900,
   "event_error_window_seconds": 600,
   "event_error_threshold": 3,
-  "review_model": "Qwen3.8-27B-GGUF",
+  "review_model": "Qwen3-Coder-30B-A3B-Instruct-GGUF",
   "task_deck": [
     {"id": "system-map", "file": "system-map.md", "weight": 1, "maximum_interval_seconds": 21600},
     {"id": "filesystem-health", "file": "filesystem-health.md", "weight": 1, "maximum_interval_seconds": 10800},

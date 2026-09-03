@@ -64,6 +64,11 @@ def drain(send: Callable[[int, str], None]) -> int:
         job = json.loads(path.read_text(encoding="utf-8"))
         if job["state"] not in {"waiting", "queued"}:
             continue
+        if job.get("attempts", 0) >= 3:
+            job.update(state="failed", updated_at=cli.now(), error="notification generation or delivery failed three times")
+            cli.atomic_json(path, job)
+            cli.audit("outbox.exhausted", job_id=job["id"], user_id=job["user_id"])
+            continue
         dependency_job = dependency(job)
         if job.get("depends_on") and (not dependency_job or dependency_job.get("state") not in TERMINAL_STATES):
             continue

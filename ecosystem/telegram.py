@@ -4,12 +4,12 @@ import json, os, threading, time, urllib.parse, urllib.request
 from datetime import datetime, timezone
 from ecosystem import cli
 from ecosystem.roles import list_roles
-from ecosystem.local_intent import interpret, humanize_notification
+from ecosystem.presentation import humanize_notification
 from ecosystem import conversation
 from ecosystem.outbox import drain
 from ecosystem.models import snapshot
 from ecosystem.facts import lifecycle
-from ecosystem.queries import answer as answer_query, resolve as resolve_query
+from ecosystem.control_agent import respond as control_response
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -79,90 +79,77 @@ def recent_errors_text(limit: int = 5) -> str:
         lines.append(f"{instant:%-I:%M:%S %p %Z}: {detail}")
     return "yes — the most recent recorded errors are:\n" + "\n".join(lines)
 
-def natural_reply(value: object, fallback: str) -> str:
-    text = value.strip() if isinstance(value, str) else ""
-    if not text or text.startswith(("{", "[")):
-        return fallback
-    return text
-
 def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None:
-    delayed = threading.Timer(15.0, reply, args=(token, chat_id, "this one's taking longer than usual — still on it."))
+    def disaster_fallback() -> None:
+        message = "the local response system has failed to answer this for five minutes. that's not normal."
+        reply(token, chat_id, message)
+        conversation.append(user_id, "assistant", message)
+        cli.audit("telegram.disaster_fallback", user_id=user_id)
+    delayed = threading.Timer(300.0, disaster_fallback)
     delayed.daemon = True
     delayed.start()
+    answered = False
     try:
         history = conversation.recent(user_id)
-        normalized = command.lower().strip(" ?.!")
-        status_phrases = ("what is the machine doing", "what's the machine doing", "whats the machine doing", "what is running", "what's running", "status", "what are you doing")
-        error_phrases = ("any errors", "recent errors", "check the logs", "check recent logs", "most recent logs")
-        if any(phrase in normalized for phrase in error_phrases):
-            response = recent_errors_text()
-            reply(token, chat_id, response)
-            conversation.append(user_id, "user", command)
-            conversation.append(user_id, "assistant", response)
-            return
-        if any(phrase in normalized for phrase in status_phrases):
-            response = friendly_status()
-            reply(token, chat_id, response)
-            conversation.append(user_id, "user", command)
-            conversation.append(user_id, "assistant", response)
-            return
         live = snapshot(); live["job_status"] = status_text()
         live["lifecycle_facts"] = lifecycle()
+        live["recent_errors"] = recent_errors_text()
+        live["available_roles"] = list_roles()
         from ecosystem.identity import active_names
         live["active_agent_names"] = sorted(active_names())
-        intent = interpret(command, list_roles(), history, live)
-        cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
-        if intent["action"] == "spawn":
-            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"], agent_name=intent["agent_name"])
-            job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
-            response = f"yep — {job['agent_name']}'s on it. I'll let you know how they go."
-            reply(token, chat_id, response)
-        elif intent["action"] == "amend":
-            job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"], intent["model"], intent["model_reason"])
-            response = (f"yep, fixed that up — the task now says: {intent['task']}" if job_id else
-                        "that one's already started or finished, so I haven't silently changed it. want me to queue a corrected follow-up?")
-            reply(token, chat_id, response)
-        elif intent["action"] == "status":
-            query, query_role = resolve_query(command, intent.get("query", "general"), intent.get("query_role", ""))
-            exact = answer_query(query, query_role, live["lifecycle_facts"])
-            response = exact or natural_reply(intent.get("reply"), friendly_status())
-            reply(token, chat_id, response)
-        elif intent["action"] == "roles":
-            response = natural_reply(intent.get("reply"), "I've currently got intake, worker, and steward roles.")
-            reply(token, chat_id, response)
-        elif intent["action"] == "pause":
-            (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
-            response = natural_reply(intent.get("reply"), "yep, paused. nothing new will start until you resume it.")
-            reply(token, chat_id, response)
-        else:
-            response = natural_reply(intent.get("reply"), "what would you like an agent to do?")
-            reply(token, chat_id, response)
+        available_models = {item["id"] for item in live["models"]}
+        available_roles = set(live["available_roles"])
+        def execute_tool(name: str, arguments: dict) -> dict:
+            cli.audit("telegram.tool", user_id=user_id, tool=name)
+            if name == "inspect_status":
+                refreshed = snapshot()
+                return {"ok": True, "job_status": status_text(), "models": refreshed,
+                        "lifecycle_facts": lifecycle()}
+            if name == "inspect_recent_errors":
+                return {"ok": True, "recent_errors": recent_errors_text()}
+            if name == "list_roles":
+                return {"ok": True, "roles": list_roles()}
+            if name in {"queue_task", "amend_pending_task"}:
+                role = arguments.get("role")
+                model = arguments.get("model")
+                task = arguments.get("task")
+                if role not in available_roles: raise ValueError("unknown role")
+                if model not in available_models: raise ValueError("unavailable model")
+                if not isinstance(task, str) or not task.strip(): raise ValueError("empty task")
+                if name == "queue_task":
+                    job_id = cli.enqueue_task(role, task, source=f"telegram:{user_id}", model=model,
+                                              model_reason=arguments.get("model_reason", ""),
+                                              agent_name=arguments.get("agent_name"))
+                    job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
+                    return {"ok": True, "agent_name": job["agent_name"], "role": role,
+                            "model": model, "task": task}
+                job_id = cli.amend_latest_task(f"telegram:{user_id}", role, task, model,
+                                               arguments.get("model_reason", ""))
+                return {"ok": bool(job_id), "amended": bool(job_id), "task": task}
+            if name == "pause_dispatch":
+                (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
+                return {"ok": True, "paused": True}
+            if name == "resume_dispatch":
+                (cli.ROOT / "state/PAUSED").unlink(missing_ok=True); cli.audit("ecosystem.resumed", source="telegram", user_id=user_id)
+                return {"ok": True, "paused": False}
+            if name == "forget_conversation":
+                conversation.forget(user_id)
+                return {"ok": True, "forgotten": True}
+            raise ValueError("unsupported control tool")
+        response = control_response(command, history, live, execute_tool)
+        if not response:
+            raise ValueError("control agent returned no response")
+        reply(token, chat_id, response)
         conversation.append(user_id, "user", command)
         conversation.append(user_id, "assistant", response)
+        answered = True
     finally:
-        delayed.cancel()
+        if answered:
+            delayed.cancel()
 
 def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     cli.audit("telegram.command", chat_id=chat_id, user_id=user_id, command=command.split(maxsplit=1)[0])
-    if command == "/roles": reply(token, chat_id, "Roles: " + ", ".join(list_roles()))
-    elif command == "/status":
-        reply(token, chat_id, friendly_status())
-    elif command == "/pause":
-        (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
-        reply(token, chat_id, "Paused. No checker will prepare or launch work.")
-    elif command == "/forget":
-        conversation.forget(user_id)
-        reply(token, chat_id, "Forgot our saved conversational context. Jobs and audit records were not deleted.")
-    elif command.startswith("/spawn "):
-        parts = command.split(maxsplit=2)
-        if len(parts) < 3: reply(token, chat_id, "Usage: /spawn ROLE TASK"); return
-        job_id = cli.enqueue_task(parts[1], parts[2], source=f"telegram:{user_id}")
-        job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
-        reply(token, chat_id, f"yep — {job['agent_name']}'s on it. I'll let you know how they go.")
-    elif command.startswith("/"):
-        reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause, /forget — or just speak normally.")
-    else:
-        handle_natural(token, chat_id, user_id, command)
+    handle_natural(token, chat_id, user_id, command)
 
 def main() -> None:
     token = os.environ.get("AGENT_TELEGRAM_BOT_TOKEN")
@@ -177,7 +164,7 @@ def main() -> None:
                     friendly = humanize_notification(message, conversation.recent(user_id))
                 except Exception as error:
                     cli.audit("telegram.humanize_failed", user_id=user_id, error=f"{type(error).__name__}: {error}")
-                    friendly = message
+                    raise
                 reply(token, user_id, friendly)
                 conversation.append(user_id, "assistant", friendly)
             drain(deliver)
@@ -191,15 +178,12 @@ def main() -> None:
                     incoming = message["text"].strip()
                     try:
                         handle(token, chat, sender, incoming)
-                    except (ValueError, KeyError, json.JSONDecodeError) as error:
-                        # A semantically invalid model response is not transient. Retrying
-                        # the same Telegram update forever creates a poison-message loop.
+                    except Exception as error:
+                        # One inbound message gets one bounded control attempt. Replaying
+                        # it can duplicate actions and schedule many fallback timers.
                         cli.audit("telegram.dead_letter", user_id=sender, update_id=update["update_id"],
                                   error=f"{type(error).__name__}: {error}")
-                        fallback = "sorry — I mangled that one locally. Nothing was queued."
-                        reply(token, chat, fallback)
                         conversation.append(sender, "user", incoming)
-                        conversation.append(sender, "assistant", fallback)
                 # Advance after success or deliberate dead-lettering. Network failures
                 # still escape and retry because delivery outcome is then unknown.
                 offset = next_offset; offset_path.write_text(str(offset))

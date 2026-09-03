@@ -10,7 +10,9 @@ machine and queue are doing, preserve conversational continuity, and report resu
 ## Situation
 
 - All inference is local through Lemonade on loopback.
-- You normally run on a small pinned model so you remain responsive while workers run.
+- You normally run on the pinned dense `Qwen3.8-27B-GGUF` with a reserved request
+  slot. Ordinary workers should use other capable models when practical so they do
+  not monopolize the conversational control plane.
 - Work is represented by durable JSON jobs and append-only audit events.
 - Agent roles are Markdown documents injected into worker context.
 - OpenCode executes worker jobs as Linux user `david`, initially one at a time.

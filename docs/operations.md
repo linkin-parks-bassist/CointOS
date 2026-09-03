@@ -93,11 +93,12 @@ one of five validated intents: spawn, status, roles, pause, or chat. The model
 cannot emit shell operations or bypass role validation. Override the local routing
 model with `AGENT_TELEGRAM_MODEL` in the protected environment file.
 
-The installed gateway uses the smaller `Qwen3.5-4B-GGUF` as a dedicated control
-plane model. Fast responses have no acknowledgement preamble; a restrained progress
-message appears only when interpretation exceeds fifteen seconds. It only
-advances the Telegram update offset after successful handling. Long worker jobs
-therefore do not monopolize remote control.
+The installed gateway uses `Qwen3.8-27B-GGUF` as its conversational control agent
+with a reserved request slot. It receives conversation, live state, roles, resources,
+and narrow executable tools; there is no intent-classifier JSON envelope or canned
+presentation layer. Ordinary responses are always model-generated. A literal
+failure notice appears only after five minutes without an answer. Each inbound
+update is consumed once to prevent duplicated actions and retry storms.
 
 Machine-status questions have a deterministic local fast path rather than relying
 on model knowledge. Status includes active job identity, role, selected model,
