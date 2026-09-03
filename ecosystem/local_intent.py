@@ -82,6 +82,8 @@ def humanize_notification(raw: str, history: list[dict[str, str]] | None = None)
 Rewrite an internal agent notification as one concise Telegram message to David.
 Preserve consequential facts, questions, requested decisions, failures, and useful
 results. Remove job IDs, log paths, ANSI/tool chatter, JSON, and queue mechanics.
+Preserve the agent's assigned name and use it naturally; names make the system fun
+and help David follow who did what.
 Do not invent success or details. If it is routine success, be casual (often start
 with “btw,”). If it needs a response, ask naturally and clearly. Output only the message."""
     messages = [{"role":"system","content":system}, *((history or [])[-6:]), {"role":"user","content":raw}]

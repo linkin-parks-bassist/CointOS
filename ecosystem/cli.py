@@ -51,9 +51,10 @@ def initialize() -> None:
     print(f"initialized {ROOT}")
 
 
-def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | None = None, model_reason: str = "") -> str:
+def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | None = None, model_reason: str = "", agent_name: str | None = None) -> str:
     from ecosystem.roles import load_role
     from ecosystem.models import snapshot, ids, fallback
+    from ecosystem.identity import assign
 
     initialize()
     load_role(role)  # Reject unknown or malformed roles before queueing.
@@ -62,6 +63,7 @@ def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | N
         model, model_reason = fallback(role, inventory)
     if model not in ids(inventory):
         raise ValueError(f"model {model!r} is not locally available")
+    agent_name = agent_name or assign(role)
     job_id = f"task-{uuid.uuid4().hex[:16]}"
     job = {
         "id": job_id, "kind": "agent-task", "state": "queued",
@@ -69,9 +71,10 @@ def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | N
         "role": role, "task": task, "source": source, "model": model,
         "model_reason": model_reason or "Explicit caller selection.",
         "resource_snapshot": inventory,
+        "agent_name": agent_name,
     }
     atomic_json(ROOT / "state/jobs" / f"{job_id}.json", job)
-    audit("task.queued", job_id=job_id, role=role, source=source, model=model, model_reason=job["model_reason"])
+    audit("task.queued", job_id=job_id, role=role, source=source, model=model, model_reason=job["model_reason"], agent_name=agent_name)
     return job_id
 
 
@@ -107,13 +110,13 @@ def prepare_next() -> None:
         job = json.loads(path.read_text(encoding="utf-8"))
         if job.get("kind") != "agent-task" or job["state"] != "queued":
             continue
-        prompt = render_context(job["role"], job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""))
+        prompt = render_context(job["role"], job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"))
         prompt_path = ROOT / "state/jobs" / f"{job['id']}.prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         job.update(state="ready", updated_at=now(), prompt=str(prompt_path.relative_to(ROOT)))
         atomic_json(path, job)
         audit("task.ready", job_id=job["id"], role=job["role"], prompt=job["prompt"])
-        print(f"{job['id']} ready with role {job['role']} on {job.get('model', 'legacy-default')}")
+        print(f"{job['id']} ({job.get('agent_name', 'Agent')}) ready with role {job['role']} on {job.get('model', 'legacy-default')}")
         return
     print("no queued agent task")
 

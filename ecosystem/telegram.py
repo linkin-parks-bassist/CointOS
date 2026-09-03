@@ -55,7 +55,8 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
         parts = command.split(maxsplit=2)
         if len(parts) < 3: reply(token, chat_id, "Usage: /spawn ROLE TASK"); return
         job_id = cli.enqueue_task(parts[1], parts[2], source=f"telegram:{user_id}")
-        reply(token, chat_id, f"Queued {job_id} with role {parts[1]}. The local executor will pick it up shortly.")
+        job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
+        reply(token, chat_id, f"yep — {job['agent_name']}'s on it. I'll let you know how they go.")
     elif command.startswith("/"):
         reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause, /forget — or just speak normally.")
     else:
@@ -75,7 +76,8 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":
             job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"])
-            response = intent.get("reply") or f"yep — I've handed that off to a {intent['role']} and I'll let you know how it goes."
+            job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
+            response = f"yep — {job['agent_name']}'s on it. I'll let you know how they go."
             reply(token, chat_id, response)
         elif intent["action"] == "amend":
             job_id = cli.amend_latest_task(f"telegram:{user_id}", intent["role"], intent["task"], intent["model"], intent["model_reason"])

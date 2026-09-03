@@ -107,6 +107,11 @@ Before delivery, the pinned control model rewrites internal notifications into a
 concise informal message. Job IDs, raw JSON, log paths, tool chatter, and queue
 jargon remain in local records unless David explicitly asks for technical detail.
 
+Each spawned job receives a durable role-aware name from `config/agent-names.json`.
+The allocator avoids names held by active jobs where possible. Identity is injected
+into context and retained through retries, audit events, agent-originated messages,
+and completion notices; it does not create a separate role or pretend agents are human.
+
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available
 memory, and host load. It selects a model (or honors David's explicit selection),
