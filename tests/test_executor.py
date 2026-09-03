@@ -12,7 +12,7 @@ class ExecutorTest(IntakeTest):
         roles = self.root / "roles"; roles.mkdir(exist_ok=True)
         (roles / "worker.md").write_text("# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nRoot.\n## Handoff\nReport.\n")
         (roles / "verifier.md").write_text("# Verifier\n## Mission\nCheck.\n## Permissions\nRead.\n## Approval required\nChanges.\n## Handoff\nVerdict.\n")
-        (self.root / "config").mkdir()
+        (self.root / "config").mkdir(exist_ok=True)
         (self.root / "config/executor-opencode.json").write_text(
             '{"provider":{"Lemonade":{"models":{"Qwen3.5-4B-GGUF":{},"Qwen3-Coder-30B-A3B-Instruct-GGUF":{}}}}}'
         )

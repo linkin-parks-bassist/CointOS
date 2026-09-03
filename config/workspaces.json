@@ -1,0 +1,18 @@
+{
+  "workspaces": [
+    {
+      "id": "pigen",
+      "path": "/home/david/personal_projects/pigen",
+      "provenance": "personal",
+      "mode": "active",
+      "push_requires_explicit_approval": true
+    },
+    {
+      "id": "kestrel-interface-style-reference",
+      "path": "/home/david/reference_projects/kestrel-interface-ab1b88db9612",
+      "provenance": "personal-human-written-reference",
+      "mode": "immutable-reference",
+      "commit": "ab1b88db9612cf177d991a9855bbdbe56f0b1244"
+    }
+  ]
+}

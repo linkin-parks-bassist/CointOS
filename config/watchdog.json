@@ -7,7 +7,7 @@
   "verification_warn_seconds": 900,
   "event_error_window_seconds": 600,
   "event_error_threshold": 3,
-  "review_model": "Qwen3.5-4B-GGUF",
+  "review_model": "Qwen3.8-27B-GGUF",
   "task_deck": [
     {"id": "system-map", "file": "system-map.md", "weight": 1, "maximum_interval_seconds": 21600},
     {"id": "filesystem-health", "file": "filesystem-health.md", "weight": 1, "maximum_interval_seconds": 10800},

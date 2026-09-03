@@ -16,6 +16,8 @@ class IntakeTest(unittest.TestCase):
         self.root_patch.start()
         cli.initialize()
         (self.root / "AGENTS.md").write_text("# Test repository instructions\n\nUse explicit evidence.\n", encoding="utf-8")
+        (self.root / "config").mkdir(exist_ok=True)
+        (self.root / "config/workspaces.json").write_text('{"workspaces": []}\n', encoding="utf-8")
 
     def tearDown(self):
         self.root_patch.stop()

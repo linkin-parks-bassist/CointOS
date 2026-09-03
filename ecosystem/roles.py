@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from ecosystem import cli
@@ -25,6 +26,7 @@ def render_context(role: str, task: str, job_id: str, model: str = "unspecified"
     definition = load_role(role)
     workspace_instructions = (Path.home() / "AGENTS.md").read_text(encoding="utf-8").strip()
     repository_instructions = (cli.ROOT / "AGENTS.md").read_text(encoding="utf-8").strip()
+    workspace_registry = json.loads((cli.ROOT / "config/workspaces.json").read_text(encoding="utf-8"))
     return f"""# Assigned agent context
 
 You are a locally running agent assigned the role below. Follow the role's scope
@@ -52,6 +54,10 @@ Selection rationale: {model_reason or "Not recorded (legacy job)."}
 ## Binding ecosystem repository instructions
 
 {repository_instructions}
+
+## Registered workspaces and provenance
+
+{json.dumps(workspace_registry, indent=2)}
 
 {definition}
 
