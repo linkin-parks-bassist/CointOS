@@ -39,6 +39,7 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     elif command.startswith("/"):
         reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause, /forget — or just speak normally.")
     else:
+        reply(token, chat_id, "Got it — thinking locally…")
         history = conversation.recent(user_id)
         intent = interpret(command, list_roles(), history)
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
@@ -74,10 +75,14 @@ def main() -> None:
             drain(lambda user_id, text: reply(token, user_id, text))
             updates = api(token, "getUpdates", {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'})["result"]
             for update in updates:
-                offset = update["update_id"] + 1; offset_path.write_text(str(offset))
+                next_offset = update["update_id"] + 1
                 message = update.get("message", {}); sender = message.get("from", {}).get("id"); chat = message.get("chat", {}).get("id")
-                if sender not in allowed: cli.audit("telegram.denied", user_id=sender, chat_id=chat); continue
-                if chat is not None and message.get("text"): handle(token, chat, sender, message["text"].strip())
+                if sender not in allowed:
+                    cli.audit("telegram.denied", user_id=sender, chat_id=chat)
+                elif chat is not None and message.get("text"):
+                    handle(token, chat, sender, message["text"].strip())
+                # Confirm an update only after its handling completed successfully.
+                offset = next_offset; offset_path.write_text(str(offset))
         except Exception as error:
             cli.audit("telegram.error", error=f"{type(error).__name__}: {error}"); time.sleep(5)
 

@@ -6,6 +6,7 @@ Wants=network-online.target
 ExecStart=%h/agent-ecosystem/scripts/telegram-gateway
 WorkingDirectory=%h/agent-ecosystem
 EnvironmentFile=%h/.config/agent-ecosystem/telegram.env
+Environment=AGENT_TELEGRAM_MODEL=Qwen3.5-4B-GGUF
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
@@ -14,4 +15,3 @@ ProtectSystem=strict
 ReadWritePaths=%h/agent-ecosystem
 [Install]
 WantedBy=default.target
-

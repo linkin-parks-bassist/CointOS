@@ -71,10 +71,15 @@ It supports `/spawn ROLE TASK`, `/roles`, `/status`, and `/pause`; arbitrary tex
 is never shell input. Installing/enabling `agent-telegram.service` waits for an
 explicit decision on credentials and remote data handling.
 
-Ordinary English is routed by the locally served `GLM-4.7-Flash-GGUF` model into
+Ordinary English is routed by a locally served control-plane model into
 one of five validated intents: spawn, status, roles, pause, or chat. The model
 cannot emit shell operations or bypass role validation. Override the local routing
 model with `AGENT_TELEGRAM_MODEL` in the protected environment file.
+
+The installed gateway uses the smaller `Qwen3.5-4B-GGUF` as a dedicated control
+plane model. It acknowledges natural-language messages before inference and only
+advances the Telegram update offset after successful handling. Long worker jobs
+therefore do not monopolize remote control.
 
 The bot stores a private per-user JSONL conversation under `state/conversations/`
 and supplies at most the latest 20 messages / 12,000 characters to GLM. This lets
