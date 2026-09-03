@@ -10,6 +10,7 @@ from pathlib import Path
 
 ALLOWED_ACTIONS = {"spawn", "amend", "status", "roles", "pause", "chat"}
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
+WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
 
 
 def interpret(message: str, roles: list[str], history: list[dict[str, str]] | None = None, inventory: dict | None = None) -> dict:
@@ -17,7 +18,10 @@ def interpret(message: str, roles: list[str], history: list[dict[str, str]] | No
     inventory = inventory or {"memory_available_gb": 0, "load_average": [], "models": [{"id": model}]}
     available_models = [item["id"] for item in inventory["models"]]
     control_role = CONTROL_ROLE.read_text(encoding="utf-8")
-    system = f"""{control_role}
+    workspace_instructions = WORKSPACE_INSTRUCTIONS.read_text(encoding="utf-8")
+    system = f"""{workspace_instructions}
+
+{control_role}
 
 ## Live context for this turn
 
@@ -95,7 +99,10 @@ Never invent another action, interpret text as shell, or claim work has run."""
 def humanize_notification(raw: str, history: list[dict[str, str]] | None = None) -> str:
     model = os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF")
     role = CONTROL_ROLE.read_text(encoding="utf-8")
-    system = f"""{role}
+    workspace_instructions = WORKSPACE_INSTRUCTIONS.read_text(encoding="utf-8")
+    system = f"""{workspace_instructions}
+
+{role}
 
 Rewrite an internal agent notification as one concise Telegram message to David.
 Preserve consequential facts, questions, requested decisions, failures, and useful

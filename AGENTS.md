@@ -1,5 +1,9 @@
 # Repository instructions
 
+The workspace instructions in `/home/david/AGENTS.md` apply here in full. This is
+personal orchestration infrastructure that may coordinate professional tasks; that
+does not authorize mixing personal, Avnet, AMD, partner, or customer information.
+
 - Preserve local-only inference and filesystem/version-control as the source of truth.
 - Read `docs/status.md`, relevant project notes, and decisions before changing behavior.
 - Record consequential design changes in `docs/decisions/`.
@@ -17,4 +21,3 @@
   coherence as product requirements. Background Stewards, Auditors, and Refactorers
   should improve the system in bounded, tested increments without waiting for a
   visible failure or allowing autonomous scope to outrun approval boundaries.
-

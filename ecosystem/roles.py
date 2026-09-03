@@ -23,6 +23,8 @@ def load_role(role: str) -> str:
 
 def render_context(role: str, task: str, job_id: str, model: str = "unspecified", model_reason: str = "", agent_name: str = "Agent") -> str:
     definition = load_role(role)
+    workspace_instructions = (Path.home() / "AGENTS.md").read_text(encoding="utf-8").strip()
+    repository_instructions = (cli.ROOT / "AGENTS.md").read_text(encoding="utf-8").strip()
     return f"""# Assigned agent context
 
 You are a locally running agent assigned the role below. Follow the role's scope
@@ -42,6 +44,14 @@ be human. Bring a little personality, but never trade correctness or clarity for
 Job ID: `{job_id}`
 Selected model: `{model}`
 Selection rationale: {model_reason or "Not recorded (legacy job)."}
+
+## Binding workspace instructions
+
+{workspace_instructions}
+
+## Binding ecosystem repository instructions
+
+{repository_instructions}
 
 {definition}
 

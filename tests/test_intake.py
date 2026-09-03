@@ -15,6 +15,7 @@ class IntakeTest(unittest.TestCase):
         self.root_patch = patch.object(cli, "ROOT", self.root)
         self.root_patch.start()
         cli.initialize()
+        (self.root / "AGENTS.md").write_text("# Test repository instructions\n\nUse explicit evidence.\n", encoding="utf-8")
 
     def tearDown(self):
         self.root_patch.stop()
@@ -60,6 +61,8 @@ class IntakeTest(unittest.TestCase):
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
         self.assertIn("# Worker", prompt)
         self.assertIn("Inspect the widget", prompt)
+        self.assertIn("# David's workspace instructions", prompt)
+        self.assertIn("# Test repository instructions", prompt)
 
     def test_pending_task_can_be_amended(self):
         roles = self.root / "roles"; roles.mkdir(exist_ok=True)
