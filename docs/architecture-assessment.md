@@ -33,5 +33,8 @@ Status: functional prototype requiring consolidation before scale.
 6. Add property/state-machine tests, crash injection, replay tests, and architecture
    dependency checks before increasing worker concurrency or privilege.
 
-No more major feature growth should bypass this consolidation milestone.
+An initial `queries` boundary now demonstrates this direction: high-confidence
+lifecycle language is resolved to a typed query, authoritative projections answer
+it, and the model is limited to ambiguity and presentation rather than factual authority.
 
+No more major feature growth should bypass this consolidation milestone.

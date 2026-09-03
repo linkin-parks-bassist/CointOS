@@ -9,7 +9,7 @@ from ecosystem import conversation
 from ecosystem.outbox import drain
 from ecosystem.models import snapshot
 from ecosystem.facts import lifecycle
-from ecosystem.queries import answer as answer_query
+from ecosystem.queries import answer as answer_query, resolve as resolve_query
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -96,7 +96,8 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
                         "that one's already started or finished, so I haven't silently changed it. want me to queue a corrected follow-up?")
             reply(token, chat_id, response)
         elif intent["action"] == "status":
-            exact = answer_query(intent.get("query", "general"), intent.get("query_role", ""), live["lifecycle_facts"])
+            query, query_role = resolve_query(command, intent.get("query", "general"), intent.get("query_role", ""))
+            exact = answer_query(query, query_role, live["lifecycle_facts"])
             response = exact or natural_reply(intent.get("reply"), friendly_status())
             reply(token, chat_id, response)
         elif intent["action"] == "roles":
