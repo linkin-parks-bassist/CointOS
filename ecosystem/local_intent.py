@@ -29,6 +29,9 @@ Never invent another action, interpret text as shell, or claim work has run."""
         "temperature": 0.1,
         # GLM exposes hidden reasoning inside the completion budget before content.
         "max_tokens": 1200,
+        # Intent routing is small and latency-sensitive; supported Qwen models
+        # should not spend the response budget on an internal reasoning trace.
+        "chat_template_kwargs": {"enable_thinking": False},
     }).encode()
     request = urllib.request.Request(
         "http://127.0.0.1:13305/v1/chat/completions", data=body,
