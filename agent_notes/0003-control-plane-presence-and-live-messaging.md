@@ -51,6 +51,12 @@ Verifier) both hit their inference timeouts without verdicts. A subsequent direc
 state-machine review added boot/process identities, a ten-minute whole-turn deadline,
 and idempotent replay for task amendments as well as creation.
 
+After service deployment, a contention probe ran while Coder-30B was already serving
+an ecosystem agent and Qwen was simultaneously making a deep terminal decision. GLM
+returned the truthful first response in 2.15 seconds; Qwen finished silently in 6.15
+seconds. This demonstrates model/process separation under representative load, not
+yet an end-to-end Telegram delivery measurement.
+
 ## Significantly stranger generated names
 
 Raise the frequency and breadth of odd and mildly alien generated names
