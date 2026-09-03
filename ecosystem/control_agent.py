@@ -18,7 +18,7 @@ TOOLS = [
     {"type": "function", "function": {"name": "inspect_status", "description": "Refresh exact machine, model, queue, job, and service status.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "inspect_recent_errors", "description": "Read recent durable errors and failure events with timestamps.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "list_roles", "description": "List currently available agent roles.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
-    {"type": "function", "function": {"name": "queue_task", "description": "Assign one bounded task to an agent when David requests work.", "parameters": {"type": "object", "properties": {"role": {"type": "string"}, "task": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}, "agent_name": {"type": "string"}}, "required": ["role", "task", "model", "model_reason", "agent_name"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "queue_task", "description": "Delegate one bounded task to a full role-backed agent. Use this for sustained investigation, substantial reasoning, implementation, or actions that should continue after the quick initial reply. The verified result will return to David later.", "parameters": {"type": "object", "properties": {"role": {"type": "string"}, "task": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}, "agent_name": {"type": "string"}}, "required": ["role", "task", "model", "model_reason", "agent_name"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "amend_pending_task", "description": "Amend David's latest still-pending Telegram task when he explicitly corrects that task.", "parameters": {"type": "object", "properties": {"role": {"type": "string"}, "task": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}}, "required": ["role", "task", "model", "model_reason"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "pause_dispatch", "description": "Pause all new agent dispatch when David asks.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "resume_dispatch", "description": "Resume agent dispatch when David asks.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
@@ -35,8 +35,13 @@ def respond(message: str, history: list[dict[str, str]], live: dict,
 
 You are the conversational control agent, not an intent classifier. Understand
 David's message in context, decide whether any tool action is useful, use tools when
-needed, observe their results, and then respond naturally. You may call several
-tools. Do not emit JSON as prose. Do not mention internal IDs unless asked. Do not
+needed, observe their results, and then respond naturally. Keep this front-door turn
+light and responsive. Answer immediately when the matter is conversational or can be
+settled from live facts. When it requires sustained investigation, substantial
+reasoning, implementation, or prolonged actions, queue one appropriately scoped
+role-backed agent and give David a brief natural initial response; that agent's
+verified result will be delivered later. Do not attempt the long task inside this
+Telegram turn. You may call several quick tools. Do not emit JSON as prose. Do not mention internal IDs unless asked. Do not
 repeat a stock acknowledgement. Ask a question only for a genuinely consequential
 missing decision. If no action is needed, simply converse. Never claim an action or
 fact unless present in live context or a tool result.

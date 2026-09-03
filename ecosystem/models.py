@@ -27,8 +27,19 @@ def snapshot() -> dict:
         "busy": loaded.get(item["id"], {}).get("is_busy", False),
     } for item in registry if item.get("downloaded") and "chat" in item.get("labels", [])]
     policy_path = Path(__file__).resolve().parents[1] / "config/model-policy.json"
+    machine_path = Path(__file__).resolve().parents[1] / "config/machine-profile.json"
+    machine = json.loads(machine_path.read_text(encoding="utf-8"))
+    linux_total = round(memory.get("MemTotal", 0) / 1024 / 1024, 1)
+    linux_available = round(memory.get("MemAvailable", 0) / 1024 / 1024, 1)
     return {
-        "memory_available_gb": round(memory.get("MemAvailable", 0) / 1024 / 1024, 1),
+        "memory_available_gb": linux_available,
+        "memory": {
+            "physical_unified_gb": machine["physical_unified_memory_gb"],
+            "firmware_gpu_reservation_gb": machine["firmware_gpu_reservation_gb"],
+            "linux_total_gb": linux_total,
+            "linux_available_gb": linux_available,
+            "meaning": machine["memory_note"],
+        },
         "load_average": list(os.getloadavg()), "models": models,
         "scheduling_policy": json.loads(policy_path.read_text(encoding="utf-8")),
     }
