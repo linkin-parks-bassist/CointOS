@@ -53,8 +53,11 @@ The executor may modify David-owned files. Its dedicated OpenCode policy blocks
 obvious privilege, package-management, service-management, destructive deletion,
 Git push, and web tools. Shell containment is best-effort rather than a security
 boundary; elevated actions will move through a separate approval broker.
-Completion and failure summaries are sent to the configured allowlisted Telegram
-user, while the complete transcript remains on disk.
+Completion and failure summaries are durable `outbound-message` jobs dependent on
+the agent job reaching a terminal state. The Telegram gateway drains this outbox,
+retries transient delivery failures, and returns the useful tail of agent output;
+the complete transcript remains on disk. This same dependency mechanism is the
+foundation for future state watchers and scheduled reminders.
 
 The Telegram gateway uses outbound long polling and accepts only configured user
 IDs. Put the following in `~/.config/agent-ecosystem/telegram.env` with mode `0600`:

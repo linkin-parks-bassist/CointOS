@@ -5,29 +5,16 @@ import fcntl
 import json
 import os
 import subprocess
-import re
 from pathlib import Path
 
 from ecosystem import cli
 
 
-def notify(job: dict) -> None:
-    token = os.environ.get("AGENT_TELEGRAM_BOT_TOKEN")
+def queue_notifications(job: dict) -> None:
+    from ecosystem.outbox import enqueue
     recipients = [value for value in os.environ.get("AGENT_TELEGRAM_ALLOWED_USER_IDS", "").split(",") if value.strip()]
-    if not token:
-        return
-    from ecosystem.telegram import reply
-    summary = f"Job {job['id']} {job['state']} ({job['role']}).\nLog: {job.get('output', 'none')}"
-    output_path = cli.ROOT / job["output"] if job.get("output") else None
-    if output_path and output_path.exists():
-        clean = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", output_path.read_text(encoding="utf-8", errors="replace")).strip()
-        if clean:
-            summary += "\n\nResult (tail):\n" + clean[-3000:]
     for recipient in recipients:
-        try:
-            reply(token, int(recipient), summary)
-        except Exception as error:
-            cli.audit("telegram.notification_failed", job_id=job["id"], error=f"{type(error).__name__}: {error}")
+        enqueue(int(recipient), depends_on=job["id"], result_of=job["id"])
 
 
 def execute_next(run=subprocess.run) -> bool:
@@ -65,7 +52,7 @@ def execute_next(run=subprocess.run) -> bool:
                 job.update(state="failed", updated_at=cli.now(), error=f"{type(error).__name__}: {error}")
             cli.atomic_json(path, job)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))
-            notify(job)
+            queue_notifications(job)
             print(f"{job['id']} {job['state']}")
             return True
     print("no ready task")

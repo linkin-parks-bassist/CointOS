@@ -5,6 +5,7 @@ from ecosystem import cli
 from ecosystem.roles import list_roles
 from ecosystem.local_intent import interpret
 from ecosystem import conversation
+from ecosystem.outbox import drain
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -70,6 +71,7 @@ def main() -> None:
     offset = int(offset_path.read_text()) if offset_path.exists() else 0
     while True:
         try:
+            drain(lambda user_id, text: reply(token, user_id, text))
             updates = api(token, "getUpdates", {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'})["result"]
             for update in updates:
                 offset = update["update_id"] + 1; offset_path.write_text(str(offset))
