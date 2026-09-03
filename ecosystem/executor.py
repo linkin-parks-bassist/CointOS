@@ -56,14 +56,27 @@ def execute_next(run=subprocess.run) -> bool:
             try:
                 with prompt_path.open("rb") as prompt, output_path.open("wb") as output:
                     result = run(command, stdin=prompt, stdout=output, stderr=subprocess.STDOUT, env=env, timeout=1800)
-                job.update(state="completed" if result.returncode == 0 else "failed", updated_at=cli.now(), exit_code=result.returncode)
+                job.update(state="run_finished" if result.returncode == 0 else "failed", updated_at=cli.now(), exit_code=result.returncode)
             except subprocess.TimeoutExpired:
                 job.update(state="failed", updated_at=cli.now(), error="executor timed out after 1800 seconds")
             except Exception as error:
                 job.update(state="failed", updated_at=cli.now(), error=f"{type(error).__name__}: {error}")
             cli.atomic_json(path, job)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))
-            queue_notifications(job)
+            if job.get("verifies"):
+                from ecosystem.verification import finalize
+                target = finalize(job)
+                if job["state"] == "run_finished":
+                    job.update(state="completed", updated_at=cli.now())
+                    cli.atomic_json(path, job)
+                queue_notifications(target)
+            elif job["state"] == "run_finished":
+                from ecosystem.verification import enqueue
+                job.update(state="awaiting_verification", updated_at=cli.now())
+                cli.atomic_json(path, job)
+                enqueue(job)
+            else:
+                queue_notifications(job)
             print(f"{job['id']} {job['state']}")
             return True
     print("no ready task")

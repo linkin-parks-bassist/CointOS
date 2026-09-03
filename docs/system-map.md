@@ -23,7 +23,8 @@ frequently belong in `state/` and service status, not copied tables here.
 ## Durable flow
 
 Telegram or local intake -> validated intent -> queued agent task -> role/context
-packet -> scheduler -> executor -> durable output -> dependent outbox -> Telegram.
+packet -> scheduler -> executor -> provisional run output -> independent Verifier
+-> accepted/rejected root state -> dependent outbox -> Telegram.
 
 Append-only events live in `logs/runs/*.jsonl`; job and outbox state lives in
 `state/jobs/`; private Telegram history lives in `state/conversations/`. Generated

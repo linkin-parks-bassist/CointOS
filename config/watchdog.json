@@ -4,6 +4,9 @@
   "running_job_warn_seconds": 600,
   "running_job_hard_seconds": 1800,
   "output_idle_warn_seconds": 300,
+  "verification_warn_seconds": 900,
+  "event_error_window_seconds": 600,
+  "event_error_threshold": 3,
   "review_model": "Qwen3.5-4B-GGUF",
   "task_deck": [
     {"id": "system-map", "file": "system-map.md", "weight": 1, "maximum_interval_seconds": 21600},
@@ -11,7 +14,10 @@
     {"id": "log-audit", "file": "log-audit.md", "weight": 2, "maximum_interval_seconds": 3600},
     {"id": "control-plane-qa", "file": "control-plane-qa.md", "weight": 2, "maximum_interval_seconds": 3600},
     {"id": "architecture-integrity", "file": "architecture-integrity.md", "weight": 2, "maximum_interval_seconds": 7200},
-    {"id": "improvement-gardening", "file": "improvement-gardening.md", "weight": 2, "maximum_interval_seconds": 7200}
+    {"id": "improvement-gardening", "file": "improvement-gardening.md", "weight": 2, "maximum_interval_seconds": 7200},
+    {"id": "fact-consistency", "file": "fact-consistency.md", "weight": 3, "maximum_interval_seconds": 3600},
+    {"id": "handshake-health", "file": "handshake-health.md", "weight": 3, "maximum_interval_seconds": 3600},
+    {"id": "plan-followthrough", "file": "plan-followthrough.md", "weight": 3, "maximum_interval_seconds": 3600}
   ],
   "auto_actions": [
     "enqueue one deduplicated steward review",

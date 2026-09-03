@@ -2,6 +2,14 @@
 
 Updated: 2026-09-03 (Australia/Sydney)
 
+## Verification and observation
+
+Executor termination and semantic completion are separate. Cleanly exited runs now
+await an independent model-driven verification before notification. The periodic
+Steward deck includes complete-log inspection, fact consistency, component
+handshake health, and unfinished-plan follow-through. Deterministic watchdog checks
+also flag transport error storms and missing or stale verification links.
+
 ## Observed
 
 - Lemonade 11.9.0 is running on loopback port 13305 and reports

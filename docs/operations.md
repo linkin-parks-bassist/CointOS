@@ -61,6 +61,12 @@ retries transient delivery failures, and returns the useful tail of agent output
 the complete transcript remains on disk. This same dependency mechanism is the
 foundation for future state watchers and scheduled reminders.
 
+A clean executor exit now moves ordinary work to `awaiting_verification`. A linked
+Verifier on a separately selected local model inspects the original request, full
+run evidence, artifacts, checks, and current state. Only a schema-valid accepted
+verdict becomes `completed` and produces a success notice; a missing, malformed, or
+negative verdict becomes `rejected`. Verifiers are never recursively verified.
+
 The Telegram gateway uses outbound long polling and accepts only configured user
 IDs. Put the following in `~/.config/agent-ecosystem/telegram.env` with mode `0600`:
 

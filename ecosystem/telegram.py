@@ -28,7 +28,7 @@ def status_text() -> str:
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text())
         counts[job["state"]] = counts.get(job["state"], 0) + 1
-        if job.get("kind") == "agent-task" and job["state"] in {"queued", "ready", "running"}:
+        if job.get("kind") == "agent-task" and job["state"] in {"queued", "ready", "running", "awaiting_verification"}:
             line = f"{job['id']}: {job['state']} / {job.get('role', '?')} / {job.get('model') or 'legacy GLM default'}"
             if job["state"] == "running":
                 started = datetime.fromisoformat(job["updated_at"])
@@ -44,7 +44,7 @@ def status_text() -> str:
 
 def friendly_status() -> str:
     jobs = [json.loads(path.read_text()) for path in (cli.ROOT / "state/jobs").glob("*.json")]
-    active = [job for job in jobs if job.get("kind") == "agent-task" and job.get("state") in {"queued","ready","running"}]
+    active = [job for job in jobs if job.get("kind") == "agent-task" and job.get("state") in {"queued","ready","running","awaiting_verification"}]
     if active:
         descriptions = []
         for job in active:
@@ -58,6 +58,26 @@ def friendly_status() -> str:
     history = f" {completed} agent jobs have finished"
     if failed: history += f", and {failed} older attempts failed"
     return opening + history + "."
+
+
+def recent_errors_text(limit: int = 5) -> str:
+    now = datetime.now(timezone.utc)
+    events = []
+    for path in sorted((cli.ROOT / "logs/runs").glob("*.jsonl"), reverse=True)[:2]:
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try: event = json.loads(line)
+            except json.JSONDecodeError: continue
+            if event.get("event", "").endswith(("error", "failed")) or event.get("event") == "telegram.dead_letter":
+                events.append(event)
+    events.sort(key=lambda item: item.get("at", ""), reverse=True)
+    if not events:
+        return "I checked the recent event logs; there aren't any recorded errors."
+    lines = []
+    for event in events[:limit]:
+        instant = datetime.fromisoformat(event["at"]).astimezone()
+        detail = event.get("error") or event.get("summary") or event["event"]
+        lines.append(f"{instant:%-I:%M:%S %p %Z}: {detail}")
+    return "yes — the most recent recorded errors are:\n" + "\n".join(lines)
 
 def natural_reply(value: object, fallback: str) -> str:
     text = value.strip() if isinstance(value, str) else ""
@@ -73,6 +93,13 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
         history = conversation.recent(user_id)
         normalized = command.lower().strip(" ?.!")
         status_phrases = ("what is the machine doing", "what's the machine doing", "whats the machine doing", "what is running", "what's running", "status", "what are you doing")
+        error_phrases = ("any errors", "recent errors", "check the logs", "check recent logs", "most recent logs")
+        if any(phrase in normalized for phrase in error_phrases):
+            response = recent_errors_text()
+            reply(token, chat_id, response)
+            conversation.append(user_id, "user", command)
+            conversation.append(user_id, "assistant", response)
+            return
         if any(phrase in normalized for phrase in status_phrases):
             response = friendly_status()
             reply(token, chat_id, response)
@@ -161,8 +188,20 @@ def main() -> None:
                 if sender not in allowed:
                     cli.audit("telegram.denied", user_id=sender, chat_id=chat)
                 elif chat is not None and message.get("text"):
-                    handle(token, chat, sender, message["text"].strip())
-                # Confirm an update only after its handling completed successfully.
+                    incoming = message["text"].strip()
+                    try:
+                        handle(token, chat, sender, incoming)
+                    except (ValueError, KeyError, json.JSONDecodeError) as error:
+                        # A semantically invalid model response is not transient. Retrying
+                        # the same Telegram update forever creates a poison-message loop.
+                        cli.audit("telegram.dead_letter", user_id=sender, update_id=update["update_id"],
+                                  error=f"{type(error).__name__}: {error}")
+                        fallback = "sorry — I mangled that one locally. Nothing was queued."
+                        reply(token, chat, fallback)
+                        conversation.append(sender, "user", incoming)
+                        conversation.append(sender, "assistant", fallback)
+                # Advance after success or deliberate dead-lettering. Network failures
+                # still escape and retry because delivery outcome is then unknown.
                 offset = next_offset; offset_path.write_text(str(offset))
         except Exception as error:
             cli.audit("telegram.error", error=f"{type(error).__name__}: {error}"); time.sleep(5)

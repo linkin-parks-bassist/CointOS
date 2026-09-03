@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from ecosystem import cli, conversation
-from ecosystem.telegram import status_text, friendly_status
+from ecosystem.telegram import status_text, friendly_status, recent_errors_text
 
 
 class ConversationTest(unittest.TestCase):
@@ -30,3 +30,11 @@ class ConversationTest(unittest.TestCase):
             text = friendly_status()
             self.assertIn("nothing's running", text)
             self.assertNotIn("{", text)
+
+    def test_recent_error_answer_reads_events(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+            cli.initialize()
+            cli.audit("telegram.error", error="model returned an unknown role")
+            text = recent_errors_text()
+            self.assertIn("model returned an unknown role", text)
+            self.assertNotIn("aren't any", text)

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-DIRS = ("inbox/new", "inbox/triaged", "projects", "state/jobs", "logs/runs")
+DIRS = ("inbox/new", "inbox/triaged", "projects", "state/jobs", "state/verifications", "logs/runs")
 
 
 def now() -> str:

@@ -1,8 +1,11 @@
 # Audit recent runs and failures
 
-Review recent append-only events, failed or stalled jobs, executor output tails,
-model-routing decisions, retries, and notification delivery. Look for unsafe tool
-use, instructions being ignored, false success claims, repeated errors, missing
-evidence, and suspicious changes. Repair clear user-level defects, add regression
-tests where useful, and escalate rather than concealing uncertainty.
-
+Review complete recent executor logs as well as append-only events, failed or
+stalled jobs, model-routing decisions, retries, verification verdicts, and
+notification delivery. Compare what agents said they would do with their tool
+calls, resulting artifacts, tests, state transitions, and Telegram claims. Look
+for premature stopping, fabricated completion, swallowed exceptions, repeated
+errors, stale facts, missing evidence, unsafe tool use, and suspicious changes.
+Repair clear user-level defects, add regression tests where useful, and escalate
+rather than concealing uncertainty. A clean process exit proves only that the
+process exited.
