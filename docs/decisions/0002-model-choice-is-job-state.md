@@ -21,3 +21,17 @@ must record that reconsideration rather than silently substitute a model.
 Model routing is inspectable and can improve independently of execution. A model's
 free-text rationale is advisory; the attached resource snapshot is authoritative.
 Manual choices are accepted only for locally available models.
+
+## Residency and time-sharing policy
+
+One pinned small model and two inference slots are reserved for the control plane.
+Worker inference is initially serialized and scheduled at job boundaries. The
+scheduler scores queue age and model-switch cost, preferentially batches jobs for
+an already-resident large model, and applies a starvation limit so batching cannot
+indefinitely delay other work. Larger models receive longer intended residency
+because their load/eviction cost is higher. Policy values live in
+`config/model-policy.json` and are included in every routing snapshot.
+
+Token-level preemption is deferred: current OpenCode/Lemonade requests are not a
+safe resumable execution boundary. Additional worker concurrency will be admitted
+only when memory pressure and measured throughput justify it.

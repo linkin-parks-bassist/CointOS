@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 
 from ecosystem import cli
+from ecosystem.models import snapshot
+from ecosystem.scheduler import choose
 
 
 def queue_notifications(job: dict) -> None:
@@ -29,10 +31,13 @@ def execute_next(run=subprocess.run) -> bool:
         except BlockingIOError:
             print("executor already active")
             return False
+        ready = []
         for path in sorted((cli.ROOT / "state/jobs").glob("*.json")):
             job = json.loads(path.read_text(encoding="utf-8"))
-            if job.get("kind") != "agent-task" or job["state"] != "ready":
-                continue
+            if job.get("kind") == "agent-task" and job["state"] == "ready": ready.append((path, job))
+        if ready:
+            path, job, scheduling_reason = choose(ready, snapshot())
+            job["scheduling_reason"] = scheduling_reason
             prompt_path = cli.ROOT / job["prompt"]
             output_path = cli.ROOT / "logs/runs" / f"{job['id']}.opencode.log"
             job.update(state="running", attempts=job["attempts"] + 1, updated_at=cli.now(), output=str(output_path.relative_to(cli.ROOT)))

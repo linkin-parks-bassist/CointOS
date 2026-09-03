@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "resident_llm_slots": 2,
+  "control_plane": {
+    "model": "Qwen3.5-4B-GGUF",
+    "pinned": true,
+    "reserved_slots": 1,
+    "parallel_requests": 2,
+    "purpose": "Telegram, queue control, model routing, and health responses"
+  },
+  "workers": {
+    "initial_concurrency": 1,
+    "schedule_boundary": "job",
+    "prefer_resident_model": true,
+    "batch_same_model_jobs": true,
+    "max_job_seconds": 1800,
+    "minimum_residency_seconds": {
+      "under_6_gb": 300,
+      "6_to_12_gb": 600,
+      "over_12_gb": 1200
+    },
+    "switch_penalty_points_per_gb": 4,
+    "queue_age_points_per_minute": 1,
+    "maximum_starvation_minutes": 30
+  },
+  "principles": [
+    "Keep remote control responsive even under worker saturation.",
+    "Amortize expensive model loads across compatible queued work.",
+    "Do not evict a large model merely because one small job prefers another.",
+    "Prevent batching from starving older jobs.",
+    "Record every model selection, scheduling preference, and later substitution."
+  ]
+}
+

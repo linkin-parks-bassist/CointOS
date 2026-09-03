@@ -1,6 +1,7 @@
 """Live Lemonade model and host-resource inventory for scheduling decisions."""
 from __future__ import annotations
 import json, os, urllib.request
+from pathlib import Path
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 
@@ -25,9 +26,11 @@ def snapshot() -> dict:
         "context": item.get("context_length"), "loaded": item["id"] in loaded,
         "busy": loaded.get(item["id"], {}).get("is_busy", False),
     } for item in registry if item.get("downloaded") and "chat" in item.get("labels", [])]
+    policy_path = Path(__file__).resolve().parents[1] / "config/model-policy.json"
     return {
         "memory_available_gb": round(memory.get("MemAvailable", 0) / 1024 / 1024, 1),
         "load_average": list(os.getloadavg()), "models": models,
+        "scheduling_policy": json.loads(policy_path.read_text(encoding="utf-8")),
     }
 
 def ids(inventory: dict) -> list[str]:
@@ -40,4 +43,3 @@ def fallback(role: str, inventory: dict) -> tuple[str, str]:
                    ["Qwen3.5-4B-GGUF", "GLM-4.7-Flash-GGUF"])
     chosen = next((model for model in preferences if model in available), available[0])
     return chosen, "Deterministic fallback based on role capability; live router choice unavailable."
-
