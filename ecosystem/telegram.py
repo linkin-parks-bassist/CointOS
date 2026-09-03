@@ -3,6 +3,7 @@ from __future__ import annotations
 import json, os, time, urllib.parse, urllib.request
 from ecosystem import cli
 from ecosystem.roles import list_roles
+from ecosystem.local_intent import interpret
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -29,8 +30,19 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
         parts = command.split(maxsplit=2)
         if len(parts) < 3: reply(token, chat_id, "Usage: /spawn ROLE TASK"); return
         job_id = cli.enqueue_task(parts[1], parts[2], source=f"telegram:{user_id}")
-        reply(token, chat_id, f"Queued {job_id} with role {parts[1]}; awaiting the local dispatcher.")
-    else: reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause")
+        reply(token, chat_id, f"Queued {job_id} with role {parts[1]}. The local executor will pick it up shortly.")
+    elif command.startswith("/"):
+        reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause — or just speak normally.")
+    else:
+        intent = interpret(command, list_roles())
+        cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
+        if intent["action"] == "spawn":
+            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}")
+            reply(token, chat_id, f"Got it — queued {job_id} as {intent['role']}. The local executor will pick it up shortly.\n\nTask: {intent['task']}")
+        elif intent["action"] == "status": handle(token, chat_id, user_id, "/status")
+        elif intent["action"] == "roles": handle(token, chat_id, user_id, "/roles")
+        elif intent["action"] == "pause": handle(token, chat_id, user_id, "/pause")
+        else: reply(token, chat_id, intent.get("reply") or "Tell me what you'd like an agent to do.")
 
 def main() -> None:
     token = os.environ.get("AGENT_TELEGRAM_BOT_TOKEN")
@@ -50,4 +62,3 @@ def main() -> None:
             cli.audit("telegram.error", error=f"{type(error).__name__}: {error}"); time.sleep(5)
 
 if __name__ == "__main__": main()
-

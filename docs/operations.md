@@ -45,8 +45,16 @@ Roles are Markdown files in `roles/`. A valid role includes `Mission`,
 ./scripts/ecosystem prepare-next
 ```
 
-The resulting `state/jobs/*.prompt.md` is the exact context packet intended for
-an executor. No executor is wired yet, so remote input cannot silently execute code.
+The resulting `state/jobs/*.prompt.md` is the exact context packet passed to the
+serialized OpenCode executor. It runs as David (never root), uses Lemonade locally,
+and records output in `logs/runs/<job-id>.opencode.log`.
+
+The executor may modify David-owned files. Its dedicated OpenCode policy blocks
+obvious privilege, package-management, service-management, destructive deletion,
+Git push, and web tools. Shell containment is best-effort rather than a security
+boundary; elevated actions will move through a separate approval broker.
+Completion and failure summaries are sent to the configured allowlisted Telegram
+user, while the complete transcript remains on disk.
 
 The Telegram gateway uses outbound long polling and accepts only configured user
 IDs. Put the following in `~/.config/agent-ecosystem/telegram.env` with mode `0600`:
@@ -59,3 +67,12 @@ AGENT_TELEGRAM_ALLOWED_USER_IDS=123456789
 It supports `/spawn ROLE TASK`, `/roles`, `/status`, and `/pause`; arbitrary text
 is never shell input. Installing/enabling `agent-telegram.service` waits for an
 explicit decision on credentials and remote data handling.
+
+Ordinary English is routed by the locally served `GLM-4.7-Flash-GGUF` model into
+one of five validated intents: spawn, status, roles, pause, or chat. The model
+cannot emit shell operations or bypass role validation. Override the local routing
+model with `AGENT_TELEGRAM_MODEL` in the protected environment file.
+
+For first-time users, `./scripts/setup-telegram` walks through bot creation,
+validates the token, discovers the user ID from a message, and writes the protected
+environment file. It does not enable the gateway.

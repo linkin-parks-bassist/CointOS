@@ -1,0 +1,33 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "Lemonade": {
+      "name": "Lemonade Server (local)",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {"apiKey": "lemonade", "baseURL": "http://127.0.0.1:13305/v1"},
+      "models": {
+        "GLM-4.7-Flash-GGUF": {"name": "GLM-4.7-Flash-GGUF (local)", "limit": {"context": 202752, "output": 32768}},
+        "Qwen3-Coder-30B-A3B-Instruct-GGUF": {"name": "Qwen3 Coder 30B (local)", "limit": {"context": 262144, "output": 32768}}
+      }
+    }
+  },
+  "permission": {
+    "*": "allow",
+    "external_directory": {"/home/david/**": "allow"},
+    "webfetch": "deny",
+    "websearch": "deny",
+    "bash": {
+      "*": "allow",
+      "sudo *": "deny",
+      "su *": "deny",
+      "rm *": "deny",
+      "shred *": "deny",
+      "git push*": "deny",
+      "systemctl *": "deny",
+      "apt *": "deny",
+      "apt-get *": "deny",
+      "snap *": "deny"
+    }
+  }
+}
+
