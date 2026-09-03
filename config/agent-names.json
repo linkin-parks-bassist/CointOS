@@ -1,8 +1,0 @@
-{
-  "worker": ["Rob", "Nina", "Dex", "Maya", "Theo", "Kit"],
-  "steward": ["Mabel", "Percy", "June", "Gus"],
-  "intake": ["Pip", "Dot", "Ivy"],
-  "default": ["Alex", "Sam", "Quinn", "Rowan"],
-  "silly_chance": 0.12,
-  "silly": ["Journathan", "Bort", "Spreadsheet Kevin", "Crumpet", "Greeble", "Actual Clive", "The Other Rob"]
-}

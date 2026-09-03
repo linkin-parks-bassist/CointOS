@@ -107,12 +107,14 @@ Before delivery, the pinned control model rewrites internal notifications into a
 concise informal message. Job IDs, raw JSON, log paths, tool chatter, and queue
 jargon remain in local records unless David explicitly asks for technical detail.
 
-Each spawned job receives a durable role-aware name from `config/agent-names.json`.
-The allocator avoids names held by active jobs where possible. Identity is injected
+Each Telegram-spawned job receives a name invented by the control-plane model under
+`config/naming-policy.json`. The generator sees active names, honors explicit user
+choices, and targets a modest 8% tasteful-odd-name rate without a fixed pool.
+Names should subtly suit the assignment while avoiding forced puns or mascot energy.
+Non-Telegram jobs use the same pinned control model to generate their identity.
+Names are validated before use. Identity is injected
 into context and retained through retries, audit events, agent-originated messages,
 and completion notices; it does not create a separate role or pretend agents are human.
-The roster has a deliberately modest 12% chance of drawing from a tasteful odd-name
-pool. This keeps names like `Journathan` surprising rather than exhausting.
 
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available

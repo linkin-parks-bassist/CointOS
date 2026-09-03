@@ -72,10 +72,12 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
             return
         live = snapshot()
         live["job_status"] = status_text()
+        from ecosystem.identity import active_names
+        live["active_agent_names"] = sorted(active_names())
         intent = interpret(command, list_roles(), history, live)
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":
-            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"])
+            job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"], agent_name=intent["agent_name"])
             job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
             response = f"yep — {job['agent_name']}'s on it. I'll let you know how they go."
             reply(token, chat_id, response)

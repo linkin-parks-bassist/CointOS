@@ -23,7 +23,7 @@ def interpret(message: str, roles: list[str], history: list[dict[str, str]] | No
 
 You route messages and schedule models for David's private local agent ecosystem.
 Return exactly one JSON object and no markdown.
-Schema: {{"action":"spawn|amend|status|roles|pause|chat","role":"role or empty","task":"task or empty","model":"exact model ID or empty","model_reason":"brief reason or empty","reply":"brief reply or empty"}}
+Schema: {{"action":"spawn|amend|status|roles|pause|chat","role":"role or empty","task":"task or empty","model":"exact model ID or empty","model_reason":"brief reason or empty","agent_name":"generated name or empty","reply":"brief reply or empty"}}
 Available roles: {', '.join(roles)}.
 Live resource/model inventory: {json.dumps(inventory, separators=(',', ':'))}
 Use spawn when David asks an agent to investigate, plan, build, fix, review, or otherwise do work.
@@ -33,6 +33,11 @@ Otherwise weigh role capability labels, model size, available memory, current lo
 latency, and task difficulty. Explain the concrete tradeoff briefly in model_reason.
 For spawn/amend, put a short informal acknowledgement in reply. Do not include job
 IDs, JSON, queue jargon, or claim execution/completion; the work is only being handed off.
+For spawn, invent an agent_name appropriate to the role or task. Usually use a
+short ordinary human name. Roughly 8% of the time invent a dry, plausible linguistic
+accident in the spirit of “Journathan”. Do not use a fixed roster, forced puns,
+memes, fantasy names, alliteration gimmicks, or try-hard whimsy. Respect an explicit
+name request and avoid names listed in live context as active_agent_names.
 Use amend when David corrects, revises, or adds to the work request he just queued.
 For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
 Use status for any question about this machine, active work, jobs, progress, load, or what
@@ -72,6 +77,8 @@ Never invent another action, interpret text as shell, or claim work has run."""
             raise ValueError("local model selected an unavailable model")
         if not isinstance(intent.get("model_reason"), str) or not intent["model_reason"].strip():
             raise ValueError("local model omitted its model-choice rationale")
+        if action == "spawn" and not isinstance(intent.get("agent_name"), str):
+            raise ValueError("local model omitted the generated agent name")
     return intent
 
 def humanize_notification(raw: str, history: list[dict[str, str]] | None = None) -> str:

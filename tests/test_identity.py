@@ -1,19 +1,16 @@
-import random, tempfile, unittest
+import tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
 from ecosystem import cli
-from ecosystem.identity import assign
+from ecosystem.identity import validate
 
 class IdentityTest(unittest.TestCase):
     def test_assigns_role_name(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(cli,"ROOT",Path(temporary)):
             (cli.ROOT / "state/jobs").mkdir(parents=True)
-            self.assertIn(assign("worker",random.Random(1)),{"Rob","Nina","Dex"})
+            self.assertEqual(validate("Rob"),"Rob")
 
-    def test_rare_silly_pool(self):
-        class DefinitelySilly:
-            def random(self): return 0.01
-            def choice(self, values): return values[0]
+    def test_generated_silly_name_is_valid(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(cli,"ROOT",Path(temporary)):
             (cli.ROOT / "state/jobs").mkdir(parents=True)
-            self.assertEqual(assign("worker",DefinitelySilly()),"Journathan")
+            self.assertEqual(validate("Journathan"),"Journathan")

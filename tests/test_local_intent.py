@@ -15,11 +15,11 @@ class FakeResponse:
 class IntentTest(unittest.TestCase):
     @patch("urllib.request.urlopen")
     def test_valid_spawn(self, opened):
-        opened.return_value = FakeResponse('{"action":"spawn","role":"worker","task":"fix it","model":"model-a","model_reason":"small enough","reply":""}')
+        opened.return_value = FakeResponse('{"action":"spawn","role":"worker","task":"fix it","model":"model-a","model_reason":"small enough","agent_name":"Rob","reply":""}')
         result = interpret("please fix it", ["worker"], inventory={"memory_available_gb": 10, "load_average": [1,1,1], "models": [{"id":"model-a"}]})
         self.assertEqual(result["action"], "spawn")
 
     @patch("urllib.request.urlopen")
     def test_unknown_role_is_rejected(self, opened):
-        opened.return_value = FakeResponse('{"action":"spawn","role":"root","task":"do it","model":"model-a","model_reason":"fast","reply":""}')
+        opened.return_value = FakeResponse('{"action":"spawn","role":"root","task":"do it","model":"model-a","model_reason":"fast","agent_name":"Bort","reply":""}')
         with self.assertRaises(ValueError): interpret("do it", ["worker"], inventory={"memory_available_gb": 10, "load_average": [], "models": [{"id":"model-a"}]})

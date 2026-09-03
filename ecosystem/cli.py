@@ -54,7 +54,7 @@ def initialize() -> None:
 def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | None = None, model_reason: str = "", agent_name: str | None = None) -> str:
     from ecosystem.roles import load_role
     from ecosystem.models import snapshot, ids, fallback
-    from ecosystem.identity import assign
+    from ecosystem.identity import validate, generate
 
     initialize()
     load_role(role)  # Reject unknown or malformed roles before queueing.
@@ -63,7 +63,7 @@ def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | N
         model, model_reason = fallback(role, inventory)
     if model not in ids(inventory):
         raise ValueError(f"model {model!r} is not locally available")
-    agent_name = agent_name or assign(role)
+    agent_name = validate(agent_name) if agent_name else generate(role, task)
     job_id = f"task-{uuid.uuid4().hex[:16]}"
     job = {
         "id": job_id, "kind": "agent-task", "state": "queued",
