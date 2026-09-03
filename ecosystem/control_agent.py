@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -44,17 +45,27 @@ Live context at the start of this turn:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
+    force_answer = False
     for _ in range(MAX_TOOL_ROUNDS):
         body = json.dumps({"model": model, "messages": messages, "tools": TOOLS,
                            "tool_choice": "auto", "temperature": 0.35,
+                           "chat_template_kwargs": {"enable_thinking": not force_answer},
                            "max_tokens": 1800}).encode()
         request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",
                                          data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer lemonade"})
-        with urllib.request.urlopen(request, timeout=180) as response:
-            assistant = json.load(response)["choices"][0]["message"]
+        try:
+            with urllib.request.urlopen(request, timeout=180) as response:
+                assistant = json.load(response)["choices"][0]["message"]
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")[:2000]
+            raise RuntimeError(f"control model HTTP {error.code}: {detail}") from error
         tool_calls = assistant.get("tool_calls") or []
         if not tool_calls:
-            return (assistant.get("content") or "").strip()
+            content = (assistant.get("content") or "").strip()
+            if content:
+                return content
+            force_answer = True
+            continue
         messages.append(assistant)
         for call in tool_calls:
             name = call.get("function", {}).get("name", "")
@@ -65,4 +76,5 @@ Live context at the start of this turn:
                 result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "name": name, "content": json.dumps(result, separators=(",", ":"))})
+        force_answer = True
     raise RuntimeError("control agent exceeded its bounded tool loop")
