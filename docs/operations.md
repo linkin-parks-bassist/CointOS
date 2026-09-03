@@ -81,6 +81,10 @@ plane model. It acknowledges natural-language messages before inference and only
 advances the Telegram update offset after successful handling. Long worker jobs
 therefore do not monopolize remote control.
 
+Machine-status questions have a deterministic local fast path rather than relying
+on model knowledge. Status includes active job identity, role, selected model,
+elapsed time, output-idle time, and a possible-stall warning after five minutes.
+
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available
 memory, and host load. It selects a model (or honors David's explicit selection),

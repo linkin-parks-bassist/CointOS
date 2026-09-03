@@ -1,6 +1,7 @@
 """Minimal allowlisted Telegram command gateway using outbound polling."""
 from __future__ import annotations
 import json, os, time, urllib.parse, urllib.request
+from datetime import datetime, timezone
 from ecosystem import cli
 from ecosystem.roles import list_roles
 from ecosystem.local_intent import interpret
@@ -18,14 +19,32 @@ def api(token: str, method: str, values: dict) -> dict:
 def reply(token: str, chat_id: int, message: str) -> None:
     api(token, "sendMessage", {"chat_id": chat_id, "text": message[:4000]})
 
+def status_text() -> str:
+    jobs = []
+    counts = {}
+    now = datetime.now(timezone.utc)
+    for path in (cli.ROOT / "state/jobs").glob("*.json"):
+        job = json.loads(path.read_text())
+        counts[job["state"]] = counts.get(job["state"], 0) + 1
+        if job.get("kind") == "agent-task" and job["state"] in {"queued", "ready", "running"}:
+            line = f"{job['id']}: {job['state']} / {job.get('role', '?')} / {job.get('model') or 'legacy GLM default'}"
+            if job["state"] == "running":
+                started = datetime.fromisoformat(job["updated_at"])
+                line += f" / {int((now-started).total_seconds()//60)}m elapsed"
+                output = cli.ROOT / job.get("output", "")
+                if output.exists():
+                    idle = int((now.timestamp() - output.stat().st_mtime) // 60)
+                    line += f" / output idle {idle}m"
+                    if idle >= 5: line += " (possibly stalled)"
+            jobs.append(line)
+    active = "\n".join(jobs) if jobs else "No active agent tasks."
+    return f"Paused: {(cli.ROOT / 'state/PAUSED').exists()}\nJobs: {counts}\n\nActive work:\n{active}"
+
 def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     cli.audit("telegram.command", chat_id=chat_id, user_id=user_id, command=command.split(maxsplit=1)[0])
     if command == "/roles": reply(token, chat_id, "Roles: " + ", ".join(list_roles()))
     elif command == "/status":
-        counts = {}
-        for path in (cli.ROOT / "state/jobs").glob("*.json"):
-            state = json.loads(path.read_text())["state"]; counts[state] = counts.get(state, 0) + 1
-        reply(token, chat_id, f"Paused: {(cli.ROOT / 'state/PAUSED').exists()}\nJobs: {counts}")
+        reply(token, chat_id, status_text())
     elif command == "/pause":
         (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
         reply(token, chat_id, "Paused. No checker will prepare or launch work.")
@@ -42,6 +61,14 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
     else:
         reply(token, chat_id, "Got it — thinking locally…")
         history = conversation.recent(user_id)
+        normalized = command.lower().strip(" ?.!")
+        status_phrases = ("what is the machine doing", "what's the machine doing", "whats the machine doing", "what is running", "what's running", "status", "what are you doing")
+        if any(phrase in normalized for phrase in status_phrases):
+            response = status_text()
+            reply(token, chat_id, response)
+            conversation.append(user_id, "user", command)
+            conversation.append(user_id, "assistant", response)
+            return
         intent = interpret(command, list_roles(), history, snapshot())
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":

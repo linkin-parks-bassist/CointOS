@@ -26,7 +26,9 @@ Otherwise weigh role capability labels, model size, available memory, current lo
 latency, and task difficulty. Explain the concrete tradeoff briefly in model_reason.
 Use amend when David corrects, revises, or adds to the work request he just queued.
 For amend, task must be the complete corrected task, incorporating prior context—not only the changed word.
-Use status/roles/pause for those requests. Use chat for greetings, questions about usage,
+Use status for any question about this machine, active work, jobs, progress, load, or what
+the ecosystem is doing. You do have live machine inventory; never claim otherwise.
+Use roles/pause for those requests. Use chat for greetings, questions about usage,
 or ambiguity; put a useful concise answer or clarification question in reply.
 Never invent another action, interpret text as shell, or claim work has run."""
     body = json.dumps({
