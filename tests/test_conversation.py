@@ -21,5 +21,5 @@ class ConversationTest(unittest.TestCase):
             cli.initialize()
             job = {"id":"task-x", "kind":"agent-task", "state":"running", "role":"worker", "model":"model-x", "updated_at":"2026-01-01T00:00:00+00:00", "output":"logs/x.log"}
             cli.atomic_json(cli.ROOT / "state/jobs/task-x.json", job)
-            output = cli.ROOT / "logs/x.log"; output.parent.mkdir(); output.write_text("working")
+            output = cli.ROOT / "logs/x.log"; output.parent.mkdir(exist_ok=True); output.write_text("working")
             self.assertIn("task-x: running / worker / model-x", status_text())
