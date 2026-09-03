@@ -1,7 +1,7 @@
 [Unit]
 Description=Allowlisted Telegram gateway for local agent jobs
-After=network-online.target
-Wants=network-online.target
+After=network-online.target agent-models.service
+Wants=network-online.target agent-models.service
 [Service]
 ExecStart=%h/agent-ecosystem/scripts/telegram-gateway
 WorkingDirectory=%h/agent-ecosystem
