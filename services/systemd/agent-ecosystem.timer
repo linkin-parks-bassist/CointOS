@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodic fallback scan of the local agent inbox
+
+[Timer]
+OnBootSec=2m
+OnUnitActiveSec=5m
+Unit=agent-ecosystem.service
+
+[Install]
+WantedBy=timers.target
+

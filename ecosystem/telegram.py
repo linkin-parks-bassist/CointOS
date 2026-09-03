@@ -1,0 +1,53 @@
+"""Minimal allowlisted Telegram command gateway using outbound polling."""
+from __future__ import annotations
+import json, os, time, urllib.parse, urllib.request
+from ecosystem import cli
+from ecosystem.roles import list_roles
+
+def api(token: str, method: str, values: dict) -> dict:
+    data = urllib.parse.urlencode(values).encode()
+    with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/{method}", data=data, timeout=40) as response:
+        result = json.load(response)
+    if not result.get("ok"): raise RuntimeError(f"Telegram {method} failed")
+    return result
+
+def reply(token: str, chat_id: int, message: str) -> None:
+    api(token, "sendMessage", {"chat_id": chat_id, "text": message[:4000]})
+
+def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
+    cli.audit("telegram.command", chat_id=chat_id, user_id=user_id, command=command.split(maxsplit=1)[0])
+    if command == "/roles": reply(token, chat_id, "Roles: " + ", ".join(list_roles()))
+    elif command == "/status":
+        counts = {}
+        for path in (cli.ROOT / "state/jobs").glob("*.json"):
+            state = json.loads(path.read_text())["state"]; counts[state] = counts.get(state, 0) + 1
+        reply(token, chat_id, f"Paused: {(cli.ROOT / 'state/PAUSED').exists()}\nJobs: {counts}")
+    elif command == "/pause":
+        (cli.ROOT / "state/PAUSED").touch(); cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
+        reply(token, chat_id, "Paused. No checker will prepare or launch work.")
+    elif command.startswith("/spawn "):
+        parts = command.split(maxsplit=2)
+        if len(parts) < 3: reply(token, chat_id, "Usage: /spawn ROLE TASK"); return
+        job_id = cli.enqueue_task(parts[1], parts[2], source=f"telegram:{user_id}")
+        reply(token, chat_id, f"Queued {job_id} with role {parts[1]}; awaiting the local dispatcher.")
+    else: reply(token, chat_id, "Commands: /spawn ROLE TASK, /roles, /status, /pause")
+
+def main() -> None:
+    token = os.environ.get("AGENT_TELEGRAM_BOT_TOKEN")
+    allowed = {int(v) for v in os.environ.get("AGENT_TELEGRAM_ALLOWED_USER_IDS", "").split(",") if v.strip()}
+    if not token or not allowed: raise SystemExit("set AGENT_TELEGRAM_BOT_TOKEN and AGENT_TELEGRAM_ALLOWED_USER_IDS")
+    cli.initialize(); offset_path = cli.ROOT / "state/telegram-offset"
+    offset = int(offset_path.read_text()) if offset_path.exists() else 0
+    while True:
+        try:
+            updates = api(token, "getUpdates", {"offset": offset, "timeout": 30, "allowed_updates": '["message"]'})["result"]
+            for update in updates:
+                offset = update["update_id"] + 1; offset_path.write_text(str(offset))
+                message = update.get("message", {}); sender = message.get("from", {}).get("id"); chat = message.get("chat", {}).get("id")
+                if sender not in allowed: cli.audit("telegram.denied", user_id=sender, chat_id=chat); continue
+                if chat is not None and message.get("text"): handle(token, chat, sender, message["text"].strip())
+        except Exception as error:
+            cli.audit("telegram.error", error=f"{type(error).__name__}: {error}"); time.sleep(5)
+
+if __name__ == "__main__": main()
+

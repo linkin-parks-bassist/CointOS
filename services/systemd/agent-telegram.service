@@ -1,0 +1,17 @@
+[Unit]
+Description=Allowlisted Telegram gateway for local agent jobs
+After=network-online.target
+Wants=network-online.target
+[Service]
+ExecStart=%h/agent-ecosystem/scripts/telegram-gateway
+WorkingDirectory=%h/agent-ecosystem
+EnvironmentFile=%h/.config/agent-ecosystem/telegram.env
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/agent-ecosystem
+[Install]
+WantedBy=default.target
+

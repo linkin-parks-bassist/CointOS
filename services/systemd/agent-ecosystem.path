@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch the local agent idea inbox
+
+[Path]
+PathChanged=%h/agent-ecosystem/inbox/new
+Unit=agent-ecosystem.service
+
+[Install]
+WantedBy=default.target
+
