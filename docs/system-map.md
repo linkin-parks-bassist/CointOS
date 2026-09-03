@@ -1,6 +1,6 @@
 # System map
 
-Last reconciled: 2026-09-03 (Australia/Sydney).
+Last reconciled: 2026-09-04 (Australia/Sydney).
 
 This is a factual recovery aid, not a task transcript. Runtime details that change
 frequently belong in `state/` and service status, not copied tables here.
@@ -8,8 +8,13 @@ frequently belong in `state/` and service status, not copied tables here.
 ## Live topology
 
 - `agent-telegram.service` is the allowlisted remote conversational gateway. It
-  polls Telegram, uses a small local control model for validated intents and prose,
-  and records private conversation context outside Git.
+  durably records each update, asks resident GLM for a bounded generated first
+  response, and never runs deep control or result presentation in the polling path.
+- `agent-control-worker.service` runs up to two durable Qwen deep-control turns in
+  parallel. Typed terminal decisions either publish material new information or
+  finish silently after the first response.
+- `agent-notifier.service` presents and delivers dependent agent results without
+  blocking Telegram update receipt.
 - `agent-ecosystem.timer` and `.path` activate the serialized intake/preparation/
   executor pipeline. Agent work is represented by durable JSON job records.
 - `agent-watchdog.timer` runs deterministic health checks every three minutes and
@@ -22,13 +27,14 @@ frequently belong in `state/` and service status, not copied tables here.
 
 ## Durable flow
 
-Telegram or local intake -> validated intent -> queued agent task -> role/context
-packet -> scheduler -> executor -> provisional run output -> independent Verifier
--> accepted/rejected root state -> dependent outbox -> Telegram.
+Telegram -> durable control turn -> GLM first response -> Qwen deep decision/tool
+action -> optional follow-up. A dispatched task then flows through role/context
+packet -> scheduler -> executor -> provisional output -> independent Verifier ->
+accepted/rejected root state -> dependent outbox -> background notifier -> Telegram.
 
 Append-only events live in `logs/runs/*.jsonl`; job and outbox state lives in
-`state/jobs/`; private Telegram history lives in `state/conversations/`. Generated
-runtime state is not committed.
+`state/jobs/`; control turns live in `state/control-turns/`; private Telegram history
+lives in `state/conversations/`. Generated runtime state is not committed.
 
 ## Roles and custodianship
 

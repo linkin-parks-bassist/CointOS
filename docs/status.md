@@ -1,40 +1,31 @@
 # Current status
 
-Updated: 2026-09-03 (Australia/Sydney)
-
-## Verification and observation
-
-Executor termination and semantic completion are separate. Cleanly exited runs now
-await an independent model-driven verification before notification. The periodic
-Steward deck includes complete-log inspection, fact consistency, component
-handshake health, and unfinished-plan follow-through. Deterministic watchdog checks
-also flag transport error storms and missing or stale verification links.
-
-## Observed
-
-- Lemonade 11.9.0 is running on loopback port 13305 and reports
-  `GLM-4.7-Flash-GGUF` ready.
-- The pre-existing `lemonade-ecosystem-install.service` is still active.
-- No agent ecosystem units were installed or enabled during this milestone.
+Updated: 2026-09-04 (Australia/Sydney)
 
 ## Implemented
 
-- A durable, atomic JSON-file job queue with content-derived idempotency keys.
-- Markdown inbox intake that creates project proposals and clarification lists.
-- Append-only JSONL run events, three Markdown role definitions, pause
-  switch, systemd unit templates, migration notes, and automated tests.
-- Role-context compilation, task enqueue/preparation, and an allowlisted Telegram
-  long-polling gateway with structured commands.
-- A serialized OpenCode executor using local Lemonade models, dedicated permissions,
-  per-job output capture, timeouts, and durable completion/failure states.
-- Resource-aware per-job model selection with explicit overrides, recorded rationale,
-  and an immutable-at-enqueue inventory snapshot.
-- A three-minute deterministic watchdog plus deduplicated fifteen-minute reasoning
-  Steward reviews of recent bot conversation, jobs, logs, models, and services.
+- Durable filesystem jobs, role-context compilation, recorded model choice, local
+  OpenCode execution, independent semantic verification, and dependent results.
+- A three-stage Telegram path: durable receipt plus GLM first response, concurrent
+  Qwen deep control, and separately supervised result presentation.
+- Per-turn action caching and deterministic task idempotency, explicit unknown-
+  delivery states, and a transport-owned five-minute disaster fallback.
+- GLM-4.7-Flash, Qwen3.8-27B, and Qwen3-Coder-30B as the intended resident model set.
+- Periodic deterministic health checks and model-judged Steward assignments.
 
-## Deliberately deferred
+## Operational state
 
-- Automatic retries, privileged approval state transitions,
-  worker dispatch, hardware/Vivado access, and service activation.
-- The autonomy boundary and AMD data-handling constraints still require David's
-  decisions before unattended execution expands beyond proposal generation.
+Checked-in units cover model loading, Telegram intake, two deep-control workers,
+background notifications, ecosystem intake/execution, and watchdog stewardship.
+Runtime truth must be established from `systemctl --user`, Lemonade, control-turn/job
+records, and an end-to-end probe after deployment or reboot; this document is not
+live telemetry.
+
+## Known limits
+
+- Telegram `sendMessage` has no client idempotency key. A crash during a request is
+  recorded as `delivery_unknown` and is not replayed automatically.
+- General live direct, role-local, and global inter-agent messaging remains specified
+  but unimplemented.
+- Worker checkpoint/preemption and model lease admission remain future work.
+- Existing class-based tests remain incremental no-OOP migration debt.

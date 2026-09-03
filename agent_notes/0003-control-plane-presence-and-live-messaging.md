@@ -1,6 +1,8 @@
 # Control-plane presence and live agent messaging
 
-Status: high-priority design/implementation backlog; not yet implemented.
+Status: fast-response slice implemented on `fix/snappy-initial-response` and awaiting
+live deployment verification; introductions, stranger names, and the general live
+message bus remain partially or wholly pending.
 
 ## Natural agent introductions
 
@@ -34,6 +36,20 @@ five-minute disaster fallback when the generated path has genuinely failed.
 
 Measure time-to-first-generated-response separately from time-to-completed-work and
 preserve one reserved control-plane request slot so worker load cannot starve it.
+
+Implementation note, 2026-09-04: Telegram updates now become versioned durable turns
+before inference. Resident GLM produces the bounded first response; up to two Qwen
+deep-control processes claim turns outside polling and finish through typed publish-
+or-silent tools; result presentation is also a separate service. Offline probes found
+and corrected a GLM hallucination of Wren's completion time. Measured GLM response
+latency after prompt correction was 0.25–0.58 seconds on three representative turns;
+Qwen's deep silent decision took 18.0 seconds and an inspect-plus-answer turn took
+12.2 seconds without blocking intake. See ADR 0005 and the control-flow tests. Live
+Telegram deployment remains the acceptance gate. Two attempted independent local
+reviews were not counted as verification: Sieve (Qwen Verifier) and Ternary (GLM
+Verifier) both hit their inference timeouts without verdicts. A subsequent direct
+state-machine review added boot/process identities, a ten-minute whole-turn deadline,
+and idempotent replay for task amendments as well as creation.
 
 ## Significantly stranger generated names
 

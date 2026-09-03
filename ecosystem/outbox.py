@@ -12,6 +12,21 @@ from ecosystem import cli
 TERMINAL_STATES = {"completed", "failed", "rejected"}
 
 
+def mark_interrupted_deliveries_unknown() -> int:
+    """Do not replay a Telegram send whose prior delivery outcome is unknowable."""
+    changed = 0
+    for path in sorted((cli.ROOT / "state/jobs").glob("outbox-*.json")):
+        job = json.loads(path.read_text(encoding="utf-8"))
+        if job.get("state") != "sending":
+            continue
+        job.update(state="delivery_unknown", updated_at=cli.now(),
+                   error="notifier stopped while delivery was in progress; not replayed")
+        cli.atomic_json(path, job)
+        cli.audit("outbox.delivery_unknown", job_id=job["id"], user_id=job["user_id"])
+        changed += 1
+    return changed
+
+
 def enqueue(user_id: int, message: str = "", depends_on: str | None = None, result_of: str | None = None,
             origin_job: str | None = None, severity: str = "info", needs_response: bool = False) -> str:
     job_id = f"outbox-{uuid.uuid4().hex[:16]}"

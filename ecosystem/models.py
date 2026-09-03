@@ -69,8 +69,8 @@ def ids(inventory: dict) -> list[str]:
 
 def fallback(role: str, inventory: dict) -> tuple[str, str]:
     available = ids(inventory)
-    preferences = (["Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3.8-27B-GGUF", "GLM-4.7-Flash-GGUF", "Qwen3.5-4B-GGUF"]
+    preferences = (["Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3.8-27B-GGUF", "GLM-4.7-Flash-GGUF"]
                    if role in {"worker", "refactorer"} else
-                   ["Qwen3.8-27B-GGUF", "GLM-4.7-Flash-GGUF", "Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3.5-4B-GGUF"])
+                   ["Qwen3.8-27B-GGUF", "GLM-4.7-Flash-GGUF", "Qwen3-Coder-30B-A3B-Instruct-GGUF"])
     chosen = next((model for model in preferences if model in available), available[0])
     return chosen, "Deterministic fallback based on role capability; live router choice unavailable."

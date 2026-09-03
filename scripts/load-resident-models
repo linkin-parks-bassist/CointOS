@@ -13,6 +13,8 @@ for attempt in $(seq 1 60); do
 done
 
 /usr/bin/lemonade load Qwen3.8-27B-GGUF \
-    --pinned --ctx-size 131072 --merge-args=true --llamacpp-args '--parallel 4'
+    --pinned --ctx-size 262144 --merge-args=true --llamacpp-args '--parallel 4'
 /usr/bin/lemonade load Qwen3-Coder-30B-A3B-Instruct-GGUF \
     --ctx-size 65536 --merge-args=true --llamacpp-args '--parallel 2'
+/usr/bin/lemonade load GLM-4.7-Flash-GGUF \
+    --pinned --ctx-size 32768 --merge-args=true --llamacpp-args '--parallel 4'

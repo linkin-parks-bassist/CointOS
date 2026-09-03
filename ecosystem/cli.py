@@ -35,6 +35,20 @@ def atomic_json(path: Path, value: dict) -> None:
             os.unlink(temporary)
 
 
+def atomic_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def audit(event: str, **fields: object) -> None:
     path = ROOT / "logs/runs" / f"{datetime.now(timezone.utc):%Y-%m-%d}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,12 +65,22 @@ def initialize() -> None:
     print(f"initialized {ROOT}")
 
 
-def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | None = None, model_reason: str = "", agent_name: str | None = None) -> str:
+def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | None = None,
+                 model_reason: str = "", agent_name: str | None = None,
+                 idempotency_key: str | None = None) -> str:
     from ecosystem.roles import load_role
     from ecosystem.models import snapshot, ids, fallback
     from ecosystem.identity import validate, generate
 
     initialize()
+    job_id = (f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
+              if idempotency_key else f"task-{uuid.uuid4().hex[:16]}")
+    job_path = ROOT / "state/jobs" / f"{job_id}.json"
+    if job_path.exists():
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        if not idempotency_key or saved.get("idempotency_key") != idempotency_key:
+            raise ValueError("task identifier collision")
+        return job_id
     load_role(role)  # Reject unknown or malformed roles before queueing.
     inventory = snapshot()
     if model is None:
@@ -64,7 +88,6 @@ def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | N
     if model not in ids(inventory):
         raise ValueError(f"model {model!r} is not locally available")
     agent_name = validate(agent_name) if agent_name else generate(role, task)
-    job_id = f"task-{uuid.uuid4().hex[:16]}"
     job = {
         "id": job_id, "kind": "agent-task", "state": "queued",
         "attempts": 0, "created_at": now(), "updated_at": now(),
@@ -73,19 +96,24 @@ def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | N
         "resource_snapshot": inventory,
         "agent_name": agent_name,
     }
-    atomic_json(ROOT / "state/jobs" / f"{job_id}.json", job)
+    if idempotency_key:
+        job["idempotency_key"] = idempotency_key
+    atomic_json(job_path, job)
     audit("task.queued", job_id=job_id, role=role, source=source, model=model, model_reason=job["model_reason"], agent_name=agent_name)
     return job_id
 
 
-def amend_latest_task(source: str, role: str, task: str, model: str | None = None, model_reason: str = "") -> str | None:
+def amend_latest_task(source: str, role: str, task: str, model: str | None = None,
+                      model_reason: str = "", idempotency_key: str | None = None) -> str | None:
     from ecosystem.roles import load_role
-    load_role(role)
     candidates = []
     for path in (ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
+        if idempotency_key in job.get("amendment_keys", []):
+            return job["id"]
         if job.get("kind") == "agent-task" and job.get("source") == source and job.get("state") in {"queued", "ready"}:
             candidates.append((job["created_at"], path, job))
+    load_role(role)
     if not candidates:
         return None
     _, path, job = max(candidates, key=lambda item: item[0])
@@ -95,6 +123,8 @@ def amend_latest_task(source: str, role: str, task: str, model: str | None = Non
     job.update(role=role, task=task.strip(), state="queued", updated_at=now())
     if model:
         job.update(model=model, model_reason=model_reason or "Explicit amendment selection.")
+    if idempotency_key:
+        job.setdefault("amendment_keys", []).append(idempotency_key)
     job.pop("prompt", None)
     atomic_json(path, job)
     audit("task.amended", job_id=job["id"], role=role, source=source)

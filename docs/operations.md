@@ -22,8 +22,11 @@ Install or refresh the checked-in units with:
 mkdir -p ~/.config/systemd/user
 cp services/systemd/agent-ecosystem.{service,path,timer} ~/.config/systemd/user/
 cp services/systemd/agent-watchdog.{service,timer} ~/.config/systemd/user/
+cp services/systemd/agent-{telegram,control-worker,notifier,models}.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now agent-ecosystem.path agent-ecosystem.timer agent-watchdog.timer
+systemctl --user enable --now agent-models.service agent-telegram.service \
+  agent-control-worker.service agent-notifier.service agent-ecosystem.path \
+  agent-ecosystem.timer agent-watchdog.timer
 ```
 
 Stop all automatic intake with:
@@ -88,23 +91,30 @@ It supports `/spawn ROLE TASK`, `/roles`, `/status`, and `/pause`; arbitrary tex
 is never shell input. Installing/enabling `agent-telegram.service` waits for an
 explicit decision on credentials and remote data handling.
 
-Ordinary English goes directly to a locally served conversational control agent.
-It can converse or combine narrow validated tools for status inspection, role
-discovery, dispatch control, task amendment, and task creation. It cannot emit
-shell operations or bypass role validation. Override the control model with
-`AGENT_TELEGRAM_MODEL` in the protected environment file.
+Ordinary English first reaches resident `GLM-4.7-Flash-GGUF` with only a small recent
+conversation window and a strict 96-token output bound. This is generated speech,
+not an intent classifier or canned acknowledgement. It may converse immediately but
+must not claim live facts or action. Override it with
+`AGENT_TELEGRAM_FIRST_RESPONSE_MODEL` in the protected environment file.
 
-The installed gateway uses `Qwen3.8-27B-GGUF` as its conversational control agent
-with a reserved request slot. It receives conversation, live state, roles, resources,
-and narrow executable tools; there is no intent-classifier JSON envelope or canned
-presentation layer. Ordinary responses are always model-generated. A literal
-failure notice appears only after five minutes without an answer. Each inbound
-update is consumed once to prevent duplicated actions and retry storms.
+Every admitted update is already a durable control turn before that inference.
+`agent-control-worker.service` then runs up to two Qwen turns outside the polling
+process. Qwen can combine narrow validated tools for status inspection, role
+discovery, dispatch control, task amendment, and task creation. It finishes through
+an internal typed decision: either publish material new information or remain silent
+when GLM already handled the exchange. Override it with `AGENT_TELEGRAM_MODEL`.
+
+The deep controller receives conversation, live state, roles, resources, and narrow
+executable tools; there is no user-visible JSON envelope. A literal failure notice
+appears only after five minutes without a known generated delivery. Receipt, first-
+response attempt, delivery, deep work, and follow-up are separate audited states.
+Queued work uses deterministic per-turn idempotency keys so a recovered control turn
+cannot silently spawn the same task twice.
 
 The resident 27B weights are shared by four llama.cpp request sequences. Its
-131,072-token context pool therefore provides roughly 32k tokens per simultaneous
-sequence without loading four copies of the coefficients. One sequence is reserved
-for the conversational control plane. This request-level concurrency is distinct
+262,144-token aggregate context pool provides roughly 65k tokens per simultaneous
+sequence without loading four copies of the coefficients. GLM has four fast-front
+sequences and Coder-30B has two worker sequences. This request-level concurrency is distinct
 from worker scheduling: durable worker turns must remain bounded and resumable so
 the scheduler can rotate work instead of allowing one long generation to monopolize
 a sequence.
@@ -155,8 +165,9 @@ memory, and host load. It selects a model (or honors David's explicit selection)
 and the job permanently records both the choice and rationale. The executor does
 not choose or hardcode a different model later.
 
-The bot stores a private per-user JSONL conversation under `state/conversations/`
-and supplies at most the latest 20 messages / 12,000 characters to GLM. This lets
+The bot stores a private per-user JSONL conversation under `state/conversations/`.
+GLM receives at most six messages / 2,500 characters; Qwen deep control receives at
+most the prior 20 messages / 12,000 characters. This lets
 follow-ups refer to prior discussion without putting chat history in Git or audit
 events. `/forget` clears conversational memory without deleting jobs or audit logs.
 Corrections to the most recent queued/prepared task use the validated `amend`

@@ -1,17 +1,21 @@
 [Unit]
-Description=Allowlisted Telegram gateway for local agent jobs
+Description=Process durable Telegram control turns outside the polling path
 After=network-online.target agent-models.service
 Wants=network-online.target agent-models.service
+
 [Service]
-ExecStart=%h/agent-ecosystem/scripts/telegram-gateway
+ExecStart=%h/agent-ecosystem/scripts/control-worker
 WorkingDirectory=%h/agent-ecosystem
 EnvironmentFile=%h/.config/agent-ecosystem/telegram.env
-Environment=AGENT_TELEGRAM_FIRST_RESPONSE_MODEL=GLM-4.7-Flash-GGUF
+Environment=AGENT_TELEGRAM_MODEL=Qwen3.8-27B-GGUF
+Environment=AGENT_CONTROL_WORKERS=2
+Environment=AGENT_CONTROL_TURN_SECONDS=600
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ReadWritePaths=%h/agent-ecosystem
+
 [Install]
 WantedBy=default.target
