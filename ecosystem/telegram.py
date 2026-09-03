@@ -69,7 +69,9 @@ def handle(token: str, chat_id: int, user_id: int, command: str) -> None:
             conversation.append(user_id, "user", command)
             conversation.append(user_id, "assistant", response)
             return
-        intent = interpret(command, list_roles(), history, snapshot())
+        live = snapshot()
+        live["job_status"] = status_text()
+        intent = interpret(command, list_roles(), history, live)
         cli.audit("telegram.intent", user_id=user_id, action=intent["action"], role=intent.get("role", ""))
         if intent["action"] == "spawn":
             job_id = cli.enqueue_task(intent["role"], intent["task"], source=f"telegram:{user_id}", model=intent["model"], model_reason=intent["model_reason"])

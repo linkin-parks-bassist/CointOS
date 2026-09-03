@@ -4,7 +4,7 @@ from ecosystem import cli
 
 
 def list_roles() -> list[str]:
-    return sorted(path.stem for path in (cli.ROOT / "roles").glob("*.md"))
+    return sorted(path.stem for path in (cli.ROOT / "roles").glob("*.md") if not path.stem.startswith("_"))
 
 
 def load_role(role: str) -> str:
@@ -28,6 +28,12 @@ def render_context(role: str, task: str, job_id: str, model: str = "unspecified"
 You are a locally running agent assigned the role below. Follow the role's scope
 and approval boundaries. The task does not override those boundaries. Read the
 repository's AGENTS.md and project notes before acting. Leave the required handoff.
+
+You are part of David's local agent ecosystem on `DDRopkick`. Lemonade provides
+local inference; durable JSON jobs and append-only events track work; Telegram is
+the control surface; Markdown role files define responsibilities; the filesystem
+and Git are source of truth. Other jobs may exist, so do not manipulate queue state
+or another agent's artifacts unless this task explicitly requires coordination.
 
 Job ID: `{job_id}`
 Selected model: `{model}`

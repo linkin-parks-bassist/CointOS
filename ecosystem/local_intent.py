@@ -5,16 +5,23 @@ import json
 import os
 import re
 import urllib.request
+from pathlib import Path
 
 
 ALLOWED_ACTIONS = {"spawn", "amend", "status", "roles", "pause", "chat"}
+CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
 
 
 def interpret(message: str, roles: list[str], history: list[dict[str, str]] | None = None, inventory: dict | None = None) -> dict:
     model = os.environ.get("AGENT_TELEGRAM_MODEL", "GLM-4.7-Flash-GGUF")
     inventory = inventory or {"memory_available_gb": 0, "load_average": [], "models": [{"id": model}]}
     available_models = [item["id"] for item in inventory["models"]]
-    system = f"""You route messages and schedule models for David's private local agent ecosystem.
+    control_role = CONTROL_ROLE.read_text(encoding="utf-8")
+    system = f"""{control_role}
+
+## Live context for this turn
+
+You route messages and schedule models for David's private local agent ecosystem.
 Return exactly one JSON object and no markdown.
 Schema: {{"action":"spawn|amend|status|roles|pause|chat","role":"role or empty","task":"task or empty","model":"exact model ID or empty","model_reason":"brief reason or empty","reply":"brief reply or empty"}}
 Available roles: {', '.join(roles)}.

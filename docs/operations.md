@@ -85,6 +85,13 @@ Machine-status questions have a deterministic local fast path rather than relyin
 on model knowledge. Status includes active job identity, role, selected model,
 elapsed time, output-idle time, and a possible-stall warning after five minutes.
 
+The bot's durable identity and operating knowledge live in
+`roles/_control-plane.md`. The underscore marks it as infrastructure rather than a
+spawnable worker role. Every natural-language turn combines that complete role
+with conversation history, live queue status, resources, model residency, and the
+model scheduling policy. Spawned agents receive their role plus a concise ecosystem
+situation preamble and their recorded model decision.
+
 For every spawn, the control-plane model receives a live inventory of downloaded
 models, capability labels, sizes, context limits, loaded/busy state, available
 memory, and host load. It selects a model (or honors David's explicit selection),
