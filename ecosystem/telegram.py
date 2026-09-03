@@ -8,6 +8,8 @@ from ecosystem.local_intent import interpret, humanize_notification
 from ecosystem import conversation
 from ecosystem.outbox import drain
 from ecosystem.models import snapshot
+from ecosystem.facts import lifecycle
+from ecosystem.queries import answer as answer_query
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -64,7 +66,7 @@ def natural_reply(value: object, fallback: str) -> str:
     return text
 
 def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None:
-    delayed = threading.Timer(6.0, reply, args=(token, chat_id, "still chewing on that — one sec…"))
+    delayed = threading.Timer(15.0, reply, args=(token, chat_id, "this one's taking longer than usual — still on it."))
     delayed.daemon = True
     delayed.start()
     try:
@@ -78,6 +80,7 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
             conversation.append(user_id, "assistant", response)
             return
         live = snapshot(); live["job_status"] = status_text()
+        live["lifecycle_facts"] = lifecycle()
         from ecosystem.identity import active_names
         live["active_agent_names"] = sorted(active_names())
         intent = interpret(command, list_roles(), history, live)
@@ -93,7 +96,8 @@ def handle_natural(token: str, chat_id: int, user_id: int, command: str) -> None
                         "that one's already started or finished, so I haven't silently changed it. want me to queue a corrected follow-up?")
             reply(token, chat_id, response)
         elif intent["action"] == "status":
-            response = natural_reply(intent.get("reply"), friendly_status())
+            exact = answer_query(intent.get("query", "general"), intent.get("query_role", ""), live["lifecycle_facts"])
+            response = exact or natural_reply(intent.get("reply"), friendly_status())
             reply(token, chat_id, response)
         elif intent["action"] == "roles":
             response = natural_reply(intent.get("reply"), "I've currently got intake, worker, and steward roles.")
