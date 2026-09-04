@@ -113,6 +113,12 @@ def test_load_rejects_missing_unknown_boolean_nonfinite_and_nonpositive_values()
     cases = (
         ("[DEFAULT]\n\n[heartbeat]\nprobe_deadline_seconds = 15\nmaximum_age_seconds = 60\n",
          "unknown time policy section DEFAULT"),
+        ("[DEFAULT] \n\n[heartbeat]\nprobe_deadline_seconds = 15\nmaximum_age_seconds = 60\n",
+         "unknown time policy section DEFAULT"),
+        (" [DEFAULT]\n\n[heartbeat]\nprobe_deadline_seconds = 15\nmaximum_age_seconds = 60\n",
+         "unknown time policy section DEFAULT"),
+        ("[DEFAULT] ; comment\n\n[heartbeat]\nprobe_deadline_seconds = 15\nmaximum_age_seconds = 60\n",
+         "unknown time policy section DEFAULT"),
         ("[heartbeat]\nprobe_deadline_seconds = 15\n", "missing time policy heartbeat.maximum_age_seconds"),
         ("[heartbeat]\nprobe_deadline_seconds = 15\nmaximum_age_seconds = 60\nextra_seconds = 1\n",
          "unknown time policy heartbeat.extra_seconds"),

@@ -76,12 +76,10 @@ def validate(policy: dict) -> None:
 
 def load(path: Path = CONFIG_PATH,
          required: dict[str, set[str]] = REQUIRED_KEYS) -> dict[str, dict[str, float]]:
-    parser = configparser.ConfigParser(interpolation=None)
+    parser = configparser.ConfigParser(interpolation=None, default_section=None)
     parser.optionxform = str
     try:
         source = path.read_text(encoding="utf-8")
-        if any(line == "[DEFAULT]" for line in source.splitlines()):
-            raise ValueError("unknown time policy section DEFAULT")
         parser.read_string(source, source=str(path))
     except configparser.Error as error:
         raise ValueError(f"invalid time policy: {error}") from error
