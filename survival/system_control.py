@@ -1489,7 +1489,15 @@ def _runtime_snapshot(config, request_id, observe_user):
     previous_active = []
     for category in ACTIVITY_RESTORE_CATEGORIES:
         for entry in config["lifecycle_catalog"]["user_units"][category]:
-            if observe_user(entry["unit"]) == "active":
+            observation = observe_user(entry["unit"])
+            if (
+                type(observation) is not str
+                or observation not in {"active", "inactive"}
+            ):
+                raise ValueError(
+                    f"stable activity was not observed for {entry['unit']}"
+                )
+            if observation == "active":
                 previous_active.append(entry["unit"])
     return {
         "schema_version": 1,
@@ -1512,15 +1520,15 @@ def _ensure_pause_marker(config, effect):
 
 
 def _ensure_admission_closed(config, effect, observe_user, sync):
+    paused = _ensure_pause_marker(config, effect)
+    if not paused.exists():
+        return {"ok": False, "error": "admission pause was not observed"}
     runtime_path = _runtime_path(config, effect["request_id"])
     if runtime_path.exists():
         runtime = _read_runtime(config, effect["request_id"])
     else:
         runtime = _runtime_snapshot(config, effect["request_id"], observe_user)
         _write_runtime(config, runtime)
-    paused = _ensure_pause_marker(config, effect)
-    if not paused.exists():
-        return {"ok": False, "error": "admission pause was not observed"}
     request = _read_request(_request_path(config["store_path"], effect["request_id"]))
     if request["command"]["command"] == "reset":
         runtime["interrupted_jobs"] = _interrupt_job_records(
@@ -2187,19 +2195,21 @@ def production_adapters(
 
     def finish(effect, _policy):
         runtime = _read_runtime(config, effect["request_id"])
-        restoration = restore_runtime_activity(
-            config,
-            effect,
-            user_adapter,
-            progress_wait,
-            reopen_admission=not runtime["previous_pause"],
-        )
-        if restoration["ok"] is not True:
-            return {
-                "ok": False,
-                "error": "prior runtime activity was not restored",
-                "restoration": restoration,
-            }
+        restoration = None
+        if runtime["previous_pause"]:
+            restoration = restore_runtime_activity(
+                config,
+                effect,
+                user_adapter,
+                progress_wait,
+                reopen_admission=False,
+            )
+            if restoration["ok"] is not True:
+                return {
+                    "ok": False,
+                    "error": "prior runtime activity was not restored",
+                    "restoration": restoration,
+                }
         records.atomic_json(
             Path(config["store_path"]) / "lifecycle-completions" / f"{effect['request_id']}.json",
             {
@@ -2214,7 +2224,10 @@ def production_adapters(
             f"{effect['request_id']} lifecycle recovery completed and passed verification.",
             "completed",
         )
-        return {"ok": report["ok"] is True, "restoration": restoration, **report}
+        result = {"ok": report["ok"] is True, **report}
+        if restoration is not None:
+            result["restoration"] = restoration
+        return result
 
     adapters = {
         "system": system_adapter,

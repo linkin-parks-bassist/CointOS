@@ -117,6 +117,27 @@ def lifecycle_policy(store, request_id="telegram-1"):
     return policy
 
 
+def admission_policy(root, previous_pause=False):
+    root = Path(root)
+    agent_state = root / "agent-state"
+    (agent_state / "jobs").mkdir(parents=True)
+    policy = {
+        "store_path": root / "survival",
+        "agent_state_path": agent_state,
+        "user_manager_uid": os.getuid(),
+        "lifecycle_catalog": system_control.load_lifecycle_catalog(
+            Path("config/survival-lifecycle.json"),
+        ),
+        "timing_policy": time_policy.load(Path("config/time.cfg")),
+    }
+    system_control.accept_request(
+        policy["store_path"],
+        command_record("restart"),
+        previous_pause=previous_pause,
+    )
+    return policy
+
+
 def test_only_gateway_uid_can_submit_lifecycle_request():
     system_control.authorize_peer(991, gateway_uid=991)
     with unittest.TestCase().assertRaises(PermissionError):
@@ -1708,13 +1729,110 @@ def test_runtime_snapshot_excludes_units_declared_intentionally_inactive():
         assert snapshot["previous_active_user_units"] == []
 
 
+def test_admission_is_closed_before_a_crash_during_activity_snapshot():
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = admission_policy(temporary)
+        paused = policy["agent_state_path"] / "PAUSED"
+        runtime_path = system_control._runtime_path(policy, "telegram-1")
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:acknowledged:close_admission",
+        }
+
+        with patch.object(
+            system_control,
+            "_runtime_snapshot",
+            side_effect=RuntimeError("simulated death during activity snapshot"),
+        ):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "simulated death"):
+                system_control._ensure_admission_closed(
+                    policy,
+                    effect,
+                    observe_user=lambda _unit: "inactive",
+                    sync=lambda: None,
+                )
+
+        assert paused.exists()
+        assert not runtime_path.exists()
+        result = system_control._ensure_admission_closed(
+            policy,
+            effect,
+            observe_user=lambda _unit: "inactive",
+            sync=lambda: None,
+        )
+        assert result["ok"] is True
+        assert runtime_path.exists()
+
+
+def test_activity_change_after_admission_closure_is_captured():
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = admission_policy(temporary)
+        paused = policy["agent_state_path"] / "PAUSED"
+        ordinary = policy["lifecycle_catalog"]["user_units"]["ordinary_services"][0][
+            "unit"
+        ]
+        state = {
+            entry["unit"]: "inactive"
+            for category in system_control.ACTIVITY_RESTORE_CATEGORIES
+            for entry in policy["lifecycle_catalog"]["user_units"][category]
+        }
+
+        def observe_user(unit):
+            assert paused.exists()
+            if unit == ordinary:
+                state[unit] = "active"
+            return state[unit]
+
+        result = system_control._ensure_admission_closed(
+            policy,
+            {
+                "request_id": "telegram-1",
+                "idempotency_key": "telegram-1:acknowledged:close_admission",
+            },
+            observe_user=observe_user,
+            sync=lambda: None,
+        )
+        runtime = system_control._read_runtime(policy, "telegram-1")
+
+        assert result["ok"] is True
+        assert runtime["previous_active_user_units"] == [ordinary]
+
+
+def test_indeterminate_activity_observation_fails_with_admission_closed():
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = admission_policy(temporary)
+        paused = policy["agent_state_path"] / "PAUSED"
+        runtime_path = system_control._runtime_path(policy, "telegram-1")
+        first_unit = policy["lifecycle_catalog"]["user_units"][
+            "inference_prerequisites"
+        ][0]["unit"]
+
+        for indeterminate in ("unknown", "activating", "failed", None, []):
+            with unittest.TestCase().assertRaisesRegex(ValueError, "stable activity"):
+                system_control._ensure_admission_closed(
+                    policy,
+                    {
+                        "request_id": "telegram-1",
+                        "idempotency_key": "telegram-1:acknowledged:close_admission",
+                    },
+                    observe_user=lambda unit, value=indeterminate: (
+                        value if unit == first_unit else "inactive"
+                    ),
+                    sync=lambda: None,
+                )
+
+        assert paused.exists()
+        assert not runtime_path.exists()
+
+
 def test_production_constructor_is_complete_and_drives_both_commands():
     for command in ("restart", "reset"):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             agent_state = root / "agent-state"
             (agent_state / "jobs").mkdir(parents=True)
-            (agent_state / "jobs" / "task-live.json").write_text(json.dumps({
+            job_path = agent_state / "jobs" / "task-live.json"
+            job_path.write_text(json.dumps({
                 "id": "task-live",
                 "kind": "agent-task",
                 "state": "running",
@@ -1732,10 +1850,15 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                         "inactive" if category == "inactive_units" else "active"
                     )
             trace = []
+            post_resume_actions = []
+            pause_publications = []
 
             def manager(kind):
                 def run(action, unit):
                     trace.append((kind, action, unit))
+                    job_state = json.loads(job_path.read_text(encoding="utf-8"))["state"]
+                    if job_state in {"queued", "ready"}:
+                        post_resume_actions.append((kind, action, unit))
                     if action == "start":
                         state[(kind, unit)] = "active"
                     elif action in {"stop", "terminate", "kill"}:
@@ -1774,9 +1897,21 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                 config["store_path"], command_record(command), previous_pause=False,
             )
             system_control.commit_acknowledgement(path)
-            result = system_control.advance_request(path, adapters, config)
+            real_atomic_json = system_control.records.atomic_json
+
+            def record_pause_publication(record_path, value, *arguments, **keywords):
+                if Path(record_path) == agent_state / "PAUSED":
+                    pause_publications.append(value["request_id"])
+                return real_atomic_json(record_path, value, *arguments, **keywords)
+
+            with patch.object(
+                system_control.records, "atomic_json", record_pause_publication,
+            ):
+                result = system_control.advance_request(path, adapters, config)
 
             assert result == {"ok": True, "phase": "completed", "remaining_effects": 0}
+            assert post_resume_actions == []
+            assert pause_publications == ["telegram-1"]
             assert state[("system", catalog["backend_unit"])] == "active"
             assert state[("user", "agent-models.service")] == "active"
             assert state[("user", "agent-ecosystem.service")] == "active"
@@ -1793,9 +1928,10 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                 if event[1:] == ("start", "agent-ecosystem.path")
             )
             assert first_activation_stop < lemonade_stop < lemonade_start < activation_restart
-            job = json.loads(
-                (agent_state / "jobs" / "task-live.json").read_text(encoding="utf-8")
-            )
+            ordinary = catalog["user_units"]["ordinary_services"][0]["unit"]
+            assert trace.count(("user", "reset_failed", ordinary)) == 1
+            assert trace.count(("user", "start", ordinary)) == 1
+            job = json.loads(job_path.read_text(encoding="utf-8"))
             assert job["state"] == "queued"
             assert job["resume_available"] is False
             assert "opencode_session" not in job
