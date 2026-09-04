@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ecosystem import cli, control_runtime, control_turns, roles
+from ecosystem import cli, control_agent, control_runtime, control_turns, roles
 
 
 def with_root(function):
@@ -133,6 +133,38 @@ def test_status_formats_absent_role_as_unassigned(root):
     status = control_runtime.status_text()
     assert "queued / unassigned / unspecified" in status
     assert " / None / " not in status
+
+
+@with_root
+def test_unsafe_role_label_is_absent_from_live_control_prompt(root):
+    cli.atomic_json(root / "state/jobs/task-unsafe.json", {
+        "id": "task-unsafe",
+        "kind": "agent-task",
+        "state": "queued",
+        "role": "../../etc/passwd",
+        "agent_name": "Noether",
+        "model": None,
+        "created_at": "2026-09-04T00:00:00+00:00",
+        "updated_at": "2026-09-04T00:00:00+00:00",
+    })
+    captured = {}
+
+    def infer(**arguments):
+        captured.update(arguments)
+        return {"content": None, "tool_calls": [{
+            "id": "done",
+            "type": "function",
+            "function": {"name": "finish_silently", "arguments": "{}"},
+        }]}
+
+    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}), \
+            patch("ecosystem.control_agent.active_chat_model", return_value="model"):
+        live = control_runtime.live_context()
+        control_agent.respond("status?", [], "I’ll check.", live,
+                              lambda *_arguments: {}, infer=infer)
+    prompt = captured["messages"][0]["content"]
+    assert "../../etc/passwd" not in prompt
+    assert "task-unsafe" in prompt
 
 
 def load_tests(_loader, _tests, _pattern):

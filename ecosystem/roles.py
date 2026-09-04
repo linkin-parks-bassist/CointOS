@@ -24,10 +24,16 @@ def role_capabilities(role: str | None) -> list[str]:
     return list(ROLE_CAPABILITIES.get(role, ["tool-calling"]))
 
 
+def safe_role_label(role: str | None) -> str | None:
+    label = role.strip() if isinstance(role, str) and role.strip() else None
+    return label if label and SAFE_ROLE.fullmatch(label) else None
+
+
 def resolve_role(role: str | None) -> dict:
     label = role.strip() if isinstance(role, str) and role.strip() else None
     roles = cli.ROOT / "roles"
-    path = roles / f"{label}.md" if label and SAFE_ROLE.fullmatch(label) else None
+    safe_label = safe_role_label(role)
+    path = roles / f"{safe_label}.md" if safe_label else None
     spawnable = (path is not None and path.is_file()
                  and (not path.name.startswith("_") or label == "sole_survivor"))
     if not spawnable:

@@ -4,6 +4,7 @@ import glob, json, os, re, subprocess, urllib.request
 from pathlib import Path
 
 from ecosystem.inference import chat
+from ecosystem.roles import safe_role_label
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 RESOURCE_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/resource-policy.json"
@@ -180,13 +181,14 @@ def _json_object(text: str) -> dict:
 def _routing_prompt(job: dict, inventory: dict) -> str:
     policy = inventory.get("scheduling_policy", {})
     control_model = policy.get("control_plane", {}).get("model")
+    advisory_role = safe_role_label(job.get("role"))
     maximum_loaded = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))["normal"]["maximum_loaded_models"]
     models = []
     safe_routes = []
     loaded_count = sum(1 for item in inventory.get("models", []) if item.get("loaded"))
     for item in inventory.get("models", []):
         load_admitted, load_reason = admission(item.get("id", ""), inventory)
-        compatible = role_compatible(job.get("role"), set(item.get("labels", [])))
+        compatible = role_compatible(advisory_role, set(item.get("labels", [])))
         contexts = context_options(item, inventory)
         models.append({
             "id": item.get("id"),
@@ -207,7 +209,7 @@ def _routing_prompt(job: dict, inventory: dict) -> str:
             safe_routes.append({"action": "load", "model": item.get("id"),
                                 "context_options": contexts})
     facts = {
-        "role": job.get("role"),
+        "role": advisory_role,
         "task": str(job.get("task", ""))[:6000],
         "requested_model_hint": job.get("requested_model"),
         "requested_model_reason": job.get("requested_model_reason", ""),
@@ -290,7 +292,7 @@ def route(job: dict, inventory: dict, infer=chat) -> dict:
     if candidate is None:
         return {"action": "defer", "model": None,
                 "reason": f"routing model selected unavailable model {model_id!r}", "valid": False}
-    if not role_compatible(job.get("role"), set(candidate.get("labels", []))):
+    if not role_compatible(safe_role_label(job.get("role")), set(candidate.get("labels", []))):
         return {"action": "defer", "model": None,
                 "reason": f"routing model selected role-incompatible model {model_id!r}", "valid": False}
     if action == "use_loaded" and not candidate.get("loaded"):

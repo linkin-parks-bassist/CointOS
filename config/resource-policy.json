@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "normal": {
+    "maximum_loaded_models": 2,
+    "minimum_available_gb": 40.0,
+    "maximum_gtt_used_gb": 55.0
+  },
+  "pressure": {
+    "minimum_available_gb": 32.0,
+    "maximum_gtt_used_gb": 57.0,
+    "maximum_swap_used_gb": 1.0,
+    "healthy_seconds_before_release": 60
+  },
+  "emergency": {
+    "minimum_available_gb": 24.0,
+    "maximum_gtt_used_gb": 60.0,
+    "maximum_swap_used_gb": 2.0,
+    "maximum_memory_full_avg10": 1.0,
+    "chat_model": "Qwen3.5-4B-GGUF",
+    "chat_context_tokens": 32768,
+    "parallel_requests": 2
+  },
+  "gpu_boundary": {
+    "gtt_limit_gb": 64,
+    "ttm_pages_limit": 16777216,
+    "ttm_page_pool_pages": 2097152
+  },
+  "admission": {
+    "desktop_and_control_reserve_gb": 32.0,
+    "model_load_transient_reserve_gb": 12.0,
+    "unknown_model_reserve_gb": 64.0,
+    "forbidden_recipes": []
+  },
+  "dynamic_models": {
+    "context_candidates": [16384, 32768, 65536, 131072, 262144],
+    "estimated_kv_bytes_per_token": 131072,
+    "rollover_fraction": 0.75,
+    "parallel_requests": 1,
+    "llamacpp_batch_size": 512,
+    "llamacpp_ubatch_size": 128
+  },
+  "poll_seconds": 1.0
+}

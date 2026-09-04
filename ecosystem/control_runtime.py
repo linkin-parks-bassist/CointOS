@@ -9,7 +9,25 @@ from ecosystem import cli, conversation, control_turns
 from ecosystem.facts import lifecycle
 from ecosystem.identity import active_names
 from ecosystem.models import snapshot
-from ecosystem.roles import list_roles
+from ecosystem.roles import list_roles, safe_role_label
+
+
+def _prompt_lifecycle_facts() -> dict:
+    facts = lifecycle()
+    recent = []
+    for fact in facts.get("recent_agents", []):
+        projected = dict(fact)
+        projected["role"] = safe_role_label(projected.get("role"))
+        recent.append(projected)
+    latest = {}
+    for raw_role, fact in facts.get("latest_by_role", {}).items():
+        role = safe_role_label(raw_role)
+        if role is None:
+            continue
+        projected = dict(fact)
+        projected["role"] = role
+        latest[role] = projected
+    return {**facts, "latest_by_role": latest, "recent_agents": recent}
 
 
 def status_text() -> str:
@@ -26,7 +44,7 @@ def status_text() -> str:
             continue
         counts[state] = counts.get(state, 0) + 1
         if job.get("kind") == "agent-task" and state in {"queued", "ready", "running", "awaiting_verification"}:
-            role = job.get("role") or "unassigned"
+            role = safe_role_label(job.get("role")) or "unassigned"
             line = f"{job['id']}: {job['state']} / {role} / {job.get('model') or 'unspecified'}"
             if job["state"] == "running":
                 started = datetime.fromisoformat(job["updated_at"])
@@ -93,7 +111,7 @@ def live_context() -> dict:
     maintenance_path = cli.ROOT / "state/maintenance-status.json"
     maintenance = (json.loads(maintenance_path.read_text(encoding="utf-8"))
                    if maintenance_path.exists() else None)
-    live.update(job_status=status_text(), lifecycle_facts=lifecycle(),
+    live.update(job_status=status_text(), lifecycle_facts=_prompt_lifecycle_facts(),
                 recent_errors=recent_errors_text(), available_roles=list_roles(),
                 active_agent_names=sorted(active_names()), active_maintenance=maintenance)
     return live
@@ -115,7 +133,7 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
     if name == "inspect_status":
         refreshed = snapshot()
         result = {"ok": True, "job_status": status_text(), "models": refreshed,
-                  "lifecycle_facts": lifecycle()}
+                  "lifecycle_facts": _prompt_lifecycle_facts()}
     elif name == "inspect_recent_errors":
         result = {"ok": True, "recent_errors": recent_errors_text()}
     elif name == "list_roles":
@@ -135,7 +153,8 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
                                       agent_name=arguments.get("agent_name"),
                                       idempotency_key=f"{identifier}:{key}")
             job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
-            result = {"ok": True, "agent_name": job["agent_name"], "role": role,
+            result = {"ok": True, "agent_name": job["agent_name"],
+                      "role": safe_role_label(role),
                       "requested_model_hint": model, "model_selection": "pending", "task": task}
         else:
             job_id = cli.amend_latest_task(f"telegram:{user_id}", role, task, model,

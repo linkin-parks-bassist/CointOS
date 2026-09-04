@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from ecosystem import cli, resource_control
 from ecosystem.models import (
+    _routing_prompt,
     admission,
     admitted_or_substitute,
     context_options,
@@ -62,6 +63,20 @@ def test_nonresident_model_substitutes_only_a_compatible_resident_model():
 def test_optional_role_uses_baseline_model_capability():
     assert required_labels("coder") == {"coding", "tool-calling"}
     assert role_compatible(None, {"tool-calling"})
+
+
+def test_unsafe_role_label_is_absent_from_model_routing_prompt():
+    inventory = {
+        "memory_available_gb": 100.0,
+        "memory": {"gtt_used_gb": 5.0},
+        "scheduling_policy": {"control_plane": {"model": "router"}},
+        "models": [],
+    }
+    prompt = _routing_prompt(
+        {"role": "../../etc/passwd", "task": "inspect the invariant"}, inventory
+    )
+    assert "../../etc/passwd" not in prompt
+    assert "inspect the invariant" in prompt
 
 
 def test_router_selects_only_a_prevalidated_model_route():
