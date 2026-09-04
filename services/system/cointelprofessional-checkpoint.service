@@ -1,0 +1,36 @@
+[Unit]
+Description=Cointelprofessional unprivileged durable-checkpoint consumer
+Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=david
+Slice=cointelprofessional-survival.slice
+Restart=always
+RestartSec=250ms
+ExecStart=/usr/bin/python3 -m survival.checkpoint
+WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current
+Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
+Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
+Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json
+Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state
+ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/time.cfg
+ReadOnlyPaths=/var/lib/cointelprofessional/checkpoint-requests
+BindReadOnlyPaths=-/home/david/agent-ecosystem/state/jobs -/home/david/agent-ecosystem/logs/runs
+ReadWritePaths=/var/lib/cointelprofessional/checkpoint-results
+InaccessiblePaths=-/run/cointelprofessional/guardian.sock
+PrivateTmp=true
+PrivateDevices=true
+PrivateNetwork=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=tmpfs
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

@@ -1,5 +1,9 @@
 {
   "backend_unit": "lemond.service",
+  "checkpoint": {
+    "request_directory": "checkpoint-requests",
+    "result_directory": "checkpoint-results"
+  },
   "model_health": {
     "host": "127.0.0.1",
     "path": "/api/v1/health",

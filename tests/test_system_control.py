@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from survival import lifecycle, system_control, telegram_api, time_policy
+from survival import checkpoint, lifecycle, system_control, telegram_api, time_policy
 
 
 def command_record(command="reset", update_id=1):
@@ -776,7 +776,39 @@ def test_guardian_reports_every_gateway_incident_even_when_scans_find_several():
         assert len(reports) == 2
 
 
-def test_restart_checkpoint_request_is_readable_by_agent_state_owner():
+def _checkpoint_clock():
+    state = {"now": 0.0}
+
+    def monotonic():
+        return state["now"]
+
+    def sleep(seconds):
+        state["now"] += seconds
+
+    return monotonic, sleep
+
+
+def _write_checkpoint_job(agent_state, job_id, session=None):
+    job = {
+        "id": job_id,
+        "kind": "agent-task",
+        "state": "running",
+        "output": f"logs/runs/{job_id}.opencode.log",
+    }
+    if session is not None:
+        job["opencode_session"] = session
+    path = agent_state / "jobs" / f"{job_id}.json"
+    path.write_text(json.dumps(job), encoding="utf-8")
+    if session is not None:
+        output = agent_state.parent / job["output"]
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            json.dumps({"sessionID": session}) + "\n", encoding="utf-8",
+        )
+    return path
+
+
+def test_restart_checkpoint_request_is_observed_and_all_active_jobs_use_task_1_transition():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         agent_state = root / "agent-state"
@@ -784,22 +816,194 @@ def test_restart_checkpoint_request_is_readable_by_agent_state_owner():
         policy = lifecycle_policy(root / "survival") | {
             "agent_state_path": agent_state,
         }
+        checkpointed_path = _write_checkpoint_job(
+            agent_state, "task-checkpointed", "ses_checkpointed",
+        )
+        unsupported_path = _write_checkpoint_job(
+            agent_state, "task-unsupported",
+        )
         effect = {
             "request_id": "telegram-1",
             "idempotency_key": "telegram-1:checkpointing:checkpoint",
         }
+        monotonic, advance_clock = _checkpoint_clock()
+
+        def consume_request(seconds):
+            request_root, result_root = checkpoint.checkpoint_paths(
+                policy["store_path"], policy["lifecycle_catalog"],
+            )
+            request_path = request_root / "telegram-1.json"
+            checkpoint.process_checkpoint_request(
+                request_path, agent_state, result_root, now=monotonic,
+            )
+            advance_clock(seconds)
 
         result = system_control._checkpoint_runtime(
-            policy, effect, sleep=lambda _seconds: None, sync=lambda: None,
+            policy, effect, sleep=consume_request, sync=lambda: None,
+            monotonic=monotonic,
         )
 
-        checkpoint = agent_state / "lifecycle-checkpoint.json"
-        directory_metadata = agent_state.stat()
-        checkpoint_metadata = checkpoint.stat()
-        assert result["ok"] is True
-        assert checkpoint_metadata.st_uid == directory_metadata.st_uid
-        assert checkpoint_metadata.st_gid == directory_metadata.st_gid
+        request_root, result_root = checkpoint.checkpoint_paths(
+            policy["store_path"], policy["lifecycle_catalog"],
+        )
+        request_path = request_root / "telegram-1.json"
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        checkpoint_metadata = request_path.stat()
+        request_directory_metadata = request_root.stat()
+        assert set(request) == checkpoint.CHECKPOINT_REQUEST_FIELDS
+        assert request["job_ids"] == ["task-checkpointed", "task-unsupported"]
+        assert request["deadline_monotonic"] == 30.0
+        assert checkpoint_metadata.st_uid == request_directory_metadata.st_uid
+        assert checkpoint_metadata.st_gid == request_directory_metadata.st_gid
         assert checkpoint_metadata.st_mode & 0o777 == 0o640
+        assert result == {
+            "ok": True,
+            "checkpointed_jobs": ["task-checkpointed"],
+            "interrupted_jobs": ["task-checkpointed", "task-unsupported"],
+        }
+        assert json.loads(checkpointed_path.read_text())["state"] == "interrupted"
+        assert json.loads(checkpointed_path.read_text())["resume_available"] is True
+        assert json.loads(unsupported_path.read_text())["state"] == "interrupted"
+        assert json.loads(unsupported_path.read_text())["resume_available"] is False
+        assert json.loads(
+            (policy["store_path"] / "lifecycle-transitions/telegram-1/task-checkpointed.json")
+            .read_text(encoding="utf-8")
+        )["transition_state"] == "completed"
+        assert json.loads(
+            (policy["store_path"] / "lifecycle-transitions/telegram-1/task-unsupported.json")
+            .read_text(encoding="utf-8")
+        )["transition_state"] == "completed"
+        assert json.loads(
+            (result_root / "telegram-1/task-checkpointed.json").read_text()
+        )["opencode_session"] == "ses_checkpointed"
+
+
+def test_elapsed_checkpoint_wait_without_results_interrupts_instead_of_succeeding():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        job_path = _write_checkpoint_job(
+            agent_state, "task-active", "ses_active",
+        )
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
+        }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+        monotonic, sleep = _checkpoint_clock()
+
+        result = system_control._checkpoint_runtime(
+            policy, effect, sleep=sleep, sync=lambda: None, monotonic=monotonic,
+        )
+
+        assert result == {
+            "ok": True,
+            "checkpointed_jobs": [],
+            "interrupted_jobs": ["task-active"],
+        }
+        assert json.loads(job_path.read_text())["state"] == "interrupted"
+        request_root, result_root = checkpoint.checkpoint_paths(
+            policy["store_path"], policy["lifecycle_catalog"],
+        )
+        assert (request_root / "telegram-1.json").exists()
+        assert not (result_root / "telegram-1/task-active.json").exists()
+
+
+def test_guardian_rejects_a_checkpoint_result_without_its_claimed_handoff():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        job_path = _write_checkpoint_job(
+            agent_state, "task-active", "ses_real",
+        )
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
+        }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+        monotonic, advance_clock = _checkpoint_clock()
+
+        def publish_tampered_result(seconds):
+            _request_root, result_root = checkpoint.checkpoint_paths(
+                policy["store_path"], policy["lifecycle_catalog"],
+            )
+            result_path = result_root / "telegram-1/task-active.json"
+            result_path.parent.mkdir(parents=True, exist_ok=True)
+            result_path.write_text(json.dumps({
+                "schema_version": 1,
+                "request_id": "telegram-1",
+                "job_id": "task-active",
+                "state": "checkpointed",
+                "opencode_session": "ses_forged",
+            }), encoding="utf-8")
+            advance_clock(seconds)
+
+        result = system_control._checkpoint_runtime(
+            policy,
+            effect,
+            sleep=publish_tampered_result,
+            sync=lambda: None,
+            monotonic=monotonic,
+        )
+
+        assert result["checkpointed_jobs"] == []
+        job = json.loads(job_path.read_text())
+        assert job["state"] == "interrupted"
+        assert job["opencode_session"] == "ses_real"
+
+
+def test_guardian_rejects_checkpoint_results_through_a_symlinked_request_directory():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        job_path = _write_checkpoint_job(
+            agent_state, "task-active", "ses_real",
+        )
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
+        }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+        monotonic, advance_clock = _checkpoint_clock()
+
+        def publish_outside_result(seconds):
+            _request_root, result_root = checkpoint.checkpoint_paths(
+                policy["store_path"], policy["lifecycle_catalog"],
+            )
+            result_root.mkdir(parents=True, exist_ok=True)
+            outside = root / "outside-results"
+            outside.mkdir(exist_ok=True)
+            (outside / "task-active.json").write_text(json.dumps({
+                "schema_version": 1,
+                "request_id": "telegram-1",
+                "job_id": "task-active",
+                "state": "checkpointed",
+                "opencode_session": "ses_real",
+            }), encoding="utf-8")
+            linked = result_root / "telegram-1"
+            if not linked.is_symlink():
+                linked.symlink_to(outside, target_is_directory=True)
+            advance_clock(seconds)
+
+        result = system_control._checkpoint_runtime(
+            policy,
+            effect,
+            sleep=publish_outside_result,
+            sync=lambda: None,
+            monotonic=monotonic,
+        )
+
+        assert result["checkpointed_jobs"] == []
+        assert json.loads(job_path.read_text())["state"] == "interrupted"
 
 
 def test_load_config_rejects_missing_or_noncanonical_uid():
@@ -887,6 +1091,7 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                 "lifecycle_catalog": catalog,
                 "timing_policy": time_policy.load(Path("config/time.cfg")),
             }
+            monotonic, checkpoint_sleep = _checkpoint_clock()
             adapters = system_control.production_adapters(
                 config,
                 system_adapter=manager("system"),
@@ -894,8 +1099,9 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                 observe_system=lambda unit: state[("system", unit)],
                 observe_user=lambda unit: state[("user", unit)],
                 model_probe=lambda _catalog, _deadline: {"ok": True},
-                sleep=lambda _seconds: None,
+                sleep=checkpoint_sleep,
                 sync=lambda: None,
+                monotonic=monotonic,
             )
             assert set(adapters) == system_control.PRODUCTION_ADAPTER_KINDS
 
@@ -968,6 +1174,7 @@ def test_production_route_restores_an_initially_inactive_inference_service():
             "lifecycle_catalog": catalog,
             "timing_policy": time_policy.load(Path("config/time.cfg")),
         }
+        monotonic, checkpoint_sleep = _checkpoint_clock()
         adapters = system_control.production_adapters(
             config,
             system_adapter=manager("system"),
@@ -975,8 +1182,9 @@ def test_production_route_restores_an_initially_inactive_inference_service():
             observe_system=lambda unit: state[("system", unit)],
             observe_user=lambda unit: state[("user", unit)],
             model_probe=lambda _catalog, _deadline: {"ok": True},
-            sleep=lambda _seconds: None,
+            sleep=checkpoint_sleep,
             sync=lambda: None,
+            monotonic=monotonic,
         )
         path = system_control.accept_request(
             config["store_path"], command_record("restart"), previous_pause=True,
@@ -1058,6 +1266,7 @@ def test_production_route_turns_over_disposable_real_process_groups():
                 "lifecycle_catalog": catalog,
                 "timing_policy": time_policy.load(Path("config/time.cfg")),
             }
+            monotonic, checkpoint_sleep = _checkpoint_clock()
             adapters = system_control.production_adapters(
                 config,
                 system_adapter=manager("system"),
@@ -1065,8 +1274,9 @@ def test_production_route_turns_over_disposable_real_process_groups():
                 observe_system=lambda unit: observed("system", unit),
                 observe_user=lambda unit: observed("user", unit),
                 model_probe=lambda _catalog, _deadline: {"ok": True},
-                sleep=lambda _seconds: None,
+                sleep=checkpoint_sleep,
                 sync=lambda: None,
+                monotonic=monotonic,
             )
             for update_id, command in enumerate(("restart", "reset"), start=1):
                 original_backend_pid = processes[("system", catalog["backend_unit"])].pid

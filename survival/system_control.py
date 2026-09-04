@@ -11,11 +11,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from survival import lifecycle, protocol, records, systemd_notify, time_policy
+from survival import checkpoint, lifecycle, protocol, records, systemd_notify, time_policy
 from survival.json_codec import decode_json_object
 
 
 SURVIVAL_UNITS = frozenset((
+    "cointelprofessional-checkpoint.service",
     "cointelprofessional-gateway.service",
     "cointelprofessional-guardian.service",
     "cointelprofessional-guardian.socket",
@@ -62,7 +63,9 @@ RESULT_FIELDS = frozenset((
 MAX_EFFECT_OUTPUT_BYTES = 4096
 MAXIMUM_EFFECTS_PER_ADVANCE = 128
 USER_MANAGER_HOST = "david@.host"
-CATALOG_FIELDS = frozenset(("schema_version", "backend_unit", "model_health", "user_units"))
+CATALOG_FIELDS = frozenset((
+    "schema_version", "backend_unit", "checkpoint", "model_health", "user_units",
+))
 CATALOG_CATEGORIES = (
     "activation_sources", "inference_prerequisites", "control_services",
     "ordinary_services", "inactive_units",
@@ -113,6 +116,7 @@ def load_lifecycle_catalog(path):
     if type(value["backend_unit"]) is not str:
         raise ValueError("invalid lifecycle backend unit")
     validate_destructible_units([value["backend_unit"]])
+    checkpoint.validate_checkpoint_catalog(value["checkpoint"])
     model_health = value["model_health"]
     if (
         type(model_health) is not dict
@@ -1047,17 +1051,24 @@ def _job_interruption_postcondition(job, request_id, session):
     return job.get("opencode_session") == session
 
 
-def _interrupt_one_job(config, request_id, path):
+def _interrupt_one_job(config, request_id, path, checkpoint_session=None):
     job_id, job = _job_identity(config, path)
     transition_path = _job_transition_path(config, request_id, job_id)
     if transition_path.exists():
         transition = _read_job_transition(transition_path, request_id, job_id)
+        if (
+            checkpoint_session is not None
+            and transition["opencode_session"] != checkpoint_session
+        ):
+            raise ValueError("checkpoint handoff conflicts with interruption intent")
     else:
         if job.get("state") not in ACTIVE_JOB_STATES:
             return
-        session = job.get("opencode_session")
-        if type(session) is not str or not session.startswith("ses_"):
-            session = _opencode_session_id(config, job)
+        session = checkpoint_session
+        if session is None:
+            session = job.get("opencode_session")
+            if type(session) is not str or not session.startswith("ses_"):
+                session = _opencode_session_id(config, job)
         transition = {
             "schema_version": 1,
             "request_id": request_id,
@@ -1110,8 +1121,26 @@ def _derived_interrupted_jobs(config, request_id):
     return interrupted
 
 
-def _interrupt_job_records(config, effect, paths, deadline_expired=None):
+def _interrupt_job_records(
+    config,
+    effect,
+    paths,
+    deadline_expired=None,
+    checkpoint_sessions=None,
+):
     request_id = _canonical_request_id(effect["request_id"])
+    if checkpoint_sessions is None:
+        checkpoint_sessions = {}
+    if (
+        type(checkpoint_sessions) is not dict
+        or any(
+            type(job_id) is not str
+            or type(session) is not str
+            or not session.startswith("ses_")
+            for job_id, session in checkpoint_sessions.items()
+        )
+    ):
+        raise ValueError("invalid checkpoint handoff map")
     candidates = {}
     for path in paths:
         job_id, _job = _job_identity(config, path)
@@ -1124,7 +1153,12 @@ def _interrupt_job_records(config, effect, paths, deadline_expired=None):
     for job_id in sorted(candidates):
         if deadline_expired is not None and deadline_expired():
             raise RuntimeError("lifecycle reconciliation deadline expired")
-        _interrupt_one_job(config, request_id, candidates[job_id])
+        _interrupt_one_job(
+            config,
+            request_id,
+            candidates[job_id],
+            checkpoint_session=checkpoint_sessions.get(job_id),
+        )
     return _derived_interrupted_jobs(config, request_id)
 
 
@@ -1253,34 +1287,103 @@ def _ensure_admission_closed(config, effect, observe_user, sync):
     return {"ok": True, "previous_pause": runtime["previous_pause"]}
 
 
-def _checkpoint_runtime(config, effect, sleep, sync):
+def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
     runtime = _read_runtime(config, effect["request_id"])
     agent_state_path = Path(config["agent_state_path"])
-    active_paths = _active_job_paths(agent_state_path)
-    request = {
-        "schema_version": 1,
-        "request_id": effect["request_id"],
-        "job_ids": [path.stem for path in active_paths],
-        "requested_at": datetime.now(timezone.utc).isoformat(),
-    }
-    state_metadata = agent_state_path.stat()
-    records.atomic_json(
-        agent_state_path / "lifecycle-checkpoint.json",
-        request,
-        mode=records.SHARED_RECORD_MODE,
-        owner=(os.geteuid(), state_metadata.st_gid),
+    request_root, result_root = checkpoint.checkpoint_paths(
+        config["store_path"], config["lifecycle_catalog"],
     )
-    sleep(time_policy.seconds(
-        config["timing_policy"], "lifecycle", "restart_checkpoint_grace_seconds",
-    ))
+    request_root.mkdir(parents=True, exist_ok=True)
+    request_path = request_root / f"{effect['request_id']}.json"
+    if request_path.exists() or request_path.is_symlink():
+        request = checkpoint.validate_checkpoint_request(
+            decode_json_object(request_path.read_bytes(), "checkpoint request"),
+        )
+        if request["request_id"] != effect["request_id"]:
+            raise ValueError("checkpoint request identity mismatch")
+        active_paths = [
+            _job_path(config, job_id) for job_id in request["job_ids"]
+        ]
+    else:
+        active_paths = _active_job_paths(agent_state_path)
+        grace = time_policy.seconds(
+            config["timing_policy"],
+            "lifecycle",
+            "restart_checkpoint_grace_seconds",
+        )
+        request = {
+            "schema_version": 1,
+            "request_id": effect["request_id"],
+            "job_ids": [path.stem for path in active_paths],
+            "requested_at": datetime.now(timezone.utc).isoformat(),
+            "deadline_monotonic": monotonic() + grace,
+        }
+        checkpoint.validate_checkpoint_request(request)
+        request_metadata = request_root.stat()
+        records.atomic_json(
+            request_path,
+            request,
+            mode=records.SHARED_RECORD_MODE,
+            owner=(os.geteuid(), request_metadata.st_gid),
+        )
+
+    accepted_results = {}
+    while len(accepted_results) < len(request["job_ids"]):
+        result_directory = result_root / request["request_id"]
+        result_directory_is_safe = not (
+            result_root.is_symlink() or result_directory.is_symlink()
+        )
+        for job_id in request["job_ids"]:
+            if job_id in accepted_results:
+                continue
+            if not result_directory_is_safe:
+                continue
+            result_path = result_directory / f"{job_id}.json"
+            if not result_path.exists() or result_path.is_symlink():
+                continue
+            try:
+                result = checkpoint.validate_checkpoint_result(
+                    decode_json_object(result_path.read_bytes(), "checkpoint result"),
+                    request["request_id"],
+                    job_id,
+                )
+            except (OSError, ValueError):
+                continue
+            if result["state"] == "checkpointed" and checkpoint.verified_handoff_session(
+                agent_state_path, job_id, result["opencode_session"],
+            ) != result["opencode_session"]:
+                continue
+            accepted_results[job_id] = result
+        if len(accepted_results) == len(request["job_ids"]):
+            break
+        remaining = request["deadline_monotonic"] - monotonic()
+        if remaining <= 0:
+            break
+        sleep(min(
+            remaining,
+            time_policy.seconds(
+                config["timing_policy"], "heartbeat", "guardian_poll_seconds",
+            ),
+        ))
+
+    checkpoint_sessions = {
+        job_id: result["opencode_session"]
+        for job_id, result in accepted_results.items()
+        if result["state"] == "checkpointed"
+    }
     runtime["interrupted_jobs"] = _interrupt_job_records(
         config,
         effect,
-        _active_job_paths(config["agent_state_path"]),
+        active_paths,
+        checkpoint_sessions=checkpoint_sessions,
     )
     _write_runtime(config, runtime)
     sync()
-    return {"ok": True, "jobs": runtime["interrupted_jobs"]}
+    return {
+        "ok": True,
+        "checkpointed_jobs": sorted(checkpoint_sessions),
+        "interrupted_jobs": runtime["interrupted_jobs"],
+    }
 
 
 def _reconcile_runtime(config, effect):
@@ -1630,6 +1733,7 @@ def production_adapters(
     model_probe=None,
     sleep=time.sleep,
     sync=os.sync,
+    monotonic=time.monotonic,
 ):
     """Compose every reducer effect over only literal injected fingertips."""
     user_manager_uid = config["user_manager_uid"]
@@ -1690,7 +1794,7 @@ def production_adapters(
 
     for adapter in (
         system_adapter, user_adapter, observe_system, observe_user, model_probe, sleep,
-        sync,
+        sync, monotonic,
     ):
         if not callable(adapter):
             raise RuntimeError("incomplete production lifecycle adapter composition")
@@ -1708,7 +1812,9 @@ def production_adapters(
         return _ensure_admission_closed(config, effect, observe_user, sync)
 
     def checkpoint(effect, _policy):
-        return _checkpoint_runtime(config, effect, progress_wait, sync)
+        return _checkpoint_runtime(
+            config, effect, progress_wait, sync, monotonic=monotonic,
+        )
 
     def reconcile(effect, _policy):
         return _reconcile_runtime(config, effect)

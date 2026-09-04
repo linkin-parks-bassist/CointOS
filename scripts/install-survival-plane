@@ -74,6 +74,7 @@ usermod --append --groups "$command_group" "$gateway_user"
 usermod --append --groups "$spool_group" "$user_manager"
 gateway_uid="$(id -u "$gateway_user")"
 user_manager_uid="$(id -u "$user_manager")"
+user_manager_group="$(id -gn "$user_manager")"
 if [[ ! "$gateway_uid" =~ ^[1-9][0-9]*$ || ! "$user_manager_uid" =~ ^[1-9][0-9]*$ ]]; then
     echo "survival-plane account identities are invalid" >&2
     exit 1
@@ -188,7 +189,12 @@ install -d -o root -g root -m 0700 \
     "$state_directory/lifecycle" \
     "$state_directory/lifecycle-runtime" \
     "$state_directory/lifecycle-completions" \
-    "$state_directory/lifecycle-result-quarantine"
+    "$state_directory/lifecycle-result-quarantine" \
+    "$state_directory/lifecycle-transitions"
+install -d -o root -g "$user_manager_group" -m 0750 \
+    "$state_directory/checkpoint-requests"
+install -d -o "$user_manager" -g root -m 0750 \
+    "$state_directory/checkpoint-results"
 install -d -o root -g "$gateway_user" -m 2750 "$state_directory/policy"
 install -d -o root -g "$command_group" -m 0750 "$socket_directory"
 install -d -o root -g "$gateway_user" -m 0750 "$configuration_directory"
@@ -196,9 +202,10 @@ install -d -o root -g root -m 0755 "$unit_directory"
 
 if [[ ! -e "$configuration_directory/time.cfg" \
     && ! -L "$configuration_directory/time.cfg" ]]; then
-    install -o root -g "$gateway_user" -m 0640 \
+    install -o root -g root -m 0644 \
         "$repository_directory/config/time.cfg" "$configuration_directory/time.cfg"
 fi
+chmod 0644 "$configuration_directory/time.cfg"
 
 temporary_environment="$configuration_directory/.guardian.env.source.$$"
 candidate_environment="$configuration_directory/.guardian.env.candidate.$$"
@@ -221,6 +228,7 @@ install -d -o root -g root -m 0755 \
 
 python_modules=(
     survival/__init__.py
+    survival/checkpoint.py
     survival/gateway.py
     survival/guardian.py
     survival/json_codec.py
@@ -242,7 +250,11 @@ for module in "${python_modules[@]}"; do
         "$source_path" "$staging_directory/$module"
 done
 
-entry_points=(cointelprofessional-gateway cointelprofessional-guardian)
+entry_points=(
+    cointelprofessional-checkpoint
+    cointelprofessional-gateway
+    cointelprofessional-guardian
+)
 for entry_point in "${entry_points[@]}"; do
     source_path="$repository_directory/scripts/$entry_point"
     if [[ ! -f "$source_path" ]]; then
@@ -262,6 +274,7 @@ install -o root -g root -m 0644 \
 
 units=(
     cointelprofessional-survival.slice
+    cointelprofessional-checkpoint.service
     cointelprofessional-gateway.service
     cointelprofessional-guardian.socket
     cointelprofessional-guardian.service
@@ -279,6 +292,7 @@ done
 install -d -o root -g root -m 0755 "$staging_directory"
 systemd-analyze verify \
     "$staging_directory/services/system/cointelprofessional-survival.slice" \
+    "$staging_directory/services/system/cointelprofessional-checkpoint.service" \
     "$staging_directory/services/system/cointelprofessional-gateway.service" \
     "$staging_directory/services/system/cointelprofessional-guardian.socket" \
     "$staging_directory/services/system/cointelprofessional-guardian.service"
@@ -337,6 +351,7 @@ fi
 if [[ "$enable" == true ]]; then
     systemctl daemon-reload
     systemctl enable --now \
+        cointelprofessional-checkpoint.service \
         cointelprofessional-guardian.socket \
         cointelprofessional-guardian.service \
         cointelprofessional-gateway.service

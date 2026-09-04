@@ -14,7 +14,7 @@ import time
 import unittest
 from pathlib import Path
 
-from survival import guardian, systemd_notify
+from survival import guardian, system_control, systemd_notify
 
 
 base = Path(__file__).resolve().parent.parent.parent
@@ -22,9 +22,11 @@ unit_directory = base / "services" / "system"
 installer_path = base / "scripts" / "install-survival-plane"
 installer_source_paths = (
     "scripts/install-survival-plane",
+    "scripts/cointelprofessional-checkpoint",
     "scripts/cointelprofessional-gateway",
     "scripts/cointelprofessional-guardian",
     "survival/__init__.py",
+    "survival/checkpoint.py",
     "survival/gateway.py",
     "survival/guardian.py",
     "survival/json_codec.py",
@@ -39,6 +41,7 @@ installer_source_paths = (
     "config/time.cfg",
     "config/survival-lifecycle.json",
     "services/system/cointelprofessional-survival.slice",
+    "services/system/cointelprofessional-checkpoint.service",
     "services/system/cointelprofessional-gateway.service",
     "services/system/cointelprofessional-guardian.socket",
     "services/system/cointelprofessional-guardian.service",
@@ -161,6 +164,35 @@ def read_pid_log(path):
 def test_survival_units_are_not_stoppable_by_guardian():
     text = load_unit("cointelprofessional-guardian.service")
     assert "cointelprofessional-gateway.service" not in destructible_units_from(text)
+    assert "cointelprofessional-checkpoint.service" in system_control.SURVIVAL_UNITS
+
+
+def test_checkpoint_unit_is_unprivileged_activation_independent_infrastructure():
+    text = load_unit("cointelprofessional-checkpoint.service")
+    for setting in (
+        "User=david",
+        "Restart=always",
+        "StartLimitIntervalSec=0",
+        "Slice=cointelprofessional-survival.slice",
+        "ExecStart=/usr/bin/python3 -m survival.checkpoint",
+        "WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current",
+        "Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional",
+        "Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state",
+        "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg",
+        "Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json",
+        "ReadOnlyPaths=/var/lib/cointelprofessional/checkpoint-requests",
+        "BindReadOnlyPaths=-/home/david/agent-ecosystem/state/jobs -/home/david/agent-ecosystem/logs/runs",
+        "ReadWritePaths=/var/lib/cointelprofessional/checkpoint-results",
+        "InaccessiblePaths=-/run/cointelprofessional/guardian.sock",
+        "NoNewPrivileges=true",
+        "ProtectSystem=strict",
+        "ProtectHome=tmpfs",
+        "WantedBy=multi-user.target",
+    ):
+        assert setting in text
+    assert "User=root" not in text
+    assert "SupplementaryGroups=cointelprofessional_command" not in text
+    assert "GUARDIAN_SOCKET_PATH" not in text
 
 
 def test_gateway_unit_has_exact_supervision_contract():
@@ -198,6 +230,7 @@ def test_guardian_socket_uses_the_private_command_group():
 
 def test_units_execute_only_the_installed_snapshot():
     modules = {
+        "cointelprofessional-checkpoint.service": "survival.checkpoint",
         "cointelprofessional-gateway.service": "survival.gateway",
         "cointelprofessional-guardian.service": "survival.guardian",
     }
@@ -235,6 +268,80 @@ def test_units_project_task_3_and_4_paths_and_groups():
     assert "Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json" in guardian_text
     assert "Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state" in guardian_text
     assert "ProtectHome=read-only" in guardian_text
+
+
+def test_checkpoint_process_consumes_a_real_mixed_request_without_privileged_state():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "store"
+        agent_state = root / "agent-state"
+        jobs = agent_state / "jobs"
+        logs = root / "logs/runs"
+        request_root = store / "checkpoint-requests"
+        request_root.mkdir(parents=True)
+        jobs.mkdir(parents=True)
+        logs.mkdir(parents=True)
+        deadline = time.monotonic() + 30.0
+        (request_root / "telegram-1.json").write_text(json.dumps({
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "job_ids": ["task-active", "task-finished", "task-unsupported"],
+            "requested_at": "2026-09-05T00:00:00+00:00",
+            "deadline_monotonic": deadline,
+        }), encoding="utf-8")
+        (jobs / "task-active.json").write_text(json.dumps({
+            "id": "task-active",
+            "kind": "agent-task",
+            "state": "running",
+            "opencode_session": "ses_process",
+            "output": "logs/runs/task-active.opencode.log",
+        }), encoding="utf-8")
+        (logs / "task-active.opencode.log").write_text(
+            '{"sessionID":"ses_process"}\n', encoding="utf-8",
+        )
+        (jobs / "task-finished.json").write_text(json.dumps({
+            "id": "task-finished", "kind": "agent-task", "state": "completed",
+        }), encoding="utf-8")
+        (jobs / "task-unsupported.json").write_text(json.dumps({
+            "id": "task-unsupported", "kind": "agent-task", "state": "running",
+        }), encoding="utf-8")
+        guardian_sentinel = root / "guardian.sock"
+        guardian_sentinel.write_text("not a consumer input", encoding="utf-8")
+        environment = os.environ.copy()
+        environment.update({
+            "PYTHONPATH": str(base),
+            "SURVIVAL_STORE_DIR": str(store),
+            "AGENT_STATE_DIR": str(agent_state),
+            "TIME_CONFIG_PATH": str(base / "config/time.cfg"),
+            "LIFECYCLE_CATALOG_PATH": str(base / "config/survival-lifecycle.json"),
+            "GUARDIAN_SOCKET_PATH": str(guardian_sentinel),
+        })
+        process = subprocess.Popen(
+            [str(base / "scripts/cointelprofessional-checkpoint")],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=environment,
+            start_new_session=True,
+        )
+        result_directory = store / "checkpoint-results/telegram-1"
+        try:
+            wait_until(lambda: len(list(result_directory.glob("*.json"))) == 3)
+            assert process.poll() is None
+        finally:
+            stderr = stop_process(process)
+        results = {
+            path.stem: json.loads(path.read_text(encoding="utf-8"))
+            for path in result_directory.glob("*.json")
+        }
+        assert {job_id: result["state"] for job_id, result in results.items()} == {
+            "task-active": "checkpointed",
+            "task-finished": "already_terminal",
+            "task-unsupported": "unsupported",
+        }
+        assert guardian_sentinel.read_text(encoding="utf-8") == "not a consumer input"
+        assert json.loads((jobs / "task-active.json").read_text())["state"] == "running"
+        assert stderr == ""
 
 
 def test_notify_systemd_uses_explicit_filesystem_datagram_path():
@@ -550,12 +657,15 @@ if name == "systemd-analyze":
         raise SystemExit(74)
     release_root = Path(sys.argv[2]).parents[2]
     required_release_entries = (
+        "survival/checkpoint.py",
         "survival/gateway.py",
         "survival/guardian.py",
+        "scripts/cointelprofessional-checkpoint",
         "scripts/cointelprofessional-gateway",
         "scripts/cointelprofessional-guardian",
         "docs/operations.md",
         "config/survival-lifecycle.json",
+        "services/system/cointelprofessional-checkpoint.service",
         "services/system/cointelprofessional-survival.slice",
         "services/system/cointelprofessional-gateway.service",
         "services/system/cointelprofessional-guardian.socket",
@@ -707,6 +817,7 @@ def published_installation_paths(image):
     snapshot = image / "usr/local/lib/cointelprofessional-survival"
     return (
         snapshot / "current",
+        image / "etc/systemd/system/cointelprofessional-checkpoint.service",
         image / "etc/systemd/system/cointelprofessional-survival.slice",
         image / "etc/systemd/system/cointelprofessional-gateway.service",
         image / "etc/systemd/system/cointelprofessional-guardian.socket",
@@ -727,6 +838,8 @@ def test_installer_is_idempotent_and_install_only_by_default():
             ),
             encoding="utf-8",
         )
+        expected_digest = installed_tree_digest(image)
+        time_config.chmod(0o640)
         edited_digest = installed_tree_digest(image)
         environment = os.environ.copy()
         environment.update({
@@ -744,8 +857,9 @@ def test_installer_is_idempotent_and_install_only_by_default():
             for line in (state / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         ]
         assert edited_digest != first_digest
-        assert installed_tree_digest(image) == edited_digest
+        assert installed_tree_digest(image) == expected_digest
         assert "poll_seconds = 1.5" in time_config.read_text(encoding="utf-8")
+        assert time_config.stat().st_mode & 0o777 == 0o644
         assert not any(call[0] == "systemctl" for call in second_trace)
         assert sum(call[0] == "groupadd" for call in second_trace) == 2
         assert sum(call[0] == "useradd" for call in second_trace) == 1
@@ -768,12 +882,19 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
         result, trace, image, _state = run_fake_installer(root)
         assert result.returncode == 0, result.stderr
         snapshot = image / "usr/local/lib/cointelprofessional-survival"
+        assert (snapshot / "current/survival/checkpoint.py").read_bytes() == (
+            base / "survival/checkpoint.py"
+        ).read_bytes()
+        assert (snapshot / "current/scripts/cointelprofessional-checkpoint").read_bytes() == (
+            base / "scripts/cointelprofessional-checkpoint"
+        ).read_bytes()
         assert (snapshot / "current/survival/gateway.py").read_bytes() == (base / "survival/gateway.py").read_bytes()
         assert (snapshot / "current/scripts/cointelprofessional-gateway").read_bytes() == (
             base / "scripts/cointelprofessional-gateway"
         ).read_bytes()
         assert (snapshot / "current/docs/operations.md").read_bytes() == (base / "docs/operations.md").read_bytes()
         assert (snapshot / "current/scripts/cointelprofessional-gateway").stat().st_mode & 0o777 == 0o755
+        assert (snapshot / "current/scripts/cointelprofessional-checkpoint").stat().st_mode & 0o777 == 0o755
         store = image / "var/lib/cointelprofessional"
         assert store.stat().st_mode & 0o777 == 0o755
         assert (store / "inbox").stat().st_mode & 0o7777 == 0o2750
@@ -786,9 +907,11 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
             assert (store / relative).stat().st_mode & 0o777 == 0o700
         for relative in (
             "lifecycle", "lifecycle-runtime", "lifecycle-completions",
-            "lifecycle-result-quarantine",
+            "lifecycle-result-quarantine", "lifecycle-transitions",
         ):
             assert (store / relative).stat().st_mode & 0o777 == 0o700
+        assert (store / "checkpoint-requests").stat().st_mode & 0o777 == 0o750
+        assert (store / "checkpoint-results").stat().st_mode & 0o777 == 0o750
         assert (store / "policy").stat().st_mode & 0o7777 == 0o2750
         assert (image / "run/cointelprofessional").stat().st_mode & 0o777 == 0o750
         assert (image / "etc/cointelprofessional").stat().st_mode & 0o777 == 0o750
@@ -798,7 +921,7 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
             "GUARDIAN_GATEWAY_UID=991\nUSER_MANAGER_UID=1000\n"
         )
         time_config = image / "etc/cointelprofessional/time.cfg"
-        assert time_config.stat().st_mode & 0o777 == 0o640
+        assert time_config.stat().st_mode & 0o777 == 0o644
         assert time_config.read_bytes() == (base / "config/time.cfg").read_bytes()
         assert not (snapshot / "current/config/time.cfg").exists()
         assert not (image / "etc/cointelprofessional/telegram_bot_token").exists()
@@ -837,6 +960,7 @@ def test_installer_enable_is_explicit_and_unknown_arguments_are_not_echoed():
             ["systemctl", "daemon-reload"],
             [
                 "systemctl", "enable", "--now",
+                "cointelprofessional-checkpoint.service",
                 "cointelprofessional-guardian.socket",
                 "cointelprofessional-guardian.service",
                 "cointelprofessional-gateway.service",
@@ -855,14 +979,17 @@ def test_installer_construction_failure_preserves_the_authoritative_release():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         installer, image, state, prior_digest = prepare_release_update(root)
-        result = invoke_fake_installer(
-            installer, root / "fake-bin", state, image,
-            extra_environment={
-                "FAKE_INSTALL_FAILURE_SUFFIX": "/survival/telegram_api.py",
-            },
-        )
-        assert result.returncode == 73
-        assert_failed_update_is_invisible(image, prior_digest)
+        for suffix in (
+            "/survival/checkpoint.py",
+            "/scripts/cointelprofessional-checkpoint",
+            "/services/system/cointelprofessional-checkpoint.service",
+        ):
+            result = invoke_fake_installer(
+                installer, root / "fake-bin", state, image,
+                extra_environment={"FAKE_INSTALL_FAILURE_SUFFIX": suffix},
+            )
+            assert result.returncode == 73
+            assert_failed_update_is_invisible(image, prior_digest)
 
 
 def test_installer_verification_failure_preserves_the_authoritative_release():
@@ -923,6 +1050,9 @@ def test_installer_abrupt_pre_commit_interruption_publishes_no_wrappers():
         assert (release / "survival/gateway.py").read_bytes() == (
             base / "survival/gateway.py"
         ).read_bytes()
+        assert (release / "survival/checkpoint.py").read_bytes() == (
+            base / "survival/checkpoint.py"
+        ).read_bytes()
         guardian_unit = release / "services/system/cointelprofessional-guardian.service"
         assert guardian_unit.read_bytes() == (
             base / "services/system/cointelprofessional-guardian.service"
@@ -930,7 +1060,7 @@ def test_installer_abrupt_pre_commit_interruption_publishes_no_wrappers():
 
 
 def test_first_install_interruption_at_each_wrapper_keeps_authoritative_root_absent():
-    for wrapper_index in range(1, 5):
+    for wrapper_index in range(1, 6):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             result, _trace, image, state = run_fake_installer(
@@ -963,6 +1093,9 @@ def test_installer_post_commit_interruption_keeps_a_complete_release_visible():
         assert result.returncode == 77
         assert (snapshot / "current").resolve().is_dir()
         assert b"candidate-two" in (snapshot / "current/survival/gateway.py").read_bytes()
+        assert (snapshot / "current/survival/checkpoint.py").read_bytes() == (
+            base / "survival/checkpoint.py"
+        ).read_bytes()
         guardian_unit = image / "etc/systemd/system/cointelprofessional-guardian.service"
         assert b"candidate-two" in guardian_unit.read_bytes()
         assert prior_releases <= set((snapshot / "releases").iterdir())
@@ -980,6 +1113,27 @@ def test_installer_rejects_a_release_with_tampered_root_metadata():
         result = invoke_fake_installer(
             installer_path, root / "fake-bin", state, image,
         )
+        assert result.returncode == 1
+        assert "content identity" in result.stderr
+        assert os.readlink(snapshot / "current") == current_target
+
+
+def test_installer_rejects_tampered_checkpoint_consumer_content():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        result, _trace, image, state = run_fake_installer(root)
+        assert result.returncode == 0, result.stderr
+        snapshot = image / "usr/local/lib/cointelprofessional-survival"
+        release = (snapshot / "current").resolve()
+        current_target = os.readlink(snapshot / "current")
+        (release / "survival/checkpoint.py").write_text(
+            "tampered checkpoint consumer\n", encoding="utf-8",
+        )
+
+        result = invoke_fake_installer(
+            installer_path, root / "fake-bin", state, image,
+        )
+
         assert result.returncode == 1
         assert "content identity" in result.stderr
         assert os.readlink(snapshot / "current") == current_target

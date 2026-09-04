@@ -39,8 +39,9 @@ Plan 5 installs that boundary and its live acceptance sequence passes.
 
 ## Permanent survival-plane package
 
-`scripts/install-survival-plane` packages the model-independent gateway and guardian
-without enabling or starting anything by default. It creates the dedicated
+`scripts/install-survival-plane` packages the model-independent gateway, guardian,
+and unprivileged checkpoint consumer without enabling or starting anything by
+default. It creates the dedicated
 `cointelprofessional` system account, the private `cointelprofessional_command`
 socket group, and the shared `agent_ecosystem_io` spool group. The installed code,
 entry points, lifecycle catalogue, and this operations file are immutable root-owned
@@ -55,7 +56,8 @@ Before installation, provision the Telegram bot token at
 identities, one per line, at `/etc/cointelprofessional/allowed_user_ids`. Do not pass
 either value on a command line. The installer deliberately does not create
 placeholder credentials. It creates the mutable, root-owned timing policy at
-`/etc/cointelprofessional/time.cfg` only when absent, resolves the actual gateway and David user IDs
+`/etc/cointelprofessional/time.cfg` only when absent and enforces mode `0644` so all
+three services can read this non-secret policy, resolves the actual gateway and David user IDs
 into a root-readable guardian environment file, and creates these runtime boundaries:
 
 ```text
@@ -65,6 +67,8 @@ inbox/                          cointelprofessional:agent_ecosystem_io 2750
 outbox/critical/                root:cointelprofessional           2750
 gateway private state          cointelprofessional:cointelprofessional 0700
 guardian lifecycle state       root:root                          0700
+checkpoint-requests/            root:david                         0750
+checkpoint-results/             david:root                         0750
 guardian.sock                   root:cointelprofessional_command  0660
 ```
 
@@ -73,8 +77,12 @@ may consume them. Root critical records are also `0640`; the gateway may read bu
 cannot alter them, and keeps delivery state in its own private directory. Neither
 ordinary work nor the gateway can rename or inject entries at the store root.
 
+The checkpoint consumer runs as David, has no guardian socket or system-manager
+authority, and remains outside the ordinary admission and destructible-unit sets.
+It can read only fixed-schema checkpoint requests, canonical job records, and the
+corresponding durable OpenCode logs; it can write only request-scoped result facts.
 The guardian service restores the volatile `/run/cointelprofessional` directory
-with that owner and mode after each boot and preserves it across guardian restarts.
+with its owner and mode after each boot and preserves it across guardian restarts.
 
 After reviewing the pending diff, install the files without activation with:
 
@@ -100,8 +108,15 @@ at startup and on idle polls, and records an immutable result attempt before red
 the next phase. `RESTART` closes activation, checkpoints, then performs cooperative
 stop with TERM/KILL escalation; `RESET` skips the handoff and escalates immediately.
 The restart checkpoint request is published as a David-readable `0640`
-`state/lifecycle-checkpoint.json` before the configured grace interval; surviving
-jobs are then recorded as interrupted with any durable OpenCode session identity.
+`checkpoint-requests/<request-id>.json` before one absolute monotonic deadline. The
+David-owned consumer atomically publishes exactly one result per requested job under
+`checkpoint-results/<request-id>/`: `checkpointed`, `already_terminal`,
+`unsupported`, or `deadline_expired`. A `checkpointed` result is accepted only when
+its exact `ses_*` identity is still present in that job's canonical durable OpenCode
+log. Sleeping to the deadline is not checkpoint success. The guardian then moves
+every still-active requested job through its sole crash-safe per-job interruption
+intent/mutation/completion route; a verified session makes that interruption
+resumable, while absent, malformed, stale, or forged evidence does not.
 Both clear systemd failed/start-limit state, start Lemonade and inference/control prerequisites, reconcile jobs, control
 turns, uncertain outbox delivery, and pending verification, verify the pinned-model
 canary, and only then restore prior activation and pause state. The resource guard is
