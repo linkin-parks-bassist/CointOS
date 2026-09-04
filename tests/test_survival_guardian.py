@@ -239,14 +239,17 @@ def test_oldest_blocked_request_serializes_later_lifecycle_commands():
         )
         system_control.commit_acknowledgement(first)
         system_control.commit_acknowledgement(second)
-        result = guardian.resume_pending_request(config, failing, recover_blocked=False)
-        assert result["phase"] == "blocked"
-        assert system_control._read_request(second)["state"]["phase"] == "acknowledged"
+        results = [
+            guardian.resume_pending_request(config, failing, recover_blocked=False),
+        ]
+        for _attempt in range(2):
+            results.append(
+                guardian.resume_pending_request(config, failing, recover_blocked=True)
+            )
 
-        recovered = successful_adapters()
-        result = guardian.resume_pending_request(config, recovered, recover_blocked=True)
-        assert result["ok"] is True
-        assert system_control._read_request(first)["state"]["phase"] == "completed"
+        assert [result["phase"] for result in results] == ["blocked"] * 3
+        assert events.count(("notify",)) == 1
+        assert system_control._read_request(first)["state"]["phase"] == "blocked"
         assert system_control._read_request(second)["state"]["phase"] == "acknowledged"
 
 

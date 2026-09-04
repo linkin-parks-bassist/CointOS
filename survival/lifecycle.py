@@ -82,12 +82,14 @@ def reduce_lifecycle(state: dict, event: dict) -> tuple[dict, list[dict]]:
     event_key = _event_key(state["request_id"], event)
     if event["kind"] == "recover":
         return _recover(state, event_key)
+    if event["kind"] in {"blocked", "failed"}:
+        if event_key in state["applied_events"]:
+            return _repeat_failure(state, event["kind"], event_key)
+        return _block_or_fail(state, event["kind"], event_key)
     if event_key in state["applied_events"]:
         return state, []
     if event["kind"] == "effect_completed":
         return _complete_named_effect(state, event, event_key)
-    if event["kind"] in {"blocked", "failed"}:
-        return _block_or_fail(state, event["kind"], event_key)
     key = (state["command"], state["phase"], event["kind"])
     transition = TRANSITIONS.get(key)
     if transition is None:
@@ -153,6 +155,22 @@ def _block_or_fail(state: dict, phase: str, event_key: str) -> tuple[dict, list[
     return _next_state(
         state, phase, event_key, pending, list(state["completed_effects"]), state["phase"],
     ), [effect]
+
+
+def _repeat_failure(state: dict, phase: str, event_key: str) -> tuple[dict, list[dict]]:
+    """Re-enter a failure phase only while its exact failed effect is pending."""
+    if state["phase"] in {"completed", "blocked", "failed"}:
+        return state, []
+    pending_failure_keys = {
+        f"{state['request_id']}:{phase}:{effect['idempotency_key']}"
+        for effect in state["pending_effects"]
+    }
+    if event_key not in pending_failure_keys:
+        return state, []
+    return _next_state(
+        state, phase, None, _copy_effects(state["pending_effects"]),
+        list(state["completed_effects"]), state["phase"],
+    ), []
 
 
 def _completed_effect_key(state: dict, event_kind: str) -> str | None:

@@ -227,6 +227,36 @@ def test_blocked_or_failed_lifecycle_retains_pending_work_and_can_recover():
         assert reissued == recovered
 
 
+def test_replayed_blocked_event_reblocks_without_duplicating_the_report():
+    state, _effects = lifecycle.reduce_lifecycle(
+        lifecycle.new_lifecycle(command_record("restart"), previous_pause=False),
+        {"kind": "ack_committed"},
+    )
+    blocked_event = {
+        "kind": "blocked",
+        "idempotency_key": (
+            "telegram-1:blocked:telegram-1:acknowledged:close_admission"
+        ),
+    }
+    state, effects = lifecycle.reduce_lifecycle(state, blocked_event)
+    report = effects[0]
+    state, _effects = lifecycle.reduce_lifecycle(state, {
+        "kind": "effect_completed",
+        "effect_idempotency_key": report["idempotency_key"],
+    })
+    state, _effects = lifecycle.reduce_lifecycle(state, {
+        "kind": "recover",
+        "idempotency_key": "telegram-1:recover:1",
+    })
+
+    state, effects = lifecycle.reduce_lifecycle(state, blocked_event)
+
+    assert state["phase"] == "blocked"
+    assert state["recovery_phase"] == "acknowledged"
+    assert effect_kinds(state["pending_effects"]) == ["close_admission"]
+    assert effects == []
+
+
 def test_malformed_state_and_event_are_rejected_before_reduction():
     malformed_state = lifecycle_state() | {"pending_effects": [{"kind": "checkpoint"}]}
     with unittest.TestCase().assertRaisesRegex(ValueError, "state"):

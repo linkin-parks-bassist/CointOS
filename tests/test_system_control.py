@@ -475,6 +475,35 @@ def test_unverified_effect_result_is_durable_and_effect_remains_pending():
         assert any(result["ok"] is False for result in read_results(path))
 
 
+def test_permanent_effect_failure_retries_without_duplicate_blocked_report():
+    with tempfile.TemporaryDirectory() as temporary:
+        path = system_control.accept_request(
+            Path(temporary), command_record("reset"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        attempts = []
+        adapters = successful_adapters()
+
+        def fail_permanently(_effect, _policy):
+            attempts.append("close_admission")
+            return {"ok": False, "error": "permanent admission failure"}
+
+        adapters["close_admission"] = fail_permanently
+        results = []
+        for _attempt in range(3):
+            results.append(system_control.advance_request(path, adapters, {}))
+            system_control.recover_request(path)
+
+        reports = [
+            result for result in read_results(path)
+            if result["effect_idempotency_key"] == "telegram-1:blocked:notify"
+        ]
+        assert [result["phase"] for result in results] == ["blocked"] * 3
+        assert attempts == ["close_admission"] * 3
+        assert len(reports) == 1
+        assert reports[0]["ok"] is True
+
+
 def test_durable_verified_result_is_written_before_reducer_completion_and_recovers():
     with tempfile.TemporaryDirectory() as temporary:
         path = system_control.accept_request(
@@ -1125,8 +1154,9 @@ def test_interruption_recovers_opencode_session_from_durable_output():
             "state": "running",
             "output": "logs/runs/task-live.opencode.log",
         }), encoding="utf-8")
+        store = root / "survival"
         interrupted = system_control._interrupt_job_records(
-            {"agent_state_path": state},
+            {"agent_state_path": state, "store_path": store},
             {"request_id": "telegram-1"},
             [job_path],
         )
@@ -1134,6 +1164,164 @@ def test_interruption_recovers_opencode_session_from_durable_output():
         assert interrupted == ["task-live"]
         assert job["opencode_session"] == "ses_durable"
         assert job["resume_available"] is True
+
+
+def _assert_job_interruption_recovers_across_crash(crash_cut):
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "survival"
+        agent_state = root / "state"
+        jobs = agent_state / "jobs"
+        jobs.mkdir(parents=True)
+        sessions = {
+            "task-alpha": "ses_alpha",
+            "task-beta": "ses_beta",
+        }
+        for job_id, session in sessions.items():
+            (jobs / f"{job_id}.json").write_text(json.dumps({
+                "id": job_id,
+                "kind": "agent-task",
+                "state": "running",
+                "opencode_session": session,
+            }), encoding="utf-8")
+        system_control.accept_request(
+            store, command_record("reset"), previous_pause=False,
+        )
+        config = lifecycle_policy(store) | {"agent_state_path": agent_state}
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:acknowledged:close_admission",
+        }
+        transition_path = (
+            store / "lifecycle-transitions/telegram-1/task-alpha.json"
+        )
+        first_job_path = jobs / "task-alpha.json"
+        real_atomic_json = system_control.records.atomic_json
+        crashed = False
+
+        def crash_at_cut(path, value, *arguments, **keywords):
+            nonlocal crashed
+            path = Path(path)
+            is_intent = (
+                path == transition_path
+                and value.get("transition_state") == "intended"
+            )
+            is_job_mutation = (
+                path == first_job_path
+                and value.get("state") == "interrupted"
+            )
+            is_completion = (
+                path == transition_path
+                and value.get("transition_state") == "completed"
+            )
+            matches = {
+                "before_intent": is_intent,
+                "after_intent": is_intent,
+                "after_job_mutation": is_job_mutation,
+                "after_completion": is_completion,
+            }[crash_cut]
+            if matches and not crashed:
+                crashed = True
+                if crash_cut != "before_intent":
+                    real_atomic_json(path, value, *arguments, **keywords)
+                raise RuntimeError(f"simulated death {crash_cut}")
+            return real_atomic_json(path, value, *arguments, **keywords)
+
+        with patch.object(system_control.records, "atomic_json", crash_at_cut):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, crash_cut):
+                system_control._ensure_admission_closed(
+                    config, effect, observe_user=lambda _unit: "inactive",
+                    sync=lambda: None,
+                )
+
+        assert crashed is True
+        result = system_control._ensure_admission_closed(
+            dict(config), dict(effect), observe_user=lambda _unit: "inactive",
+            sync=lambda: None,
+        )
+
+        runtime = system_control._read_runtime(config, "telegram-1")
+        assert result["ok"] is True
+        assert runtime["interrupted_jobs"] == ["task-alpha", "task-beta"]
+        for job_id, session in sessions.items():
+            job = json.loads((jobs / f"{job_id}.json").read_text(encoding="utf-8"))
+            transition = json.loads((
+                store / f"lifecycle-transitions/telegram-1/{job_id}.json"
+            ).read_text(encoding="utf-8"))
+            assert job["state"] == "interrupted"
+            assert job["interrupted_by"] == "telegram-1"
+            assert job["opencode_session"] == session
+            assert job["resume_available"] is True
+            assert transition == {
+                "schema_version": 1,
+                "request_id": "telegram-1",
+                "job_id": job_id,
+                "transition_state": "completed",
+                "opencode_session": session,
+            }
+
+
+def test_job_interruption_recovers_after_death_before_transition_intent():
+    _assert_job_interruption_recovers_across_crash("before_intent")
+
+
+def test_job_interruption_recovers_after_death_after_transition_intent():
+    _assert_job_interruption_recovers_across_crash("after_intent")
+
+
+def test_job_interruption_recovers_after_death_after_job_mutation():
+    _assert_job_interruption_recovers_across_crash("after_job_mutation")
+
+
+def test_job_interruption_recovers_after_death_after_transition_completion():
+    _assert_job_interruption_recovers_across_crash("after_completion")
+
+
+def test_job_interruption_rejects_a_boolean_transition_schema_version():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "survival"
+        agent_state = root / "state"
+        jobs = agent_state / "jobs"
+        jobs.mkdir(parents=True)
+        (jobs / "task-alpha.json").write_text(json.dumps({
+            "id": "task-alpha",
+            "kind": "agent-task",
+            "state": "interrupted",
+            "interrupted_by": "telegram-1",
+            "interruption_reason": "survival lifecycle teardown",
+            "resume_available": True,
+            "opencode_session": "ses_alpha",
+        }), encoding="utf-8")
+        transition = store / "lifecycle-transitions/telegram-1/task-alpha.json"
+        transition.parent.mkdir(parents=True)
+        transition.write_text(json.dumps({
+            "schema_version": True,
+            "request_id": "telegram-1",
+            "job_id": "task-alpha",
+            "transition_state": "completed",
+            "opencode_session": "ses_alpha",
+        }), encoding="utf-8")
+
+        with unittest.TestCase().assertRaisesRegex(ValueError, "transition"):
+            system_control._derived_interrupted_jobs({
+                "store_path": store,
+                "agent_state_path": agent_state,
+            }, "telegram-1")
+
+
+def test_job_interruption_rejects_a_non_scalar_transition_state():
+    malformed = {
+        "schema_version": 1,
+        "request_id": "telegram-1",
+        "job_id": "task-alpha",
+        "transition_state": ["completed"],
+        "opencode_session": "ses_alpha",
+    }
+    with unittest.TestCase().assertRaisesRegex(ValueError, "transition"):
+        system_control._validate_job_transition(
+            malformed, "telegram-1", "task-alpha",
+        )
 
 
 def test_atomic_result_records_isolate_a_torn_attempt_tail():

@@ -69,6 +69,12 @@ CATALOG_CATEGORIES = (
 )
 MODEL_HEALTH_FIELDS = frozenset(("host", "port", "path", "required_model"))
 UNIT_ENTRY_FIELDS = frozenset(("unit", "required"))
+ACTIVE_JOB_STATES = frozenset(("claimed", "reserved", "running", "verifying"))
+JOB_TRANSITION_FIELDS = frozenset((
+    "schema_version", "request_id", "job_id", "transition_state",
+    "opencode_session",
+))
+JOB_TRANSITION_STATES = frozenset(("intended", "completed"))
 
 
 def authorize_peer(uid: int, gateway_uid: int) -> None:
@@ -782,6 +788,14 @@ def _persist_reduction(path: Path, command: dict, state: dict, event: dict) -> d
     return state
 
 
+def _pending_blocked_report(state):
+    return next((
+        dict(effect)
+        for effect in reversed(state["pending_effects"])
+        if effect["kind"] == "notify"
+    ), None)
+
+
 def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
     """Advance only persisted Task 2 effects across crash-safe commit boundaries."""
     if type(policy) is not dict:
@@ -816,17 +830,15 @@ def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
                             f"{state['request_id']}:blocked:{effect['idempotency_key']}"
                         ),
                     })
-                    report = next(
-                        candidate for candidate in reversed(state["pending_effects"])
-                        if candidate["kind"] == "notify"
-                    )
-                    report_result = execute_effect(report, adapters, policy)
-                    _store_effect_result(path, report, report_result)
-                    if report_result["ok"] is True:
-                        state = _persist_reduction(path, command, state, {
-                            "kind": "effect_completed",
-                            "effect_idempotency_key": report["idempotency_key"],
-                        })
+                    report = _pending_blocked_report(state)
+                    if report is not None:
+                        report_result = execute_effect(report, adapters, policy)
+                        _store_effect_result(path, report, report_result)
+                        if report_result["ok"] is True:
+                            state = _persist_reduction(path, command, state, {
+                                "kind": "effect_completed",
+                                "effect_idempotency_key": report["idempotency_key"],
+                            })
                 return {
                     "ok": False,
                     "phase": state["phase"],
@@ -933,32 +945,187 @@ def _active_job_paths(agent_state_path):
             value = _agent_record(path)
         except ValueError:
             continue
-        if value.get("kind") == "agent-task" and value.get("state") in {
-            "claimed", "reserved", "running", "verifying",
-        }:
+        if value.get("kind") == "agent-task" and value.get("state") in ACTIVE_JOB_STATES:
             paths.append(path)
     return paths
 
 
-def _interrupt_job_records(config, effect, paths):
-    interrupted = []
-    for path in paths:
-        job = _agent_record(path)
-        if job.get("state") not in {"claimed", "reserved", "running", "verifying"}:
-            continue
-        job["state"] = "interrupted"
-        job["interrupted_by"] = effect["request_id"]
-        job["interruption_reason"] = "survival lifecycle teardown"
+def _canonical_request_id(request_id):
+    if type(request_id) is not str or not request_id.startswith("telegram-"):
+        raise ValueError("invalid lifecycle request identity")
+    update_id = request_id.removeprefix("telegram-")
+    if not update_id.isdecimal() or f"telegram-{int(update_id)}" != request_id:
+        raise ValueError("invalid lifecycle request identity")
+    return request_id
+
+
+def _canonical_job_id(job_id):
+    if (
+        type(job_id) is not str
+        or not job_id
+        or Path(job_id).name != job_id
+        or job_id in {".", ".."}
+    ):
+        raise ValueError("invalid lifecycle job identity")
+    return job_id
+
+
+def _job_path(config, job_id):
+    return (
+        Path(config["agent_state_path"])
+        / "jobs"
+        / f"{_canonical_job_id(job_id)}.json"
+    )
+
+
+def _job_identity(config, path):
+    path = Path(path)
+    jobs = Path(config["agent_state_path"]) / "jobs"
+    job_id = path.stem
+    if path != jobs / f"{job_id}.json":
+        raise ValueError("job path is outside the lifecycle job store")
+    job = _agent_record(path)
+    if job.get("kind") != "agent-task" or job.get("id") != job_id:
+        raise ValueError("invalid lifecycle job identity")
+    return job_id, job
+
+
+def _job_transition_directory(config, request_id):
+    return (
+        Path(config["store_path"])
+        / "lifecycle-transitions"
+        / _canonical_request_id(request_id)
+    )
+
+
+def _job_transition_path(config, request_id, job_id):
+    return _job_transition_directory(config, request_id) / (
+        f"{_canonical_job_id(job_id)}.json"
+    )
+
+
+def _validate_job_transition(value, request_id, job_id):
+    if (
+        type(value) is not dict
+        or set(value) != JOB_TRANSITION_FIELDS
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != 1
+        or value.get("request_id") != request_id
+        or value.get("job_id") != job_id
+        or type(value.get("transition_state")) is not str
+        or value.get("transition_state") not in JOB_TRANSITION_STATES
+        or (
+            value.get("opencode_session") is not None
+            and (
+                type(value["opencode_session"]) is not str
+                or not value["opencode_session"].startswith("ses_")
+            )
+        )
+    ):
+        raise ValueError("invalid lifecycle job transition")
+    return value
+
+
+def _read_job_transition(path, request_id, job_id):
+    try:
+        value = decode_json_object(Path(path).read_bytes(), "lifecycle job transition")
+    except OSError as error:
+        raise ValueError("missing lifecycle job transition") from error
+    return _validate_job_transition(value, request_id, job_id)
+
+
+def _job_interruption_postcondition(job, request_id, session):
+    if (
+        job.get("state") != "interrupted"
+        or job.get("interrupted_by") != request_id
+        or job.get("interruption_reason") != "survival lifecycle teardown"
+        or job.get("resume_available") is not (session is not None)
+    ):
+        return False
+    if session is None:
+        return "opencode_session" not in job
+    return job.get("opencode_session") == session
+
+
+def _interrupt_one_job(config, request_id, path):
+    job_id, job = _job_identity(config, path)
+    transition_path = _job_transition_path(config, request_id, job_id)
+    if transition_path.exists():
+        transition = _read_job_transition(transition_path, request_id, job_id)
+    else:
+        if job.get("state") not in ACTIVE_JOB_STATES:
+            return
         session = job.get("opencode_session")
         if type(session) is not str or not session.startswith("ses_"):
             session = _opencode_session_id(config, job)
-        if session is not None:
-            job["opencode_session"] = session
+        transition = {
+            "schema_version": 1,
+            "request_id": request_id,
+            "job_id": job_id,
+            "transition_state": "intended",
+            "opencode_session": session,
+        }
+        records.atomic_json(transition_path, transition)
+
+    session = transition["opencode_session"]
+    if not _job_interruption_postcondition(job, request_id, session):
+        if job.get("state") not in ACTIVE_JOB_STATES:
+            raise ValueError("job does not satisfy its interruption intent")
+        job["state"] = "interrupted"
+        job["interrupted_by"] = request_id
+        job["interruption_reason"] = "survival lifecycle teardown"
         job["resume_available"] = session is not None
+        if session is None:
+            job.pop("opencode_session", None)
+        else:
+            job["opencode_session"] = session
         job["updated_at"] = datetime.now(timezone.utc).isoformat()
         _write_agent_record(path, job)
-        interrupted.append(path.stem)
+        job = _agent_record(path)
+        if not _job_interruption_postcondition(job, request_id, session):
+            raise ValueError("job interruption postcondition was not observed")
+
+    if transition["transition_state"] != "completed":
+        completed = dict(transition)
+        completed["transition_state"] = "completed"
+        records.atomic_json(transition_path, completed)
+
+
+def _derived_interrupted_jobs(config, request_id):
+    directory = _job_transition_directory(config, request_id)
+    interrupted = []
+    if not directory.is_dir():
+        return interrupted
+    for transition_path in sorted(directory.glob("*.json")):
+        job_id = transition_path.stem
+        transition = _read_job_transition(transition_path, request_id, job_id)
+        if transition["transition_state"] != "completed":
+            continue
+        _job_id, job = _job_identity(config, _job_path(config, job_id))
+        if not _job_interruption_postcondition(
+            job, request_id, transition["opencode_session"],
+        ):
+            raise ValueError("completed job interruption lost its postcondition")
+        interrupted.append(job_id)
     return interrupted
+
+
+def _interrupt_job_records(config, effect, paths, deadline_expired=None):
+    request_id = _canonical_request_id(effect["request_id"])
+    candidates = {}
+    for path in paths:
+        job_id, _job = _job_identity(config, path)
+        candidates[job_id] = Path(path)
+    directory = _job_transition_directory(config, request_id)
+    if directory.is_dir():
+        for transition_path in directory.glob("*.json"):
+            job_id = transition_path.stem
+            candidates[job_id] = _job_path(config, job_id)
+    for job_id in sorted(candidates):
+        if deadline_expired is not None and deadline_expired():
+            raise RuntimeError("lifecycle reconciliation deadline expired")
+        _interrupt_one_job(config, request_id, candidates[job_id])
+    return _derived_interrupted_jobs(config, request_id)
 
 
 def _opencode_session_id(config, job):
@@ -1125,19 +1292,15 @@ def _reconcile_runtime(config, effect):
         return time.monotonic() >= deadline
 
     runtime = _read_runtime(config, effect["request_id"])
-    interrupted = []
-    for path in _active_job_paths(config["agent_state_path"]):
-        if deadline_expired():
-            return {"ok": False, "error": "lifecycle reconciliation deadline expired"}
-        job = _agent_record(path)
-        job["state"] = "interrupted"
-        job["interrupted_by"] = effect["request_id"]
-        job["interruption_reason"] = "survival lifecycle teardown"
-        job["resume_available"] = type(job.get("opencode_session")) is str
-        job["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _write_agent_record(path, job)
-        interrupted.append(path.stem)
-    runtime["interrupted_jobs"] = sorted(set(runtime["interrupted_jobs"] + interrupted))
+    try:
+        runtime["interrupted_jobs"] = _interrupt_job_records(
+            config,
+            effect,
+            _active_job_paths(config["agent_state_path"]),
+            deadline_expired=deadline_expired,
+        )
+    except RuntimeError as error:
+        return {"ok": False, "error": str(error)}
     _write_runtime(config, runtime)
     outbox_unknown = []
     jobs_directory = Path(config["agent_state_path"]) / "jobs"
