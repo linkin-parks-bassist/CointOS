@@ -19,6 +19,10 @@ from ecosystem import cli, time_policy
 POLICY_PATH = cli.ROOT / "config/resource-policy.json"
 RUNNING_STATES = {"running"}
 HALTED_MODES = {"pressure", "emergency"}
+MODEL_CLIENT_UNITS = ("agent-ecosystem.service", "agent-control-worker.service")
+SURVIVOR_ACTIVE_STATES = {"ready", "running", "awaiting_verification"}
+STARTED_UNIT_STATES = {"active", "activating", "reloading"}
+STOPPED_UNIT_STATES = {"inactive", "failed"}
 EMERGENCY_PHASES = (
     "recorded",
     "clients_stopped",
@@ -26,6 +30,34 @@ EMERGENCY_PHASES = (
     "model_loaded",
     "survivor_ready",
     "active",
+)
+ACTIVE_EMERGENCY_FIELDS = (
+    "incident_id",
+    "incident_path",
+    "emergency_reason",
+    "emergency_entered_at",
+    "emergency_phase",
+    "emergency_error",
+    "emergency_error_at",
+    "interrupted_jobs",
+    "client_stop_result",
+    "model_unload_result",
+    "emergency_model_last_attempt",
+    "emergency_model_last_result",
+    "emergency_model_ready",
+    "sole_survivor_job",
+    "survivor_start_result",
+    "threshold_candidate",
+    "threshold_candidate_since_monotonic",
+    "healthy_since",
+    "healthy_since_monotonic",
+    "pressure_incident_id",
+    "pressure_entered_at",
+    "pressure_released_at",
+    "pressure_interrupted_jobs",
+    "pressure_dynamic_unloads",
+    "pressure_client_stop_result",
+    "pressure_client_start_result",
 )
 
 
@@ -140,8 +172,12 @@ def job_admitted_in_current_mode(job: dict) -> bool:
     return job.get("id") == load_state().get("sole_survivor_job")
 
 
+def _seconds(section: str, key: str) -> float:
+    return time_policy.seconds(time_policy.load(), section, key)
+
+
 def _lemonade_request(path: str, payload: dict | None = None,
-                      method: str | None = None, timeout: float = 5.0) -> dict:
+                      method: str | None = None, *, timeout: float) -> dict:
     data = None if payload is None else json.dumps(payload).encode()
     request = urllib.request.Request(
         "http://127.0.0.1:13305" + path,
@@ -156,9 +192,23 @@ def _lemonade_request(path: str, payload: dict | None = None,
 
 def lemonade_health() -> dict:
     try:
-        return _lemonade_request("/v1/health", timeout=2.0)
+        return _lemonade_request(
+            "/v1/health",
+            timeout=_seconds("inference", "health_verification_deadline_seconds"),
+        )
     except Exception as error:
         return {"error": f"{type(error).__name__}: {error}"}
+
+
+def _health_models(health: object) -> tuple[list[dict] | None, str | None]:
+    if not isinstance(health, dict):
+        return None, "health response is not an object"
+    if health.get("error"):
+        return None, f"health request failed: {health['error']}"
+    models = health.get("all_models_loaded")
+    if not isinstance(models, list) or any(not isinstance(item, dict) for item in models):
+        return None, "health response has no valid all_models_loaded list"
+    return models, None
 
 
 def model_is_live(item: dict) -> bool:
@@ -168,9 +218,12 @@ def model_is_live(item: dict) -> bool:
 
 def emergency_model_live(health: dict | None = None) -> bool:
     current = health if health is not None else lemonade_health()
+    models, error = _health_models(current)
+    if error:
+        return False
     expected = policy()["emergency"]["chat_model"]
     return any(item.get("model_name") == expected and model_is_live(item)
-               for item in current.get("all_models_loaded", []))
+               for item in models or [])
 
 
 def _hash_file(path: Path) -> str | None:
@@ -252,39 +305,133 @@ def checkpoint_running_jobs(incident_id: str, reason: str = "resource emergency"
     return interrupted
 
 
-def _user_systemctl(*arguments: str) -> None:
-    subprocess.run(["systemctl", "--user", *arguments], check=False,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+def _user_systemctl(*arguments: str) -> dict:
+    timeout = _seconds("lifecycle", "service_stop_deadline_seconds")
+    command = ["systemctl", "--user", *arguments]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"systemctl timed out after {timeout:g} seconds"}
+    except OSError as error:
+        return {"ok": False, "error": f"{type(error).__name__}: {error}"}
+    if result.returncode != 0:
+        return {"ok": False, "returncode": result.returncode,
+                "error": f"systemctl exited with status {result.returncode}"}
+    return {"ok": True, "returncode": 0, "stdout": result.stdout}
 
 
-def interrupt_model_clients() -> None:
-    for unit in ("agent-ecosystem.service", "agent-control-worker.service"):
-        _user_systemctl("stop", unit)
+def _user_unit_state(unit: str) -> dict:
+    result = _user_systemctl(
+        "show", unit, "--property=ActiveState", "--property=ControlGroup"
+    )
+    if not result.get("ok"):
+        return result
+    fields = {}
+    for line in result.get("stdout", "").splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            fields[key] = value
+    if set(fields) != {"ActiveState", "ControlGroup"}:
+        return {"ok": False, "error": f"ambiguous unit state for {unit}"}
+    return {
+        "ok": True,
+        "unit": unit,
+        "active_state": fields["ActiveState"],
+        "control_group": fields["ControlGroup"],
+    }
+
+
+def _verify_user_units(units: tuple[str, ...], expected: str) -> dict:
+    states = [_user_unit_state(unit) for unit in units]
+    if any(not state.get("ok") for state in states):
+        return {"ok": False, "error": "unit state could not be verified", "states": states}
+    if expected == "stopped":
+        valid = all(state["active_state"] in STOPPED_UNIT_STATES
+                    and not state["control_group"] for state in states)
+    elif expected == "started":
+        valid = all(state["active_state"] in STARTED_UNIT_STATES
+                    and bool(state["control_group"]) for state in states)
+    else:
+        raise ValueError(f"unknown unit postcondition: {expected}")
+    return {
+        "ok": valid,
+        "error": None if valid else f"units did not reach verified {expected} state",
+        "states": states,
+    }
+
+
+def _stop_user_units(units: tuple[str, ...]) -> dict:
+    actions = []
+    for unit in units:
+        result = _user_systemctl("stop", unit)
+        actions.append({"unit": unit, **result})
+        if not result.get("ok"):
+            return {"ok": False, "error": result.get("error", "unit stop failed"),
+                    "actions": actions}
+    verified = _verify_user_units(units, "stopped")
+    return {**verified, "actions": actions}
+
+
+def _start_user_units(units: tuple[str, ...]) -> dict:
+    result = _user_systemctl("start", "--no-block", *units)
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error", "unit start failed"),
+                "action": result}
+    verified = _verify_user_units(units, "started")
+    return {**verified, "action": result}
+
+
+def interrupt_model_clients() -> dict:
+    return _stop_user_units(MODEL_CLIENT_UNITS)
 
 
 def unload_all_models() -> dict:
+    stop_deadline = _seconds("inference", "model_stop_deadline_seconds")
     try:
-        result = _lemonade_request("/v1/unload", {}, timeout=10.0)
+        result = _lemonade_request("/v1/unload", {}, timeout=stop_deadline)
     except Exception as error:
         return {"ok": False, "error": f"{type(error).__name__}: {error}"}
-    deadline = time.monotonic() + 10.0
+    deadline = time.monotonic() + stop_deadline
+    poll_seconds = _seconds("resource", "poll_seconds")
     health = lemonade_health()
-    while time.monotonic() < deadline and health.get("all_models_loaded"):
-        time.sleep(0.25)
+    models, error = _health_models(health)
+    if error:
+        return {"ok": False, "error": error, "response": result, "health": health}
+    while models:
+        if time.monotonic() >= deadline:
+            return {"ok": False, "error": "models remain loaded after stop deadline",
+                    "response": result, "health": health}
+        time.sleep(poll_seconds)
         health = lemonade_health()
-    return {"ok": not bool(health.get("all_models_loaded")), "response": result,
-            "health": health}
+        models, error = _health_models(health)
+        if error:
+            return {"ok": False, "error": error, "response": result, "health": health}
+    return {"ok": True, "response": result, "health": health}
 
 
 def unload_dynamic_models() -> list[dict]:
     preserved = policy()["emergency"]["chat_model"]
     results = []
-    for item in lemonade_health().get("all_models_loaded", []):
+    health = lemonade_health()
+    models, error = _health_models(health)
+    if error:
+        return [{"ok": False, "error": error, "health": health}]
+    for item in models or []:
         model_name = item.get("model_name")
         if not model_name or model_name == preserved:
             continue
         try:
-            response = _lemonade_request("/v1/unload", {"model_name": model_name}, timeout=15.0)
+            response = _lemonade_request(
+                "/v1/unload", {"model_name": model_name},
+                timeout=_seconds("inference", "model_stop_deadline_seconds"),
+            )
             results.append({"model": model_name, "ok": True, "response": response})
         except Exception as error:
             results.append({"model": model_name, "ok": False,
@@ -321,10 +468,11 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
                  pressure_incident_id=incident_id)
     save_state(state)
     interrupted = checkpoint_running_jobs(incident_id, "resource pressure")
-    _user_systemctl("stop", "agent-ecosystem.service")
+    stop = _stop_user_units(("agent-ecosystem.service",))
     unloads = unload_dynamic_models()
     state.update(pressure_interrupted_jobs=interrupted,
-                 pressure_dynamic_unloads=unloads)
+                 pressure_dynamic_unloads=unloads,
+                 pressure_client_stop_result=stop)
     save_state(state)
     cli.audit("resource.pressure_entered", resources=snapshot,
               interrupted_jobs=interrupted, dynamic_unloads=unloads)
@@ -341,8 +489,15 @@ def load_emergency_model() -> dict:
         "llamacpp_args": f"--parallel {emergency['parallel_requests']} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
     }
     try:
-        result = _lemonade_request("/v1/load", payload, timeout=180.0)
-        return {"ok": True, "response": result, "health": lemonade_health()}
+        result = _lemonade_request(
+            "/v1/load", payload,
+            timeout=_seconds("inference", "model_start_deadline_seconds"),
+        )
+        health = lemonade_health()
+        if not emergency_model_live(health):
+            return {"ok": False, "error": "emergency model remained non-live after load",
+                    "response": result, "health": health}
+        return {"ok": True, "response": result, "health": health}
     except Exception as error:
         return {"ok": False, "error": f"{type(error).__name__}: {error}",
                 "health": lemonade_health()}
@@ -470,7 +625,7 @@ def _interrupted_job_ids(state: dict) -> list[str]:
     return list(dict.fromkeys(identifiers))
 
 
-def _survivor_is_ready(state: dict) -> bool:
+def _survivor_has_state(state: dict, allowed_states: set[str]) -> bool:
     identifier = state.get("sole_survivor_job")
     if not identifier:
         return False
@@ -479,8 +634,16 @@ def _survivor_is_ready(state: dict) -> bool:
         job = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return (job.get("id") == identifier and job.get("state") == "ready"
+    return (job.get("id") == identifier and job.get("state") in allowed_states
             and job.get("source") == f"resource-emergency:{state.get('incident_id')}")
+
+
+def _survivor_is_ready(state: dict) -> bool:
+    return _survivor_has_state(state, {"ready"})
+
+
+def _survivor_is_active(state: dict) -> bool:
+    return _survivor_has_state(state, SURVIVOR_ACTIVE_STATES)
 
 
 def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
@@ -497,10 +660,15 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
             checkpoint_running_jobs(state["incident_id"])
             state["interrupted_jobs"] = _interrupted_job_ids(state)
             save_state(state)
-            interrupt_model_clients()
+            stopped = interrupt_model_clients()
         except Exception as error:
             return _record_emergency_error(
                 state, f"client interruption failed: {type(error).__name__}: {error}"
+            )
+        state["client_stop_result"] = stopped
+        if not stopped.get("ok"):
+            return _record_emergency_error(
+                state, f"client interruption failed: {stopped.get('error', 'unverified stop')}"
             )
         _update_incident(state, interrupted_jobs=state["interrupted_jobs"])
         _persist_emergency_phase(state, "clients_stopped")
@@ -556,11 +724,17 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
         if not _survivor_is_ready(state):
             return _record_emergency_error(state, "sole survivor job is not ready")
         try:
-            _user_systemctl("start", "--no-block", "agent-control-worker.service",
-                            "agent-ecosystem.service")
+            started = _start_user_units(
+                ("agent-control-worker.service", "agent-ecosystem.service")
+            )
         except Exception as error:
             return _record_emergency_error(
                 state, f"survivor executor start failed: {type(error).__name__}: {error}"
+            )
+        state["survivor_start_result"] = started
+        if not started.get("ok"):
+            return _record_emergency_error(
+                state, f"survivor executor start failed: {started.get('error', 'unverified start')}"
             )
         os.sync()
         _persist_emergency_phase(state, "active")
@@ -572,8 +746,10 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
     if phase == "active":
         if not emergency_model_live():
             return _record_emergency_error(state, "emergency model is not live")
-        if not _survivor_is_ready(state):
-            return _record_emergency_error(state, "sole survivor job is not ready")
+        if not _survivor_is_active(state):
+            return _record_emergency_error(
+                state, "sole survivor job is not in a live executor state"
+            )
         state.pop("emergency_error", None)
         state.pop("emergency_error_at", None)
         save_state(state)
@@ -669,7 +845,10 @@ def tick() -> dict:
             cli.audit("resource.pressure_released", resources=snapshot,
                       resumed_jobs=resumed)
             save_state(state)
-            _user_systemctl("start", "--no-block", "agent-ecosystem.service")
+            state["pressure_client_start_result"] = _start_user_units(
+                ("agent-ecosystem.service",)
+            )
+            save_state(state)
             return state
     elif threshold != "healthy":
         state.pop("healthy_since", None)
@@ -691,13 +870,20 @@ def request_recovery(job_id: str) -> dict:
         raise RuntimeError(f"recovery health gate refused: {json.dumps(snapshot, sort_keys=True)}")
     resumed = _release_interrupted_jobs(
         state.get("interrupted_jobs", []), f"released by Sole Survivor {job_id}")
+    incident_id = state.get("incident_id")
     state.update(mode="normal", recovered_at=cli.now(), recovered_by=job_id,
                  recovery_resources=snapshot, resumed_jobs=resumed)
+    for field in ACTIVE_EMERGENCY_FIELDS:
+        state.pop(field, None)
     save_state(state)
-    cli.audit("resource.emergency_recovered", incident_id=state.get("incident_id"),
+    cli.audit("resource.emergency_recovered", incident_id=incident_id,
               survivor_job=job_id, resumed_jobs=resumed, resources=snapshot)
-    _user_systemctl("start", "--no-block", "agent-ecosystem.service")
-    return {"ok": True, "resumed_jobs": resumed, "resources": snapshot}
+    start = _start_user_units(("agent-ecosystem.service",))
+    if not start.get("ok"):
+        cli.audit("resource.recovery_start_failed", incident_id=incident_id,
+                  survivor_job=job_id, error=start.get("error", "unverified start"))
+    return {"ok": bool(start.get("ok")), "resumed_jobs": resumed, "resources": snapshot,
+            "executor_start": start}
 
 
 def run_guard() -> None:

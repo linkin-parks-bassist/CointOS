@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -119,6 +120,79 @@ def transition_state(phase="model_loaded", sole_survivor_job=None):
 
 def systemctl_units(calls):
     return [argument for call in calls for argument in call if argument.endswith(".service")]
+
+
+def in_memory_systemctl(calls=None, failed_action=None, ambiguous_unit=None):
+    recorded = calls if calls is not None else []
+    states = {
+        "agent-ecosystem.service": {
+            "active_state": "active",
+            "control_group": "/user.slice/agent-ecosystem.service",
+        },
+        "agent-control-worker.service": {
+            "active_state": "active",
+            "control_group": "/user.slice/agent-control-worker.service",
+        },
+    }
+
+    def invoke(*arguments):
+        recorded.append(arguments)
+        action = arguments[0]
+        if action == failed_action:
+            return {"ok": False, "error": f"injected {action} failure"}
+        if action in {"start", "stop"}:
+            for unit in systemctl_units([arguments]):
+                states[unit] = ({
+                    "active_state": "active",
+                    "control_group": f"/user.slice/{unit}",
+                } if action == "start" else {
+                    "active_state": "inactive",
+                    "control_group": "",
+                })
+            return {"ok": True, "returncode": 0, "stdout": ""}
+        if action == "show":
+            unit = arguments[1]
+            state = states[unit].copy()
+            if unit == ambiguous_unit:
+                state = ({"active_state": "inactive", "control_group": ""}
+                         if state["active_state"] == "active" else
+                         {"active_state": "active", "control_group": f"/user.slice/{unit}"})
+            return {
+                "ok": True,
+                "returncode": 0,
+                "stdout": (
+                    f"ActiveState={state['active_state']}\n"
+                    f"ControlGroup={state['control_group']}\n"
+                ),
+            }
+        raise AssertionError(f"unexpected systemctl action: {arguments!r}")
+
+    return invoke
+
+
+def in_memory_lemonade(calls=None, initially_loaded=True):
+    recorded = calls if calls is not None else []
+    runtime = {"loaded": initially_loaded, "health_reads": 0}
+
+    def request(path, payload=None, method=None, timeout=None):
+        recorded.append({
+            "path": path,
+            "payload": payload,
+            "method": method,
+            "timeout": timeout,
+        })
+        if path == "/v1/health":
+            runtime["health_reads"] += 1
+            return emergency_health() if runtime["loaded"] else {"all_models_loaded": []}
+        if path == "/v1/unload":
+            runtime["loaded"] = False
+            return {"unloaded": True}
+        if path == "/v1/load":
+            runtime["loaded"] = True
+            return {"loaded": True}
+        raise AssertionError(f"unexpected Lemonade path: {path}")
+
+    return request
 
 
 def test_oversized_vllm_is_refused_before_load():
@@ -347,7 +421,8 @@ def test_healthy_pressure_release_uses_central_monotonic_duration(_root):
     with patch("ecosystem.resource_control.resource_snapshot", return_value=healthy_snapshot()), \
             patch("ecosystem.resource_control.load_state", return_value=state), \
             patch.object(time_policy, "load", return_value=central_policy), \
-            patch("ecosystem.resource_control._user_systemctl"):
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()):
         with patch("ecosystem.resource_control.time.monotonic", return_value=300.0):
             assert resource_control.tick()["mode"] == "pressure"
         with patch("ecosystem.resource_control.time.monotonic", return_value=301.999):
@@ -380,6 +455,142 @@ def test_resource_guard_poll_uses_central_duration(_root):
     assert sleeps == [0.75]
 
 
+def test_systemctl_boundary_reports_nonzero_and_timeout():
+    central_policy = {"lifecycle": {"service_stop_deadline_seconds": 7.0}}
+    failed = subprocess.CompletedProcess(
+        ["systemctl", "--user", "stop", "agent-ecosystem.service"], 1,
+        stdout="", stderr="failed",
+    )
+    with patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control.subprocess.run", return_value=failed) as run:
+        result = resource_control._user_systemctl("stop", "agent-ecosystem.service")
+    assert result["ok"] is False
+    assert "status 1" in result["error"]
+    assert run.call_args.kwargs["timeout"] == 7.0
+
+    timeout = subprocess.TimeoutExpired(["systemctl", "--user", "stop"], 7.0)
+    with patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control.subprocess.run", side_effect=timeout):
+        result = resource_control._user_systemctl("stop", "agent-ecosystem.service")
+    assert result["ok"] is False
+    assert "timed out" in result["error"]
+
+
+def test_resource_effect_adapters_use_central_deadlines_and_cadence():
+    central_policy = {
+        "inference": {
+            "model_stop_deadline_seconds": 11.0,
+            "model_start_deadline_seconds": 13.0,
+            "health_verification_deadline_seconds": 17.0,
+        },
+        "lifecycle": {
+            "service_stop_deadline_seconds": 7.0,
+            "reconciliation_deadline_seconds": 19.0,
+        },
+        "resource": {"poll_seconds": 0.75},
+    }
+    requests = []
+    sleeps = []
+    current_health = {"value": emergency_health()}
+
+    def lemonade(path, payload=None, method=None, timeout=None):
+        requests.append((path, timeout))
+        if path == "/v1/health":
+            return current_health["value"]
+        return {"ok": True}
+
+    completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+    with patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control.subprocess.run", return_value=completed), \
+            patch("ecosystem.resource_control._lemonade_request", side_effect=lemonade), \
+            patch("ecosystem.resource_control.time.sleep", side_effect=sleeps.append):
+        resource_control._user_systemctl("stop", "agent-ecosystem.service")
+        resource_control.lemonade_health()
+        with patch("ecosystem.resource_control.lemonade_health",
+                   side_effect=(emergency_health(), {"all_models_loaded": []})), \
+                patch("ecosystem.resource_control.time.monotonic", return_value=100.0):
+            assert resource_control.unload_all_models()["ok"]
+        resource_control.load_emergency_model()
+        current_health["value"] = {
+            "all_models_loaded": [
+                emergency_health()["all_models_loaded"][0],
+                {"model_name": "dynamic-model", "loaded": True,
+                 "backend_alive": True, "status": "ready"},
+            ],
+        }
+        resource_control.unload_dynamic_models()
+
+    assert ("/v1/health", 17.0) in requests
+    assert ("/v1/load", 13.0) in requests
+    assert requests.count(("/v1/unload", 11.0)) == 2
+    assert sleeps == [0.75]
+
+
+def test_unload_rejects_missing_or_failed_health_records():
+    for health in ({}, {"error": "health unavailable"}):
+        with patch("ecosystem.resource_control._lemonade_request", return_value={}), \
+                patch("ecosystem.resource_control.lemonade_health", return_value=health), \
+                patch("ecosystem.resource_control.time.monotonic", return_value=100.0):
+            result = resource_control.unload_all_models()
+        assert result["ok"] is False
+        assert "health" in result["error"]
+
+
+@with_root
+def test_clients_stopped_requires_successful_actions_and_empty_cgroups(root):
+    for name, systemctl in (
+            ("failed_action", in_memory_systemctl(failed_action="stop")),
+            ("ambiguous_cgroup", in_memory_systemctl(
+                ambiguous_unit="agent-control-worker.service")),
+    ):
+        case_root = root / name
+        with patch.object(cli, "ROOT", case_root):
+            cli.initialize()
+            state = transition_state(phase="recorded")
+            cli.atomic_json(case_root / state["incident_path"], {
+                "version": 1,
+                "id": state["incident_id"],
+            })
+            with patch("ecosystem.resource_control.checkpoint_running_jobs",
+                       return_value=[]), \
+                    patch("ecosystem.resource_control._user_systemctl",
+                          side_effect=systemctl), \
+                    patch("ecosystem.resource_control.unload_all_models",
+                          return_value={"ok": False, "error": "must not run"}) as unload:
+                result = resource_control.advance_emergency(
+                    state, healthy_snapshot(), "stop verification"
+                )
+        assert result["emergency_phase"] == "recorded"
+        assert "client interruption failed" in result["emergency_error"]
+        assert unload.call_count == 0
+
+
+@with_root
+def test_active_phase_requires_successful_start_and_observed_running_units(root):
+    identifier = "task-survivor"
+    for name, systemctl in (
+            ("failed_action", in_memory_systemctl(failed_action="start")),
+            ("ambiguous_cgroup", in_memory_systemctl(
+                ambiguous_unit="agent-control-worker.service")),
+    ):
+        state = transition_state(phase="survivor_ready", sole_survivor_job=identifier)
+        cli.atomic_json(root / "state/jobs" / f"{identifier}.json", {
+            "id": identifier,
+            "state": "ready",
+            "source": f"resource-emergency:{state['incident_id']}",
+        })
+        with patch("ecosystem.resource_control.lemonade_health",
+                   return_value=emergency_health()), \
+                patch("ecosystem.resource_control._user_systemctl",
+                      side_effect=systemctl), \
+                patch("ecosystem.resource_control.os.sync"):
+            result = resource_control.advance_emergency(
+                state, healthy_snapshot(), f"start verification {name}"
+            )
+        assert result["emergency_phase"] == "survivor_ready"
+        assert "start failed" in result["emergency_error"]
+
+
 @with_root
 def test_emergency_entry_creates_survivor_before_active_phase(root):
     initialize_survivor_context(root)
@@ -399,7 +610,7 @@ def test_emergency_entry_creates_survivor_before_active_phase(root):
             patch("ecosystem.resource_control.load_emergency_model",
                   return_value={"ok": True, "health": emergency_health()}), \
             patch("ecosystem.resource_control._user_systemctl",
-                  side_effect=lambda *arguments: systemctl_calls.append(arguments)), \
+                  side_effect=in_memory_systemctl(systemctl_calls)), \
             patch("ecosystem.resource_control.os.sync"):
         result = resource_control.advance_emergency(state, healthy_snapshot(), "test emergency")
 
@@ -429,7 +640,7 @@ def test_retry_resumes_model_loaded_phase_without_restarting_contact(root):
             patch("ecosystem.resource_control._prepare_survivor",
                   wraps=resource_control._prepare_survivor) as prepare, \
             patch("ecosystem.resource_control._user_systemctl",
-                  side_effect=lambda *arguments: systemctl_calls.append(arguments)), \
+                  side_effect=in_memory_systemctl(systemctl_calls)), \
             patch("ecosystem.resource_control.os.sync"):
         result = resource_control.advance_emergency(state, healthy_snapshot(), "retry")
     assert result["sole_survivor_job"]
@@ -465,7 +676,7 @@ def test_retry_repairs_legacy_emergency_without_phase_or_survivor(root):
             patch("ecosystem.resource_control.unload_all_models", side_effect=unload_models), \
             patch("ecosystem.resource_control.load_emergency_model", side_effect=load_model), \
             patch("ecosystem.resource_control._user_systemctl",
-                  side_effect=lambda *arguments: systemctl_calls.append(arguments)), \
+                  side_effect=in_memory_systemctl(systemctl_calls)), \
             patch("ecosystem.resource_control.os.sync"):
         result = resource_control.advance_emergency(state, healthy_snapshot(), "legacy retry")
 
@@ -473,6 +684,139 @@ def test_retry_repairs_legacy_emergency_without_phase_or_survivor(root):
     assert read_job(root, result["sole_survivor_job"])["state"] == "ready"
     assert "agent-telegram.service" not in systemctl_units(systemctl_calls)
     assert "agent-notifier.service" not in systemctl_units(systemctl_calls)
+
+
+@with_root
+def test_ready_survivor_can_start_run_and_remain_active(root):
+    initialize_survivor_context(root)
+    state = transition_state(phase="model_loaded")
+    cli.atomic_json(root / state["incident_path"], {
+        "version": 1,
+        "id": state["incident_id"],
+    })
+    calls = []
+    systemctl = in_memory_systemctl(calls)
+
+    def start_survivor(*arguments):
+        result = systemctl(*arguments)
+        if arguments[0] == "start":
+            path = root / "state/jobs" / f"{state['sole_survivor_job']}.json"
+            job = json.loads(path.read_text(encoding="utf-8"))
+            job["state"] = "running"
+            cli.atomic_json(path, job)
+        return result
+
+    with patch("ecosystem.resource_control.lemonade_health",
+               return_value=emergency_health("busy")), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=start_survivor), \
+            patch("ecosystem.resource_control.os.sync"):
+        entered = resource_control.advance_emergency(
+            state, healthy_snapshot(), "executor lifecycle"
+        )
+        active_tick = resource_control.advance_emergency(
+            entered, healthy_snapshot(), "executor lifecycle retry"
+        )
+
+    assert entered["emergency_phase"] == "active"
+    assert read_job(root, entered["sole_survivor_job"])["state"] == "running"
+    assert "emergency_error" not in active_tick
+
+
+@with_root
+def test_active_survivor_accepts_verification_and_rejects_terminal_owner(root):
+    identifier = "task-survivor"
+    state = transition_state(phase="active", sole_survivor_job=identifier)
+    path = root / "state/jobs" / f"{identifier}.json"
+    for job_state in ("awaiting_verification", "failed"):
+        cli.atomic_json(path, {
+            "id": identifier,
+            "state": job_state,
+            "source": f"resource-emergency:{state['incident_id']}",
+        })
+        state.pop("emergency_error", None)
+        state.pop("emergency_error_at", None)
+        with patch("ecosystem.resource_control.lemonade_health",
+                   return_value=emergency_health()):
+            result = resource_control.advance_emergency(
+                state, healthy_snapshot(), f"owner state {job_state}"
+            )
+        if job_state == "awaiting_verification":
+            assert "emergency_error" not in result
+        else:
+            assert "survivor" in result["emergency_error"]
+
+
+@with_root
+def test_recovery_clears_generation_before_a_second_oom(root):
+    initialize_survivor_context(root)
+    old_survivor = "task-old-survivor"
+    state = transition_state(phase="active", sole_survivor_job=old_survivor)
+    state.update(
+        last_oom_kills=1,
+        interrupted_jobs=[],
+        emergency_model_ready=True,
+        emergency_model_last_attempt="old-attempt",
+        emergency_model_last_result={"ok": True},
+        model_unload_result={"ok": True},
+        client_stop_result={"ok": True},
+        survivor_start_result={"ok": True},
+        threshold_candidate="emergency",
+        threshold_candidate_since_monotonic=1.0,
+        pressure_interrupted_jobs=[],
+        pressure_client_stop_result={"ok": True},
+        pressure_client_start_result={"ok": True},
+    )
+    cli.atomic_json(root / state["incident_path"], {
+        "version": 1,
+        "id": state["incident_id"],
+    })
+    cli.atomic_json(root / "state/jobs" / f"{old_survivor}.json", {
+        "id": old_survivor,
+        "state": "ready",
+        "source": f"resource-emergency:{state['incident_id']}",
+    })
+    resource_control.save_state(state)
+    recovery_calls = []
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=healthy_snapshot(oom_kills=1)), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(recovery_calls)):
+        assert resource_control.request_recovery(old_survivor)["ok"]
+    recovered_state = resource_control.load_state()
+
+    second_calls = []
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=healthy_snapshot(oom_kills=2)), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(second_calls)), \
+            patch("ecosystem.resource_control._lemonade_request",
+                  side_effect=in_memory_lemonade(initially_loaded=True)), \
+            patch("ecosystem.resource_control.os.sync"):
+        second = resource_control.tick()
+
+    assert second["emergency_phase"] == "active"
+    assert second["incident_id"] != state["incident_id"]
+    assert second["sole_survivor_job"] != old_survivor
+    for field in (
+            "incident_id", "incident_path", "emergency_reason", "emergency_entered_at",
+            "emergency_phase", "emergency_error", "emergency_error_at", "interrupted_jobs",
+            "model_unload_result", "emergency_model_last_attempt",
+            "emergency_model_last_result", "emergency_model_ready", "sole_survivor_job",
+            "client_stop_result", "survivor_start_result", "threshold_candidate",
+            "threshold_candidate_since_monotonic", "pressure_interrupted_jobs",
+            "pressure_client_stop_result", "pressure_client_start_result"):
+        assert field not in recovered_state
+    assert (root / state["incident_path"]).exists()
+    events = [
+        json.loads(line)
+        for path in (root / "logs/runs").glob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(event.get("event") == "resource.emergency_recovered"
+               and event.get("incident_id") == state["incident_id"] for event in events)
+    assert "agent-telegram.service" not in systemctl_units(recovery_calls + second_calls)
+    assert "agent-notifier.service" not in systemctl_units(recovery_calls + second_calls)
 
 
 @with_root
@@ -488,6 +832,7 @@ def test_emergency_retry_is_idempotent_after_every_persisted_phase(root):
             real_save_state = resource_control.save_state
             real_prepare_survivor = resource_control._prepare_survivor
             failure_injected = False
+            systemctl = in_memory_systemctl(systemctl_calls)
 
             def health():
                 return emergency_health() if runtime["model_loaded"] else {
@@ -516,7 +861,7 @@ def test_emergency_retry_is_idempotent_after_every_persisted_phase(root):
                     patch("ecosystem.resource_control._prepare_survivor",
                           wraps=real_prepare_survivor) as prepare, \
                     patch("ecosystem.resource_control._user_systemctl",
-                          side_effect=lambda *arguments: systemctl_calls.append(arguments)), \
+                          side_effect=systemctl), \
                     patch("ecosystem.resource_control.os.sync"):
                 with unittest.TestCase().assertRaisesRegex(RuntimeError, injected_phase):
                     resource_control.advance_emergency(
@@ -538,7 +883,7 @@ def test_emergency_retry_is_idempotent_after_every_persisted_phase(root):
                     patch("ecosystem.resource_control._prepare_survivor",
                           wraps=real_prepare_survivor) as retry_prepare, \
                     patch("ecosystem.resource_control._user_systemctl",
-                          side_effect=lambda *arguments: systemctl_calls.append(arguments)), \
+                          side_effect=systemctl), \
                     patch("ecosystem.resource_control.os.sync"):
                 result = resource_control.advance_emergency(
                     persisted, healthy_snapshot(), "failure injection retry"
@@ -631,11 +976,13 @@ def test_pressure_preempts_work_and_unloads_only_dynamic_models(_root):
         "memory_available_gb": 50.0, "swap_used_gb": 0.0,
         "memory_full_avg10": 0.0, "gtt_used_gb": 58.0,
     }
+    systemctl_calls = []
     with patch("ecosystem.resource_control.resource_snapshot", return_value=current), \
             patch("ecosystem.resource_control.load_state", return_value=before), \
             patch("ecosystem.resource_control.checkpoint_running_jobs", return_value=["task-work"]) as checkpoint, \
             patch("ecosystem.resource_control.unload_dynamic_models", return_value=[{"model": "large", "ok": True}]) as unload, \
-            patch("ecosystem.resource_control._user_systemctl") as systemctl:
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(systemctl_calls)):
         with patch("ecosystem.resource_control.time.monotonic", return_value=100.0):
             first = resource_control.tick()
         assert first["mode"] == "normal"
@@ -647,7 +994,7 @@ def test_pressure_preempts_work_and_unloads_only_dynamic_models(_root):
     assert result["pressure_interrupted_jobs"] == ["task-work"]
     assert checkpoint.call_count == 1
     assert unload.call_count == 1
-    systemctl.assert_called_once_with("stop", "agent-ecosystem.service")
+    assert systemctl_calls[0] == ("stop", "agent-ecosystem.service")
 
 
 def load_tests(_loader, _tests, _pattern):
