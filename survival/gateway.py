@@ -193,10 +193,17 @@ def drain_critical_outbox(store, send):
             delivery_path = (
                 store / "gateway" / "critical-delivery" / f"{value['id']}.json"
             )
-            telegram_api.quarantine_record(store, delivery_path, str(error))
-            delivery_path, delivery = telegram_api.ensure_critical_delivery(
-                store, value["id"], initial_state=initial_state,
-            )
+            if not telegram_api.quarantine_record(store, delivery_path, str(error)):
+                continue
+            try:
+                delivery_path, delivery = telegram_api.ensure_critical_delivery(
+                    store, value["id"], initial_state=initial_state,
+                )
+            except (OSError, ValueError) as reconstruction_error:
+                telegram_api.quarantine_record(
+                    store, delivery_path, str(reconstruction_error),
+                )
+                continue
         state = delivery["egress_state"]
         if state in {"delivered", "delivery_unknown"}:
             if state == "delivery_unknown":

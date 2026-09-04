@@ -829,6 +829,44 @@ def test_unmovable_malformed_record_does_not_withhold_egress_heartbeat():
         assert read_json(root / "heartbeats/egress.json")["monotonic_at"] == 20.0
 
 
+def test_unmovable_corrupt_delivery_is_suppressed_while_later_egress_continues():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_json(
+            root / "outbox/critical/message-a-corrupt.json",
+            critical_record("message-a-corrupt"),
+        )
+        write_json(
+            root / "outbox/critical/message-b-valid.json",
+            critical_record("message-b-valid"),
+        )
+        telegram_api.observe_critical_delivery_attempt(root, "message-a-corrupt")
+        corrupt = root / "gateway/critical-delivery/message-a-corrupt.json"
+        corrupt.parent.mkdir(parents=True, exist_ok=True)
+        corrupt.write_text("{", encoding="utf-8")
+        sent = []
+
+        with patch.object(
+            telegram_api, "_replace_record", side_effect=PermissionError("read-only"),
+        ):
+            gateway.egress_child(
+                root,
+                lambda chat_id, text: sent.append((chat_id, text)) or True,
+                outbox_poll_seconds=0.0,
+                heartbeat_maximum_age_seconds=5.0,
+                monotonic_now=lambda: 20.0,
+                boot_id=lambda: "boot-a",
+                sleep=lambda _seconds: None,
+                maximum_iterations=1,
+            )
+
+        assert sent == [(42, "critical message")]
+        assert read_json(root / "heartbeats/egress.json")["monotonic_at"] == 20.0
+        assert read_json(root / "gateway/data-health.json")[
+            "quarantine_succeeded"
+        ] is False
+
+
 def test_unmovable_quarantine_incident_is_deduplicated_and_visible():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)

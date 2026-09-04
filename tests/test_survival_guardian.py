@@ -7,7 +7,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from survival import guardian, system_control, telegram_api, time_policy
 
@@ -266,6 +266,33 @@ def test_progress_reporting_failure_cannot_block_or_advance_lifecycle():
 
         assert result == {"ok": True, "phase": "completed", "remaining_effects": 0}
         assert system_control._read_request(path)["state"]["phase"] == "completed"
+
+
+def test_gateway_health_reporting_failure_cannot_terminate_guardian_loop():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        accepted = []
+
+        server = Mock()
+
+        def stop_after_startup():
+            accepted.append(True)
+            raise KeyboardInterrupt
+
+        server.accept.side_effect = stop_after_startup
+
+        with (
+            patch.object(guardian, "acquire_server", return_value=(server, False)),
+            patch.object(
+                system_control,
+                "report_gateway_data_health",
+                side_effect=ValueError("immutable report identity mismatch"),
+            ),
+        ):
+            guardian.run_loop(config)
+
+        assert accepted == [True]
 
 
 def test_oldest_blocked_request_serializes_later_lifecycle_commands():

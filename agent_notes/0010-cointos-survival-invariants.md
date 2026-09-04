@@ -51,3 +51,21 @@ data integrity must remain separate durable facts: isolating or failing to isola
 one malformed spool record cannot disable the gateway watchdog. Lifecycle effect
 success is likewise not inferred from a command exit; each phase owns an atomic
 result attempt and an independently observed service, cgroup, or health postcondition.
+
+## Queued Task 4 closure after Stage 1 bring-up
+
+David redirected full Task 4 closure to practical skeleton bring-up on 2026-09-05.
+Codex agent `/root/closure_task4_fix` contained guardian reporting exceptions and
+unmovable corrupt delivery records, but these independent-review findings remain
+mandatory maintenance before Task 4 or the whole survival closure can be accepted:
+
+- define one exact canonical identity grammar and central path containment from a
+  gateway-private incident through the root critical outbox;
+- represent failed quarantine and later successful isolation as distinct stable
+  immutable outcome/resolution facts rather than mutating one identity;
+- complete the adversarial corrupt-delivery reconstruction contract beyond the
+  Stage 1 suppress-and-continue containment; and
+- delete the reporting, presentation, cursor, blocker, destination, and gateway
+  incident mixture from `survival/system_control.py`, rebuild it as a narrow
+  functions-over-data reporting module, and pulse observations through existing
+  bounded wait/watchdog paths during long synchronous effects.

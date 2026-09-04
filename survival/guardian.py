@@ -133,7 +133,7 @@ def handle_one_request(
     request_path = system_control.accept_request(
         config["store_path"], command, previous_pause,
     )
-    system_control.report_gateway_data_health(config)
+    _report_gateway_data_health(config)
     system_control.commit_acknowledgement(request_path)
     acknowledgement = {
         "schema_version": 1,
@@ -189,6 +189,13 @@ def _report_progress(config, path):
         return None
 
 
+def _report_gateway_data_health(config):
+    try:
+        return system_control.report_gateway_data_health(config)
+    except Exception:
+        return None
+
+
 def run_loop(config: dict, on_accept=None, environ=None) -> None:
     """Serve serially so one lifecycle owns the privileged mutation boundary."""
     server, remove_socket = acquire_server(config, environ)
@@ -198,7 +205,7 @@ def run_loop(config: dict, on_accept=None, environ=None) -> None:
     try:
         systemd_notify.notify_systemd("READY=1")
         system_control.refresh_timing_policy(config)
-        system_control.report_gateway_data_health(config)
+        _report_gateway_data_health(config)
         server.settimeout(config["guardian_poll_seconds"])
         resume_pending_request(config, adapters, recover_blocked=True)
         while True:
@@ -206,7 +213,7 @@ def run_loop(config: dict, on_accept=None, environ=None) -> None:
                 connection, _address = server.accept()
             except socket.timeout:
                 system_control.refresh_timing_policy(config)
-                system_control.report_gateway_data_health(config)
+                _report_gateway_data_health(config)
                 server.settimeout(config["guardian_poll_seconds"])
                 resume_pending_request(config, adapters, recover_blocked=True)
                 systemd_notify.notify_systemd("WATCHDOG=1")
