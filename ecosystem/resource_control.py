@@ -695,6 +695,26 @@ conclusion to `state/resource-incidents/{incident_id}-conclusion.md`."""
     return task
 
 
+def _same_typed_json(observed: object, expected: object) -> bool:
+    if type(observed) is not type(expected):
+        return False
+    if type(observed) is dict:
+        if (not all(type(key) is str for key in observed)
+                or set(observed) != set(expected)):
+            return False
+        return all(
+            _same_typed_json(observed[key], expected[key])
+            for key in observed
+        )
+    if type(observed) is list:
+        return (len(observed) == len(expected)
+                and all(_same_typed_json(left, right)
+                        for left, right in zip(observed, expected)))
+    if type(observed) in (str, int, float, bool, type(None)):
+        return observed == expected
+    return False
+
+
 def _require_canonical_survivor_job(job: dict, expected: dict,
                                     allowed_fields: frozenset[str]) -> None:
     timestamps_are_typed = (
@@ -702,7 +722,8 @@ def _require_canonical_survivor_job(job: dict, expected: dict,
         and isinstance(job.get("updated_at"), str) and bool(job["updated_at"])
     )
     if (set(job) != allowed_fields or not timestamps_are_typed
-            or any(job.get(key) != value for key, value in expected.items())):
+            or any(not _same_typed_json(job.get(key), value)
+                   for key, value in expected.items())):
         raise RuntimeError("sole survivor job has a non-canonical descriptor")
 
 

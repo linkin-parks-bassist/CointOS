@@ -1308,6 +1308,7 @@ def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
         {"id": "task-unintended"},
         {"kind": "unrelated-kind"},
         {"state": "running"},
+        {"attempts": False},
         {"attempts": True},
         {"created_at": 7},
         {"updated_at": 7},
@@ -1321,6 +1322,7 @@ def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
         {"prefer_models_other_than": ["unrelated-model"]},
         {"agent_name": "Unintended Agent"},
         {"idempotency_key": "unrelated-key"},
+        {"context_tokens": 32768.0},
         {"context_tokens": 16384},
         {"prompt": "state/jobs/unintended.prompt.md"},
         {"original_prompt": "state/jobs/unintended.prompt.md"},
@@ -1363,6 +1365,25 @@ def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
             incident_path, incident_id, replacement_for="task-failed"
         )
     assert read_job(root, identifier) == "not-a-record"
+
+
+def test_typed_json_equality_rejects_nested_loose_value_matches():
+    expected = {
+        "outer": [
+            {"integer": 0, "boolean": False},
+            [32768, None, "exact"],
+        ],
+    }
+
+    assert resource_control._same_typed_json(expected, expected)
+    assert not resource_control._same_typed_json(
+        expected,
+        {"outer": [{"integer": False, "boolean": False}, [32768, None, "exact"]]},
+    )
+    assert not resource_control._same_typed_json(
+        expected,
+        {"outer": [{"integer": 0, "boolean": False}, [32768.0, None, "exact"]]},
+    )
 
 
 @with_root
