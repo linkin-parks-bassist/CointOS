@@ -216,6 +216,11 @@ def _event_key(request_id: str, event: object) -> str:
     if type(event) is not dict or type(event.get("kind")) is not str or not event["kind"]:
         raise ValueError("invalid lifecycle event")
     if "idempotency_key" not in event:
+        if event["kind"] == "effect_completed":
+            effect_key = event.get("effect_idempotency_key")
+            if not _is_effect_key(effect_key, request_id):
+                raise ValueError("invalid effect idempotency key")
+            return f"{request_id}:effect_completed:{effect_key}"
         return f"{request_id}:{event['kind']}"
     value = event["idempotency_key"]
     if not _is_scoped_key(value, request_id):
@@ -250,18 +255,26 @@ def _validate_state(state: object) -> None:
     if (
         type(request_id) is not str
         or not request_id
+        or type(state["command"]) is not str
         or state["command"] not in {"restart", "reset"}
         or type(state["previous_pause"]) is not bool
+        or type(state["phase"]) is not str
         or state["phase"] not in PHASES
         or type(state["applied_events"]) is not list
         or type(state["pending_effects"]) is not list
         or type(state["completed_effects"]) is not list
-        or (state["recovery_phase"] is not None and state["recovery_phase"] not in PHASES[:-2])
+        or (state["recovery_phase"] is not None
+            and (type(state["recovery_phase"]) is not str
+                 or state["recovery_phase"] not in PHASES[:-2]))
     ):
         raise ValueError("invalid lifecycle state")
     if state["phase"] in {"blocked", "failed"} and state["recovery_phase"] is None:
         raise ValueError("invalid lifecycle state")
     if state["phase"] not in {"blocked", "failed"} and state["recovery_phase"] is not None:
+        raise ValueError("invalid lifecycle state")
+    if any(type(value) is not str for value in state["applied_events"]):
+        raise ValueError("invalid lifecycle state")
+    if any(type(value) is not str for value in state["completed_effects"]):
         raise ValueError("invalid lifecycle state")
     if (
         len(set(state["applied_events"])) != len(state["applied_events"])
@@ -275,6 +288,10 @@ def _validate_state(state: object) -> None:
         if (
             type(effect) is not dict
             or set(effect) != EFFECT_FIELDS
+            or type(effect["kind"]) is not str
+            or type(effect["request_id"]) is not str
+            or type(effect["phase"]) is not str
+            or type(effect["idempotency_key"]) is not str
             or effect["kind"] not in EFFECT_KINDS
             or effect["request_id"] != request_id
             or effect["phase"] not in PHASES

@@ -129,6 +129,32 @@ def test_pending_effects_survive_a_guardian_restart_without_replaying_completed_
     assert recovered == [checkpoint]
 
 
+def test_keyless_effect_completions_use_the_effect_identity_and_replay_independently():
+    state, effects = lifecycle.reduce_lifecycle(
+        lifecycle.new_lifecycle(command_record("restart"), previous_pause=False),
+        {"kind": "ack_delivered"},
+    )
+    close_admission, checkpoint = effects
+    first_event = {
+        "kind": "effect_completed",
+        "effect_idempotency_key": close_admission["idempotency_key"],
+    }
+    state, ignored = lifecycle.reduce_lifecycle(state, first_event)
+    assert ignored == []
+    state, ignored = lifecycle.reduce_lifecycle(state, {
+        "kind": "effect_completed",
+        "effect_idempotency_key": checkpoint["idempotency_key"],
+    })
+    assert ignored == []
+    assert state["pending_effects"] == []
+    assert state["completed_effects"] == [
+        close_admission["idempotency_key"], checkpoint["idempotency_key"],
+    ]
+    replayed, ignored = lifecycle.reduce_lifecycle(state, first_event)
+    assert replayed == state
+    assert ignored == []
+
+
 def test_verification_restores_an_unpaused_lifecycle_only_after_the_health_gate():
     state = lifecycle_state(phase="resumed", previous_pause=False)
     state, effects = lifecycle.reduce_lifecycle(state, {"kind": "verified"})
@@ -196,6 +222,12 @@ def test_malformed_state_and_event_are_rejected_before_reduction():
             lifecycle_state() | {"completed_effects": ["telegram-1:forged"]},
             {"kind": "ack_delivered"},
         )
+    for field in ("command", "applied_events", "completed_effects"):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "state"):
+            lifecycle.reduce_lifecycle(
+                lifecycle_state() | {field: [[]]},
+                {"kind": "ack_delivered"},
+            )
     with unittest.TestCase().assertRaisesRegex(ValueError, "event"):
         lifecycle.reduce_lifecycle(lifecycle_state(), {"kind": 1})
 
