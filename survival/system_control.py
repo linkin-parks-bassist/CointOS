@@ -1291,13 +1291,16 @@ def _checkpoint_runtime(
             "lifecycle",
             "restart_checkpoint_grace_seconds",
         )
+        deadline_monotonic = 0.0
+        if current_boot_id is not None:
+            deadline_monotonic = monotonic() + grace
         request = {
             "schema_version": 1,
             "request_id": effect["request_id"],
             "job_ids": [path.stem for path in active_paths],
             "requested_at": datetime.now(timezone.utc).isoformat(),
             "boot_id": current_boot_id,
-            "deadline_monotonic": monotonic() + grace,
+            "deadline_monotonic": deadline_monotonic,
         }
         checkpoint.validate_checkpoint_request(request)
         request_metadata = request_root.stat()

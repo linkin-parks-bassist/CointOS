@@ -1057,6 +1057,55 @@ def test_rebooted_checkpoint_request_expires_without_comparing_monotonic_clocks(
         assert job["resume_available"] is False
 
 
+def test_fresh_checkpoint_request_without_boot_identity_never_reads_monotonic_clock():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        job_path = _write_checkpoint_job(
+            agent_state, "task-active", "ses_unverified",
+        )
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
+        }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+
+        result = system_control._checkpoint_runtime(
+            policy,
+            effect,
+            sleep=lambda _seconds: (_ for _ in ()).throw(
+                AssertionError("unavailable boot must not wait")
+            ),
+            sync=lambda: None,
+            monotonic=lambda: (_ for _ in ()).throw(
+                AssertionError("unavailable boot must not read monotonic")
+            ),
+            boot_id=lambda: None,
+        )
+
+        request_root, _result_root = checkpoint.checkpoint_paths(
+            policy["store_path"], policy["lifecycle_catalog"],
+        )
+        request = json.loads(
+            (request_root / "telegram-1.json").read_text(encoding="utf-8")
+        )
+        assert set(request) == checkpoint.CHECKPOINT_REQUEST_FIELDS
+        assert request["boot_id"] is None
+        assert request["deadline_monotonic"] == 0.0
+        assert result == {
+            "ok": True,
+            "checkpointed_jobs": [],
+            "interrupted_jobs": ["task-active"],
+        }
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        assert job["state"] == "interrupted"
+        assert job["resume_available"] is False
+        assert "opencode_session" not in job
+
+
 def test_late_checkpoint_result_cannot_override_an_existing_interruption_intent():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
