@@ -30,10 +30,19 @@ def encode_command(command: dict) -> bytes:
 def decode_command(payload: bytes) -> dict:
     """Decode and validate one complete lifecycle command record."""
     try:
-        value = json.loads(payload)
+        value = json.loads(payload, object_pairs_hook=_object_without_duplicate_fields)
     except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("invalid command JSON") from error
     _validate_command(value)
+    return value
+
+
+def _object_without_duplicate_fields(pairs: list[tuple[str, object]]) -> dict:
+    value = {}
+    for key, member in pairs:
+        if key in value:
+            raise ValueError("duplicate command field")
+        value[key] = member
     return value
 
 

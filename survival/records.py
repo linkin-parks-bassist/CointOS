@@ -1,4 +1,4 @@
-"""Filesystem-backed durable records for authenticated literal commands."""
+"""Filesystem-backed durable records for authenticated Telegram updates."""
 
 import json
 import os
@@ -6,7 +6,15 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
-from survival.protocol import COMMAND_FIELDS, encode_command, parse_literal_command
+ACCEPTED_UPDATE_FIELDS = {
+    "schema_version",
+    "id",
+    "telegram_update_id",
+    "telegram_user_id",
+    "chat_id",
+    "text",
+    "received_at",
+}
 
 
 def atomic_json(path: Path, value: dict) -> None:
@@ -37,39 +45,23 @@ def append_event(path: Path, event: dict) -> None:
 
 
 def accept_update(root: Path, update: dict, allowed_user_ids: set[int]) -> dict:
-    """Persist one authorized literal command, deduplicated by Telegram update ID."""
-    identity = _telegram_identity(update)
-    if identity["telegram_user_id"] not in allowed_user_ids:
+    """Persist one authorized Telegram update, deduplicated by its update ID."""
+    accepted = _accepted_update(update)
+    if accepted["telegram_user_id"] not in allowed_user_ids:
         raise ValueError("unauthorized Telegram user")
-    command = parse_literal_command(identity["telegram_text"])
-    if command is None:
-        raise ValueError("update is not a literal command")
-
-    request_id = f"telegram-{identity['telegram_update_id']}"
-    accepted = {
-        "id": request_id,
-        "schema_version": 1,
-        "request_id": request_id,
-        "telegram_update_id": identity["telegram_update_id"],
-        "telegram_user_id": identity["telegram_user_id"],
-        "command": command,
-        "received_at": datetime.now(timezone.utc).isoformat(),
-        "telegram_identity": identity,
-    }
-    path = root / "commands" / f"{request_id}.json"
+    path = root / "commands" / f"{accepted['id']}.json"
     try:
         _create_exclusive_json(path, accepted)
     except FileExistsError:
         existing = _read_existing_command(path)
-        existing_identity = existing.get("telegram_identity")
-        if not _identity_is_typed(existing_identity) or existing_identity != identity:
+        _validate_accepted_update(existing)
+        if not _same_update_identity(existing, accepted):
             raise ValueError("replayed update identity mismatch")
-        _validate_existing_command(existing, request_id, command)
         return existing
     return accepted
 
 
-def _telegram_identity(update: object) -> dict:
+def _accepted_update(update: object) -> dict:
     try:
         update_id = update["update_id"]
         message = update["message"]
@@ -78,52 +70,67 @@ def _telegram_identity(update: object) -> dict:
         text = message["text"]
     except (KeyError, TypeError) as error:
         raise ValueError("invalid Telegram update") from error
-    if type(update_id) is not int or type(user_id) is not int or type(chat_id) is not int:
+    if (
+        type(update_id) is not int
+        or update_id < 0
+        or type(user_id) is not int
+        or type(chat_id) is not int
+    ):
         raise ValueError("invalid Telegram update")
     if type(text) is not str:
         raise ValueError("invalid Telegram update")
     return {
+        "schema_version": 1,
+        "id": f"telegram-{update_id}",
         "telegram_update_id": update_id,
         "telegram_user_id": user_id,
-        "telegram_chat_id": chat_id,
-        "telegram_text": text,
+        "chat_id": chat_id,
+        "text": text,
+        "received_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
-def _identity_is_typed(value: object) -> bool:
-    if type(value) is not dict or set(value) != {
-        "telegram_update_id",
-        "telegram_user_id",
-        "telegram_chat_id",
-        "telegram_text",
-    }:
-        return False
-    return (
-        type(value["telegram_update_id"]) is int
-        and type(value["telegram_user_id"]) is int
-        and type(value["telegram_chat_id"]) is int
-        and type(value["telegram_text"]) is str
-    )
-
-
-def _validate_existing_command(existing: dict, request_id: str, command: str) -> None:
+def _validate_accepted_update(existing: object) -> None:
+    if type(existing) is not dict or set(existing) != ACCEPTED_UPDATE_FIELDS:
+        raise ValueError("invalid accepted update fields")
+    if type(existing["schema_version"]) is not int or existing["schema_version"] != 1:
+        raise ValueError("invalid accepted update fields")
+    if type(existing["telegram_update_id"]) is not int or existing["telegram_update_id"] < 0:
+        raise ValueError("invalid accepted update fields")
+    if existing["id"] != f"telegram-{existing['telegram_update_id']}":
+        raise ValueError("invalid accepted update fields")
+    if type(existing["telegram_user_id"]) is not int or type(existing["chat_id"]) is not int:
+        raise ValueError("invalid accepted update fields")
+    if type(existing["text"]) is not str or type(existing["received_at"]) is not str:
+        raise ValueError("invalid accepted update fields")
     try:
-        typed_command = {field: existing[field] for field in COMMAND_FIELDS}
-        encode_command(typed_command)
-    except (KeyError, ValueError) as error:
-        raise ValueError("invalid existing command record") from error
-    if existing.get("id") != request_id or typed_command["command"] != command:
-        raise ValueError("replayed update command mismatch")
+        timestamp = datetime.fromisoformat(existing["received_at"])
+    except ValueError as error:
+        raise ValueError("invalid accepted update fields") from error
+    if timestamp.tzinfo is None:
+        raise ValueError("invalid accepted update fields")
+
+
+def _same_update_identity(first: dict, second: dict) -> bool:
+    return all(first[field] == second[field] for field in (
+        "telegram_update_id", "telegram_user_id", "chat_id", "text",
+    ))
 
 
 def _create_exclusive_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-        json.dump(value, output, sort_keys=True, separators=(",", ":"))
-        output.flush()
-        os.fsync(output.fileno())
-    _fsync_directory(path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary_path = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            json.dump(value, output, sort_keys=True, separators=(",", ":"))
+            output.flush()
+            os.fsync(output.fileno())
+        os.link(temporary_path, path)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
 
 
 def _read_existing_command(path: Path) -> dict:

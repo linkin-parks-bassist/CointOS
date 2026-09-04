@@ -54,6 +54,17 @@ def test_protocol_rejects_boolean_schema_version():
         protocol.encode_command(command)
 
 
+def test_protocol_rejects_duplicate_json_field_names():
+    payload = (
+        b'{"schema_version":1,"request_id":"telegram-91",'
+        b'"telegram_update_id":91,"telegram_user_id":42,'
+        b'"command":"restart","command":"reset",'
+        b'"received_at":"2026-09-04T00:00:00+00:00"}'
+    )
+    with unittest.TestCase().assertRaisesRegex(ValueError, "duplicate"):
+        protocol.decode_command(payload)
+
+
 def load_tests(_loader, _tests, _pattern):
     functions = [value for name, value in globals().items()
                  if name.startswith("test_") and callable(value)]
