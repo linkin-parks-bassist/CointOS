@@ -22,8 +22,10 @@ HALTED_MODES = {"pressure", "emergency"}
 MODEL_CLIENT_UNITS = ("agent-ecosystem.service", "agent-control-worker.service")
 LIVE_MODEL_STATUSES = {"ready", "in_use", "busy"}
 SURVIVOR_ACTIVE_STATES = {"ready", "running", "awaiting_verification"}
+SURVIVOR_TERMINAL_STATES = {"completed", "failed", "rejected"}
 STARTED_UNIT_STATES = {"active", "activating", "reloading"}
 STOPPED_UNIT_STATES = {"inactive", "failed"}
+FAILURE_LOG_TAIL_BYTES = 65536
 EMERGENCY_PHASES = (
     "recorded",
     "clients_stopped",
@@ -40,6 +42,7 @@ ACTIVE_EMERGENCY_FIELDS = (
     "emergency_phase",
     "emergency_error",
     "emergency_error_at",
+    "emergency_escalation",
     "interrupted_jobs",
     "client_stop_result",
     "model_unload_result",
@@ -547,12 +550,13 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
 
 def load_emergency_model() -> dict:
     emergency = policy()["emergency"]
+    parallel_requests = emergency["parallel_requests"]
     payload = {
         "model_name": emergency["chat_model"],
         "pinned": True,
-        "ctx_size": emergency["chat_context_tokens"],
+        "ctx_size": emergency["chat_context_tokens"] * parallel_requests,
         "merge_args": True,
-        "llamacpp_args": f"--parallel {emergency['parallel_requests']} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
+        "llamacpp_args": f"--parallel {parallel_requests} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
     }
     try:
         result = _lemonade_request(
@@ -630,14 +634,46 @@ def _persist_emergency_phase(state: dict, phase: str) -> None:
     state["emergency_phase"] = phase
     state.pop("emergency_error", None)
     state.pop("emergency_error_at", None)
+    state.pop("emergency_escalation", None)
     save_state(state)
 
 
-def _record_emergency_error(state: dict, message: str) -> dict:
-    state.update(emergency_error=message, emergency_error_at=cli.now())
-    save_state(state)
-    cli.audit("resource.emergency_error", incident_id=state.get("incident_id"),
-              phase=state.get("emergency_phase"), error=message)
+def _same_persisted_state(state: dict) -> bool:
+    try:
+        persisted = json.loads(state_path().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    def stable_fields(candidate: dict) -> dict:
+        result = dict(candidate)
+        result.pop("updated_at", None)
+        resources = result.get("last_resources")
+        if isinstance(resources, dict):
+            resources = dict(resources)
+            resources.pop("at", None)
+            result["last_resources"] = resources
+        return result
+
+    return stable_fields(persisted) == stable_fields(state)
+
+
+def _record_emergency_error(state: dict, message: str,
+                            escalation: dict | None = None) -> dict:
+    changed = (state.get("emergency_error") != message
+               or state.get("emergency_escalation") != escalation
+               or not state.get("emergency_error_at"))
+    state["emergency_error"] = message
+    if escalation is None:
+        state.pop("emergency_escalation", None)
+    else:
+        state["emergency_escalation"] = escalation
+    if changed:
+        state["emergency_error_at"] = cli.now()
+        save_state(state)
+        cli.audit("resource.emergency_error", incident_id=state.get("incident_id"),
+                  phase=state.get("emergency_phase"), error=message,
+                  escalation=escalation)
+    elif not _same_persisted_state(state):
+        save_state(state)
     return state
 
 
@@ -691,17 +727,59 @@ def _interrupted_job_ids(state: dict) -> list[str]:
     return list(dict.fromkeys(identifiers))
 
 
-def _survivor_has_state(state: dict, allowed_states: set[str]) -> bool:
+def _survivor_job(state: dict) -> dict | None:
     identifier = state.get("sole_survivor_job")
     if not identifier:
-        return False
+        return None
     path = cli.ROOT / "state/jobs" / f"{identifier}.json"
     try:
         job = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
-    return (job.get("id") == identifier and job.get("state") in allowed_states
-            and job.get("source") == f"resource-emergency:{state.get('incident_id')}")
+        return None
+    if (job.get("id") != identifier
+            or job.get("source") != f"resource-emergency:{state.get('incident_id')}"):
+        return None
+    return job
+
+
+def _survivor_has_state(state: dict, allowed_states: set[str]) -> bool:
+    job = _survivor_job(state)
+    return job is not None and job.get("state") in allowed_states
+
+
+def _transcript_tail(raw_path: object) -> str:
+    if not isinstance(raw_path, str) or not raw_path:
+        return ""
+    try:
+        root = cli.ROOT.resolve()
+        path = Path(raw_path)
+        resolved = (path if path.is_absolute() else root / path).resolve()
+        resolved.relative_to(root)
+        with resolved.open("rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - FAILURE_LOG_TAIL_BYTES))
+            return stream.read().decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return ""
+
+
+def _survivor_terminal_escalation(job: dict) -> dict:
+    failure = f"{job.get('error', '')}\n{_transcript_tail(job.get('output'))}".casefold()
+    reason = ("context_overflow" if job.get("state") == "failed" and (
+        "exceed_context_size_error" in failure
+        or "exceeds the available context size" in failure
+    ) else "survivor_terminal")
+    return {
+        "status": "required",
+        "reason": reason,
+        "survivor_job": job.get("id"),
+        "survivor_state": job.get("state"),
+        "exit_code": job.get("exit_code"),
+        "requested_context_tokens": job.get("context_tokens"),
+        "transcript": job.get("output"),
+        "error": job.get("error"),
+    }
 
 
 def _survivor_is_ready(state: dict) -> bool:
@@ -812,9 +890,15 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
     if phase == "active":
         if not emergency_model_live():
             return _record_emergency_error(state, "emergency model is not live")
-        if not _survivor_is_active(state):
+        survivor = _survivor_job(state)
+        if survivor is None or survivor.get("state") not in SURVIVOR_ACTIVE_STATES:
+            escalation = (_survivor_terminal_escalation(survivor)
+                          if survivor is not None
+                          and survivor.get("state") in SURVIVOR_TERMINAL_STATES
+                          else None)
             return _record_emergency_error(
-                state, "sole survivor job is not in a live executor state"
+                state, "sole survivor job is not in a live executor state",
+                escalation=escalation,
             )
         services = _verify_user_units(
             ("agent-control-worker.service", "agent-ecosystem.service"), "started"
@@ -826,6 +910,7 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
             )
         state.pop("emergency_error", None)
         state.pop("emergency_error_at", None)
+        state.pop("emergency_escalation", None)
         save_state(state)
     return state
 

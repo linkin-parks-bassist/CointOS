@@ -350,6 +350,23 @@ def test_model_liveness_rejects_untyped_missing_and_unknown_fields():
 
 
 @with_root
+def test_emergency_model_context_is_usable_per_parallel_request(_root):
+    calls = []
+    with patch("ecosystem.resource_control._lemonade_request",
+               side_effect=in_memory_lemonade(calls, initially_loaded=False)):
+        result = resource_control.load_emergency_model()
+
+    emergency = resource_control.policy()["emergency"]
+    load = next(call for call in calls if call["path"] == "/v1/load")
+    total_context = load["payload"]["ctx_size"]
+    parallel_requests = emergency["parallel_requests"]
+    assert result["ok"] is True
+    assert total_context == emergency["chat_context_tokens"] * parallel_requests
+    assert total_context // parallel_requests == emergency["chat_context_tokens"]
+    assert 25523 < total_context // parallel_requests
+
+
+@with_root
 def test_model_loaded_phase_rejects_untyped_or_unknown_model_health(root):
     state = transition_state(phase="models_unloaded")
     cli.atomic_json(root / state["incident_path"], {
@@ -889,6 +906,100 @@ def test_active_survivor_accepts_verification_and_rejects_terminal_owner(root):
             assert "emergency_error" not in result
         else:
             assert "survivor" in result["emergency_error"]
+
+
+@with_root
+def test_repeated_context_overflow_survivor_ticks_record_one_pending_escalation(root):
+    identifier = "task-survivor"
+    state = transition_state(phase="active", sole_survivor_job=identifier)
+    output = "logs/runs/task-survivor.opencode.log"
+    cli.atomic_json(root / "state/jobs" / f"{identifier}.json", {
+        "id": identifier,
+        "state": "failed",
+        "source": f"resource-emergency:{state['incident_id']}",
+        "exit_code": 1,
+        "context_tokens": 32768,
+        "output": output,
+    })
+    (root / output).parent.mkdir(parents=True, exist_ok=True)
+    (root / output).write_text(
+        '{"type":"error","error":{"data":{"message":'
+        '"request (25523 tokens) exceeds the available context size '
+        '(16384 tokens)","type":"exceed_context_size_error"}}}\n',
+        encoding="utf-8",
+    )
+    resource_control.save_state(state)
+    real_save_state = resource_control.save_state
+    first_snapshot = {**healthy_snapshot(), "at": "tick-one"}
+    second_snapshot = {**healthy_snapshot(), "at": "tick-two"}
+
+    with patch("ecosystem.resource_control.resource_snapshot",
+               side_effect=(first_snapshot, second_snapshot)), \
+            patch("ecosystem.resource_control.lemonade_health",
+                  return_value=emergency_health()), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=unexpected_external_call), \
+            patch("ecosystem.resource_control.save_state",
+                  wraps=real_save_state) as save, \
+            patch("ecosystem.resource_control.cli.audit") as audit:
+        first = resource_control.tick()
+        first_error_at = first["emergency_error_at"]
+        second = resource_control.tick()
+
+    assert second["emergency_escalation"] == {
+        "status": "required",
+        "reason": "context_overflow",
+        "survivor_job": identifier,
+        "survivor_state": "failed",
+        "exit_code": 1,
+        "requested_context_tokens": 32768,
+        "transcript": output,
+        "error": None,
+    }
+    assert second["last_resources"]["at"] == "tick-two"
+    assert second["emergency_error_at"] == first_error_at
+    assert save.call_count == 1
+    assert audit.call_count == 1
+    assert audit.call_args.args == ("resource.emergency_error",)
+
+
+@with_root
+def test_deduplicated_survivor_error_preserves_changes_and_recovery(root):
+    identifier = "task-survivor"
+    state = transition_state(phase="active", sole_survivor_job=identifier)
+    job_path = root / "state/jobs" / f"{identifier}.json"
+    job = {
+        "id": identifier,
+        "state": "failed",
+        "source": f"resource-emergency:{state['incident_id']}",
+        "exit_code": 1,
+    }
+    cli.atomic_json(job_path, job)
+    resource_control.save_state(state)
+    changed_snapshot = {**healthy_snapshot(), "gtt_used_gb": 21.0}
+    real_save_state = resource_control.save_state
+
+    with patch("ecosystem.resource_control.resource_snapshot",
+               side_effect=(healthy_snapshot(), changed_snapshot, changed_snapshot)), \
+            patch("ecosystem.resource_control.lemonade_health",
+                  return_value=emergency_health()), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()), \
+            patch("ecosystem.resource_control.save_state",
+                  wraps=real_save_state) as save, \
+            patch("ecosystem.resource_control.cli.audit") as audit:
+        resource_control.tick()
+        changed = resource_control.tick()
+        job["state"] = "running"
+        cli.atomic_json(job_path, job)
+        recovered = resource_control.tick()
+
+    assert changed["last_resources"] == changed_snapshot
+    assert changed["emergency_escalation"]["reason"] == "survivor_terminal"
+    assert "emergency_error" not in recovered
+    assert "emergency_escalation" not in recovered
+    assert save.call_count == 3
+    assert audit.call_count == 1
 
 
 @with_root
