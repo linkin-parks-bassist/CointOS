@@ -5,8 +5,10 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -21,8 +23,10 @@ RUNNING_STATES = {"running"}
 HALTED_MODES = {"pressure", "emergency"}
 MODEL_CLIENT_UNITS = ("agent-ecosystem.service", "agent-control-worker.service")
 LIVE_MODEL_STATUSES = {"ready", "in_use", "busy"}
-SURVIVOR_ACTIVE_STATES = {"ready", "running", "awaiting_verification"}
+SURVIVOR_ACTIVE_STATES = {"ready", "running"}
+SURVIVOR_INCOMPLETE_STATES = {"awaiting_verification"}
 SURVIVOR_TERMINAL_STATES = {"completed", "failed", "rejected"}
+SURVIVOR_RETRYABLE_STATES = SURVIVOR_INCOMPLETE_STATES | SURVIVOR_TERMINAL_STATES
 STARTED_UNIT_STATES = {"active", "activating", "reloading"}
 STOPPED_UNIT_STATES = {"inactive", "failed"}
 FAILURE_LOG_TAIL_BYTES = 65536
@@ -51,6 +55,7 @@ ACTIVE_EMERGENCY_FIELDS = (
     "emergency_model_ready",
     "sole_survivor_job",
     "survivor_start_result",
+    "survivor_retry",
     "active_service_result",
     "recovery_start_result",
     "recovery_error",
@@ -245,13 +250,76 @@ def model_is_live(item: dict) -> bool:
             and item["status"] in LIVE_MODEL_STATUSES)
 
 
+def emergency_model_allocation(settings: dict | None = None) -> dict:
+    emergency = (settings if settings is not None else policy())["emergency"]
+    context_tokens = emergency.get("chat_context_tokens")
+    parallel_requests = emergency.get("parallel_requests")
+    if type(context_tokens) is not int or context_tokens <= 0:
+        raise ValueError("chat_context_tokens must be a positive integer")
+    if type(parallel_requests) is not int or parallel_requests <= 0:
+        raise ValueError("parallel_requests must be a positive integer")
+    if context_tokens > sys.maxsize // parallel_requests:
+        raise ValueError("derived emergency backend context is too large")
+    return {
+        "chat_context_tokens": context_tokens,
+        "parallel_requests": parallel_requests,
+        "backend_context_tokens": context_tokens * parallel_requests,
+    }
+
+
+def _observed_parallel_requests(item: dict) -> int | None:
+    options = item.get("recipe_options")
+    if not isinstance(options, dict):
+        return None
+    arguments = options.get("llamacpp_args")
+    if not isinstance(arguments, str):
+        return None
+    try:
+        tokens = shlex.split(arguments)
+    except ValueError:
+        return None
+    values = []
+    for index, token in enumerate(tokens):
+        if token == "--parallel" and index + 1 < len(tokens):
+            values.append(tokens[index + 1])
+        elif token.startswith("--parallel="):
+            values.append(token.partition("=")[2])
+    if len(values) != 1:
+        return None
+    try:
+        parallel_requests = int(values[0])
+    except ValueError:
+        return None
+    return parallel_requests if parallel_requests > 0 else None
+
+
+def _model_satisfies_emergency_allocation(item: dict, allocation: dict) -> bool:
+    options = item.get("recipe_options")
+    if not isinstance(options, dict):
+        return False
+    backend_context_tokens = options.get("ctx_size")
+    if type(backend_context_tokens) is not int or backend_context_tokens <= 0:
+        return False
+    parallel_requests = _observed_parallel_requests(item)
+    return (parallel_requests is not None
+            and parallel_requests >= allocation["parallel_requests"]
+            and backend_context_tokens // parallel_requests
+            >= allocation["chat_context_tokens"])
+
+
 def emergency_model_live(health: dict | None = None) -> bool:
     current = health if health is not None else lemonade_health()
     models, error = _health_models(current)
     if error:
         return False
-    expected = policy()["emergency"]["chat_model"]
+    settings = policy()
+    expected = settings["emergency"]["chat_model"]
+    try:
+        allocation = emergency_model_allocation(settings)
+    except (KeyError, TypeError, ValueError):
+        return False
     return any(item.get("model_name") == expected and model_is_live(item)
+               and _model_satisfies_emergency_allocation(item, allocation)
                for item in models or [])
 
 
@@ -550,11 +618,15 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
 
 def load_emergency_model() -> dict:
     emergency = policy()["emergency"]
-    parallel_requests = emergency["parallel_requests"]
+    try:
+        allocation = emergency_model_allocation()
+    except (KeyError, TypeError, ValueError) as error:
+        return {"ok": False, "error": f"{type(error).__name__}: {error}"}
+    parallel_requests = allocation["parallel_requests"]
     payload = {
         "model_name": emergency["chat_model"],
         "pinned": True,
-        "ctx_size": emergency["chat_context_tokens"] * parallel_requests,
+        "ctx_size": allocation["backend_context_tokens"],
         "merge_args": True,
         "llamacpp_args": f"--parallel {parallel_requests} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
     }
@@ -573,7 +645,8 @@ def load_emergency_model() -> dict:
                 "health": lemonade_health()}
 
 
-def _prepare_survivor(incident_path: Path, incident_id: str) -> str:
+def _prepare_survivor(incident_path: Path, incident_id: str,
+                      replacement_for: str | None = None) -> str:
     from ecosystem.roles import render_context
 
     emergency_model = policy()["emergency"]["chat_model"]
@@ -592,15 +665,30 @@ When and only when recovery is safe, run:
 That transition validates your `AGENT_JOB_ID` and the live health gate. If it
 refuses, keep dispatch halted and report the exact blocker. Write the incident
 conclusion to `state/resource-incidents/{incident_id}-conclusion.md`."""
+    if replacement_for:
+        task = (
+            f"This is the one authorized same-model retry of failed survivor "
+            f"`{replacement_for}` after correcting its backend allocation. Preserve that "
+            f"job and transcript as incident evidence.\n\n{task}"
+        )
+    idempotency_key = (f"resource-emergency:{incident_id}:replace:{replacement_for}"
+                       if replacement_for else f"resource-emergency:{incident_id}")
     job_id = cli.enqueue_task(
         "sole_survivor", task, source=f"resource-emergency:{incident_id}",
         model=emergency_model,
         model_reason="The dedicated bounded emergency model is the only model admitted after OOM.",
         agent_name="Sole Survivor",
-        idempotency_key=f"resource-emergency:{incident_id}",
+        idempotency_key=idempotency_key,
     )
     path = cli.ROOT / "state/jobs" / f"{job_id}.json"
     job = json.loads(path.read_text(encoding="utf-8"))
+    expected_source = f"resource-emergency:{incident_id}"
+    if (job.get("id") != job_id or job.get("idempotency_key") != idempotency_key
+            or job.get("source") != expected_source):
+        raise RuntimeError("sole survivor idempotency record has inconsistent identity")
+    if (job.get("state") == "ready" and job.get("model") == emergency_model
+            and job.get("role") == "sole_survivor" and job.get("prompt")):
+        return job_id
     job.update(
         model=emergency_model,
         model_reason="Emergency policy mechanically assigns the sole bounded survivor model.",
@@ -658,13 +746,14 @@ def _same_persisted_state(state: dict) -> bool:
 
 def _record_emergency_error(state: dict, message: str,
                             escalation: dict | None = None) -> dict:
+    effective_escalation = (escalation if escalation is not None
+                            else state.get("emergency_escalation"))
     changed = (state.get("emergency_error") != message
-               or state.get("emergency_escalation") != escalation
+               or state.get("emergency_escalation") != effective_escalation
                or not state.get("emergency_error_at"))
     state["emergency_error"] = message
-    if escalation is None:
-        state.pop("emergency_escalation", None)
-    else:
+    if effective_escalation is not None:
+        escalation = effective_escalation
         state["emergency_escalation"] = escalation
     if changed:
         state["emergency_error_at"] = cli.now()
@@ -747,6 +836,37 @@ def _survivor_has_state(state: dict, allowed_states: set[str]) -> bool:
     return job is not None and job.get("state") in allowed_states
 
 
+def _survivor_retry_record(state: dict) -> dict | None:
+    record = state.get("survivor_retry")
+    if record is None:
+        return None
+    valid = (isinstance(record, dict)
+             and type(record.get("version")) is int
+             and record["version"] == 1
+             and record.get("status") in {"requested", "active"}
+             and record.get("reason") == "corrected_same_model_allocation"
+             and isinstance(record.get("replaces"), str)
+             and bool(record["replaces"])
+             and isinstance(record.get("requested_at"), str)
+             and bool(record["requested_at"])
+             and (record.get("trigger") is None
+                  or isinstance(record.get("trigger"), dict)))
+    if not isinstance(record, dict):
+        raise RuntimeError("invalid survivor retry record")
+    replacement = record.get("replacement")
+    if record.get("status") == "active":
+        valid = (valid and isinstance(replacement, str) and bool(replacement)
+                 and isinstance(record.get("activated_at"), str)
+                 and bool(record["activated_at"]))
+    elif replacement is not None:
+        valid = valid and isinstance(replacement, str) and bool(replacement)
+    if replacement is not None:
+        valid = valid and replacement != record.get("replaces")
+    if not valid:
+        raise RuntimeError("invalid survivor retry record")
+    return record
+
+
 def _transcript_tail(raw_path: object) -> str:
     if not isinstance(raw_path, str) or not raw_path:
         return ""
@@ -764,12 +884,16 @@ def _transcript_tail(raw_path: object) -> str:
         return ""
 
 
-def _survivor_terminal_escalation(job: dict) -> dict:
+def _survivor_required_escalation(job: dict) -> dict:
     failure = f"{job.get('error', '')}\n{_transcript_tail(job.get('output'))}".casefold()
-    reason = ("context_overflow" if job.get("state") == "failed" and (
-        "exceed_context_size_error" in failure
-        or "exceeds the available context size" in failure
-    ) else "survivor_terminal")
+    if job.get("state") in SURVIVOR_INCOMPLETE_STATES:
+        reason = "survivor_incomplete"
+    elif job.get("state") == "failed" and (
+            "exceed_context_size_error" in failure
+            or "exceeds the available context size" in failure):
+        reason = "context_overflow"
+    else:
+        reason = "survivor_terminal"
     return {
         "status": "required",
         "reason": reason,
@@ -848,15 +972,19 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
         phase = "model_loaded"
 
     if phase == "model_loaded":
+        retry = _survivor_retry_record(state)
         try:
             survivor = _prepare_survivor(
-                _incident_path_from_state(state), state["incident_id"]
+                _incident_path_from_state(state), state["incident_id"],
+                replacement_for=(retry["replaces"] if retry is not None else None),
             )
         except Exception as error:
             return _record_emergency_error(
                 state, f"sole survivor preparation failed: {type(error).__name__}: {error}"
             )
         state["sole_survivor_job"] = survivor
+        if retry is not None:
+            retry["replacement"] = survivor
         if not _survivor_is_ready(state):
             return _record_emergency_error(state, "sole survivor job was not durably ready")
         _persist_emergency_phase(state, "survivor_ready")
@@ -881,6 +1009,9 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
                 state, f"survivor executor start failed: {started.get('error', 'unverified start')}"
             )
         os.sync()
+        retry = _survivor_retry_record(state)
+        if retry is not None and retry["status"] == "requested":
+            retry.update(status="active", activated_at=cli.now())
         _persist_emergency_phase(state, "active")
         cli.audit("resource.emergency_entered", incident_id=state["incident_id"],
                   reason=state["emergency_reason"], survivor_job=state["sole_survivor_job"],
@@ -892,9 +1023,11 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
             return _record_emergency_error(state, "emergency model is not live")
         survivor = _survivor_job(state)
         if survivor is None or survivor.get("state") not in SURVIVOR_ACTIVE_STATES:
-            escalation = (_survivor_terminal_escalation(survivor)
+            escalation = (_survivor_required_escalation(survivor)
                           if survivor is not None
-                          and survivor.get("state") in SURVIVOR_TERMINAL_STATES
+                          and survivor.get("state") in (
+                              SURVIVOR_TERMINAL_STATES | SURVIVOR_INCOMPLETE_STATES
+                          )
                           else None)
             return _record_emergency_error(
                 state, "sole survivor job is not in a live executor state",
@@ -910,7 +1043,6 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
             )
         state.pop("emergency_error", None)
         state.pop("emergency_error_at", None)
-        state.pop("emergency_escalation", None)
         save_state(state)
     return state
 
@@ -1059,6 +1191,55 @@ def request_recovery(job_id: str) -> dict:
             "executor_start": start}
 
 
+def _survivor_retry_result(state: dict, reused: bool) -> dict:
+    retry = _survivor_retry_record(state)
+    replacement = retry.get("replacement") if retry is not None else None
+    result = {
+        "ok": bool(retry is not None and retry["status"] == "active"
+                   and state.get("emergency_phase") == "active"
+                   and state.get("sole_survivor_job") == replacement),
+        "reused": reused,
+        "replaced_survivor_job": retry.get("replaces") if retry is not None else None,
+        "sole_survivor_job": replacement,
+        "emergency_phase": state.get("emergency_phase"),
+    }
+    if not result["ok"]:
+        result["error"] = state.get("emergency_error", "survivor retry remains incomplete")
+    return result
+
+
+def request_survivor_retry() -> dict:
+    state = load_state()
+    if state.get("mode") != "emergency":
+        raise RuntimeError("resource control is not in emergency mode")
+    retry = _survivor_retry_record(state)
+    if retry is not None and retry["status"] == "active":
+        result = _survivor_retry_result(state, reused=True)
+        if not result["ok"]:
+            raise RuntimeError("active survivor retry record is inconsistent")
+        return result
+    if retry is None:
+        if state.get("emergency_phase") != "active":
+            raise RuntimeError("survivor retry requires an active emergency")
+        survivor = _survivor_job(state)
+        if survivor is None or survivor.get("state") not in SURVIVOR_RETRYABLE_STATES:
+            raise RuntimeError("survivor retry requires an exited sole survivor")
+        state["survivor_retry"] = {
+            "version": 1,
+            "status": "requested",
+            "reason": "corrected_same_model_allocation",
+            "replaces": survivor["id"],
+            "requested_at": cli.now(),
+            "trigger": state.get("emergency_escalation"),
+        }
+        _persist_emergency_phase(state, "recorded")
+    snapshot = resource_snapshot()
+    advanced = advance_emergency(
+        state, snapshot, "operator requested corrected same-model survivor retry"
+    )
+    return _survivor_retry_result(advanced, reused=False)
+
+
 def run_guard() -> None:
     cli.initialize()
     interval = time_policy.seconds(time_policy.load(), "resource", "poll_seconds")
@@ -1072,7 +1253,9 @@ def run_guard() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="resource-control")
-    parser.add_argument("command", choices=("run", "tick", "status", "recover"))
+    parser.add_argument(
+        "command", choices=("run", "tick", "status", "recover", "retry-survivor")
+    )
     args = parser.parse_args()
     if args.command == "run":
         run_guard()
@@ -1083,6 +1266,8 @@ def main() -> None:
     elif args.command == "recover":
         print(json.dumps(request_recovery(os.environ.get("AGENT_JOB_ID", "")),
                          indent=2, sort_keys=True))
+    elif args.command == "retry-survivor":
+        print(json.dumps(request_survivor_retry(), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

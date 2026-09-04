@@ -89,13 +89,17 @@ def initialize_survivor_context(root):
     (root / "config/workspaces.json").write_text("{}\n", encoding="utf-8")
 
 
-def emergency_health(status="ready"):
+def emergency_health(status="ready", ctx_size=65536, parallel_requests=2):
     return {
         "all_models_loaded": [{
             "model_name": "Qwen3.5-4B-GGUF",
             "loaded": True,
             "backend_alive": True,
             "status": status,
+            "recipe_options": {
+                "ctx_size": ctx_size,
+                "llamacpp_args": f"--parallel {parallel_requests} --batch-size 512",
+            },
         }],
     }
 
@@ -186,9 +190,14 @@ def in_memory_systemctl(calls=None, failed_action=None, ambiguous_unit=None,
     return invoke
 
 
-def in_memory_lemonade(calls=None, initially_loaded=True):
+def in_memory_lemonade(calls=None, initially_loaded=True, initial_health=None,
+                       load_health=None):
     recorded = calls if calls is not None else []
-    runtime = {"loaded": initially_loaded, "health_reads": 0}
+    runtime = {
+        "loaded": initially_loaded,
+        "health": initial_health or emergency_health(),
+        "health_reads": 0,
+    }
 
     def request(path, payload=None, method=None, timeout=None):
         recorded.append({
@@ -199,12 +208,13 @@ def in_memory_lemonade(calls=None, initially_loaded=True):
         })
         if path == "/v1/health":
             runtime["health_reads"] += 1
-            return emergency_health() if runtime["loaded"] else {"all_models_loaded": []}
+            return runtime["health"] if runtime["loaded"] else {"all_models_loaded": []}
         if path == "/v1/unload":
             runtime["loaded"] = False
             return {"unloaded": True}
         if path == "/v1/load":
             runtime["loaded"] = True
+            runtime["health"] = load_health or emergency_health()
             return {"loaded": True}
         raise AssertionError(f"unexpected Lemonade path: {path}")
 
@@ -364,6 +374,86 @@ def test_emergency_model_context_is_usable_per_parallel_request(_root):
     assert total_context == emergency["chat_context_tokens"] * parallel_requests
     assert total_context // parallel_requests == emergency["chat_context_tokens"]
     assert 25523 < total_context // parallel_requests
+
+
+def test_emergency_model_readiness_requires_observed_per_request_capacity():
+    valid = emergency_health()["all_models_loaded"][0]
+    missing_options = dict(valid)
+    missing_options.pop("recipe_options")
+    cases = (
+        emergency_health(ctx_size=32768, parallel_requests=2),
+        emergency_health(ctx_size=65536, parallel_requests=1),
+        emergency_health(ctx_size=65536, parallel_requests=4),
+        {"all_models_loaded": [{
+            **valid,
+            "recipe_options": {
+                "ctx_size": "65536",
+                "llamacpp_args": "--parallel 2",
+            },
+        }]},
+        {"all_models_loaded": [missing_options]},
+        {"all_models_loaded": [{
+            **valid,
+            "recipe_options": {
+                "ctx_size": 65536,
+                "llamacpp_args": "--parallel two",
+            },
+        }]},
+    )
+    for health in cases:
+        assert not resource_control.emergency_model_live(health)
+    assert resource_control.emergency_model_live(
+        emergency_health(ctx_size=131072, parallel_requests=4)
+    )
+
+
+@with_root
+def test_emergency_context_policy_is_validated_before_load(_root):
+    base = resource_control.policy()
+    cases = (
+        ("chat_context_tokens", True, "chat_context_tokens must be a positive integer"),
+        ("chat_context_tokens", 0, "chat_context_tokens must be a positive integer"),
+        ("chat_context_tokens", 32768.0,
+         "chat_context_tokens must be a positive integer"),
+        ("parallel_requests", "2", "parallel_requests must be a positive integer"),
+        ("parallel_requests", -1, "parallel_requests must be a positive integer"),
+        ("chat_context_tokens", 9223372036854775807,
+         "derived emergency backend context is too large"),
+    )
+    for key, value, expected_error in cases:
+        settings = json.loads(json.dumps(base))
+        settings["emergency"][key] = value
+        with patch("ecosystem.resource_control.policy", return_value=settings), \
+                patch("ecosystem.resource_control._lemonade_request",
+                      side_effect=unexpected_external_call):
+            result = resource_control.load_emergency_model()
+        assert result["ok"] is False
+        assert expected_error in result["error"]
+
+
+@with_root
+def test_models_unloaded_does_not_reuse_underallocated_live_model(root):
+    state = transition_state(phase="models_unloaded")
+    cli.atomic_json(root / state["incident_path"], {
+        "version": 1,
+        "id": state["incident_id"],
+    })
+    underallocated = emergency_health(ctx_size=32768, parallel_requests=2)
+    corrected = emergency_health(ctx_size=65536, parallel_requests=2)
+    loaded = {"ok": True, "health": corrected, "corrected_allocation": True}
+    with patch("ecosystem.resource_control.lemonade_health",
+               return_value=underallocated), \
+            patch("ecosystem.resource_control.load_emergency_model",
+                  return_value=loaded), \
+            patch("ecosystem.resource_control._prepare_survivor",
+                  side_effect=RuntimeError("stop after model boundary")):
+        result = resource_control.advance_emergency(
+            state, healthy_snapshot(), "repair allocation"
+        )
+
+    assert result["emergency_phase"] == "model_loaded"
+    assert result["emergency_model_last_result"] == loaded
+    assert result["emergency_model_ready"] is True
 
 
 @with_root
@@ -883,11 +973,13 @@ def test_ready_survivor_can_start_run_and_remain_active(root):
 
 
 @with_root
-def test_active_survivor_accepts_verification_and_rejects_terminal_owner(root):
+def test_active_survivor_marks_exited_owner_states_for_escalation(root):
     identifier = "task-survivor"
     state = transition_state(phase="active", sole_survivor_job=identifier)
     path = root / "state/jobs" / f"{identifier}.json"
-    for job_state in ("awaiting_verification", "failed"):
+    for job_state, reason in (
+            ("awaiting_verification", "survivor_incomplete"),
+            ("failed", "survivor_terminal")):
         cli.atomic_json(path, {
             "id": identifier,
             "state": job_state,
@@ -898,14 +990,44 @@ def test_active_survivor_accepts_verification_and_rejects_terminal_owner(root):
         with patch("ecosystem.resource_control.lemonade_health",
                    return_value=emergency_health()), \
                 patch("ecosystem.resource_control._user_systemctl",
-                      side_effect=in_memory_systemctl()):
+                      side_effect=unexpected_external_call):
             result = resource_control.advance_emergency(
                 state, healthy_snapshot(), f"owner state {job_state}"
             )
-        if job_state == "awaiting_verification":
-            assert "emergency_error" not in result
-        else:
-            assert "survivor" in result["emergency_error"]
+        assert "survivor" in result["emergency_error"]
+        assert result["emergency_escalation"]["status"] == "required"
+        assert result["emergency_escalation"]["reason"] == reason
+
+
+@with_root
+def test_unrelated_active_error_preserves_pending_survivor_escalation(_root):
+    escalation = {
+        "status": "required",
+        "reason": "context_overflow",
+        "survivor_job": "task-survivor",
+        "survivor_state": "failed",
+        "exit_code": 1,
+        "requested_context_tokens": 32768,
+        "transcript": "logs/runs/task-survivor.opencode.log",
+        "error": None,
+    }
+    state = transition_state(phase="active", sole_survivor_job="task-survivor")
+    state.update(
+        emergency_error="sole survivor job is not in a live executor state",
+        emergency_error_at="original-error-time",
+        emergency_escalation=escalation,
+    )
+    resource_control.save_state(state)
+    with patch("ecosystem.resource_control.lemonade_health",
+               return_value={"all_models_loaded": []}), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=unexpected_external_call):
+        result = resource_control.advance_emergency(
+            state, healthy_snapshot(), "unrelated model failure"
+        )
+
+    assert result["emergency_error"] == "emergency model is not live"
+    assert result["emergency_escalation"] == escalation
 
 
 @with_root
@@ -964,7 +1086,7 @@ def test_repeated_context_overflow_survivor_ticks_record_one_pending_escalation(
 
 
 @with_root
-def test_deduplicated_survivor_error_preserves_changes_and_recovery(root):
+def test_deduplicated_survivor_error_preserves_changes_and_escalation(root):
     identifier = "task-survivor"
     state = transition_state(phase="active", sole_survivor_job=identifier)
     job_path = root / "state/jobs" / f"{identifier}.json"
@@ -997,9 +1119,156 @@ def test_deduplicated_survivor_error_preserves_changes_and_recovery(root):
     assert changed["last_resources"] == changed_snapshot
     assert changed["emergency_escalation"]["reason"] == "survivor_terminal"
     assert "emergency_error" not in recovered
-    assert "emergency_escalation" not in recovered
+    assert recovered["emergency_escalation"]["reason"] == "survivor_terminal"
     assert save.call_count == 3
     assert audit.call_count == 1
+
+
+@with_root
+def test_operator_survivor_retry_is_durable_idempotent_and_single_owner(root):
+    initialize_survivor_context(root)
+    old_identifier = "task-failed-survivor"
+    state = transition_state(phase="active", sole_survivor_job=old_identifier)
+    state["emergency_escalation"] = {
+        "status": "required",
+        "reason": "context_overflow",
+        "survivor_job": old_identifier,
+    }
+    cli.atomic_json(root / state["incident_path"], {
+        "version": 1,
+        "id": state["incident_id"],
+    })
+    old_job = {
+        "id": old_identifier,
+        "kind": "agent-task",
+        "state": "failed",
+        "source": f"resource-emergency:{state['incident_id']}",
+        "exit_code": 1,
+        "context_tokens": 32768,
+        "output": "logs/runs/task-failed-survivor.opencode.log",
+    }
+    cli.atomic_json(root / "state/jobs" / f"{old_identifier}.json", old_job)
+    resource_control.save_state(state)
+    calls = []
+    systemctl_calls = []
+    lemonade = in_memory_lemonade(
+        calls,
+        initial_health=emergency_health(ctx_size=32768, parallel_requests=2),
+        load_health=emergency_health(ctx_size=65536, parallel_requests=2),
+    )
+    systemctl = in_memory_systemctl(systemctl_calls)
+    real_save_state = resource_control.save_state
+    injected = {"raised": False}
+
+    def fail_before_survivor_phase(current):
+        if current.get("emergency_phase") == "survivor_ready" and not injected["raised"]:
+            injected["raised"] = True
+            raise RuntimeError("injected survivor phase persistence failure")
+        real_save_state(current)
+
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=healthy_snapshot()), \
+            patch("ecosystem.resource_control._lemonade_request",
+                  side_effect=lemonade), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=systemctl), \
+            patch("ecosystem.resource_control.save_state",
+                  side_effect=fail_before_survivor_phase), \
+            patch("ecosystem.resource_control.os.sync"):
+        with unittest.TestCase().assertRaisesRegex(
+                RuntimeError, "injected survivor phase persistence failure"):
+            resource_control.request_survivor_retry()
+
+    persisted_after_failure = resource_control.load_state()
+    replacement_jobs = [
+        path for path in (root / "state/jobs").glob("*.json")
+        if path.stem != old_identifier
+    ]
+    assert persisted_after_failure["emergency_phase"] == "model_loaded"
+    assert persisted_after_failure["sole_survivor_job"] == old_identifier
+    assert persisted_after_failure["survivor_retry"]["status"] == "requested"
+    assert "emergency_escalation" not in persisted_after_failure
+    assert len(replacement_jobs) == 1
+
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=healthy_snapshot()), \
+            patch("ecosystem.resource_control._lemonade_request",
+                  side_effect=lemonade), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=systemctl), \
+            patch("ecosystem.resource_control.os.sync"):
+        resumed = resource_control.request_survivor_retry()
+        repeated = resource_control.request_survivor_retry()
+
+    final_state = resource_control.load_state()
+    replacement = resumed["sole_survivor_job"]
+    assert resumed["ok"] is True
+    assert resumed["reused"] is False
+    assert repeated == {**resumed, "reused": True}
+    assert final_state["emergency_phase"] == "active"
+    assert final_state["sole_survivor_job"] == replacement
+    assert final_state["survivor_retry"]["status"] == "active"
+    assert final_state["survivor_retry"]["replaces"] == old_identifier
+    assert final_state["survivor_retry"]["replacement"] == replacement
+    assert read_job(root, old_identifier) == old_job
+    assert read_job(root, replacement)["state"] == "ready"
+    assert sum(resource_control.job_admitted_in_current_mode(job) for job in (
+        read_job(root, old_identifier), read_job(root, replacement)
+    )) == 1
+    assert [call["path"] for call in calls].count("/v1/unload") == 1
+    assert [call["path"] for call in calls].count("/v1/load") == 1
+    assert len(list((root / "state/jobs").glob("*.json"))) == 2
+    assert "agent-telegram.service" not in systemctl_units(systemctl_calls)
+    assert "agent-notifier.service" not in systemctl_units(systemctl_calls)
+    events = [
+        json.loads(line)
+        for path in (root / "logs/runs").glob("*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len([event for event in events
+                if event.get("event") == "resource.sole_survivor_ready"
+                and event.get("job_id") == replacement]) == 1
+
+
+@with_root
+def test_survivor_retry_rejects_malformed_durable_record(_root):
+    state = transition_state(phase="model_loaded", sole_survivor_job="task-old")
+    valid = {
+        "version": 1,
+        "status": "requested",
+        "reason": "corrected_same_model_allocation",
+        "replaces": "task-old",
+        "requested_at": "now",
+        "trigger": None,
+    }
+    cases = (
+        "not-a-record",
+        {**valid, "version": "1"},
+        {**valid, "status": "pending"},
+        {**valid, "reason": "arbitrary"},
+        {**valid, "replaces": 7},
+        {**valid, "requested_at": 7},
+        {**valid, "trigger": "context_overflow"},
+        {**valid, "status": "active"},
+        {
+            **valid,
+            "status": "active",
+            "replacement": "task-old",
+            "activated_at": "now",
+        },
+    )
+    for record in cases:
+        state["survivor_retry"] = record
+        resource_control.save_state(state)
+        with patch("ecosystem.resource_control.resource_snapshot",
+                   side_effect=unexpected_external_call), \
+                patch("ecosystem.resource_control._user_systemctl",
+                      side_effect=unexpected_external_call), \
+                patch("ecosystem.resource_control._lemonade_request",
+                      side_effect=unexpected_external_call):
+            with unittest.TestCase().assertRaisesRegex(
+                    RuntimeError, "invalid survivor retry record"):
+                resource_control.request_survivor_retry()
 
 
 @with_root
