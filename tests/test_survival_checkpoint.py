@@ -6,19 +6,24 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from survival import checkpoint
+from survival import checkpoint, telegram_api
 
 
 REQUEST_FIELDS = {
     "schema_version", "request_id", "job_ids", "requested_at",
-    "deadline_monotonic",
+    "boot_id", "deadline_monotonic",
 }
 RESULT_FIELDS = {
     "schema_version", "request_id", "job_id", "state", "opencode_session",
 }
 
 
-def checkpoint_request(request_id="telegram-1", job_ids=None, deadline=10.0):
+def checkpoint_request(
+    request_id="telegram-1",
+    job_ids=None,
+    deadline=10.0,
+    boot_id=telegram_api.current_boot_id(),
+):
     if job_ids is None:
         job_ids = ["task-active"]
     return {
@@ -26,6 +31,7 @@ def checkpoint_request(request_id="telegram-1", job_ids=None, deadline=10.0):
         "request_id": request_id,
         "job_ids": job_ids,
         "requested_at": "2026-09-05T00:00:00+00:00",
+        "boot_id": boot_id,
         "deadline_monotonic": deadline,
     }
 
@@ -68,6 +74,7 @@ def test_checkpoint_request_schema_is_exact_and_canonical():
     malformed = []
     malformed.append({**request, "unexpected": True})
     malformed.append({key: value for key, value in request.items() if key != "requested_at"})
+    malformed.append({key: value for key, value in request.items() if key != "boot_id"})
     malformed.append({**request, "schema_version": True})
     malformed.append({**request, "request_id": "telegram-01"})
     malformed.append({**request, "job_ids": ["task-beta", "task-alpha"]})
@@ -75,6 +82,8 @@ def test_checkpoint_request_schema_is_exact_and_canonical():
     for job_id in ("", ".", "..", "../task-alpha", "/tmp/task-alpha", "a/b", "a\\b"):
         malformed.append({**request, "job_ids": [job_id]})
     malformed.append({**request, "requested_at": "not-a-time"})
+    for boot_id in (True, "", 1, []):
+        malformed.append({**request, "boot_id": boot_id})
     for deadline in (True, -1, math.nan, math.inf, -math.inf):
         malformed.append({**request, "deadline_monotonic": deadline})
 
@@ -412,6 +421,44 @@ def test_request_path_identity_and_existing_result_schema_fail_closed():
             checkpoint.process_checkpoint_request(
                 request_path, agent_state, result_root, now=lambda: 1.0,
             )
+
+
+def test_rebooted_or_unavailable_checkpoint_deadline_is_immediately_expired():
+    for request_boot_id, current_boot_id in (
+        ("boot-old", "boot-new"),
+        (None, "boot-new"),
+        ("boot-old", None),
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent_state = root / "agent-state"
+            result_root = root / "results"
+            request_path = root / "requests/telegram-1.json"
+            write_json(
+                request_path,
+                checkpoint_request(deadline=900000.0, boot_id=request_boot_id),
+            )
+            write_job(
+                agent_state,
+                "task-active",
+                session="ses_active",
+                output="logs/runs/task-active.opencode.log",
+            )
+            write_session(agent_state, "task-active", "ses_active")
+
+            checkpoint.process_checkpoint_request(
+                request_path,
+                agent_state,
+                result_root,
+                now=lambda: (_ for _ in ()).throw(
+                    AssertionError("unrelated monotonic clock must not be read")
+                ),
+                boot_id=lambda: current_boot_id,
+            )
+
+            assert read_result(
+                result_root, "telegram-1", "task-active",
+            )["state"] == "deadline_expired"
 
 
 def load_tests(_loader, _tests, _pattern):

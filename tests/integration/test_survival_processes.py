@@ -14,7 +14,7 @@ import time
 import unittest
 from pathlib import Path
 
-from survival import guardian, system_control, systemd_notify
+from survival import guardian, system_control, systemd_notify, telegram_api
 
 
 base = Path(__file__).resolve().parent.parent.parent
@@ -287,6 +287,7 @@ def test_checkpoint_process_consumes_a_real_mixed_request_without_privileged_sta
             "request_id": "telegram-1",
             "job_ids": ["task-active", "task-finished", "task-unsupported"],
             "requested_at": "2026-09-05T00:00:00+00:00",
+            "boot_id": telegram_api.current_boot_id(),
             "deadline_monotonic": deadline,
         }), encoding="utf-8")
         (jobs / "task-active.json").write_text(json.dumps({
@@ -1004,6 +1005,31 @@ def test_installer_verification_failure_preserves_the_authoritative_release():
         assert_failed_update_is_invisible(image, prior_digest)
 
 
+def test_installer_precommit_failures_do_not_repair_authoritative_timing_policy():
+    for failure, returncode in (
+        ({"FAKE_VERIFY_FAILURE": "1"}, 74),
+        ({"FAKE_COMMIT_FAILURE": "1"}, 75),
+    ):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installer, image, state, _prior_digest = prepare_release_update(root)
+            time_config = image / "etc/cointelprofessional/time.cfg"
+            time_config.chmod(0o640)
+            prior_digest = installed_tree_digest(image)
+
+            result = invoke_fake_installer(
+                installer,
+                root / "fake-bin",
+                state,
+                image,
+                extra_environment=failure,
+            )
+
+            assert result.returncode == returncode
+            assert time_config.stat().st_mode & 0o777 == 0o640
+            assert_failed_update_is_invisible(image, prior_digest)
+
+
 def test_installer_commit_failure_preserves_the_authoritative_release():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -1014,6 +1040,38 @@ def test_installer_commit_failure_preserves_the_authoritative_release():
         )
         assert result.returncode == 75
         assert_failed_update_is_invisible(image, prior_digest)
+
+
+def test_installer_rejects_symlinked_or_nonregular_timing_policy_without_mutation():
+    for kind in ("symlink", "directory"):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_directory, state = write_fake_command_backend(root)
+            image = root / "image"
+            configuration = image / "etc/cointelprofessional"
+            configuration.mkdir(parents=True)
+            timing_path = configuration / "time.cfg"
+            if kind == "symlink":
+                sentinel = root / "outside-time.cfg"
+                sentinel.write_text("outside\n", encoding="utf-8")
+                sentinel.chmod(0o600)
+                timing_path.symlink_to(sentinel)
+            else:
+                timing_path.mkdir()
+                timing_path.chmod(0o700)
+
+            result = invoke_fake_installer(
+                installer_path, fake_directory, state, image,
+            )
+
+            assert result.returncode == 1
+            assert "timing policy path" in result.stderr
+            if kind == "symlink":
+                assert sentinel.read_text(encoding="utf-8") == "outside\n"
+                assert sentinel.stat().st_mode & 0o777 == 0o600
+            else:
+                assert timing_path.is_dir()
+                assert timing_path.stat().st_mode & 0o777 == 0o700
 
 
 def test_installer_initial_commit_failure_leaves_no_published_wrappers():

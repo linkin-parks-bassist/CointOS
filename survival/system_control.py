@@ -11,7 +11,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from survival import checkpoint, lifecycle, protocol, records, systemd_notify, time_policy
+from survival import (
+    checkpoint,
+    lifecycle,
+    protocol,
+    records,
+    systemd_notify,
+    telegram_api,
+    time_policy,
+)
 from survival.json_codec import decode_json_object
 
 
@@ -1056,19 +1064,10 @@ def _interrupt_one_job(config, request_id, path, checkpoint_session=None):
     transition_path = _job_transition_path(config, request_id, job_id)
     if transition_path.exists():
         transition = _read_job_transition(transition_path, request_id, job_id)
-        if (
-            checkpoint_session is not None
-            and transition["opencode_session"] != checkpoint_session
-        ):
-            raise ValueError("checkpoint handoff conflicts with interruption intent")
     else:
         if job.get("state") not in ACTIVE_JOB_STATES:
             return
         session = checkpoint_session
-        if session is None:
-            session = job.get("opencode_session")
-            if type(session) is not str or not session.startswith("ses_"):
-                session = _opencode_session_id(config, job)
         transition = {
             "schema_version": 1,
             "request_id": request_id,
@@ -1160,33 +1159,6 @@ def _interrupt_job_records(
             checkpoint_session=checkpoint_sessions.get(job_id),
         )
     return _derived_interrupted_jobs(config, request_id)
-
-
-def _opencode_session_id(config, job):
-    output = job.get("output")
-    if type(output) is not str or not output:
-        return None
-    relative = Path(output)
-    if relative.is_absolute() or ".." in relative.parts:
-        return None
-    path = Path(config["agent_state_path"]).parent / relative
-    try:
-        with path.open(encoding="utf-8", errors="replace") as source:
-            consumed = 0
-            for line in source:
-                consumed += len(line.encode("utf-8", errors="replace"))
-                if consumed > 1024 * 1024:
-                    break
-                try:
-                    value = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                session = value.get("sessionID") if type(value) is dict else None
-                if type(session) is str and session.startswith("ses_"):
-                    return session
-    except OSError:
-        return None
-    return None
 
 
 def _critical_message(policy, effect, text, suffix):
@@ -1287,7 +1259,14 @@ def _ensure_admission_closed(config, effect, observe_user, sync):
     return {"ok": True, "previous_pause": runtime["previous_pause"]}
 
 
-def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
+def _checkpoint_runtime(
+    config,
+    effect,
+    sleep,
+    sync,
+    monotonic=time.monotonic,
+    boot_id=telegram_api.current_boot_id,
+):
     runtime = _read_runtime(config, effect["request_id"])
     agent_state_path = Path(config["agent_state_path"])
     request_root, result_root = checkpoint.checkpoint_paths(
@@ -1295,6 +1274,7 @@ def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
     )
     request_root.mkdir(parents=True, exist_ok=True)
     request_path = request_root / f"{effect['request_id']}.json"
+    current_boot_id = checkpoint.observe_boot_id(boot_id)
     if request_path.exists() or request_path.is_symlink():
         request = checkpoint.validate_checkpoint_request(
             decode_json_object(request_path.read_bytes(), "checkpoint request"),
@@ -1316,6 +1296,7 @@ def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
             "request_id": effect["request_id"],
             "job_ids": [path.stem for path in active_paths],
             "requested_at": datetime.now(timezone.utc).isoformat(),
+            "boot_id": current_boot_id,
             "deadline_monotonic": monotonic() + grace,
         }
         checkpoint.validate_checkpoint_request(request)
@@ -1328,18 +1309,37 @@ def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
         )
 
     accepted_results = {}
-    while len(accepted_results) < len(request["job_ids"]):
+    intent_owned_jobs = set()
+    deadline_is_comparable = checkpoint.deadline_boot_matches(
+        request, current_boot_id,
+    )
+    while (
+        deadline_is_comparable
+        and len(accepted_results) + len(intent_owned_jobs) < len(request["job_ids"])
+    ):
         result_directory = result_root / request["request_id"]
         result_directory_is_safe = not (
             result_root.is_symlink() or result_directory.is_symlink()
         )
         for job_id in request["job_ids"]:
-            if job_id in accepted_results:
+            if job_id in accepted_results or job_id in intent_owned_jobs:
                 continue
+            transition_path = _job_transition_path(
+                config, request["request_id"], job_id,
+            )
+            transition = None
+            if transition_path.exists():
+                transition = _read_job_transition(
+                    transition_path, request["request_id"], job_id,
+                )
             if not result_directory_is_safe:
+                if transition is not None:
+                    intent_owned_jobs.add(job_id)
                 continue
             result_path = result_directory / f"{job_id}.json"
             if not result_path.exists() or result_path.is_symlink():
+                if transition is not None:
+                    intent_owned_jobs.add(job_id)
                 continue
             try:
                 result = checkpoint.validate_checkpoint_result(
@@ -1348,15 +1348,30 @@ def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
                     job_id,
                 )
             except (OSError, ValueError):
+                if transition is not None:
+                    intent_owned_jobs.add(job_id)
                 continue
             if result["state"] == "checkpointed" and checkpoint.verified_handoff_session(
                 agent_state_path, job_id, result["opencode_session"],
             ) != result["opencode_session"]:
+                if transition is not None:
+                    intent_owned_jobs.add(job_id)
+                continue
+            if transition is not None:
+                if (
+                    result["state"] == "checkpointed"
+                    and transition["opencode_session"] == result["opencode_session"]
+                ):
+                    accepted_results[job_id] = result
+                else:
+                    intent_owned_jobs.add(job_id)
                 continue
             accepted_results[job_id] = result
-        if len(accepted_results) == len(request["job_ids"]):
+        if len(accepted_results) + len(intent_owned_jobs) == len(request["job_ids"]):
             break
-        remaining = request["deadline_monotonic"] - monotonic()
+        remaining = checkpoint.checkpoint_deadline_remaining(
+            request, current_boot_id, monotonic,
+        )
         if remaining <= 0:
             break
         sleep(min(
@@ -1366,7 +1381,7 @@ def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
             ),
         ))
 
-    checkpoint_sessions = {
+    verified_checkpoint_sessions = {
         job_id: result["opencode_session"]
         for job_id, result in accepted_results.items()
         if result["state"] == "checkpointed"
@@ -1375,13 +1390,23 @@ def _checkpoint_runtime(config, effect, sleep, sync, monotonic=time.monotonic):
         config,
         effect,
         active_paths,
-        checkpoint_sessions=checkpoint_sessions,
+        checkpoint_sessions=verified_checkpoint_sessions,
     )
+    committed_checkpoint_sessions = {}
+    for job_id, session in verified_checkpoint_sessions.items():
+        transition_path = _job_transition_path(config, request["request_id"], job_id)
+        if not transition_path.exists():
+            continue
+        transition = _read_job_transition(
+            transition_path, request["request_id"], job_id,
+        )
+        if transition["opencode_session"] == session:
+            committed_checkpoint_sessions[job_id] = session
     _write_runtime(config, runtime)
     sync()
     return {
         "ok": True,
-        "checkpointed_jobs": sorted(checkpoint_sessions),
+        "checkpointed_jobs": sorted(committed_checkpoint_sessions),
         "interrupted_jobs": runtime["interrupted_jobs"],
     }
 

@@ -904,7 +904,10 @@ def test_elapsed_checkpoint_wait_without_results_interrupts_instead_of_succeedin
             "checkpointed_jobs": [],
             "interrupted_jobs": ["task-active"],
         }
-        assert json.loads(job_path.read_text())["state"] == "interrupted"
+        job = json.loads(job_path.read_text())
+        assert job["state"] == "interrupted"
+        assert job["resume_available"] is False
+        assert "opencode_session" not in job
         request_root, result_root = checkpoint.checkpoint_paths(
             policy["store_path"], policy["lifecycle_catalog"],
         )
@@ -955,7 +958,8 @@ def test_guardian_rejects_a_checkpoint_result_without_its_claimed_handoff():
         assert result["checkpointed_jobs"] == []
         job = json.loads(job_path.read_text())
         assert job["state"] == "interrupted"
-        assert job["opencode_session"] == "ses_real"
+        assert job["resume_available"] is False
+        assert "opencode_session" not in job
 
 
 def test_guardian_rejects_checkpoint_results_through_a_symlinked_request_directory():
@@ -1004,6 +1008,137 @@ def test_guardian_rejects_checkpoint_results_through_a_symlinked_request_directo
 
         assert result["checkpointed_jobs"] == []
         assert json.loads(job_path.read_text())["state"] == "interrupted"
+
+
+def test_rebooted_checkpoint_request_expires_without_comparing_monotonic_clocks():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        job_path = _write_checkpoint_job(
+            agent_state, "task-active", "ses_active",
+        )
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
+        }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+        request_root, _result_root = checkpoint.checkpoint_paths(
+            policy["store_path"], policy["lifecycle_catalog"],
+        )
+        request_root.mkdir(parents=True, exist_ok=True)
+        (request_root / "telegram-1.json").write_text(json.dumps({
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "job_ids": ["task-active"],
+            "requested_at": "2026-09-05T00:00:00+00:00",
+            "boot_id": "boot-old",
+            "deadline_monotonic": 900000.0,
+        }), encoding="utf-8")
+
+        result = system_control._checkpoint_runtime(
+            policy,
+            effect,
+            sleep=lambda _seconds: (_ for _ in ()).throw(
+                AssertionError("rebooted deadline must not sleep")
+            ),
+            sync=lambda: None,
+            monotonic=lambda: (_ for _ in ()).throw(
+                AssertionError("unrelated monotonic clock must not be read")
+            ),
+            boot_id=lambda: "boot-new",
+        )
+
+        assert result["checkpointed_jobs"] == []
+        job = json.loads(job_path.read_text())
+        assert job["state"] == "interrupted"
+        assert job["resume_available"] is False
+
+
+def test_late_checkpoint_result_cannot_override_an_existing_interruption_intent():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        job_path = _write_checkpoint_job(
+            agent_state, "task-active", "ses_late",
+        )
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
+        }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+        request_root, result_root = checkpoint.checkpoint_paths(
+            policy["store_path"], policy["lifecycle_catalog"],
+        )
+        request_root.mkdir(parents=True, exist_ok=True)
+        (request_root / "telegram-1.json").write_text(json.dumps({
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "job_ids": ["task-active"],
+            "requested_at": "2026-09-05T00:00:00+00:00",
+            "boot_id": "boot-a",
+            "deadline_monotonic": 30.0,
+        }), encoding="utf-8")
+        transition_path = (
+            policy["store_path"]
+            / "lifecycle-transitions/telegram-1/task-active.json"
+        )
+        real_atomic_json = system_control.records.atomic_json
+
+        def crash_after_intent(path, value, *arguments, **keywords):
+            real_atomic_json(path, value, *arguments, **keywords)
+            if (
+                Path(path) == transition_path
+                and value.get("transition_state") == "intended"
+            ):
+                raise RuntimeError("simulated death after interruption intent")
+
+        with patch.object(
+            system_control.records, "atomic_json", crash_after_intent,
+        ):
+            with unittest.TestCase().assertRaisesRegex(
+                RuntimeError, "death after interruption intent",
+            ):
+                system_control._interrupt_one_job(
+                    policy, "telegram-1", job_path, checkpoint_session=None,
+                )
+        assert json.loads(job_path.read_text())["state"] == "running"
+        assert json.loads(transition_path.read_text())["transition_state"] == "intended"
+        result_path = result_root / "telegram-1/task-active.json"
+        result_path.parent.mkdir(parents=True)
+        result_path.write_text(json.dumps({
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "job_id": "task-active",
+            "state": "checkpointed",
+            "opencode_session": "ses_late",
+        }), encoding="utf-8")
+
+        result = system_control._checkpoint_runtime(
+            policy,
+            effect,
+            sleep=lambda _seconds: None,
+            sync=lambda: None,
+            monotonic=lambda: 1.0,
+            boot_id=lambda: "boot-a",
+        )
+
+        assert result == {
+            "ok": True,
+            "checkpointed_jobs": [],
+            "interrupted_jobs": ["task-active"],
+        }
+        job = json.loads(job_path.read_text())
+        assert job["state"] == "interrupted"
+        assert job["resume_available"] is False
+        assert "opencode_session" not in job
+        assert json.loads(transition_path.read_text())["transition_state"] == "completed"
+        assert json.loads(transition_path.read_text())["opencode_session"] is None
 
 
 def test_load_config_rejects_missing_or_noncanonical_uid():
@@ -1131,8 +1266,9 @@ def test_production_constructor_is_complete_and_drives_both_commands():
             job = json.loads(
                 (agent_state / "jobs" / "task-live.json").read_text(encoding="utf-8")
             )
-            assert job["state"] == "ready"
-            assert job["resume_available"] is True
+            assert job["state"] == "queued"
+            assert job["resume_available"] is False
+            assert "opencode_session" not in job
             assert not (agent_state / "PAUSED").exists()
 
 
@@ -1348,7 +1484,7 @@ def test_reconciliation_repairs_jobs_control_turns_outbox_and_verification_owner
         assert result["awaiting_verifications"] == ["task-awaiting"]
 
 
-def test_interruption_recovers_opencode_session_from_durable_output():
+def test_interruption_without_a_verified_checkpoint_discards_raw_handoff_fields():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         state = root / "state"
@@ -1372,8 +1508,8 @@ def test_interruption_recovers_opencode_session_from_durable_output():
         )
         job = json.loads(job_path.read_text(encoding="utf-8"))
         assert interrupted == ["task-live"]
-        assert job["opencode_session"] == "ses_durable"
-        assert job["resume_available"] is True
+        assert "opencode_session" not in job
+        assert job["resume_available"] is False
 
 
 def _assert_job_interruption_recovers_across_crash(crash_cut):
@@ -1460,14 +1596,14 @@ def _assert_job_interruption_recovers_across_crash(crash_cut):
             ).read_text(encoding="utf-8"))
             assert job["state"] == "interrupted"
             assert job["interrupted_by"] == "telegram-1"
-            assert job["opencode_session"] == session
-            assert job["resume_available"] is True
+            assert "opencode_session" not in job
+            assert job["resume_available"] is False
             assert transition == {
                 "schema_version": 1,
                 "request_id": "telegram-1",
                 "job_id": job_id,
                 "transition_state": "completed",
-                "opencode_session": session,
+                "opencode_session": None,
             }
 
 

@@ -8,13 +8,13 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from survival import records, time_policy
+from survival import records, telegram_api, time_policy
 from survival.json_codec import decode_json_object
 
 
 CHECKPOINT_REQUEST_FIELDS = frozenset((
     "schema_version", "request_id", "job_ids", "requested_at",
-    "deadline_monotonic",
+    "boot_id", "deadline_monotonic",
 ))
 CHECKPOINT_RESULT_FIELDS = frozenset((
     "schema_version", "request_id", "job_id", "state", "opencode_session",
@@ -78,6 +78,9 @@ def validate_checkpoint_request(value: dict) -> dict:
         raise ValueError("invalid checkpoint request jobs")
     if not _aware_timestamp(value["requested_at"]):
         raise ValueError("invalid checkpoint request timestamp")
+    boot_id = value["boot_id"]
+    if boot_id is not None and (type(boot_id) is not str or not boot_id):
+        raise ValueError("invalid checkpoint request boot identity")
     deadline = value["deadline_monotonic"]
     if (
         type(deadline) not in (int, float)
@@ -86,6 +89,36 @@ def validate_checkpoint_request(value: dict) -> dict:
     ):
         raise ValueError("invalid checkpoint request deadline")
     return value
+
+
+def observe_boot_id(reader=telegram_api.current_boot_id):
+    """Observe the kernel identity that owns a monotonic clock domain."""
+    try:
+        boot_id = reader()
+    except RuntimeError:
+        return None
+    if boot_id is not None and (type(boot_id) is not str or not boot_id):
+        raise ValueError("invalid current boot identity")
+    return boot_id
+
+
+def deadline_boot_matches(request, current_boot_id):
+    """Return whether a durable deadline belongs to the observed clock domain."""
+    return (
+        current_boot_id is not None
+        and request["boot_id"] is not None
+        and request["boot_id"] == current_boot_id
+    )
+
+
+def checkpoint_deadline_remaining(request, current_boot_id, now):
+    """Relate a monotonic deadline only within one known kernel boot."""
+    if not deadline_boot_matches(request, current_boot_id):
+        return 0.0
+    current = now()
+    if type(current) not in (int, float) or not math.isfinite(current):
+        raise ValueError("invalid checkpoint monotonic observation")
+    return max(0.0, request["deadline_monotonic"] - current)
 
 
 def validate_checkpoint_result(value, request_id, job_id):
@@ -226,11 +259,8 @@ def _result(request_id, job_id, state, session=None):
     }
 
 
-def _outcome(request, agent_state, job_id, now):
-    current = now()
-    if type(current) not in (int, float) or not math.isfinite(current):
-        raise ValueError("invalid checkpoint monotonic observation")
-    if current >= request["deadline_monotonic"]:
+def _outcome(request, agent_state, job_id, now, current_boot_id):
+    if checkpoint_deadline_remaining(request, current_boot_id, now) <= 0:
         return _result(request["request_id"], job_id, "deadline_expired")
     try:
         job = _job_record(agent_state, job_id)
@@ -268,12 +298,15 @@ def process_checkpoint_request(
     agent_state: Path,
     result_root: Path,
     now: Callable,
+    *,
+    boot_id: Callable = telegram_api.current_boot_id,
 ) -> int:
     """Publish one immutable terminal result for every exact requested job."""
     path = Path(path)
     if path.parent.is_symlink():
         raise ValueError("invalid checkpoint request directory")
     request = validate_checkpoint_request(_read_object(path, "checkpoint request"))
+    current_boot_id = observe_boot_id(boot_id)
     if path.name != f"{request['request_id']}.json":
         raise ValueError("checkpoint request path identity mismatch")
     result_directory = Path(result_root) / request["request_id"]
@@ -286,7 +319,7 @@ def process_checkpoint_request(
             continue
         _publish_result(
             result_path,
-            _outcome(request, Path(agent_state), job_id, now),
+            _outcome(request, Path(agent_state), job_id, now, current_boot_id),
         )
     return len(request["job_ids"])
 
@@ -322,7 +355,13 @@ def load_service_config(environ=None):
     }
 
 
-def run_loop(config, *, sleep=time.sleep, monotonic=time.monotonic):
+def run_loop(
+    config,
+    *,
+    sleep=time.sleep,
+    monotonic=time.monotonic,
+    boot_id=telegram_api.current_boot_id,
+):
     """Consume configured request records independently of ordinary admission."""
     while True:
         request_root = Path(config["request_root"])
@@ -333,6 +372,7 @@ def run_loop(config, *, sleep=time.sleep, monotonic=time.monotonic):
                     Path(config["agent_state"]),
                     Path(config["result_root"]),
                     monotonic,
+                    boot_id=boot_id,
                 )
             except (OSError, ValueError):
                 continue

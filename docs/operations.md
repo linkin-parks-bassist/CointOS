@@ -57,7 +57,10 @@ identities, one per line, at `/etc/cointelprofessional/allowed_user_ids`. Do not
 either value on a command line. The installer deliberately does not create
 placeholder credentials. It creates the mutable, root-owned timing policy at
 `/etc/cointelprofessional/time.cfg` only when absent and enforces mode `0644` so all
-three services can read this non-secret policy, resolves the actual gateway and David user IDs
+three services can read this non-secret policy. A pre-existing policy must be a
+regular non-symlink file; creation and mode repair occur only after candidate unit
+verification and the authoritative `current` cutover. The installer resolves the
+actual gateway and David user IDs
 into a root-readable guardian environment file, and creates these runtime boundaries:
 
 ```text
@@ -108,7 +111,10 @@ at startup and on idle polls, and records an immutable result attempt before red
 the next phase. `RESTART` closes activation, checkpoints, then performs cooperative
 stop with TERM/KILL escalation; `RESET` skips the handoff and escalates immediately.
 The restart checkpoint request is published as a David-readable `0640`
-`checkpoint-requests/<request-id>.json` before one absolute monotonic deadline. The
+`checkpoint-requests/<request-id>.json` before one absolute monotonic deadline. Each
+request carries the nullable kernel boot identity owning that deadline; only a
+matching known current identity permits comparison, while an unavailable or changed
+identity expires the request immediately. The
 David-owned consumer atomically publishes exactly one result per requested job under
 `checkpoint-results/<request-id>/`: `checkpointed`, `already_terminal`,
 `unsupported`, or `deadline_expired`. A `checkpointed` result is accepted only when

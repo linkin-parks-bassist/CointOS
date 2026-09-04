@@ -200,12 +200,12 @@ install -d -o root -g "$command_group" -m 0750 "$socket_directory"
 install -d -o root -g "$gateway_user" -m 0750 "$configuration_directory"
 install -d -o root -g root -m 0755 "$unit_directory"
 
-if [[ ! -e "$configuration_directory/time.cfg" \
-    && ! -L "$configuration_directory/time.cfg" ]]; then
-    install -o root -g root -m 0644 \
-        "$repository_directory/config/time.cfg" "$configuration_directory/time.cfg"
+timing_policy_path="$configuration_directory/time.cfg"
+if [[ -L "$timing_policy_path" \
+    || ( -e "$timing_policy_path" && ! -f "$timing_policy_path" ) ]]; then
+    echo "existing timing policy path is not a regular file: $timing_policy_path" >&2
+    exit 1
 fi
-chmod 0644 "$configuration_directory/time.cfg"
 
 temporary_environment="$configuration_directory/.guardian.env.source.$$"
 candidate_environment="$configuration_directory/.guardian.env.candidate.$$"
@@ -347,6 +347,18 @@ else
     rmdir "$commit_directory"
     commit_directory=""
 fi
+
+# Mutable policy is repaired only after the candidate release has passed
+# verification and the single authoritative release cutover has succeeded.
+if [[ ! -e "$timing_policy_path" && ! -L "$timing_policy_path" ]]; then
+    install -o root -g root -m 0644 \
+        "$repository_directory/config/time.cfg" "$timing_policy_path"
+fi
+if [[ -L "$timing_policy_path" || ! -f "$timing_policy_path" ]]; then
+    echo "existing timing policy path is not a regular file: $timing_policy_path" >&2
+    exit 1
+fi
+chmod 0644 "$timing_policy_path"
 
 if [[ "$enable" == true ]]; then
     systemctl daemon-reload
