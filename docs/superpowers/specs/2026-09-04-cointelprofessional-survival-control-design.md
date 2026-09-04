@@ -525,6 +525,11 @@ progress_lease_seconds = 60
 progress_update_period_seconds = 60
 emergency_model_deadline_seconds = 900
 
+[resource]
+pressure_confirmation_seconds = 5
+emergency_confirmation_seconds = 10
+healthy_release_seconds = 60
+
 [lifecycle]
 restart_checkpoint_grace_seconds = 30
 service_stop_deadline_seconds = 10
