@@ -29,7 +29,8 @@ REQUIRED_KEYS = {
         "emergency_model_deadline_seconds",
     },
     "resource": {
-        "pressure_confirmation_seconds", "emergency_confirmation_seconds", "healthy_release_seconds",
+        "poll_seconds", "pressure_confirmation_seconds", "emergency_confirmation_seconds",
+        "healthy_release_seconds",
     },
     "lifecycle": {
         "restart_checkpoint_grace_seconds", "service_stop_deadline_seconds", "terminate_grace_seconds",

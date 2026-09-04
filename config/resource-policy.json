@@ -8,8 +8,7 @@
   "pressure": {
     "minimum_available_gb": 32.0,
     "maximum_gtt_used_gb": 57.0,
-    "maximum_swap_used_gb": 1.0,
-    "healthy_seconds_before_release": 60
+    "maximum_swap_used_gb": 1.0
   },
   "emergency": {
     "minimum_available_gb": 24.0,
@@ -38,6 +37,5 @@
     "parallel_requests": 1,
     "llamacpp_batch_size": 512,
     "llamacpp_ubatch_size": 128
-  },
-  "poll_seconds": 1.0
+  }
 }

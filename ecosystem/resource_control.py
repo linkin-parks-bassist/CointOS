@@ -13,12 +13,20 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ecosystem import cli
+from ecosystem import cli, time_policy
 
 
 POLICY_PATH = cli.ROOT / "config/resource-policy.json"
 RUNNING_STATES = {"running"}
 HALTED_MODES = {"pressure", "emergency"}
+EMERGENCY_PHASES = (
+    "recorded",
+    "clients_stopped",
+    "models_unloaded",
+    "model_loaded",
+    "survivor_ready",
+    "active",
+)
 
 
 def policy() -> dict:
@@ -153,11 +161,16 @@ def lemonade_health() -> dict:
         return {"error": f"{type(error).__name__}: {error}"}
 
 
+def model_is_live(item: dict) -> bool:
+    return (bool(item.get("loaded")) and bool(item.get("backend_alive"))
+            and item.get("status") not in {"failed", "unloaded", "stopped"})
+
+
 def emergency_model_live(health: dict | None = None) -> bool:
-    health = health or lemonade_health()
+    current = health if health is not None else lemonade_health()
     expected = policy()["emergency"]["chat_model"]
-    return any(item.get("model_name") == expected and item.get("status") == "ready"
-               for item in health.get("all_models_loaded", []))
+    return any(item.get("model_name") == expected and model_is_live(item)
+               for item in current.get("all_models_loaded", []))
 
 
 def _hash_file(path: Path) -> str | None:
@@ -245,8 +258,7 @@ def _user_systemctl(*arguments: str) -> None:
 
 
 def interrupt_model_clients() -> None:
-    for unit in ("agent-ecosystem.service", "agent-control-worker.service",
-                 "agent-notifier.service", "agent-telegram.service"):
+    for unit in ("agent-ecosystem.service", "agent-control-worker.service"):
         _user_systemctl("stop", unit)
 
 
@@ -378,51 +390,198 @@ conclusion to `state/resource-incidents/{incident_id}-conclusion.md`."""
     return job_id
 
 
-def enter_emergency(state: dict, snapshot: dict, reason: str) -> dict:
+def _incident_path_from_state(state: dict) -> Path:
+    raw_path = state.get("incident_path")
+    if not raw_path:
+        raise ValueError("resource emergency has no incident path")
+    path = Path(raw_path)
+    return path if path.is_absolute() else cli.ROOT / path
+
+
+def _update_incident(state: dict, **fields: object) -> None:
+    path = _incident_path_from_state(state)
+    incident = json.loads(path.read_text(encoding="utf-8"))
+    incident.update(fields)
+    cli.atomic_json(path, incident)
+
+
+def _persist_emergency_phase(state: dict, phase: str) -> None:
+    state["emergency_phase"] = phase
+    state.pop("emergency_error", None)
+    state.pop("emergency_error_at", None)
+    save_state(state)
+
+
+def _record_emergency_error(state: dict, message: str) -> dict:
+    state.update(emergency_error=message, emergency_error_at=cli.now())
+    save_state(state)
+    cli.audit("resource.emergency_error", incident_id=state.get("incident_id"),
+              phase=state.get("emergency_phase"), error=message)
+    return state
+
+
+def _record_emergency(state: dict, snapshot: dict, reason: str) -> None:
     directory = incident_directory()
     directory.mkdir(parents=True, exist_ok=True)
-    incident_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{snapshot['oom_kills']}"
-    jobs, turns = _active_records()
-    incident = {
-        "version": 1,
-        "id": incident_id,
-        "reason": reason,
-        "detected_at": cli.now(),
-        "resources": snapshot,
-        "lemonade_before": lemonade_health(),
-        "active_jobs": jobs,
-        "active_control_turns": turns,
-        "context_boundary": (
-            "OpenCode sessions, exact prompts, durable job/control-turn records, and logs are "
-            "preserved. Lemonade does not expose serialization of live backend KV caches."
-        ),
-    }
-    incident_path = directory / f"{incident_id}.json"
-    cli.atomic_json(incident_path, incident)
-    state.update(mode="emergency", incident_id=incident_id, incident_path=str(incident_path),
-                 emergency_reason=reason, emergency_entered_at=cli.now())
-    save_state(state)
-    interrupted = list(dict.fromkeys(
-        state.get("pressure_interrupted_jobs", []) + checkpoint_running_jobs(incident_id)
-    ))
-    interrupt_model_clients()
-    unload = unload_all_models()
-    loaded = load_emergency_model()
-    incident.update(interrupted_jobs=interrupted, unload=unload,
-                    emergency_model_load=loaded, lemonade_after=lemonade_health())
-    cli.atomic_json(incident_path, incident)
-    survivor = _prepare_survivor(incident_path, incident_id)
-    state.update(sole_survivor_job=survivor, interrupted_jobs=interrupted,
-                 emergency_model_ready=bool(loaded.get("ok")))
-    save_state(state)
-    os.sync()
-    for unit in ("agent-telegram.service", "agent-control-worker.service",
-                 "agent-notifier.service"):
-        _user_systemctl("restart", unit)
-    _user_systemctl("start", "--no-block", "agent-ecosystem.service")
-    cli.audit("resource.emergency_entered", incident_id=incident_id, reason=reason,
-              survivor_job=survivor, emergency_model_ready=bool(loaded.get("ok")))
+    incident_id = state.get("incident_id")
+    if not incident_id:
+        incident_id = f"{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{snapshot['oom_kills']}"
+    raw_path = state.get("incident_path")
+    incident_path = Path(raw_path) if raw_path else directory / f"{incident_id}.json"
+    if not incident_path.is_absolute():
+        incident_path = cli.ROOT / incident_path
+    if not incident_path.exists():
+        jobs, turns = _active_records()
+        incident = {
+            "version": 1,
+            "id": incident_id,
+            "reason": state.get("emergency_reason", reason),
+            "detected_at": state.get("emergency_entered_at", cli.now()),
+            "resources": snapshot,
+            "lemonade_before": lemonade_health(),
+            "active_jobs": jobs,
+            "active_control_turns": turns,
+            "context_boundary": (
+                "OpenCode sessions, exact prompts, durable job/control-turn records, and logs "
+                "are preserved. Lemonade does not expose serialization of live backend KV caches."
+            ),
+        }
+        cli.atomic_json(incident_path, incident)
+    state.update(mode="emergency", incident_id=incident_id,
+                 incident_path=str(incident_path),
+                 emergency_reason=state.get("emergency_reason", reason),
+                 emergency_entered_at=state.get("emergency_entered_at", cli.now()))
+    state.pop("threshold_candidate", None)
+    state.pop("threshold_candidate_since_monotonic", None)
+    _persist_emergency_phase(state, "recorded")
+
+
+def _interrupted_job_ids(state: dict) -> list[str]:
+    identifiers = list(state.get("pressure_interrupted_jobs", []))
+    identifiers.extend(state.get("interrupted_jobs", []))
+    incident_id = state.get("incident_id")
+    for path in sorted((cli.ROOT / "state/jobs").glob("*.json")):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if job.get("state") == "interrupted" and job.get("interrupted_by") == incident_id:
+            identifiers.append(job["id"])
+    return list(dict.fromkeys(identifiers))
+
+
+def _survivor_is_ready(state: dict) -> bool:
+    identifier = state.get("sole_survivor_job")
+    if not identifier:
+        return False
+    path = cli.ROOT / "state/jobs" / f"{identifier}.json"
+    try:
+        job = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (job.get("id") == identifier and job.get("state") == "ready"
+            and job.get("source") == f"resource-emergency:{state.get('incident_id')}")
+
+
+def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
+    phase = state.get("emergency_phase")
+    if phase is not None and phase not in EMERGENCY_PHASES:
+        return _record_emergency_error(state, f"unknown emergency phase: {phase}")
+
+    if phase is None:
+        _record_emergency(state, snapshot, reason)
+        phase = "recorded"
+
+    if phase == "recorded":
+        try:
+            checkpoint_running_jobs(state["incident_id"])
+            state["interrupted_jobs"] = _interrupted_job_ids(state)
+            save_state(state)
+            interrupt_model_clients()
+        except Exception as error:
+            return _record_emergency_error(
+                state, f"client interruption failed: {type(error).__name__}: {error}"
+            )
+        _update_incident(state, interrupted_jobs=state["interrupted_jobs"])
+        _persist_emergency_phase(state, "clients_stopped")
+        phase = "clients_stopped"
+
+    if phase == "clients_stopped":
+        unload = unload_all_models()
+        state["model_unload_result"] = unload
+        if not unload.get("ok"):
+            return _record_emergency_error(
+                state, f"model unload failed: {unload.get('error', 'models remain loaded')}"
+            )
+        _update_incident(state, unload=unload)
+        _persist_emergency_phase(state, "models_unloaded")
+        phase = "models_unloaded"
+
+    if phase == "models_unloaded":
+        if emergency_model_live():
+            loaded = {"ok": True, "reused_live_model": True, "health": lemonade_health()}
+        else:
+            loaded = load_emergency_model()
+        state["emergency_model_last_attempt"] = cli.now()
+        state["emergency_model_last_result"] = loaded
+        if not loaded.get("ok") or not emergency_model_live(loaded.get("health")):
+            state["emergency_model_ready"] = False
+            return _record_emergency_error(
+                state, f"emergency model load failed or remained non-live: {json.dumps(loaded, sort_keys=True)}"
+            )
+        state["emergency_model_ready"] = True
+        _update_incident(state, emergency_model_load=loaded,
+                         lemonade_after=loaded.get("health"))
+        _persist_emergency_phase(state, "model_loaded")
+        phase = "model_loaded"
+
+    if phase == "model_loaded":
+        try:
+            survivor = _prepare_survivor(
+                _incident_path_from_state(state), state["incident_id"]
+            )
+        except Exception as error:
+            return _record_emergency_error(
+                state, f"sole survivor preparation failed: {type(error).__name__}: {error}"
+            )
+        state["sole_survivor_job"] = survivor
+        if not _survivor_is_ready(state):
+            return _record_emergency_error(state, "sole survivor job was not durably ready")
+        _persist_emergency_phase(state, "survivor_ready")
+        phase = "survivor_ready"
+
+    if phase == "survivor_ready":
+        if not emergency_model_live():
+            return _record_emergency_error(state, "emergency model is not live")
+        if not _survivor_is_ready(state):
+            return _record_emergency_error(state, "sole survivor job is not ready")
+        try:
+            _user_systemctl("start", "--no-block", "agent-control-worker.service",
+                            "agent-ecosystem.service")
+        except Exception as error:
+            return _record_emergency_error(
+                state, f"survivor executor start failed: {type(error).__name__}: {error}"
+            )
+        os.sync()
+        _persist_emergency_phase(state, "active")
+        cli.audit("resource.emergency_entered", incident_id=state["incident_id"],
+                  reason=state["emergency_reason"], survivor_job=state["sole_survivor_job"],
+                  emergency_model_ready=True)
+        return state
+
+    if phase == "active":
+        if not emergency_model_live():
+            return _record_emergency_error(state, "emergency model is not live")
+        if not _survivor_is_ready(state):
+            return _record_emergency_error(state, "sole survivor job is not ready")
+        state.pop("emergency_error", None)
+        state.pop("emergency_error_at", None)
+        save_state(state)
     return state
+
+
+def enter_emergency(state: dict, snapshot: dict, reason: str) -> dict:
+    return advance_emergency(state, snapshot, reason)
 
 
 def _threshold_state(snapshot: dict) -> str:
@@ -442,52 +601,79 @@ def _threshold_state(snapshot: dict) -> str:
     return "healthy"
 
 
+def confirmed_threshold(state: dict, snapshot: dict, now_monotonic: float) -> str:
+    observed = _threshold_state(snapshot)
+    current = {
+        "normal": "healthy",
+        "pressure": "pressure",
+        "emergency": "emergency",
+    }.get(state.get("mode"), "emergency")
+    if observed == "healthy" or observed == current:
+        state.pop("threshold_candidate", None)
+        state.pop("threshold_candidate_since_monotonic", None)
+        return observed
+
+    candidate = state.get("threshold_candidate")
+    started = state.get("threshold_candidate_since_monotonic")
+    if candidate != observed or not isinstance(started, (int, float)):
+        state["threshold_candidate"] = observed
+        state["threshold_candidate_since_monotonic"] = now_monotonic
+        return current
+
+    durations = time_policy.load()
+    duration_key = ("emergency_confirmation_seconds" if observed == "emergency"
+                    else "pressure_confirmation_seconds")
+    required = time_policy.seconds(durations, "resource", duration_key)
+    if now_monotonic - float(started) < required:
+        return current
+    state.pop("threshold_candidate", None)
+    state.pop("threshold_candidate_since_monotonic", None)
+    return observed
+
+
 def tick() -> dict:
     snapshot = resource_snapshot()
     state = load_state(snapshot)
+    now_monotonic = time.monotonic()
     if state.get("boot_id") != snapshot["boot_id"]:
         state.update(boot_id=snapshot["boot_id"], last_oom_kills=0)
+        state.pop("threshold_candidate", None)
+        state.pop("threshold_candidate_since_monotonic", None)
+        state.pop("healthy_since_monotonic", None)
     previous_oom = int(state.get("last_oom_kills", snapshot["oom_kills"]))
     state["last_oom_kills"] = snapshot["oom_kills"]
     state["last_resources"] = snapshot
     if snapshot["oom_kills"] > previous_oom:
         return enter_emergency(state, snapshot,
                                f"kernel oom_kill increased from {previous_oom} to {snapshot['oom_kills']}")
-    if state.get("mode") == "emergency" and not emergency_model_live():
-        result = load_emergency_model()
-        state["emergency_model_ready"] = bool(result.get("ok"))
-        state["emergency_model_last_attempt"] = cli.now()
-        state["emergency_model_last_result"] = result
-        if result.get("ok"):
-            for unit in ("agent-telegram.service", "agent-control-worker.service",
-                         "agent-notifier.service"):
-                _user_systemctl("restart", unit)
-        save_state(state)
-        return state
-    threshold = _threshold_state(snapshot)
+    if state.get("mode") == "emergency":
+        return advance_emergency(state, snapshot,
+                                 state.get("emergency_reason", "resource emergency retry"))
+    threshold = confirmed_threshold(state, snapshot, now_monotonic)
     if threshold == "emergency" and state.get("mode") != "emergency":
         return enter_emergency(state, snapshot, "critical memory/GTT/swap/PSI threshold crossed before OOM")
     if threshold == "pressure" and state.get("mode") == "normal":
         return enter_pressure(state, snapshot)
     elif threshold == "healthy" and state.get("mode") == "pressure":
-        first = state.get("healthy_since")
-        if not first:
-            state["healthy_since"] = cli.now()
-        else:
-            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(first)).total_seconds()
-            if elapsed >= policy()["pressure"]["healthy_seconds_before_release"]:
-                resumed = _release_interrupted_jobs(
-                    state.get("pressure_interrupted_jobs", []), "resource pressure released")
-                state.update(mode="normal", pressure_released_at=cli.now())
-                state.pop("healthy_since", None)
-                state.pop("pressure_interrupted_jobs", None)
-                cli.audit("resource.pressure_released", resources=snapshot,
-                          resumed_jobs=resumed)
-                save_state(state)
-                _user_systemctl("start", "--no-block", "agent-ecosystem.service")
-                return state
+        first = state.get("healthy_since_monotonic")
+        if not isinstance(first, (int, float)):
+            state["healthy_since_monotonic"] = now_monotonic
+        elif now_monotonic - float(first) >= time_policy.seconds(
+                time_policy.load(), "resource", "healthy_release_seconds"):
+            resumed = _release_interrupted_jobs(
+                state.get("pressure_interrupted_jobs", []), "resource pressure released")
+            state.update(mode="normal", pressure_released_at=cli.now())
+            state.pop("healthy_since", None)
+            state.pop("healthy_since_monotonic", None)
+            state.pop("pressure_interrupted_jobs", None)
+            cli.audit("resource.pressure_released", resources=snapshot,
+                      resumed_jobs=resumed)
+            save_state(state)
+            _user_systemctl("start", "--no-block", "agent-ecosystem.service")
+            return state
     elif threshold != "healthy":
         state.pop("healthy_since", None)
+        state.pop("healthy_since_monotonic", None)
     save_state(state)
     return state
 
@@ -516,7 +702,7 @@ def request_recovery(job_id: str) -> dict:
 
 def run_guard() -> None:
     cli.initialize()
-    interval = max(0.25, float(policy().get("poll_seconds", 1.0)))
+    interval = time_policy.seconds(time_policy.load(), "resource", "poll_seconds")
     while True:
         try:
             tick()

@@ -40,6 +40,7 @@ DEFAULT_POLICY = {
         "emergency_model_deadline_seconds": 900,
     },
     "resource": {
+        "poll_seconds": 1,
         "pressure_confirmation_seconds": 5,
         "emergency_confirmation_seconds": 10,
         "healthy_release_seconds": 60,
