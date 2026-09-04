@@ -22,9 +22,100 @@ Install or refresh the checked-in units with:
 mkdir -p ~/.config/systemd/user
 cp services/systemd/agent-ecosystem.{service,path,timer} ~/.config/systemd/user/
 cp services/systemd/agent-watchdog.{service,timer} ~/.config/systemd/user/
+cp services/systemd/agent-{telegram,control-worker,notifier,models}.service ~/.config/systemd/user/
+cp services/systemd/agent-resource-guard.service ~/.config/systemd/user/
+cp services/systemd/{control,background}.slice ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now agent-ecosystem.path agent-ecosystem.timer agent-watchdog.timer
+systemctl --user enable --now agent-resource-guard.service agent-models.service agent-telegram.service \
+  agent-control-worker.service agent-notifier.service agent-ecosystem.path \
+  agent-ecosystem.timer agent-watchdog.timer
 ```
+
+These are the current user services. They are recoverable development infrastructure,
+not the root-installed permanent gateway and hard guardian designed for the survival
+plane. Do not describe them as permanent or test `RESTART`/`RESET` against them until
+Plan 5 installs that boundary and its live acceptance sequence passes.
+
+The resource guard samples the kernel OOM counter, Linux available memory, swap,
+memory PSI, and AMD GTT use once per second. `pressure` checkpoints and interrupts
+background inference, unloads dynamic models while preserving chat, and resumes
+after 60 healthy seconds. `emergency` flushes durable run boundaries, unloads every model, loads
+only the bounded Qwen3.5 4B chatbot, and admits exactly one `sole_survivor` run. Ordinary
+dispatch remains mechanically closed until that run calls
+`scripts/resource-control recover` and the live health gate passes.
+
+Install the root-owned inference boundary with
+`sudo scripts/install-resource-controls`. It reduces the boot/runtime TTM allocation
+domain to 64 GiB, places Lemonade in `inference.slice`, makes inference the preferred
+OOM victim, and gives the desktop and chatbot higher CPU/I/O/memory protection.
+The TTM boundary is decisive on this APU: Lemonade's Vulkan GTT is not fully charged
+to its systemd memory cgroup, so `MemoryMax=` alone is not a GPU allocation limit.
+
+Lemonade's configured local API is `http://127.0.0.1:13305`; port 8000 is obsolete
+for this installation. A resource transition is successful only when its observed
+postcondition agrees: stopped units have no live control-group processes, an
+unloaded model is absent according to valid Lemonade health, the pinned model is
+loaded with a live backend, started clients have live processes, and recovery has
+independently verified every required restart. A zero `systemctl` exit status or an
+`active` unit state alone is insufficient.
+
+The guard persists these fail-closed phases:
+
+```text
+recorded -> clients_stopped -> models_unloaded -> model_loaded
+         -> survivor_ready -> active
+```
+
+Each retry resumes the durable phase rather than replaying completed effects. Loaded,
+backend-alive `ready`, `busy`, and `in_use` models are live; liveness is distinct from
+admission availability. Non-OOM pressure must remain above its configured threshold
+for the configured confirmation window. Kernel OOM-counter increments remain
+immediate emergencies. Resource durations, including the one-second poll period,
+are owned by `config/time.cfg`.
+
+The failure chain this procedure prevents occurred on 2026-09-04: a transient
+non-OOM sample latched emergency; underscore-rejecting role validation prevented
+survivor creation; and exact-`ready` model validation interpreted a busy pinned model
+as dead. The old retry loop restarted the contact services every second until
+Telegram reached its systemd start limit. Unit tests had passed because their mocks
+did not compose these boundaries. Preserve this history when changing phase,
+role-resolution, or model-health contracts.
+
+After any live reconciliation, capture evidence without rewriting runtime records:
+
+```bash
+systemctl --user show agent-telegram.service agent-control-worker.service \
+  agent-notifier.service agent-resource-guard.service \
+  -p Id -p ActiveState -p SubState -p Result -p NRestarts -p MainPID
+jq '{mode, emergency_phase, sole_survivor_job, emergency_error}' \
+  state/resource-control.json
+curl --fail --silent http://127.0.0.1:13305/api/v1/health
+python3 -m unittest discover -s tests -v
+```
+
+Sample these facts more than once and perform an approved end-to-end Telegram probe
+before claiming contact is healthy. Also require the real survivor to ingest its
+incident and reach a meaningful terminal result: backend `--ctx-size` is shared
+across parallel sequences and is not a per-request allowance. On 2026-09-04 the
+initial Task 4 gate observed stable identities and zero restarts across six samples
+over 25 seconds and passed 113/113 tests, but the survivor's 25,523-token request
+then exceeded the effective 16,384-token per-sequence context of a 32,768-token,
+two-sequence backend. The guard repeated the unchanged failed-survivor error every
+second and was stopped again while Telegram remained stable.
+
+The contained retry later observed total `ctx_size=65536`, parallel two; preserved
+the old failed records byte-for-byte; and admitted only canonical replacement
+`task-a02f3a746e5a0914`. Its first rollover wrote a 3,956-byte semantic handoff and
+started a fresh session, but that session reread the full incident and attempted
+33,891 tokens against its 32,768-token per-sequence capacity. One foreground tick
+persisted a deduplicated `emergency_escalation` with reason `context_overflow`.
+Telegram and notifier retained PIDs 272721 and 272720 with zero restarts, and the
+guard remains stopped.
+
+Treat this as safe containment, not completed recovery. Do not restart the guard to
+replay the same failure. Plan 4 owns automatic context-overflow escalation to a
+larger safely admitted model/context and completion from the preserved finding and
+handoff. None of this deploys or proves the future permanent survival plane.
 
 Stop all automatic intake with:
 
@@ -76,6 +167,22 @@ run evidence, artifacts, checks, and current state. Only a schema-valid accepted
 verdict becomes `completed` and produces a success notice; a missing, malformed, or
 negative verdict becomes `rejected`. Verifiers are never recursively verified.
 
+Production execution is preemptible. Telegram work outranks ordinary local work,
+which outranks verification and periodic stewardship; `sole_survivor` outranks all
+normal work. A higher-priority arrival interrupts the OpenCode process group after
+its durable session identifier appears. Equal-priority work rotates at a five-minute
+quantum. The job retains its prompt, JSONL output, `ses_…` identifier, and returns to
+`ready`; resumption uses the same OpenCode session.
+
+The router chooses a generous context allocation from a mechanically validated menu
+up to the model's advertised capacity. Validation estimates KV demand against live
+GTT, preserves the desktop/control reserve, and writes a per-job OpenCode limit.
+At 75 percent of the chosen window, the executor interrupts the main turn, resumes
+that session only to write `state/jobs/<job-id>.handoff.md`, archives its transcript,
+and starts a fresh session from the original prompt, handoff, and current filesystem.
+Failure to produce the semantic handoff creates a visibly degraded mechanical
+recovery artifact rather than silently losing the task.
+
 The Telegram gateway uses outbound long polling and accepts only configured user
 IDs. Put the following in `~/.config/agent-ecosystem/telegram.env` with mode `0600`:
 
@@ -88,26 +195,31 @@ It supports `/spawn ROLE TASK`, `/roles`, `/status`, and `/pause`; arbitrary tex
 is never shell input. Installing/enabling `agent-telegram.service` waits for an
 explicit decision on credentials and remote data handling.
 
-Ordinary English goes directly to a locally served conversational control agent.
-It can converse or combine narrow validated tools for status inspection, role
-discovery, dispatch control, task amendment, and task creation. It cannot emit
-shell operations or bypass role validation. Override the control model with
-`AGENT_TELEGRAM_MODEL` in the protected environment file.
+Ordinary English first reaches resident `Qwen3.5-4B-GGUF` with only a small recent
+conversation window and a strict 96-token output bound. This is generated speech,
+not an intent classifier or canned acknowledgement. It may converse immediately but
+must not claim live facts or action. Override it with
+`AGENT_TELEGRAM_FIRST_RESPONSE_MODEL` in the protected environment file.
 
-The installed gateway uses `Qwen3.8-27B-GGUF` as its conversational control agent
-with a reserved request slot. It receives conversation, live state, roles, resources,
-and narrow executable tools; there is no intent-classifier JSON envelope or canned
-presentation layer. Ordinary responses are always model-generated. A literal
-failure notice appears only after five minutes without an answer. Each inbound
-update is consumed once to prevent duplicated actions and retry storms.
+Every admitted update is already a durable control turn before that inference.
+`agent-control-worker.service` then runs up to two Qwen3.5 turns outside the polling
+process. The controller can combine narrow validated tools for status inspection, role
+discovery, dispatch control, task amendment, and task creation. It finishes through
+an internal typed decision: either publish material new information or remain silent
+when the first response already handled the exchange. Override it with `AGENT_TELEGRAM_MODEL`.
 
-The resident 27B weights are shared by four llama.cpp request sequences. Its
-131,072-token context pool therefore provides roughly 32k tokens per simultaneous
-sequence without loading four copies of the coefficients. One sequence is reserved
-for the conversational control plane. This request-level concurrency is distinct
-from worker scheduling: durable worker turns must remain bounded and resumable so
-the scheduler can rotate work instead of allowing one long generation to monopolize
-a sequence.
+The deep controller receives conversation, live state, roles, resources, and narrow
+executable tools; there is no user-visible JSON envelope. A literal failure notice
+appears only after five minutes without a known generated delivery. Receipt, first-
+response attempt, delivery, deep work, and follow-up are separate audited states.
+Queued work uses deterministic per-turn idempotency keys so a recovered control turn
+cannot silently spawn the same task twice.
+
+Only Qwen3.5 4B is pinned, with two request sequences for chatbot and routing/control.
+At most one additional work model is loaded, always unpinned. When a capable large
+work model is already loaded, the routing model preferentially sends compatible
+smaller work through it as an inference upgrade. New model loads are explicit and
+context-bounded; Lemonade auto-load defaults are not trusted.
 
 The control agent can request exact local status through a validated read-only tool.
 Status includes active job identity, role, selected model, elapsed time, output-idle
@@ -149,14 +261,17 @@ Names are validated before use. Identity is injected
 into context and retained through retries, audit events, agent-originated messages,
 and completion notices; it does not create a separate role or pretend agents are human.
 
-For every spawn, the control-plane model receives a live inventory of downloaded
-models, capability labels, sizes, context limits, loaded/busy state, available
-memory, and host load. It selects a model (or honors David's explicit selection),
-and the job permanently records both the choice and rationale. The executor does
-not choose or hardcode a different model later.
+For every spawn and again immediately before dispatch, the control-plane model
+receives a live inventory of downloaded models, capability labels, sizes, safe
+context choices, loaded/busy/pinned state, available memory, GTT, and host load. It
+chooses `use_loaded`, `load`, or `defer`, a model, and a context allocation. Caller
+model requests are hints. A deterministic validator rejects invented models,
+role-incompatible choices, unsafe loads, excess residency, and unvalidated contexts.
+Every decision, realization, and later reassessment remains in the durable job.
 
-The bot stores a private per-user JSONL conversation under `state/conversations/`
-and supplies at most the latest 20 messages / 12,000 characters to GLM. This lets
+The bot stores a private per-user JSONL conversation under `state/conversations/`.
+The fast front receives at most six messages / 2,500 characters; deep control receives at
+most the prior 20 messages / 12,000 characters. This lets
 follow-ups refer to prior discussion without putting chat history in Git or audit
 events. `/forget` clears conversational memory without deleting jobs or audit logs.
 Corrections to the most recent queued/prepared task use the validated `amend`
