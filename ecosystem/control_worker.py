@@ -47,6 +47,7 @@ def _reap(active: dict[int, str]) -> None:
     for pid in list(active):
         finished, _ = os.waitpid(pid, os.WNOHANG)
         if finished:
+            control_turns.release_reservation(active[pid], os.getpid())
             active.pop(pid, None)
 
 

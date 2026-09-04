@@ -219,6 +219,20 @@ def reserve_next(owner_pid: int) -> str | None:
     return None
 
 
+def release_reservation(identifier: str, owner_pid: int) -> bool:
+    released = False
+    def change(record: dict) -> None:
+        nonlocal released
+        if (record.get("deep_state") == "reserved"
+                and record.get("deep_owner_identity") == _process_identity(owner_pid)):
+            record.update(deep_state="queued", deep_reservation_released_at=cli.now())
+            record.pop("deep_owner_pid", None)
+            record.pop("deep_owner_identity", None)
+            released = True
+    _mutate(identifier, change)
+    return released
+
+
 def claim_reserved(identifier: str, owner_pid: int, worker_pid: int) -> bool:
     claimed = False
     def change(record: dict) -> None:

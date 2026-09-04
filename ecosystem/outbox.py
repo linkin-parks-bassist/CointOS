@@ -12,6 +12,21 @@ from ecosystem import cli
 TERMINAL_STATES = {"completed", "failed", "rejected"}
 
 
+def mark_interrupted_deliveries_unknown() -> int:
+    """Do not replay a Telegram send whose prior delivery outcome is unknowable."""
+    changed = 0
+    for path in sorted((cli.ROOT / "state/jobs").glob("outbox-*.json")):
+        job = json.loads(path.read_text(encoding="utf-8"))
+        if job.get("state") != "sending":
+            continue
+        job.update(state="delivery_unknown", updated_at=cli.now(),
+                   error="notifier stopped while delivery was in progress; not replayed")
+        cli.atomic_json(path, job)
+        cli.audit("outbox.delivery_unknown", job_id=job["id"], user_id=job["user_id"])
+        changed += 1
+    return changed
+
+
 def enqueue(user_id: int, message: str = "", depends_on: str | None = None, result_of: str | None = None,
             origin_job: str | None = None, severity: str = "info", needs_response: bool = False) -> str:
     job_id = f"outbox-{uuid.uuid4().hex[:16]}"
@@ -58,7 +73,8 @@ def render(job: dict, dependency_job: dict | None) -> str:
     return header + ("\n\nResult (tail):\n" + clean[-3000:] if show_output else "")
 
 
-def drain(send: Callable[[int, str], None]) -> int:
+def drain(send: Callable[[int, str], None],
+          prepare: Callable[[int, str], str] | None = None) -> int:
     delivered = 0
     for path in sorted((cli.ROOT / "state/jobs").glob("outbox-*.json")):
         job = json.loads(path.read_text(encoding="utf-8"))
@@ -72,15 +88,26 @@ def drain(send: Callable[[int, str], None]) -> int:
         dependency_job = dependency(job)
         if job.get("depends_on") and (not dependency_job or dependency_job.get("state") not in TERMINAL_STATES):
             continue
-        job.update(state="sending", attempts=job["attempts"] + 1, updated_at=cli.now())
+        job.update(attempts=job["attempts"] + 1, updated_at=cli.now())
+        try:
+            message = render(job, dependency_job)
+            if prepare is not None:
+                message = prepare(int(job["user_id"]), message)
+        except Exception as error:
+            job.update(state="waiting", error=f"{type(error).__name__}: {error}")
+            cli.atomic_json(path, job)
+            cli.audit("outbox.presentation_failed", job_id=job["id"], error=job["error"])
+            continue
+        job.update(state="sending", updated_at=cli.now())
         cli.atomic_json(path, job)
         try:
-            send(int(job["user_id"]), render(job, dependency_job))
+            send(int(job["user_id"]), message)
             job.update(state="delivered", updated_at=cli.now())
             delivered += 1
             cli.audit("outbox.delivered", job_id=job["id"], user_id=job["user_id"])
         except Exception as error:
-            job.update(state="waiting", updated_at=cli.now(), error=f"{type(error).__name__}: {error}")
-            cli.audit("outbox.delivery_failed", job_id=job["id"], error=job["error"])
+            job.update(state="delivery_unknown", updated_at=cli.now(),
+                       error=f"{type(error).__name__}: {error}")
+            cli.audit("outbox.delivery_unknown", job_id=job["id"], error=job["error"])
         cli.atomic_json(path, job)
     return delivered

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ecosystem import cli, conversation, control_turns
-from ecosystem.control_worker import process_turn
+from ecosystem.control_worker import _reap, process_turn
 from ecosystem.telegram import accept_update, deliver_due_disaster_fallbacks
 
 
@@ -69,6 +69,27 @@ def test_interrupted_reserved_turn_is_recovered(_root):
     assert control_turns.reserve_next(99999999) == "telegram-81"
     assert control_turns.recover_interrupted() == 1
     assert control_turns.load("telegram-81")["deep_state"] == "queued"
+
+
+@with_root
+def test_reaped_child_before_claim_releases_only_its_reservation(_root):
+    accept_update("token", update(), {42}, send=lambda *_arguments: None,
+                  infer=lambda **_arguments: {"content": "quick."})
+    owner = os.getpid()
+    assert control_turns.reserve_next(owner) == "telegram-81"
+    active = {99101: "telegram-81"}
+    with patch("ecosystem.control_worker.os.waitpid", return_value=(99101, 1)):
+        _reap(active)
+    assert active == {}
+    assert control_turns.load("telegram-81")["deep_state"] == "queued"
+
+    assert control_turns.reserve_next(owner) == "telegram-81"
+    assert control_turns.claim_reserved("telegram-81", owner, owner)
+    active = {99102: "telegram-81"}
+    with patch("ecosystem.control_worker.os.waitpid", return_value=(99102, 1)):
+        _reap(active)
+    assert control_turns.load("telegram-81")["deep_state"] == "running"
+    assert control_turns.reserve_next(owner) is None
 
 
 @with_root
