@@ -25,6 +25,7 @@ ACKNOWLEDGEMENT_MESSAGES = {
     "reset": "Reset accepted. I am staying online while the agent system restarts.",
 }
 DEGRADED_REPLY = "I am degraded. I will reply properly after restart."
+DEFAULT_DEGRADED_DEADLINE_SECONDS = 300
 
 
 def acknowledgement(command: str) -> str:
@@ -71,23 +72,26 @@ def command_record(accepted: dict, command: str) -> dict:
 
 
 def mark_acknowledged(store: Path, update_id: str) -> None:
-    """Mark an accepted update as acknowledged in the command record."""
-    path = store / "commands" / f"{update_id}.json"
-    if not path.exists():
-        return
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return
-    data["egress_state"] = "delivered"
-    telegram_api.atomic_json(path, data)
+    """Record acknowledgement state for an accepted update.
+
+    Stores in a dedicated ack file rather than mutating the
+    immutable accepted command record.
+    """
+    ack_path = store / "acks" / f"{update_id}.json"
+    ack_path.parent.mkdir(parents=True, exist_ok=True)
+    ack_record = {
+        "update_id": update_id,
+        "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+    }
+    telegram_api.atomic_json(ack_path, ack_record)
 
 
 def send_due_degraded_responses(root: Path, send: "Callable",
                                 now: float) -> int:
-    """Send degraded replies for due inbox messages.
+    """Send degraded replies for inbox messages past their deadline.
 
-    Returns the number of messages responded to.
+    Strictly parses each record; skips malformed entries without
+    corrupting state.  Returns the number of messages responded to.
     """
     due = telegram_api.list_inbox_due(root, now)
     count = 0
@@ -96,16 +100,22 @@ def send_due_degraded_responses(root: Path, send: "Callable",
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
+        if type(data) is not dict:
+            continue
         chat_id = data.get("chat_id")
-        if chat_id is not None:
+        if chat_id is not None and type(chat_id) is int:
             send(chat_id, DEGRADED_REPLY)
-            telegram_api.update_inbox_state(path, "delivered")
-            count += 1
+        telegram_api.update_inbox_state(path, "delivered")
+        count += 1
     return count
 
 
 def drain_critical_outbox(store: Path, send: "Callable") -> int:
     """Send messages from the critical outbox and mark them delivered.
+
+    Crash-truthful: persist ``sending`` before the send attempt.
+    A failed send becomes ``delivery_unknown`` (no automatic replay).
+    Malformed records are never marked delivered.
 
     Returns the number of messages drained.
     """
@@ -116,14 +126,26 @@ def drain_critical_outbox(store: Path, send: "Callable") -> int:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        if data.get("egress_state") in ("ready", "sending"):
-            chat_id = data.get("chat_id")
-            text = data.get("text")
-            if chat_id is not None and text is not None:
-                send(chat_id, text)
+        if type(data) is not dict:
+            continue
+        egress = data.get("egress_state")
+        if egress not in ("ready", "sending"):
+            continue
+        chat_id = data.get("chat_id")
+        text = data.get("text")
+        if chat_id is None or text is None:
+            continue
+        if egress != "sending":
+            data["egress_state"] = "sending"
+            telegram_api.atomic_json(path, data)
+        try:
+            send(chat_id, text)
             data["egress_state"] = "delivered"
             telegram_api.atomic_json(path, data)
-            count += 1
+        except Exception:
+            data["egress_state"] = "delivery_unknown"
+            telegram_api.atomic_json(path, data)
+        count += 1
     return count
 
 
@@ -145,7 +167,7 @@ def _reap_children() -> None:
         pass
 
 
-def _poll_child(pid: int, store: Path, allowed: set[int],
+def _poll_child(store: Path, allowed: set[int],
                 send: "Callable", send_command: "Callable") -> None:
     """Blocking long-poll worker: read Telegram updates and dispatch."""
     _reap_children()
@@ -154,12 +176,10 @@ def _poll_child(pid: int, store: Path, allowed: set[int],
     except ImportError:
         sys.exit(1)
     while True:
-        try:
-            update = telegram_mod.poll_update()
-            if update is not None:
-                handle_update(update, allowed, store, send, send_command)
-        except Exception:
-            time.sleep(1)
+        update = telegram_mod.poll_update()
+        if update is not None:
+            handle_update(update, allowed, store, send, send_command)
+        time.sleep(1)
 
 
 def _outbox_child(store: Path, send: "Callable") -> None:
@@ -169,6 +189,8 @@ def _outbox_child(store: Path, send: "Callable") -> None:
         try:
             drain_critical_outbox(store, send)
             mark_gateway_heartbeat(store, time.monotonic())
+            now = time.monotonic()
+            send_due_degraded_responses(store, send, now)
         except Exception:
             time.sleep(5)
         time.sleep(10)
@@ -186,7 +208,7 @@ def main(store: Path, allowed: set[int],
 
     poll_pid = os.fork()
     if poll_pid == 0:
-        _poll_child(poll_pid, store, allowed, send, send_command)
+        _poll_child(store, allowed, send, send_command)
         sys.exit(0)
 
     outbox_pid = os.fork()
@@ -194,7 +216,7 @@ def main(store: Path, allowed: set[int],
         _outbox_child(store, send)
         sys.exit(0)
 
-    # Parent: reap and restart children
+    # Parent: reap and restart children with tracked PIDs
     while True:
         try:
             pid, status = os.waitpid(-1, 0)
@@ -202,35 +224,48 @@ def main(store: Path, allowed: set[int],
             if pid == poll_pid:
                 new_pid = os.fork()
                 if new_pid == 0:
-                    _poll_child(new_pid, store, allowed, send, send_command)
+                    _poll_child(store, allowed, send, send_command)
                     sys.exit(0)
+                poll_pid = new_pid
             elif pid == outbox_pid:
                 new_pid = os.fork()
                 if new_pid == 0:
                     _outbox_child(store, send)
                     sys.exit(0)
+                outbox_pid = new_pid
         except ChildProcessError:
             break
 
 
 if __name__ == "__main__":
-    from survival.telegram_api import store_inbound  # noqa: F401
+    from survival.telegram_api import store_inbound, store_critical_outbox_entry  # noqa: F401
 
     store_path = Path(os.environ.get("STORE_DIR", "state"))
-    allowed_ids = {int(u) for u in os.environ.get("ALLOWED_USERS", "42").split(",")}
+
+    allowed_env = os.environ.get("ALLOWED_USERS", "")
+    if allowed_env:
+        allowed_ids = {int(u) for u in allowed_env.split(",")}
+    else:
+        allowed_ids = set()
 
     def _send(chat_id: int, text: str) -> None:
-        store_inbound(store_path, {
+        now = datetime.now(timezone.utc)
+        msg_id = f"outbound-{chat_id}-{int(time.time())}"
+        record = {
             "schema_version": 1,
-            "id": f"outbound-{chat_id}-{int(time.time())}",
+            "id": msg_id,
             "telegram_update_id": 0,
             "telegram_user_id": chat_id,
             "chat_id": chat_id,
             "text": text,
-            "received_at": datetime.now(timezone.utc).isoformat(),
-        })
+            "received_at": now.isoformat(),
+            "egress_state": "ready",
+        }
+        store_critical_outbox_entry(store_path, record)
 
     def _send_command(command: dict) -> None:
-        pass
+        path = store_path / "commands" / f"{command['request_id']}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        telegram_api.atomic_json(path, command)
 
     main(store_path, allowed_ids, _send, _send_command)

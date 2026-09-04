@@ -1,6 +1,7 @@
 """Low-level file-based Telegram I/O for the survival gateway."""
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 from survival.records import atomic_json
@@ -55,12 +56,13 @@ def update_outbox_state(path: Path, egress_state: str) -> None:
     atomic_json(path, data)
 
 
-def list_inbox_due(root: Path, now: float) -> list[Path]:
-    """Return paths to inbox entries that are due for degraded reply.
+def list_inbox_due(root: Path, now: float,
+                   deadline_seconds: int = 300) -> list[Path]:
+    """Return paths to inbox entries past their degraded-reply deadline.
 
-    An entry is considered due if its egress_state is 'ready' and
-    the message was written a significant time ago (simulated by
-    the now parameter for testing purposes).
+    An entry is considered due when its ``egress_state`` is ``ready``
+    and the stored ``received_at`` timestamp is older than
+    ``deadline_seconds`` relative to ``now``.
     """
     inbox_dir = root / INBOX_DIR
     if not inbox_dir.is_dir():
@@ -71,7 +73,19 @@ def list_inbox_due(root: Path, now: float) -> list[Path]:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             continue
-        if data.get("egress_state") == "ready":
+        if type(data) is not dict:
+            continue
+        if data.get("egress_state") != "ready":
+            continue
+        received_at = data.get("received_at")
+        if type(received_at) is not str:
+            continue
+        try:
+            ts = datetime.fromisoformat(received_at)
+        except ValueError:
+            continue
+        age = now - ts.timestamp()
+        if age >= deadline_seconds:
             due.append(path)
     return due
 
