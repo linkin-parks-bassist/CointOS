@@ -91,6 +91,12 @@ JOB_TRANSITION_FIELDS = frozenset((
     "opencode_session",
 ))
 JOB_TRANSITION_STATES = frozenset(("intended", "completed"))
+LIFECYCLE_PROGRESS_FIELDS = frozenset((
+    "schema_version", "request_id", "phase", "blocker_fingerprint",
+    "pending_effect_kind", "report_sequence", "boot_id",
+    "reported_monotonic_at", "publication_state",
+))
+_CLOCK_VALUE_UNSET = object()
 
 
 def authorize_peer(uid: int, gateway_uid: int) -> None:
@@ -949,7 +955,189 @@ def _pending_blocked_report(state):
     ), None)
 
 
-def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
+def _progress_path(store, request_id):
+    return Path(store) / "lifecycle-progress" / f"{request_id}.json"
+
+
+def _read_progress(path, request_id):
+    value = decode_json_object(Path(path).read_bytes(), "lifecycle progress")
+    if (
+        type(value) is not dict
+        or set(value) != LIFECYCLE_PROGRESS_FIELDS
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or value["request_id"] != request_id
+        or type(value["phase"]) is not str
+        or value["phase"] not in lifecycle.PHASES
+        or (
+            value["blocker_fingerprint"] is not None
+            and (
+                type(value["blocker_fingerprint"]) is not str
+                or len(value["blocker_fingerprint"]) != 24
+            )
+        )
+        or type(value["report_sequence"]) is not int
+        or value["report_sequence"] <= 0
+        or type(value["pending_effect_kind"]) is not str
+        or value["pending_effect_kind"] not in lifecycle.EFFECT_KINDS | {"none"}
+        or (
+            value["boot_id"] is not None
+            and (type(value["boot_id"]) is not str or not value["boot_id"])
+        )
+        or type(value["reported_monotonic_at"]) not in (int, float)
+        or not math.isfinite(value["reported_monotonic_at"])
+        or value["reported_monotonic_at"] < 0
+        or value["publication_state"] not in {"pending", "published"}
+    ):
+        raise ValueError("invalid lifecycle progress")
+    return value
+
+
+def _progress_blocker_fingerprint(path, state):
+    if state["phase"] not in {"blocked", "failed"} or not state["pending_effects"]:
+        return None
+    effect_key = state["pending_effects"][0]["idempotency_key"]
+    identity = {"effect_idempotency_key": effect_key}
+    directory = _effect_result_directory(path, effect_key)
+    for result_path in reversed(sorted(directory.glob("*.json"))):
+        try:
+            result = decode_json_object(
+                result_path.read_bytes(), "lifecycle effect result",
+            )
+        except (OSError, ValueError):
+            continue
+        if (
+            type(result) is dict
+            and set(result) == RESULT_FIELDS
+            and type(result.get("schema_version")) is int
+            and result["schema_version"] == 1
+            and result.get("effect_idempotency_key") == effect_key
+            and result.get("ok") is False
+            and type(result.get("result")) is dict
+        ):
+            identity["result"] = result["result"]
+            break
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+
+
+def _progress_message_id(progress):
+    return (
+        f"lifecycle-progress-{progress['request_id']}-"
+        f"{progress['report_sequence']:06d}"
+    )
+
+
+def _publish_progress(config, path, progress):
+    message_id = _progress_message_id(progress)
+    telegram_api.store_critical_outbox_entry(config["store_path"], {
+        "schema_version": 1,
+        "id": message_id,
+        "chat_id": _incident_chat_id(config),
+        "text": (
+            f"{progress['request_id']} lifecycle progress: "
+            f"phase={progress['phase']}; "
+            f"pending={progress['pending_effect_kind']}."
+        ),
+        "egress_state": "ready",
+    })
+    published = {**progress, "publication_state": "published"}
+    records.atomic_json(path, published)
+    return published, message_id
+
+
+def report_lifecycle_progress(
+    config,
+    request_path,
+    *,
+    monotonic_at=_CLOCK_VALUE_UNSET,
+    boot_id=_CLOCK_VALUE_UNSET,
+):
+    """Publish one observational progress source without reducing lifecycle state."""
+    request_path = Path(request_path)
+    record = _read_request(request_path)
+    state = record["state"]
+    if state["phase"] == "completed" and not state["pending_effects"]:
+        return None
+    if monotonic_at is _CLOCK_VALUE_UNSET:
+        monotonic_at = time.monotonic()
+    if (
+        type(monotonic_at) not in (int, float)
+        or not math.isfinite(monotonic_at)
+        or monotonic_at < 0
+    ):
+        raise ValueError("invalid lifecycle progress time")
+    if boot_id is _CLOCK_VALUE_UNSET:
+        try:
+            boot_id = telegram_api.current_boot_id()
+        except RuntimeError:
+            boot_id = None
+    if boot_id is not None and (type(boot_id) is not str or not boot_id):
+        raise ValueError("invalid lifecycle progress boot identity")
+
+    blocker = _progress_blocker_fingerprint(request_path, state)
+    progress_path = _progress_path(config["store_path"], state["request_id"])
+    previous = None
+    recovered_message_id = None
+    if progress_path.exists():
+        previous = _read_progress(progress_path, state["request_id"])
+        if previous["publication_state"] == "pending":
+            previous, recovered_message_id = _publish_progress(
+                config, progress_path, previous,
+            )
+    period = time_policy.seconds(
+        config["timing_policy"], "lifecycle", "progress_update_period_seconds",
+    )
+    report_due = previous is None
+    if previous is not None:
+        report_due = (
+            previous["phase"] != state["phase"]
+            or previous["blocker_fingerprint"] != blocker
+            or previous["boot_id"] != boot_id
+            or monotonic_at < previous["reported_monotonic_at"]
+            or monotonic_at - previous["reported_monotonic_at"] >= period
+        )
+    if not report_due:
+        return recovered_message_id
+
+    sequence = 1 if previous is None else previous["report_sequence"] + 1
+    pending_kind = (
+        state["pending_effects"][0]["kind"] if state["pending_effects"] else "none"
+    )
+    pending = {
+        "schema_version": 1,
+        "request_id": state["request_id"],
+        "phase": state["phase"],
+        "blocker_fingerprint": blocker,
+        "pending_effect_kind": pending_kind,
+        "report_sequence": sequence,
+        "boot_id": boot_id,
+        "reported_monotonic_at": float(monotonic_at),
+        "publication_state": "pending",
+    }
+    records.atomic_json(progress_path, pending)
+    _published, message_id = _publish_progress(config, progress_path, pending)
+    return message_id
+
+
+def _observe_progress(progress_observer, path):
+    if progress_observer is None:
+        return
+    if not callable(progress_observer):
+        raise ValueError("invalid lifecycle progress observer")
+    try:
+        progress_observer(Path(path))
+    except Exception:
+        return
+
+
+def advance_request(
+    path: Path,
+    adapters: dict,
+    policy: dict,
+    *,
+    progress_observer=None,
+) -> dict:
     """Advance only persisted Task 2 effects across crash-safe commit boundaries."""
     if type(policy) is not dict:
         raise ValueError("invalid lifecycle policy")
@@ -961,6 +1149,7 @@ def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
     verified_event = policy.get("verified_event")
     if verified_event is not None:
         state = _persist_reduction(path, command, state, verified_event)
+        _observe_progress(progress_observer, path)
 
     maximum_effects = policy.get(
         "maximum_effects", MAXIMUM_EFFECTS_PER_ADVANCE,
@@ -983,6 +1172,7 @@ def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
                             f"{state['request_id']}:blocked:{effect['idempotency_key']}"
                         ),
                     })
+                    _observe_progress(progress_observer, path)
                     report = _pending_blocked_report(state)
                     if report is not None:
                         report_result = execute_effect(report, adapters, policy)
@@ -1008,6 +1198,7 @@ def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
             state = _persist_reduction(path, command, state, {
                 "kind": completion_event,
             })
+            _observe_progress(progress_observer, path)
         completed_count += 1
 
     return {
@@ -1305,12 +1496,11 @@ def _interrupt_job_records(
 def _critical_message(policy, effect, text, suffix):
     from survival import telegram_api
 
-    request = _read_request(_request_path(policy["store_path"], effect["request_id"]))
     identifier = effect["idempotency_key"].replace(":", "-") + f"-{suffix}"
     telegram_api.store_critical_outbox_entry(policy["store_path"], {
         "schema_version": 1,
         "id": identifier,
-        "chat_id": request["command"]["telegram_user_id"],
+        "chat_id": _incident_chat_id(policy),
         "text": text,
         "egress_state": "ready",
     })
@@ -1920,6 +2110,9 @@ def load_production_config(environ: dict | None = None) -> dict:
         catalogue = load_lifecycle_catalog(
             Path(_required_environment(environ, "LIFECYCLE_CATALOG_PATH")),
         )
+        incident_destination = telegram_api.read_incident_destination(
+            _required_environment(environ, "INCIDENT_DESTINATION_PATH"),
+        )
     except (OSError, ValueError) as error:
         raise RuntimeError(str(error) or "invalid lifecycle policy") from error
     return {
@@ -1933,6 +2126,7 @@ def load_production_config(environ: dict | None = None) -> dict:
         "timing_policy": timing,
         "timing_policy_error": policy_error,
         "lifecycle_catalog": catalogue,
+        "incident_destination": incident_destination,
         "guardian_poll_seconds": time_policy.seconds(
             timing, "heartbeat", "guardian_poll_seconds",
         ),
@@ -1970,28 +2164,23 @@ def refresh_timing_policy(config):
 def _report_policy_rejection(config, error):
     from survival import telegram_api
 
-    request = _latest_lifecycle_request(config["store_path"])
-    if request is None:
-        return
     fingerprint = hashlib.sha256(str(error).encode("utf-8")).hexdigest()[:24]
     telegram_api.store_critical_outbox_entry(config["store_path"], {
         "schema_version": 1,
         "id": f"policy-rejected-{fingerprint}",
-        "chat_id": request["command"]["telegram_user_id"],
+        "chat_id": _incident_chat_id(config),
         "text": f"Timing policy edit rejected; last known good remains active: {error}",
         "egress_state": "ready",
     })
 
 
-def _latest_lifecycle_request(store):
-    directory = Path(store) / "lifecycle"
-    candidates = sorted(directory.glob("telegram-*.json")) if directory.is_dir() else []
-    if not candidates:
-        return None
-    return max(
-        (_read_request(path) for path in candidates),
-        key=lambda record: record["command"]["telegram_update_id"],
-    )
+def _incident_chat_id(config):
+    try:
+        destination = config["incident_destination"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("missing incident destination") from error
+    telegram_api.validate_incident_destination(destination)
+    return destination["chat_id"]
 
 
 def report_gateway_data_health(config):
@@ -2017,9 +2206,6 @@ def report_gateway_data_health(config):
             continue
         if _valid_gateway_data_health(value):
             values[value["incident_id"]] = value
-    request = _latest_lifecycle_request(config["store_path"])
-    if request is None:
-        return None
     reported = None
     for incident_id in sorted(values):
         value = values[incident_id]
@@ -2032,7 +2218,7 @@ def report_gateway_data_health(config):
         telegram_api.store_critical_outbox_entry(config["store_path"], {
             "schema_version": 1,
             "id": message_id,
-            "chat_id": request["command"]["telegram_user_id"],
+            "chat_id": _incident_chat_id(config),
             "text": (
                 f"Gateway {outcome} and contact remains live: "
                 f"{value['error_reason']}"

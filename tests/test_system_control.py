@@ -45,6 +45,14 @@ def successful_model_probe(catalog, _deadline):
     }
 
 
+def installed_incident_destination():
+    return {
+        "schema_version": 1,
+        "telegram_user_id": 42,
+        "chat_id": 42,
+    }
+
+
 def read_request_state(path):
     return json.loads(path.read_text(encoding="utf-8"))["state"]
 
@@ -106,6 +114,7 @@ def lifecycle_policy(store, request_id="telegram-1"):
             Path("config/survival-lifecycle.json"),
         ),
         "timing_policy": time_policy.load(Path("config/time.cfg")),
+        "incident_destination": installed_incident_destination(),
     }
     system_control._write_runtime(policy, {
         "schema_version": 1,
@@ -129,6 +138,7 @@ def admission_policy(root, previous_pause=False):
             Path("config/survival-lifecycle.json"),
         ),
         "timing_policy": time_policy.load(Path("config/time.cfg")),
+        "incident_destination": installed_incident_destination(),
     }
     system_control.accept_request(
         policy["store_path"],
@@ -1141,6 +1151,10 @@ def test_request_identity_replay_is_exact_and_reuses_one_lifecycle_path():
 
 
 def guardian_environment(root):
+    incident_destination = root / "incident_destination.json"
+    system_control.records.atomic_json(
+        incident_destination, installed_incident_destination(),
+    )
     return {
         "GUARDIAN_SOCKET_PATH": str(root / "guardian.sock"),
         "SURVIVAL_STORE_DIR": str(root / "state"),
@@ -1149,6 +1163,7 @@ def guardian_environment(root):
         "TIME_CONFIG_PATH": str(Path("config/time.cfg").resolve()),
         "LIFECYCLE_CATALOG_PATH": str(Path("config/survival-lifecycle.json").resolve()),
         "AGENT_STATE_DIR": str(root / "agent-state"),
+        "INCIDENT_DESTINATION_PATH": str(incident_destination),
     }
 
 
@@ -1161,8 +1176,281 @@ def test_load_config_parses_one_explicit_gateway_and_user_manager_uid():
         assert config["agent_state_path"] == root / "agent-state"
         assert config["gateway_uid"] == 991
         assert config["user_manager_uid"] == 1000
+        assert config["incident_destination"] == {
+            "schema_version": 1,
+            "telegram_user_id": 42,
+            "chat_id": 42,
+        }
         assert config["timing_policy"] == time_policy.load(Path("config/time.cfg"))
         assert config["lifecycle_catalog"]["schema_version"] == 1
+
+
+def test_incident_destination_schema_rejects_ambiguous_or_untrusted_identity():
+    valid = {
+        "schema_version": 1,
+        "telegram_user_id": 42,
+        "chat_id": 42,
+    }
+    malformed_values = (
+        {key: value for key, value in valid.items() if key != "chat_id"},
+        valid | {"source": "ordinary-spool"},
+        valid | {"chat_id": 43},
+        valid | {"telegram_user_id": "42"},
+        valid | {"telegram_user_id": True},
+        valid | {"telegram_user_id": -1, "chat_id": -1},
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        path = Path(temporary) / "incident_destination.json"
+        for value in malformed_values:
+            path.write_text(json.dumps(value), encoding="utf-8")
+            with unittest.TestCase().assertRaisesRegex(ValueError, "destination"):
+                telegram_api.read_incident_destination(path)
+
+
+def test_gateway_data_health_reports_before_any_lifecycle_command():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary) / "store"
+        incident = store / "gateway/data-health.json"
+        incident.parent.mkdir(parents=True)
+        incident.write_text(json.dumps({
+            "schema_version": 1,
+            "state": "degraded",
+            "incident_id": "pre-command-corruption",
+            "source_path": "/var/lib/cointelprofessional/inbox/bad.json",
+            "error_reason": "invalid inbox JSON",
+            "quarantine_succeeded": True,
+        }), encoding="utf-8")
+        config = {
+            "store_path": store,
+            "incident_destination": {
+                "schema_version": 1,
+                "telegram_user_id": 42,
+                "chat_id": 42,
+            },
+        }
+
+        assert system_control.report_gateway_data_health(config) == (
+            "gateway-quarantine-pre-command-corruption"
+        )
+        report = json.loads((
+            store / "outbox/critical/gateway-quarantine-pre-command-corruption.json"
+        ).read_text(encoding="utf-8"))
+        assert report["chat_id"] == 42
+        assert not (store / "lifecycle").exists()
+
+
+def test_gateway_incident_cannot_supply_its_own_destination():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary) / "store"
+        incident = store / "gateway/data-health.json"
+        incident.parent.mkdir(parents=True)
+        incident.write_text(json.dumps({
+            "schema_version": 1,
+            "state": "degraded",
+            "incident_id": "destination-override",
+            "source_path": "/var/lib/cointelprofessional/inbox/bad.json",
+            "error_reason": "invalid inbox JSON",
+            "quarantine_succeeded": True,
+            "chat_id": 99,
+        }), encoding="utf-8")
+        config = {
+            "store_path": store,
+            "incident_destination": {
+                "schema_version": 1,
+                "telegram_user_id": 42,
+                "chat_id": 42,
+            },
+        }
+
+        assert system_control.report_gateway_data_health(config) is None
+        assert telegram_api.list_critical_outbox(store) == []
+
+
+def test_invalid_policy_reports_before_any_lifecycle_command():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "time.cfg"
+        source.write_bytes(Path("config/time.cfg").read_bytes())
+        config = system_control.load_production_config(
+            guardian_environment(root) | {"TIME_CONFIG_PATH": str(source)},
+        )
+
+        source.write_text("[lifecycle]\nservice_stop_deadline_seconds = nan\n")
+        assert system_control.refresh_timing_policy(config) is not None
+        reports = list((config["store_path"] / "outbox/critical").glob("policy-*.json"))
+        assert len(reports) == 1
+        assert json.loads(reports[0].read_text(encoding="utf-8"))["chat_id"] == 42
+        assert not (config["store_path"] / "lifecycle").exists()
+
+
+def test_lifecycle_progress_reports_opening_period_and_phase_change_once():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        config = lifecycle_policy(store)
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=100.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000001"
+        opening_state = read_request_state(path)
+        assert system_control.report_lifecycle_progress(
+            dict(config), path, monotonic_at=129.0, boot_id="boot-a",
+        ) is None
+        assert read_request_state(path) == opening_state
+        assert system_control.report_lifecycle_progress(
+            dict(config), path, monotonic_at=130.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000002"
+        assert system_control.report_lifecycle_progress(
+            dict(config), path, monotonic_at=130.0, boot_id="boot-a",
+        ) is None
+
+        record = system_control._read_request(path)
+        effect = record["state"]["pending_effects"][0]
+        state = system_control._persist_reduction(
+            path,
+            record["command"],
+            record["state"],
+            {
+                "kind": "effect_completed",
+                "effect_idempotency_key": effect["idempotency_key"],
+            },
+        )
+        system_control._persist_reduction(
+            path, record["command"], state, {"kind": "admission_closed"},
+        )
+        assert system_control.report_lifecycle_progress(
+            dict(config), path, monotonic_at=131.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000003"
+        assert len(list((store / "outbox/critical").glob("lifecycle-progress-*.json"))) == 3
+
+
+def test_lifecycle_progress_adopts_a_shorter_live_period_without_double_report():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        config = lifecycle_policy(store)
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        config["timing_policy"]["lifecycle"]["progress_update_period_seconds"] = 60.0
+        system_control.report_lifecycle_progress(
+            config, path, monotonic_at=100.0, boot_id="boot-a",
+        )
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=130.0, boot_id="boot-a",
+        ) is None
+
+        replacement = {
+            section: dict(values)
+            for section, values in config["timing_policy"].items()
+        }
+        replacement["lifecycle"]["progress_update_period_seconds"] = 30.0
+        config["timing_policy"] = replacement
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=130.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000002"
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=130.0, boot_id="boot-a",
+        ) is None
+
+
+def test_lifecycle_progress_reports_a_changed_blocker_immediately():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        config = lifecycle_policy(store)
+        path = system_control.accept_request(
+            store, command_record("reset"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        system_control.report_lifecycle_progress(
+            config, path, monotonic_at=100.0, boot_id="boot-a",
+        )
+        failures = iter(("admission path unavailable", "pause marker unreadable"))
+        adapters = successful_adapters()
+        adapters["close_admission"] = lambda _effect, _policy: {
+            "ok": False,
+            "error": next(failures),
+        }
+
+        first = system_control.advance_request(path, adapters, config)
+        assert first["phase"] == "blocked"
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=101.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000002"
+        system_control.recover_request(path)
+        second = system_control.advance_request(path, adapters, config)
+        assert second["phase"] == "blocked"
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=102.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000003"
+
+        progress = json.loads((
+            store / "lifecycle-progress/telegram-1.json"
+        ).read_text(encoding="utf-8"))
+        assert progress["phase"] == "blocked"
+        assert progress["report_sequence"] == 3
+        assert type(progress["blocker_fingerprint"]) is str
+        assert len(progress["blocker_fingerprint"]) == 24
+
+
+def test_lifecycle_progress_recovers_source_before_cursor_crash_without_identity_reuse():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        config = lifecycle_policy(store)
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        progress_path = store / "lifecycle-progress/telegram-1.json"
+        real_atomic_json = system_control.records.atomic_json
+        crashed = False
+
+        def crash_before_publication_commit(record_path, value, *args, **kwargs):
+            nonlocal crashed
+            if (
+                Path(record_path) == progress_path
+                and value.get("publication_state") == "published"
+                and not crashed
+            ):
+                crashed = True
+                raise OSError("simulated progress cursor crash")
+            return real_atomic_json(record_path, value, *args, **kwargs)
+
+        with patch.object(
+            system_control.records, "atomic_json", crash_before_publication_commit,
+        ):
+            with unittest.TestCase().assertRaisesRegex(OSError, "cursor crash"):
+                system_control.report_lifecycle_progress(
+                    config, path, monotonic_at=100.0, boot_id="boot-a",
+                )
+
+        record = system_control._read_request(path)
+        effect = record["state"]["pending_effects"][0]
+        state = system_control._persist_reduction(
+            path,
+            record["command"],
+            record["state"],
+            {
+                "kind": "effect_completed",
+                "effect_idempotency_key": effect["idempotency_key"],
+            },
+        )
+        system_control._persist_reduction(
+            path, record["command"], state, {"kind": "admission_closed"},
+        )
+
+        assert system_control.report_lifecycle_progress(
+            config, path, monotonic_at=101.0, boot_id="boot-a",
+        ) == "lifecycle-progress-telegram-1-000002"
+        reports = sorted((store / "outbox/critical").glob("lifecycle-progress-*.json"))
+        assert [report.stem for report in reports] == [
+            "lifecycle-progress-telegram-1-000001",
+            "lifecycle-progress-telegram-1-000002",
+        ]
+        assert json.loads(progress_path.read_text())["publication_state"] == "published"
 
 
 def test_guardian_live_policy_reload_persists_rejection_and_keeps_last_known_good():
@@ -1210,7 +1498,10 @@ def test_guardian_reports_each_gateway_quarantine_incident_once():
             "error_reason": "invalid inbox JSON",
             "quarantine_succeeded": True,
         }), encoding="utf-8")
-        config = {"store_path": store}
+        config = {
+            "store_path": store,
+            "incident_destination": installed_incident_destination(),
+        }
         system_control.report_gateway_data_health(config)
         system_control.report_gateway_data_health(config)
         reports = list((store / "outbox/critical").glob("gateway-quarantine-*.json"))
@@ -1251,7 +1542,10 @@ def test_guardian_reports_every_gateway_incident_even_when_scans_find_several():
                 store, source, f"invalid {name}",
             ) is True
 
-        system_control.report_gateway_data_health({"store_path": store})
+        system_control.report_gateway_data_health({
+            "store_path": store,
+            "incident_destination": installed_incident_destination(),
+        })
 
         reports = list((store / "outbox/critical").glob("gateway-quarantine-*.json"))
         assert len(reports) == 2
@@ -1678,6 +1972,7 @@ def test_load_config_rejects_missing_or_noncanonical_uid():
         for name in (
             "GUARDIAN_GATEWAY_UID", "USER_MANAGER_UID", "TIME_CONFIG_PATH",
             "LIFECYCLE_CATALOG_PATH", "AGENT_STATE_DIR",
+            "INCIDENT_DESTINATION_PATH",
         ):
             missing = dict(environment)
             del missing[name]
@@ -1878,6 +2173,7 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                 "user_manager_uid": 1000,
                 "lifecycle_catalog": catalog,
                 "timing_policy": time_policy.load(Path("config/time.cfg")),
+                "incident_destination": installed_incident_destination(),
             }
             monotonic, checkpoint_sleep = _checkpoint_clock()
             adapters = system_control.production_adapters(
@@ -1979,6 +2275,7 @@ def test_production_route_restores_an_initially_inactive_inference_service():
             "user_manager_uid": os.getuid(),
             "lifecycle_catalog": catalog,
             "timing_policy": time_policy.load(Path("config/time.cfg")),
+            "incident_destination": installed_incident_destination(),
         }
         monotonic, checkpoint_sleep = _checkpoint_clock()
         adapters = system_control.production_adapters(
@@ -2220,6 +2517,7 @@ def test_production_route_turns_over_disposable_real_process_groups():
                 "user_manager_uid": os.getuid(),
                 "lifecycle_catalog": catalog,
                 "timing_policy": time_policy.load(Path("config/time.cfg")),
+                "incident_destination": installed_incident_destination(),
             }
             monotonic, checkpoint_sleep = _checkpoint_clock()
             adapters = system_control.production_adapters(

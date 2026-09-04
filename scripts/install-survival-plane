@@ -145,6 +145,8 @@ ensure_symbolic_link() {
 staging_directory=""
 commit_directory=""
 uncommitted_release=""
+incident_destination_candidate=""
+incident_destination_source=""
 cleanup() {
     local active_target=""
     local candidate_target
@@ -165,6 +167,16 @@ cleanup() {
             rm -rf -- "$uncommitted_release"
         fi
     fi
+    if [[ -n "$incident_destination_candidate" \
+        && -f "$incident_destination_candidate" \
+        && ! -L "$incident_destination_candidate" ]]; then
+        rm -f -- "$incident_destination_candidate"
+    fi
+    if [[ -n "$incident_destination_source" \
+        && -f "$incident_destination_source" \
+        && ! -L "$incident_destination_source" ]]; then
+        rm -f -- "$incident_destination_source"
+    fi
 }
 trap cleanup EXIT
 
@@ -175,8 +187,10 @@ install -d -o "$gateway_user" -g "$spool_group" -m 2750 \
 install -d -o "$gateway_user" -g "$gateway_user" -m 0700 \
     "$state_directory/commands" \
     "$state_directory/gateway" \
+    "$state_directory/gateway/critical-attempts" \
     "$state_directory/gateway/critical-delivery" \
     "$state_directory/gateway/data-health-incidents" \
+    "$state_directory/gateway/delivery-health-incidents" \
     "$state_directory/gateway_commands" \
     "$state_directory/acks" \
     "$state_directory/heartbeats" \
@@ -187,6 +201,7 @@ install -d -o root -g "$gateway_user" -m 2750 \
     "$state_directory/outbox/critical"
 install -d -o root -g root -m 0700 \
     "$state_directory/lifecycle" \
+    "$state_directory/lifecycle-progress" \
     "$state_directory/lifecycle-runtime" \
     "$state_directory/lifecycle-completions" \
     "$state_directory/lifecycle-result-quarantine" \
@@ -201,11 +216,59 @@ install -d -o root -g "$gateway_user" -m 0750 "$configuration_directory"
 install -d -o root -g root -m 0755 "$unit_directory"
 
 timing_policy_path="$configuration_directory/time.cfg"
+allowed_user_ids_path="$configuration_directory/allowed_user_ids"
+incident_destination_path="$configuration_directory/incident_destination.json"
 if [[ -L "$timing_policy_path" \
     || ( -e "$timing_policy_path" && ! -f "$timing_policy_path" ) ]]; then
     echo "existing timing policy path is not a regular file: $timing_policy_path" >&2
     exit 1
 fi
+if [[ -L "$allowed_user_ids_path" || ! -f "$allowed_user_ids_path" ]]; then
+    echo "incident destination requires a regular allowed-user identity file" >&2
+    exit 1
+fi
+if [[ -L "$incident_destination_path" \
+    || ( -e "$incident_destination_path" && ! -f "$incident_destination_path" ) ]]; then
+    echo "existing incident destination path is not a regular file: $incident_destination_path" >&2
+    exit 1
+fi
+
+incident_identity="$(python3 - "$allowed_user_ids_path" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+except OSError as error:
+    raise SystemExit(f"cannot read incident destination identity: {error}")
+identities = set()
+for line in lines:
+    value = line.strip()
+    if not value:
+        continue
+    if not value.isascii() or not value.isdecimal():
+        raise SystemExit("incident destination identity is not an exact integer")
+    identity = int(value)
+    if identity <= 0 or str(identity) != value:
+        raise SystemExit("incident destination identity is not canonical")
+    identities.add(identity)
+if len(identities) != 1:
+    raise SystemExit("incident destination requires exactly one allowed identity")
+print(next(iter(identities)))
+PY
+)"
+incident_destination_source="$(
+    mktemp "$configuration_directory/.incident_destination.source.XXXXXX"
+)"
+incident_destination_candidate="$(
+    mktemp "$configuration_directory/.incident_destination.candidate.XXXXXX"
+)"
+printf '{"chat_id":%s,"schema_version":1,"telegram_user_id":%s}\n' \
+    "$incident_identity" "$incident_identity" >"$incident_destination_source"
+install -o root -g root -m 0600 \
+    "$incident_destination_source" "$incident_destination_candidate"
+rm -f -- "$incident_destination_source"
+incident_destination_source=""
 
 temporary_environment="$configuration_directory/.guardian.env.source.$$"
 candidate_environment="$configuration_directory/.guardian.env.candidate.$$"
@@ -331,6 +394,11 @@ else
     staging_directory=""
     uncommitted_release="$release_path"
 fi
+
+# The root incident destination must exist before a release containing guardian
+# command handling can become authoritative.
+mv -Tf -- "$incident_destination_candidate" "$incident_destination_path"
+incident_destination_candidate=""
 
 desired_release_target="releases/$release_name"
 if [[ -L "$current_release" \

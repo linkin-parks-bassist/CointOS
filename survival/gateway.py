@@ -194,25 +194,38 @@ def drain_critical_outbox(store, send):
                 store / "gateway" / "critical-delivery" / f"{value['id']}.json"
             )
             telegram_api.quarantine_record(store, delivery_path, str(error))
-            continue
+            delivery_path, delivery = telegram_api.ensure_critical_delivery(
+                store, value["id"], initial_state=initial_state,
+            )
         state = delivery["egress_state"]
         if state in {"delivered", "delivery_unknown"}:
+            if state == "delivery_unknown":
+                telegram_api.record_critical_delivery_unknown(store, value["id"])
             if initial_state == "delivery_unknown":
                 count += 1
             continue
         if state == "sending":
+            telegram_api.observe_critical_delivery_attempt(store, value["id"])
             telegram_api.update_critical_delivery_state(
                 delivery_path, "delivery_unknown",
             )
+            telegram_api.record_critical_delivery_unknown(store, value["id"])
             count += 1
             continue
-        _perform_telegram_send(
-            delivery_path,
-            value["chat_id"],
-            value["text"],
-            send,
-            telegram_api.update_critical_delivery_state,
-        )
+        telegram_api.observe_critical_delivery_attempt(store, value["id"])
+        try:
+            outcome = _perform_telegram_send(
+                delivery_path,
+                value["chat_id"],
+                value["text"],
+                send,
+                telegram_api.update_critical_delivery_state,
+            )
+        except BaseException:
+            telegram_api.record_critical_delivery_unknown(store, value["id"])
+            raise
+        if outcome == "delivery_unknown":
+            telegram_api.record_critical_delivery_unknown(store, value["id"])
         count += 1
     return count
 

@@ -23,7 +23,7 @@ Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock
 Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
 LoadCredential=telegram_bot_token:/etc/cointelprofessional/telegram_bot_token
 ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/allowed_user_ids /etc/cointelprofessional/time.cfg
-ReadWritePaths=/var/lib/cointelprofessional/inbox /var/lib/cointelprofessional/commands /var/lib/cointelprofessional/gateway /var/lib/cointelprofessional/gateway_commands /var/lib/cointelprofessional/acks /var/lib/cointelprofessional/heartbeats /var/lib/cointelprofessional/dispositions /var/lib/cointelprofessional/quarantine
+ReadWritePaths=/var/lib/cointelprofessional/inbox /var/lib/cointelprofessional/commands /var/lib/cointelprofessional/gateway /var/lib/cointelprofessional/gateway/critical-attempts /var/lib/cointelprofessional/gateway/delivery-health-incidents /var/lib/cointelprofessional/gateway_commands /var/lib/cointelprofessional/acks /var/lib/cointelprofessional/heartbeats /var/lib/cointelprofessional/dispositions /var/lib/cointelprofessional/quarantine
 UMask=0007
 PrivateTmp=true
 PrivateDevices=true

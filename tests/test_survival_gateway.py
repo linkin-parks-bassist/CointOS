@@ -515,15 +515,122 @@ def test_critical_outbox_is_exact_and_crash_truthful():
 
         def send(chat_id, text):
             delivery = root / "gateway/critical-delivery/message-1.json"
-            observed.append((chat_id, text, read_json(delivery)["egress_state"]))
+            attempt = root / "gateway/critical-attempts/message-1.json"
+            observed.append((
+                chat_id,
+                text,
+                read_json(delivery)["egress_state"],
+                read_json(attempt),
+            ))
             return True
 
         assert gateway.drain_critical_outbox(root, send) == 1
-        assert observed == [(42, "critical message", "sending")]
+        assert observed == [(
+            42,
+            "critical message",
+            "sending",
+            {
+                "schema_version": 1,
+                "message_id": "message-1",
+                "attempt_observed": True,
+            },
+        )]
         assert read_json(path)["egress_state"] == "ready"
         assert read_json(
             root / "gateway/critical-delivery/message-1.json"
         )["egress_state"] == "delivered"
+        assert (
+            root / "gateway/critical-attempts/message-1.json"
+        ).stat().st_mode & 0o777 == 0o600
+
+
+def test_missing_delivery_after_observed_attempt_becomes_unknown_without_replay():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "outbox/critical/message-missing.json"
+        write_json(source, critical_record("message-missing"))
+        assert gateway.drain_critical_outbox(root, lambda *_: True) == 1
+        delivery = root / "gateway/critical-delivery/message-missing.json"
+        delivery.unlink()
+
+        assert gateway.drain_critical_outbox(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
+        ) == 0
+        assert read_json(delivery)["egress_state"] == "delivery_unknown"
+        with unittest.TestCase().assertRaisesRegex(ValueError, "terminal"):
+            telegram_api.update_critical_delivery_state(delivery, "ready")
+        incidents = list((root / "gateway/delivery-health-incidents").glob(
+            "critical-delivery-*.json",
+        ))
+        assert len(incidents) == 1
+
+
+def test_corrupt_or_quarantined_delivery_after_attempt_never_replays():
+    for damage in ("corrupt", "quarantined"):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "outbox/critical/message-damaged.json"
+            write_json(source, critical_record("message-damaged"))
+            assert gateway.drain_critical_outbox(root, lambda *_: True) == 1
+            delivery = root / "gateway/critical-delivery/message-damaged.json"
+            if damage == "corrupt":
+                delivery.write_text("{broken", encoding="utf-8")
+            else:
+                quarantine = root / "quarantine/prior-delivery.record"
+                quarantine.parent.mkdir(parents=True)
+                delivery.replace(quarantine)
+
+            assert gateway.drain_critical_outbox(
+                root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
+            ) == 0
+            assert read_json(delivery)["egress_state"] == "delivery_unknown"
+
+
+def test_corruption_before_any_attempt_is_quarantined_then_delivered_once():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "outbox/critical/message-pre-attempt.json"
+        delivery = root / "gateway/critical-delivery/message-pre-attempt.json"
+        write_json(source, critical_record("message-pre-attempt"))
+        delivery.parent.mkdir(parents=True)
+        delivery.write_text("{broken", encoding="utf-8")
+        sent = []
+
+        assert gateway.drain_critical_outbox(
+            root, lambda *arguments: sent.append(arguments) or True,
+        ) == 1
+        assert sent == [(42, "critical message")]
+        assert read_json(delivery)["egress_state"] == "delivered"
+        assert (root / "gateway/critical-attempts/message-pre-attempt.json").exists()
+
+
+def test_crash_after_attempt_observation_cannot_revert_delivery_to_ready():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "outbox/critical/message-crash.json"
+        write_json(source, critical_record("message-crash"))
+        real_update = telegram_api.update_critical_delivery_state
+
+        def crash_before_sending(path, state):
+            if state == "sending":
+                assert read_json(
+                    root / "gateway/critical-attempts/message-crash.json"
+                )["attempt_observed"] is True
+                raise OSError("simulated death after attempt observation")
+            return real_update(path, state)
+
+        with patch.object(
+            telegram_api, "update_critical_delivery_state", crash_before_sending,
+        ):
+            with unittest.TestCase().assertRaisesRegex(OSError, "simulated death"):
+                gateway.drain_critical_outbox(root, lambda *_: True)
+
+        assert gateway.drain_critical_outbox(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
+        ) == 0
+        assert read_json(
+            root / "gateway/critical-delivery/message-crash.json"
+        )["egress_state"] == "delivery_unknown"
 
 
 def test_guardian_critical_message_is_group_readable_but_immutable_to_gateway():
@@ -535,6 +642,7 @@ def test_guardian_critical_message_is_group_readable_but_immutable_to_gateway():
         assert path.stat().st_mode & 0o777 == 0o640
         telegram_api.ensure_critical_delivery(root, "message-shared")
         delivery = root / "gateway/critical-delivery/message-shared.json"
+        telegram_api.update_critical_delivery_state(delivery, "sending")
         telegram_api.update_critical_delivery_state(delivery, "delivered")
         assert read_json(path)["egress_state"] == "ready"
         assert read_json(delivery)["egress_state"] == "delivered"
@@ -552,9 +660,34 @@ def test_critical_false_return_is_unknown_and_never_recursively_requeued():
             root / "gateway/critical-delivery/message-2.json"
         )["egress_state"] == "delivery_unknown"
         assert [entry.name for entry in telegram_api.list_critical_outbox(root)] == ["message-2.json"]
+        assert len(list((root / "gateway/delivery-health-incidents").glob(
+            "critical-delivery-*.json",
+        ))) == 1
         assert gateway.drain_critical_outbox(
             root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
         ) == 0
+
+
+def test_critical_send_exception_records_local_uncertainty_before_worker_exit():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "outbox/critical/message-exception.json"
+        write_json(source, critical_record("message-exception"))
+
+        with unittest.TestCase().assertRaisesRegex(ConnectionError, "Telegram unavailable"):
+            gateway.drain_critical_outbox(
+                root,
+                lambda *_: (_ for _ in ()).throw(
+                    ConnectionError("Telegram unavailable")
+                ),
+            )
+
+        assert read_json(
+            root / "gateway/critical-delivery/message-exception.json"
+        )["egress_state"] == "delivery_unknown"
+        assert len(list((root / "gateway/delivery-health-incidents").glob(
+            "critical-delivery-*.json",
+        ))) == 1
 
 
 def test_critical_discovered_sending_becomes_unknown_without_replay():

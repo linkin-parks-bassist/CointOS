@@ -23,6 +23,9 @@ CRITICAL_EGRESS_FIELDS = {
 }
 COMMAND_DELIVERY_FIELDS = {"schema_version", "request_id", "egress_state"}
 CRITICAL_DELIVERY_FIELDS = {"schema_version", "message_id", "egress_state"}
+CRITICAL_ATTEMPT_FIELDS = {
+    "schema_version", "message_id", "attempt_observed",
+}
 ACKNOWLEDGEMENT_FIELDS = {
     "schema_version", "request_id", "chat_id", "text", "egress_state",
 }
@@ -40,6 +43,9 @@ QUARANTINE_FIELDS = {
 }
 DISPOSITION_FIELDS = {
     "schema_version", "telegram_update_id", "state", "reason",
+}
+INCIDENT_DESTINATION_FIELDS = {
+    "schema_version", "telegram_user_id", "chat_id",
 }
 POLL_OFFSET_FIELDS = {"schema_version", "offset"}
 EGRESS_STATES = {"ready", "sending", "delivered", "delivery_unknown"}
@@ -231,6 +237,27 @@ def read_allowed_user_ids(path):
     return allowed
 
 
+def read_incident_destination(path):
+    """Decode the one installed root-owned destination for survival incidents."""
+    value = _read_record(Path(path), "incident destination")
+    validate_incident_destination(value)
+    return value
+
+
+def validate_incident_destination(value):
+    if type(value) is not dict or set(value) != INCIDENT_DESTINATION_FIELDS:
+        raise ValueError("invalid incident destination fields")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or type(value["telegram_user_id"]) is not int
+        or value["telegram_user_id"] <= 0
+        or type(value["chat_id"]) is not int
+        or value["chat_id"] != value["telegram_user_id"]
+    ):
+        raise ValueError("invalid incident destination value")
+
+
 def current_boot_id(path=Path("/proc/sys/kernel/random/boot_id")):
     """Return the kernel boot identity owning monotonic timestamps."""
     try:
@@ -415,17 +442,28 @@ def ensure_critical_delivery(root, message_id, initial_state="ready"):
     if type(message_id) is not str or not message_id:
         raise ValueError("invalid critical message identity")
     _validate_egress_state(initial_state)
+    attempt_observed = _critical_attempt_path(root, message_id).exists()
+    if initial_state != "ready":
+        observe_critical_delivery_attempt(root, message_id)
+        attempt_observed = True
     value = {
         "schema_version": 1,
         "message_id": message_id,
-        "egress_state": initial_state,
+        "egress_state": "delivery_unknown" if attempt_observed else initial_state,
     }
     path = root / "gateway" / "critical-delivery" / f"{message_id}.json"
     if not path.exists():
         records.atomic_json(path, value)
+        if attempt_observed:
+            record_critical_delivery_unknown(root, message_id)
         return path, value
     existing = _read_record(path, "critical delivery")
     _validate_critical_delivery(existing, message_id)
+    if existing["egress_state"] != "ready":
+        observe_critical_delivery_attempt(root, message_id)
+    elif attempt_observed:
+        existing = update_critical_delivery_state(path, "delivery_unknown")
+        record_critical_delivery_unknown(root, message_id)
     return path, existing
 
 
@@ -433,6 +471,14 @@ def update_critical_delivery_state(path, state):
     value = _read_record(path, "critical delivery")
     _validate_critical_delivery(value, path.stem)
     _validate_egress_state(state)
+    allowed = {
+        "ready": {"sending", "delivery_unknown"},
+        "sending": {"delivered", "delivery_unknown"},
+        "delivered": {"delivered"},
+        "delivery_unknown": {"delivery_unknown"},
+    }
+    if state not in allowed[value["egress_state"]]:
+        raise ValueError("critical delivery terminal state cannot transition")
     value["egress_state"] = state
     records.atomic_json(path, value)
     return value
@@ -448,6 +494,64 @@ def _validate_critical_delivery(value, message_id):
     ):
         raise ValueError("invalid critical delivery value")
     _validate_egress_state(value["egress_state"])
+
+
+def _critical_attempt_path(root, message_id):
+    return Path(root) / "gateway" / "critical-attempts" / f"{message_id}.json"
+
+
+def observe_critical_delivery_attempt(root, message_id):
+    """Publish the immutable fact that Telegram egress may have begun."""
+    if type(message_id) is not str or not message_id:
+        raise ValueError("invalid critical message identity")
+    value = {
+        "schema_version": 1,
+        "message_id": message_id,
+        "attempt_observed": True,
+    }
+    path = _critical_attempt_path(root, message_id)
+    try:
+        records._create_exclusive_json(path, value)
+    except FileExistsError:
+        existing = _read_record(path, "critical delivery attempt")
+        _validate_critical_delivery_attempt(existing, message_id)
+    return path, value
+
+
+def _validate_critical_delivery_attempt(value, message_id):
+    if (
+        type(value) is not dict
+        or set(value) != CRITICAL_ATTEMPT_FIELDS
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or value["message_id"] != message_id
+        or value["attempt_observed"] is not True
+    ):
+        raise ValueError("invalid critical delivery attempt")
+
+
+def record_critical_delivery_unknown(root, message_id):
+    """Expose one local health incident for operator delivery adjudication."""
+    if type(message_id) is not str or not message_id:
+        raise ValueError("invalid critical message identity")
+    fingerprint = hashlib.sha256(message_id.encode("utf-8")).hexdigest()[:24]
+    incident_id = f"critical-delivery-{fingerprint}"
+    value = {
+        "schema_version": 1,
+        "state": "delivery_unknown",
+        "incident_id": incident_id,
+        "message_id": message_id,
+        "error_reason": "critical delivery state is uncertain after an observed attempt",
+    }
+    path = (
+        Path(root) / "gateway" / "delivery-health-incidents" / f"{incident_id}.json"
+    )
+    try:
+        if not path.exists():
+            records.atomic_json(path, value)
+    except OSError:
+        pass
+    return incident_id
 
 
 def _write_shared_record(path, value):

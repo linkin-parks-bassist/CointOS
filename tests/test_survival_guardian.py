@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from survival import guardian, system_control, telegram_api, time_policy
 
@@ -92,6 +93,11 @@ def guardian_config(root, adapters=None):
             Path("config/survival-lifecycle.json"),
         ),
         "timing_policy": time_policy.load(Path("config/time.cfg")),
+        "incident_destination": {
+            "schema_version": 1,
+            "telegram_user_id": 42,
+            "chat_id": 42,
+        },
         "guardian_poll_seconds": 0.05,
         "adapters": adapters,
     }
@@ -222,6 +228,46 @@ def test_idle_recovery_advances_an_accepted_request_without_telegram_replay():
         assert system_control._read_request(path)["state"]["phase"] == "completed"
 
 
+def test_guardian_reports_opening_and_each_persisted_phase_during_recovery():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        config["maximum_effects"] = 1
+        path = system_control.accept_request(
+            config["store_path"], command_record(update_id=460), previous_pause=False,
+        )
+
+        result = guardian.resume_pending_request(config, config["adapters"])
+
+        assert result["phase"] == "checkpointing"
+        reports = sorted((
+            config["store_path"] / "outbox/critical"
+        ).glob("lifecycle-progress-*.json"))
+        assert [json.loads(report.read_text())["text"] for report in reports] == [
+            "telegram-460 lifecycle progress: phase=acknowledged; pending=close_admission.",
+            "telegram-460 lifecycle progress: phase=checkpointing; pending=checkpoint.",
+        ]
+
+
+def test_progress_reporting_failure_cannot_block_or_advance_lifecycle():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        path = system_control.accept_request(
+            config["store_path"], command_record(update_id=461), previous_pause=False,
+        )
+
+        with patch.object(
+            system_control,
+            "report_lifecycle_progress",
+            side_effect=OSError("progress store unavailable"),
+        ):
+            result = guardian.resume_pending_request(config, config["adapters"])
+
+        assert result == {"ok": True, "phase": "completed", "remaining_effects": 0}
+        assert system_control._read_request(path)["state"]["phase"] == "completed"
+
+
 def test_oldest_blocked_request_serializes_later_lifecycle_commands():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -328,6 +374,12 @@ def test_start_server_creates_the_configured_unix_socket():
 def test_load_production_config_delegates_explicit_identity_and_paths():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
+        incident_destination = root / "incident_destination.json"
+        incident_destination.write_text(json.dumps({
+            "schema_version": 1,
+            "telegram_user_id": 42,
+            "chat_id": 42,
+        }), encoding="utf-8")
         environment = {
             "GUARDIAN_SOCKET_PATH": str(root / "guardian.sock"),
             "SURVIVAL_STORE_DIR": str(root / "state"),
@@ -336,6 +388,7 @@ def test_load_production_config_delegates_explicit_identity_and_paths():
             "TIME_CONFIG_PATH": str(Path("config/time.cfg").resolve()),
             "LIFECYCLE_CATALOG_PATH": str(Path("config/survival-lifecycle.json").resolve()),
             "AGENT_STATE_DIR": str(root / "agent-state"),
+            "INCIDENT_DESTINATION_PATH": str(incident_destination),
         }
         config = guardian.load_production_config(environment)
         assert config["socket_path"] == str(root / "guardian.sock")
@@ -343,6 +396,7 @@ def test_load_production_config_delegates_explicit_identity_and_paths():
         assert config["agent_state_path"] == root / "agent-state"
         assert config["gateway_uid"] == 991
         assert config["user_manager_uid"] == 1000
+        assert config["incident_destination"]["chat_id"] == 42
 
 
 def load_tests(_loader, _tests, _pattern):

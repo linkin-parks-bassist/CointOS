@@ -52,10 +52,15 @@ it and never execute the mutable checkout. Unit links are constructed before
 a retry completes it without exposing a partial release.
 
 Before installation, provision the Telegram bot token at
-`/etc/cointelprofessional/telegram_bot_token` and the allowed numeric Telegram user
-identities, one per line, at `/etc/cointelprofessional/allowed_user_ids`. Do not pass
-either value on a command line. The installer deliberately does not create
-placeholder credentials. It creates the mutable, root-owned timing policy at
+`/etc/cointelprofessional/telegram_bot_token` and the one authorized numeric Telegram
+user identity at `/etc/cointelprofessional/allowed_user_ids`. Do not pass either value
+on a command line. The installer deliberately does not create placeholder credentials.
+It validates that the authorization file resolves to exactly one positive canonical
+integer, then publishes that identity as both fields of the root-only `0600`
+`/etc/cointelprofessional/incident_destination.json`. The guardian validates the exact
+`schema_version`, `telegram_user_id`, and `chat_id` record before command handling; no
+ordinary, lifecycle, model, or gateway record can select a critical destination. It
+creates the mutable, root-owned timing policy at
 `/etc/cointelprofessional/time.cfg` only when absent and enforces mode `0644` so all
 three services can read this non-secret policy. A pre-existing policy must be a
 regular non-symlink file; creation and mode repair occur only after candidate unit
@@ -70,6 +75,9 @@ inbox/                          cointelprofessional:agent_ecosystem_io 2750
 outbox/critical/                root:cointelprofessional           2750
 gateway private state          cointelprofessional:cointelprofessional 0700
 guardian lifecycle state       root:root                          0700
+lifecycle-progress/            root:root                          0700
+gateway/critical-attempts/      cointelprofessional:cointelprofessional 0700
+gateway/delivery-health-incidents/ cointelprofessional:cointelprofessional 0700
 checkpoint-requests/            root:david                         0750
 checkpoint-results/             david:root                         0750
 guardian.sock                   root:cointelprofessional_command  0660
@@ -77,8 +85,15 @@ guardian.sock                   root:cointelprofessional_command  0660
 
 Inbox records are `0640`: only the gateway writes them and David's ordinary plane
 may consume them. Root critical records are also `0640`; the gateway may read but
-cannot alter them, and keeps delivery state in its own private directory. Neither
-ordinary work nor the gateway can rename or inject entries at the store root.
+cannot alter them. The gateway keeps both delivery state and immutable, exclusive
+attempt-observed facts in its own private directories. Before a critical Telegram API
+call, the attempt fact is forced to disk. Once it exists, absent, malformed,
+quarantined, interrupted, or inconsistent delivery state reconstructs as terminal
+`delivery_unknown`; it is never made `ready` or replayed automatically. The ambiguity
+also creates one deduplicated gateway-private delivery-health incident for operator
+adjudication. The guardian never turns that local ambiguity into another critical
+Telegram source. Neither ordinary work nor the gateway can rename or inject entries
+at the store root.
 
 The checkpoint consumer runs as David, has no guardian socket or system-manager
 authority, and remains outside the ordinary admission and destructible-unit sets.
@@ -139,7 +154,19 @@ reported truthfully while later egress and watchdog renewal continue.
 Both services validate the complete timing schema. Valid live edits are adopted as
 one projection. Invalid edits keep `/var/lib/cointelprofessional/policy/time.json` as
 the guardian's last-known-good value, persist `policy/status.json`, and enqueue a
-deduplicated critical explanation. Inspect offline state with:
+deduplicated critical explanation even when no lifecycle command has ever existed.
+Gateway data-health incidents use the same installed destination before command
+history exists.
+
+While the oldest lifecycle is incomplete, the guardian persists its last reported
+phase, blocker fingerprint, boot identity, monotonic report time, and sequence under
+`lifecycle-progress/`. A phase or blocker change reports immediately; otherwise the
+live accepted `lifecycle.progress_update_period_seconds` controls cadence. A guardian
+restart therefore cannot duplicate a report inside an interval, and shortening the
+accepted period takes effect without a second timing owner. Progress publication is
+observational: failure cannot advance or block the lifecycle.
+
+Inspect offline state with:
 
 ```bash
 jq . /var/lib/cointelprofessional/policy/{time,status}.json
@@ -147,6 +174,8 @@ jq '.state | {phase,pending_effects,completed_effects}' \
   /var/lib/cointelprofessional/lifecycle/telegram-*.json
 find /var/lib/cointelprofessional/{quarantine,lifecycle-result-quarantine} \
   -maxdepth 1 -type f -print
+jq . /etc/cointelprofessional/incident_destination.json \
+  /var/lib/cointelprofessional/lifecycle-progress/*.json
 ```
 
 Keep `agent-resource-guard.service` disabled and stopped across login and reboot. Its

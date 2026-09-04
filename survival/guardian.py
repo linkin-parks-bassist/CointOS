@@ -160,6 +160,7 @@ def resume_pending_request(config, adapters=None, recover_blocked=True):
     state = system_control._read_request(path)["state"]
     if state["phase"] == "accepted":
         state = system_control.commit_acknowledgement(path)
+    _report_progress(config, path)
     if recover_blocked and state["phase"] in {"blocked", "failed"}:
         system_control.recover_request(path)
     if adapters is None:
@@ -175,7 +176,17 @@ def resume_pending_request(config, adapters=None, recover_blocked=True):
                 "maximum_effects", system_control.MAXIMUM_EFFECTS_PER_ADVANCE,
             ),
         },
+        progress_observer=lambda observed_path: _report_progress(
+            config, observed_path,
+        ),
     )
+
+
+def _report_progress(config, path):
+    try:
+        return system_control.report_lifecycle_progress(config, path)
+    except Exception:
+        return None
 
 
 def run_loop(config: dict, on_accept=None, environ=None) -> None:

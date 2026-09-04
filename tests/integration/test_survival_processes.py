@@ -259,6 +259,7 @@ def test_units_project_task_3_and_4_paths_and_groups():
     assert "Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock" in gateway_text
     assert "Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional" in gateway_text
     assert "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg" in gateway_text
+    assert "/var/lib/cointelprofessional/gateway/critical-attempts" in gateway_text
     assert "Environment=CREDENTIALS_DIRECTORY=" not in gateway_text
     guardian_text = load_unit("cointelprofessional-guardian.service")
     assert "EnvironmentFile=/etc/cointelprofessional/guardian.env" in guardian_text
@@ -267,7 +268,143 @@ def test_units_project_task_3_and_4_paths_and_groups():
     assert "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg" in guardian_text
     assert "Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json" in guardian_text
     assert "Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state" in guardian_text
+    assert "Environment=INCIDENT_DESTINATION_PATH=/etc/cointelprofessional/incident_destination.json" in guardian_text
+    assert "/etc/cointelprofessional/incident_destination.json" in guardian_text
+    assert "/var/lib/cointelprofessional/lifecycle-progress" in guardian_text
     assert "ProtectHome=read-only" in guardian_text
+    assert "/etc/cointelprofessional/incident_destination.json" not in gateway_text
+    assert "/var/lib/cointelprofessional/lifecycle-progress" not in gateway_text
+    assert "/var/lib/cointelprofessional/gateway/critical-attempts" not in guardian_text
+    assert "/var/lib/cointelprofessional/gateway/delivery-health-incidents" in gateway_text
+    assert "/var/lib/cointelprofessional/gateway/delivery-health-incidents" not in guardian_text
+
+
+def test_lifecycle_progress_is_deduplicated_across_guardian_process_restart():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "store"
+        agent_state = root / "agent-state"
+        agent_state.mkdir()
+        path = system_control.accept_request(
+            store,
+            {
+                "schema_version": 1,
+                "request_id": "telegram-700",
+                "telegram_update_id": 700,
+                "telegram_user_id": 99,
+                "command": "reset",
+                "received_at": "2026-09-05T00:00:00+00:00",
+            },
+            previous_pause=False,
+        )
+        source = f'''\
+from pathlib import Path
+from survival import guardian, system_control, time_policy
+
+store = Path({str(store)!r})
+config = {{
+    "store_path": store,
+    "agent_state_path": Path({str(agent_state)!r}),
+    "timing_policy": time_policy.load(Path({str(base / "config/time.cfg")!r})),
+    "incident_destination": {{
+        "schema_version": 1,
+        "telegram_user_id": 42,
+        "chat_id": 42,
+    }},
+}}
+
+def direct(kind):
+    def run(_effect, _policy):
+        if kind == "close_admission":
+            return {{"ok": False, "error": "stable injected blocker"}}
+        return {{"ok": True}}
+    return run
+
+adapters = {{"system": lambda *_: {{"ok": True}}, "user": lambda *_: {{"ok": True}}}}
+for kind in (
+    "notify", "close_admission", "checkpoint", "reconcile", "verify",
+    "resume", "finish",
+):
+    adapters[kind] = direct(kind)
+guardian.resume_pending_request(config, adapters)
+'''
+        process_environment = os.environ.copy()
+        process_environment["PYTHONPATH"] = (
+            str(base) + ":" + process_environment.get("PYTHONPATH", "")
+        )
+
+        first = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True,
+            env=process_environment, timeout=5, check=False,
+        )
+        assert first.returncode == 0, first.stderr
+        first_reports = sorted((store / "outbox/critical").glob(
+            "lifecycle-progress-*.json",
+        ))
+        assert len(first_reports) == 2
+
+        second = subprocess.run(
+            [sys.executable, "-c", source], capture_output=True, text=True,
+            env=process_environment, timeout=5, check=False,
+        )
+        assert second.returncode == 0, second.stderr
+        assert sorted((store / "outbox/critical").glob(
+            "lifecycle-progress-*.json",
+        )) == first_reports
+        assert system_control._read_request(path)["state"]["phase"] == "blocked"
+
+
+def test_delivery_ambiguity_is_terminal_across_gateway_process_restart():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "store"
+        source_path = store / "outbox/critical/process-message.json"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text(json.dumps({
+            "schema_version": 1,
+            "id": "process-message",
+            "chat_id": 42,
+            "text": "process restart delivery",
+            "egress_state": "ready",
+        }), encoding="utf-8")
+        first_source = f'''\
+from pathlib import Path
+from survival import gateway
+assert gateway.drain_critical_outbox(
+    Path({str(store)!r}), lambda *_arguments: True,
+) == 1
+'''
+        process_environment = os.environ.copy()
+        process_environment["PYTHONPATH"] = (
+            str(base) + ":" + process_environment.get("PYTHONPATH", "")
+        )
+        first = subprocess.run(
+            [sys.executable, "-c", first_source], capture_output=True, text=True,
+            env=process_environment, timeout=5, check=False,
+        )
+        assert first.returncode == 0, first.stderr
+        delivery_path = store / "gateway/critical-delivery/process-message.json"
+        delivery_path.unlink()
+        replay_marker = root / "replayed"
+        second_source = f'''\
+from pathlib import Path
+from survival import gateway
+
+def forbidden_send(*_arguments):
+    Path({str(replay_marker)!r}).write_text("replayed", encoding="utf-8")
+    return True
+
+assert gateway.drain_critical_outbox(
+    Path({str(store)!r}), forbidden_send,
+) == 0
+'''
+        second = subprocess.run(
+            [sys.executable, "-c", second_source], capture_output=True, text=True,
+            env=process_environment, timeout=5, check=False,
+        )
+        assert second.returncode == 0, second.stderr
+        assert not replay_marker.exists()
+        assert json.loads(delivery_path.read_text())["egress_state"] == "delivery_unknown"
 
 
 def test_checkpoint_process_consumes_a_real_mixed_request_without_privileged_state():
@@ -751,6 +888,12 @@ def run_fake_installer(
 ):
     fake_directory, state_directory = write_fake_command_backend(root)
     image = root / "image"
+    configuration = image / "etc/cointelprofessional"
+    configuration.mkdir(parents=True, exist_ok=True)
+    allowed = configuration / "allowed_user_ids"
+    if not allowed.exists() and not allowed.is_symlink():
+        allowed.write_text("42\n", encoding="utf-8")
+        allowed.chmod(0o600)
     result = invoke_fake_installer(
         installer, fake_directory, state_directory, image, arguments,
         extra_environment,
@@ -903,12 +1046,14 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
         for relative in (
             "commands", "gateway", "gateway_commands", "acks", "heartbeats",
             "dispositions", "quarantine", "gateway/critical-delivery",
-            "gateway/data-health-incidents",
+            "gateway/critical-attempts", "gateway/data-health-incidents",
+            "gateway/delivery-health-incidents",
         ):
             assert (store / relative).stat().st_mode & 0o777 == 0o700
         for relative in (
             "lifecycle", "lifecycle-runtime", "lifecycle-completions",
-            "lifecycle-result-quarantine", "lifecycle-transitions",
+            "lifecycle-progress", "lifecycle-result-quarantine",
+            "lifecycle-transitions",
         ):
             assert (store / relative).stat().st_mode & 0o777 == 0o700
         assert (store / "checkpoint-requests").stat().st_mode & 0o777 == 0o750
@@ -921,12 +1066,21 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
         assert guardian_environment.read_text(encoding="utf-8") == (
             "GUARDIAN_GATEWAY_UID=991\nUSER_MANAGER_UID=1000\n"
         )
+        incident_destination = image / "etc/cointelprofessional/incident_destination.json"
+        assert incident_destination.stat().st_mode & 0o777 == 0o600
+        assert json.loads(incident_destination.read_text(encoding="utf-8")) == {
+            "schema_version": 1,
+            "telegram_user_id": 42,
+            "chat_id": 42,
+        }
         time_config = image / "etc/cointelprofessional/time.cfg"
         assert time_config.stat().st_mode & 0o777 == 0o644
         assert time_config.read_bytes() == (base / "config/time.cfg").read_bytes()
         assert not (snapshot / "current/config/time.cfg").exists()
         assert not (image / "etc/cointelprofessional/telegram_bot_token").exists()
-        assert not (image / "etc/cointelprofessional/allowed_user_ids").exists()
+        assert (
+            image / "etc/cointelprofessional/allowed_user_ids"
+        ).read_text(encoding="utf-8") == "42\n"
         assert [
             "install", "-d", "-o", "root", "-g", "root",
             "-m", "0755", str(store),
@@ -947,9 +1101,38 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
             "install", "-d", "-o", "root", "-g", "cointelprofessional",
             "-m", "0750", str(image / "etc/cointelprofessional"),
         ] in trace
+        assert any(
+            call[:7] == ["install", "-o", "root", "-g", "root", "-m", "0600"]
+            and "/.incident_destination.candidate." in call[-1]
+            for call in trace
+        )
         analyze_calls = [call for call in trace if call[0] == "systemd-analyze"]
         assert len(analyze_calls) == 1
         assert analyze_calls[0][1] == "verify"
+
+
+def test_installer_requires_one_exact_authorized_incident_identity():
+    for source in (None, "", "42\n43\n", "true\n", "-1\n", "042\n"):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fake_directory, state = write_fake_command_backend(root)
+            image = root / "image"
+            if source is not None:
+                configuration = image / "etc/cointelprofessional"
+                configuration.mkdir(parents=True)
+                (configuration / "allowed_user_ids").write_text(
+                    source, encoding="utf-8",
+                )
+
+            result = invoke_fake_installer(
+                installer_path, fake_directory, state, image,
+            )
+
+            assert result.returncode != 0
+            assert "incident destination" in result.stderr
+            assert not (
+                image / "etc/cointelprofessional/incident_destination.json"
+            ).exists()
 
 
 def test_installer_enable_is_explicit_and_unknown_arguments_are_not_echoed():
