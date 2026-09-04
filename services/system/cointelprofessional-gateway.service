@@ -1,0 +1,39 @@
+[Unit]
+Description=Cointelprofessional permanent Telegram gateway
+After=network-online.target
+Wants=network-online.target
+Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=cointelprofessional
+Group=cointelprofessional
+SupplementaryGroups=cointelprofessional_command agent_ecosystem_io
+Slice=cointelprofessional-survival.slice
+Restart=always
+RestartSec=250ms
+WatchdogSec=10s
+ExecStart=/usr/bin/python3 -m survival.gateway
+WorkingDirectory=/usr/local/lib/cointelprofessional-survival
+Environment=GUARDIAN_ALLOWED_USER_IDS_PATH=/etc/cointelprofessional/allowed_user_ids
+Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
+Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock
+Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
+LoadCredential=telegram_bot_token:/etc/cointelprofessional/telegram_bot_token
+ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/allowed_user_ids /etc/cointelprofessional/time.cfg
+ReadWritePaths=/var/lib/cointelprofessional
+UMask=0007
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

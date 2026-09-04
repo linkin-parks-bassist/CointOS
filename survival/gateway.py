@@ -7,7 +7,7 @@ import signal
 import time
 from pathlib import Path
 
-from survival import protocol, records, telegram_api
+from survival import protocol, records, systemd_notify, telegram_api
 
 
 ACKNOWLEDGEMENT_MESSAGES = {
@@ -245,6 +245,7 @@ def poll_child(
     monotonic_now=time.monotonic,
     sleep=time.sleep,
     maximum_iterations=None,
+    notify_parent=None,
 ):
     """Long-poll and dispatch; any poll or dispatch failure exits this worker."""
     offset = None
@@ -273,6 +274,8 @@ def poll_child(
             offset = update_id + 1
         now = monotonic_now()
         mark_worker_heartbeat(store, "poll", now, heartbeat_maximum_age_seconds)
+        if notify_parent is not None:
+            notify_parent()
         iterations += 1
         if maximum_iterations is None or iterations < maximum_iterations:
             sleep(poll_seconds)
@@ -287,6 +290,7 @@ def egress_child(
     monotonic_now=time.monotonic,
     sleep=time.sleep,
     maximum_iterations=None,
+    notify_parent=None,
 ):
     """Drain Telegram egress and renew only its own successful-loop heartbeat."""
     iterations = 0
@@ -296,6 +300,8 @@ def egress_child(
         send_due_degraded_responses(store, send, now)
         if check_quarantine_health(store):
             mark_worker_heartbeat(store, "egress", now, heartbeat_maximum_age_seconds)
+            if notify_parent is not None:
+                notify_parent()
         iterations += 1
         if maximum_iterations is None or iterations < maximum_iterations:
             sleep(outbox_poll_seconds)
@@ -325,6 +331,25 @@ def main(
         install_signal_handlers = _install_signal_handlers
     install_signal_handlers()
 
+    parent_pid = os.getpid()
+    readiness = {"sent": False}
+
+    def notify_systemd_if_healthy(_signum, _frame):
+        now = time.monotonic()
+        if not gateway_is_healthy(store, now, heartbeat_maximum_age_seconds):
+            return
+        if not readiness["sent"]:
+            systemd_notify.notify_systemd("READY=1")
+            readiness["sent"] = True
+        systemd_notify.notify_systemd("WATCHDOG=1")
+
+    previous_health_handler = signal.signal(signal.SIGUSR1, notify_systemd_if_healthy)
+
+    def notify_parent():
+        if os.getppid() != parent_pid:
+            raise RuntimeError("gateway supervisor is no longer the worker parent")
+        os.kill(parent_pid, signal.SIGUSR1)
+
     worker_arguments = {
         "poll": lambda: poll_child(
             store,
@@ -337,12 +362,14 @@ def main(
             request_timeout_seconds=request_timeout_seconds,
             heartbeat_maximum_age_seconds=heartbeat_maximum_age_seconds,
             get_updates=get_updates,
+            notify_parent=notify_parent,
         ),
         "egress": lambda: egress_child(
             store,
             send,
             outbox_poll_seconds=outbox_poll_seconds,
             heartbeat_maximum_age_seconds=heartbeat_maximum_age_seconds,
+            notify_parent=notify_parent,
         ),
     }
 
@@ -354,15 +381,18 @@ def main(
         return pid
 
     children = {"poll": spawn("poll"), "egress": spawn("egress")}
-    while True:
-        try:
-            dead_pid, _status = waitpid(-1, 0)
-        except ChildProcessError:
-            return dict(children)
-        for worker, pid in children.items():
-            if pid == dead_pid:
-                children[worker] = spawn(worker)
-                break
+    try:
+        while True:
+            try:
+                dead_pid, _status = waitpid(-1, 0)
+            except ChildProcessError:
+                return dict(children)
+            for worker, pid in children.items():
+                if pid == dead_pid:
+                    children[worker] = spawn(worker)
+                    break
+    finally:
+        signal.signal(signal.SIGUSR1, previous_health_handler)
 
 
 def _install_signal_handlers():

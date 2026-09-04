@@ -148,6 +148,7 @@ def test_ordinary_message_uses_injected_configured_deadline_without_model_call()
         assert stored["accepted_monotonic_at"] == 100.0
         assert stored["deadline_at"] == 107.0
         assert stored["egress_state"] == "ready"
+        assert (root / "inbox" / "telegram-8.json").stat().st_mode & 0o777 == 0o660
 
 
 def test_ordinary_replay_preserves_existing_egress_state_and_deadline():
@@ -222,6 +223,12 @@ def test_command_replay_emits_one_guardian_submission_and_one_acknowledgement():
             "text": "Reset accepted. I am staying online while the agent system restarts.",
             "egress_state": "delivered",
         }
+        for path in (
+            root / "commands" / "telegram-11.json",
+            root / "gateway_commands" / "telegram-11.json",
+            root / "acks" / "telegram-11.json",
+        ):
+            assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_unknown_guardian_submission_retries_only_same_request_identity():
@@ -300,6 +307,7 @@ def test_due_degraded_reply_persists_sending_before_https_and_delivered_after():
         assert count == 1
         assert observed == [(42, gateway.DEGRADED_REPLY, "sending")]
         assert read_json(path)["egress_state"] == "delivered"
+        assert path.stat().st_mode & 0o777 == 0o660
 
 
 def test_due_degraded_reply_failure_becomes_delivery_unknown_and_is_not_replayed():
@@ -371,6 +379,17 @@ def test_critical_outbox_is_exact_and_crash_truthful():
         assert read_json(path)["egress_state"] == "delivered"
 
 
+def test_critical_outbox_publication_and_replacement_remain_group_writable():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        value = critical_record("message-shared")
+        telegram_api.store_critical_outbox_entry(root, value)
+        path = root / "outbox" / "critical" / "message-shared.json"
+        assert path.stat().st_mode & 0o777 == 0o660
+        telegram_api.update_critical_outbox_state(path, "delivered")
+        assert path.stat().st_mode & 0o777 == 0o660
+
+
 def test_critical_false_return_is_unknown_and_never_recursively_requeued():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -433,6 +452,12 @@ def test_poll_and_egress_workers_renew_independent_heartbeats():
         assert read_json(root / "heartbeats" / "egress.json")["monotonic_at"] == 11.0
         assert gateway.gateway_is_healthy(root, 12.0, 5.0) is True
         assert read_json(root / "heartbeat.json")["monotonic_at"] == 11.0
+        for path in (
+            root / "heartbeats" / "poll.json",
+            root / "heartbeats" / "egress.json",
+            root / "heartbeat.json",
+        ):
+            assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_overall_health_requires_both_fresh_heartbeats():

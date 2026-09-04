@@ -37,6 +37,49 @@ not the root-installed permanent gateway and hard guardian designed for the surv
 plane. Do not describe them as permanent or test `RESTART`/`RESET` against them until
 Plan 5 installs that boundary and its live acceptance sequence passes.
 
+## Permanent survival-plane package
+
+`scripts/install-survival-plane` packages the model-independent gateway and guardian
+without enabling or starting anything by default. It creates the dedicated
+`cointelprofessional` system account, the private `cointelprofessional_command`
+socket group, and the shared `agent_ecosystem_io` spool group. The installed code,
+entry points, and this operations file are immutable root-owned copies under
+`/usr/local/lib/cointelprofessional-survival/`; services never execute the mutable
+checkout.
+
+Before installation, provision the Telegram bot token at
+`/etc/cointelprofessional/telegram_bot_token` and the allowed numeric Telegram user
+identities, one per line, at `/etc/cointelprofessional/allowed_user_ids`. Do not pass
+either value on a command line. The installer deliberately does not create
+placeholder credentials. It installs the accepted timing policy as
+`/etc/cointelprofessional/time.cfg`, resolves the actual gateway and David user IDs
+into a root-readable guardian environment file, and creates these runtime boundaries:
+
+```text
+/run/cointelprofessional/       root:cointelprofessional_command  0750
+/var/lib/cointelprofessional/   root:agent_ecosystem_io           2770
+guardian.sock                   root:cointelprofessional_command  0660
+```
+
+The guardian service restores the volatile `/run/cointelprofessional` directory
+with that owner and mode after each boot and preserves it across guardian restarts.
+
+After reviewing the pending diff, install the files without activation with:
+
+```bash
+sudo ./scripts/install-survival-plane
+```
+
+The install-only path verifies the installed units but does not call `systemctl`,
+reload the manager, or disturb the current user gateway. `--enable` performs the
+separate daemon-reload and enable/start transition; it is reserved for Plan 5's
+credential-aware live acceptance sequence and must not be used as an offline test.
+The systemd units supply `NOTIFY_SOCKET`; never put a literal notification socket in
+the environment. `NotifyAccess=main` is intentional: gateway workers publish their
+health to their parent, and only the service main process emits readiness/watchdog
+datagrams. The guardian likewise stops watchdog renewal while a lifecycle operation
+is wedged.
+
 Keep `agent-resource-guard.service` disabled and stopped across login and reboot. Its
 pending `context_overflow` escalation cannot yet complete automatically; Plan 4 must
 implement that escalation and the final live acceptance gate must pass before the

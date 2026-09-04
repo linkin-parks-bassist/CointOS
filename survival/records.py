@@ -17,10 +17,14 @@ ACCEPTED_UPDATE_FIELDS = {
     "text",
     "received_at",
 }
+PRIVATE_RECORD_MODE = 0o600
+SHARED_RECORD_MODE = 0o660
+RECORD_MODES = frozenset((PRIVATE_RECORD_MODE, SHARED_RECORD_MODE))
 
 
-def atomic_json(path: Path, value: dict) -> None:
+def atomic_json(path: Path, value: dict, mode: int = PRIVATE_RECORD_MODE) -> None:
     """Atomically replace a JSON record after forcing its bytes to disk."""
+    _validate_record_mode(mode)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
@@ -29,6 +33,8 @@ def atomic_json(path: Path, value: dict) -> None:
             json.dump(value, output, sort_keys=True, separators=(",", ":"))
             output.flush()
             os.fsync(output.fileno())
+            os.fchmod(output.fileno(), mode)
+            os.fsync(output.fileno())
         os.replace(temporary_path, path)
         _fsync_directory(path.parent)
     finally:
@@ -36,10 +42,13 @@ def atomic_json(path: Path, value: dict) -> None:
             temporary_path.unlink()
 
 
-def append_event(path: Path, event: dict) -> None:
+def append_event(path: Path, event: dict, mode: int = PRIVATE_RECORD_MODE) -> None:
     """Append one durable JSONL event without changing previous events."""
+    _validate_record_mode(mode)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as output:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, mode)
+    with os.fdopen(descriptor, "a", encoding="utf-8") as output:
+        os.fchmod(output.fileno(), mode)
         json.dump(event, output, sort_keys=True, separators=(",", ":"))
         output.write("\n")
         output.flush()
@@ -119,7 +128,12 @@ def _same_update_identity(first: dict, second: dict) -> bool:
     ))
 
 
-def _create_exclusive_json(path: Path, value: dict) -> None:
+def _create_exclusive_json(
+    path: Path,
+    value: dict,
+    mode: int = PRIVATE_RECORD_MODE,
+) -> None:
+    _validate_record_mode(mode)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
@@ -127,6 +141,8 @@ def _create_exclusive_json(path: Path, value: dict) -> None:
         with os.fdopen(descriptor, "w", encoding="utf-8") as output:
             json.dump(value, output, sort_keys=True, separators=(",", ":"))
             output.flush()
+            os.fsync(output.fileno())
+            os.fchmod(output.fileno(), mode)
             os.fsync(output.fileno())
         os.link(temporary_path, path)
         _fsync_directory(path.parent)
@@ -149,3 +165,8 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _validate_record_mode(mode: int) -> None:
+    if type(mode) is not int or mode not in RECORD_MODES:
+        raise ValueError("invalid survival record mode")

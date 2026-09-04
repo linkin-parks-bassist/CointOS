@@ -36,6 +36,52 @@ def test_atomic_json_replaces_a_complete_record(root):
 
 
 @with_survival_root
+def test_atomic_json_defaults_to_private_mode(root):
+    path = root / "state" / "private.json"
+    records.atomic_json(path, {"state": "private"})
+    assert path.stat().st_mode & 0o777 == 0o600
+
+
+@with_survival_root
+def test_shared_atomic_json_has_final_mode_before_publication(root):
+    path = root / "state" / "shared.json"
+    observed = []
+    replace = records.os.replace
+
+    def observe_replace(source, destination):
+        observed.append(Path(source).stat().st_mode & 0o777)
+        replace(source, destination)
+
+    with patch("survival.records.os.replace", side_effect=observe_replace):
+        records.atomic_json(
+            path, {"state": "shared"}, mode=records.SHARED_RECORD_MODE,
+        )
+    assert observed == [0o660]
+    assert path.stat().st_mode & 0o777 == 0o660
+
+
+@with_survival_root
+def test_permission_failure_leaves_no_published_or_temporary_record(root):
+    path = root / "state" / "shared.json"
+    with patch("survival.records.os.fchmod", side_effect=OSError("mode failed")):
+        with unittest.TestCase().assertRaisesRegex(OSError, "mode failed"):
+            records.atomic_json(
+                path, {"state": "shared"}, mode=records.SHARED_RECORD_MODE,
+            )
+    assert not path.exists()
+    assert list(path.parent.iterdir()) == []
+
+
+@with_survival_root
+def test_record_modes_reject_implicit_or_overpermissive_values(root):
+    path = root / "state" / "invalid.json"
+    for mode in (True, 0o640, 0o666):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "mode"):
+            records.atomic_json(path, {"state": "invalid"}, mode=mode)
+    assert not path.parent.exists()
+
+
+@with_survival_root
 def test_append_event_preserves_each_jsonl_event(root):
     path = root / "events" / "commands.jsonl"
     records.append_event(path, {"event": "accepted", "id": "telegram-91"})
@@ -44,6 +90,7 @@ def test_append_event_preserves_each_jsonl_event(root):
         {"event": "accepted", "id": "telegram-91"},
         {"event": "completed", "id": "telegram-91"},
     ]
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 @with_survival_root
@@ -52,6 +99,23 @@ def test_replayed_update_keeps_one_record(root):
     second = records.accept_update(root, telegram_update(91, 42, "RESTART"), {42})
     assert first["id"] == second["id"]
     assert len(list((root / "commands").glob("*.json"))) == 1
+    assert (root / "commands" / "telegram-91.json").stat().st_mode & 0o777 == 0o600
+
+
+@with_survival_root
+def test_exclusive_command_mode_is_private_before_publication(root):
+    path = root / "commands" / "telegram-92.json"
+    observed = []
+    link = records.os.link
+
+    def observe_link(source, destination):
+        observed.append(Path(source).stat().st_mode & 0o777)
+        link(source, destination)
+
+    with patch("survival.records.os.link", side_effect=observe_link):
+        records.accept_update(root, telegram_update(92, 42, "RESTART"), {42})
+    assert observed == [0o600]
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 @with_survival_root

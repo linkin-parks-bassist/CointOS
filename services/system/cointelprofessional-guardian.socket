@@ -1,0 +1,16 @@
+[Unit]
+Description=Cointelprofessional guardian socket activation
+Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md
+
+[Socket]
+ListenStream=/run/cointelprofessional/guardian.sock
+Accept=no
+FileDescriptorName=guardian
+SocketUser=root
+SocketGroup=cointelprofessional_command
+SocketMode=0660
+DirectoryMode=0750
+Slice=cointelprofessional-survival.slice
+
+[Install]
+WantedBy=sockets.target

@@ -5,7 +5,7 @@ import os
 import socket
 import struct
 
-from survival import protocol, system_control
+from survival import protocol, systemd_notify, system_control
 
 
 MAXIMUM_GUARDIAN_RESPONSE_BYTES = 4096
@@ -77,6 +77,38 @@ def start_server(config: dict) -> socket.socket:
     return server
 
 
+def inherited_server(environ=None, current_pid=os.getpid):
+    """Consume systemd's one inherited listener, if this process owns it."""
+    if environ is None:
+        environ = os.environ
+    listen_pid = environ.get("LISTEN_PID")
+    listen_fds = environ.get("LISTEN_FDS")
+    if listen_pid is None and listen_fds is None:
+        return None
+    if listen_pid is None or listen_fds is None:
+        raise RuntimeError("incomplete systemd socket activation environment")
+    try:
+        owner_pid = int(listen_pid)
+        descriptor_count = int(listen_fds)
+    except ValueError as error:
+        raise RuntimeError("invalid systemd socket activation environment") from error
+    if owner_pid != current_pid():
+        return None
+    if descriptor_count != 1:
+        raise RuntimeError("guardian requires exactly one inherited listener")
+    server = socket.socket(fileno=3)
+    server.settimeout(1.0)
+    return server
+
+
+def acquire_server(config, environ=None):
+    """Return the listener and whether this process owns its filesystem node."""
+    server = inherited_server(environ)
+    if server is not None:
+        return server, False
+    return start_server(config), True
+
+
 def handle_one_request(
     connection: socket.socket,
     config: dict,
@@ -119,29 +151,34 @@ def handle_one_request(
     )
 
 
-def run_loop(config: dict, on_accept=None) -> None:
+def run_loop(config: dict, on_accept=None, environ=None) -> None:
     """Serve serially so one lifecycle owns the privileged mutation boundary."""
-    server = start_server(config)
+    server, remove_socket = acquire_server(config, environ)
     try:
+        systemd_notify.notify_systemd("READY=1")
         while True:
             try:
                 connection, _address = server.accept()
             except socket.timeout:
+                systemd_notify.notify_systemd("WATCHDOG=1")
                 continue
             try:
                 if on_accept is not None:
                     on_accept(connection)
-                handle_one_request(connection, config)
+                result = handle_one_request(connection, config)
+                if result is not None:
+                    systemd_notify.notify_systemd("WATCHDOG=1")
             finally:
                 connection.close()
     except KeyboardInterrupt:
         pass
     finally:
         server.close()
-        try:
-            os.unlink(config["socket_path"])
-        except OSError:
-            pass
+        if remove_socket:
+            try:
+                os.unlink(config["socket_path"])
+            except OSError:
+                pass
 
 
 def load_production_config(environ: dict | None = None) -> dict:

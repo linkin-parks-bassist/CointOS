@@ -224,7 +224,7 @@ def store_inbound(root, accepted, monotonic_now, deadline_seconds):
         "egress_state": "ready",
     })
     validate_inbox_entry(value)
-    records.atomic_json(path, value)
+    _write_shared_record(path, value)
     return value
 
 
@@ -276,14 +276,14 @@ def update_inbox_state(path, state):
     value = read_inbox_entry(path)
     _validate_egress_state(state)
     value["egress_state"] = state
-    records.atomic_json(path, value)
+    _write_shared_record(path, value)
     return value
 
 
 def store_critical_outbox_entry(root, value):
     validate_critical_outbox_entry(value)
     path = root / "outbox" / "critical" / f"{value['id']}.json"
-    records.atomic_json(path, value)
+    _write_shared_record(path, value)
 
 
 def list_critical_outbox(root):
@@ -320,8 +320,12 @@ def update_critical_outbox_state(path, state):
     value = read_critical_outbox_entry(path)
     _validate_egress_state(state)
     value["egress_state"] = state
-    records.atomic_json(path, value)
+    _write_shared_record(path, value)
     return value
+
+
+def _write_shared_record(path, value):
+    records.atomic_json(path, value, mode=records.SHARED_RECORD_MODE)
 
 
 def ensure_command_delivery(root, request_id):

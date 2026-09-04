@@ -1,0 +1,37 @@
+[Unit]
+Description=Cointelprofessional guardian - peer-authenticated lifecycle controller
+Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+Group=cointelprofessional_command
+Slice=cointelprofessional-survival.slice
+Sockets=cointelprofessional-guardian.socket
+Restart=always
+RestartSec=250ms
+WatchdogSec=10s
+RuntimeDirectory=cointelprofessional
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/python3 -m survival.guardian
+WorkingDirectory=/usr/local/lib/cointelprofessional-survival
+EnvironmentFile=/etc/cointelprofessional/guardian.env
+Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock
+Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
+ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/guardian.env /sys/fs/cgroup
+ReadWritePaths=/var/lib/cointelprofessional /run/cointelprofessional
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+[Unit]
+Description=Cointelprofessional permanent survival plane
+Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md
+
+[Slice]
+CPUWeight=1000
+IOWeight=1000
+MemoryMax=4G
+ManagedOOMPreference=avoid
+TasksMax=12

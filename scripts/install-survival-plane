@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Install the permanent survival plane without activating it by default.
+set -euo pipefail
+
+usage() {
+    echo "usage: scripts/install-survival-plane [--enable]" >&2
+}
+
+enable=false
+case "$#" in
+    0) ;;
+    1)
+        if [[ "$1" != "--enable" ]]; then
+            usage
+            exit 64
+        fi
+        enable=true
+        ;;
+    *)
+        usage
+        exit 64
+        ;;
+esac
+
+install_root="${COINTELPROFESSIONAL_INSTALL_ROOT:-}"
+if [[ -n "$install_root" && "$install_root" != /* ]]; then
+    echo "COINTELPROFESSIONAL_INSTALL_ROOT must be absolute" >&2
+    exit 64
+fi
+install_root="${install_root%/}"
+if (( EUID != 0 )) && [[ -z "$install_root" ]]; then
+    echo "install-survival-plane must run as root" >&2
+    exit 77
+fi
+
+repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+install_prefix="$install_root/usr/local/lib/cointelprofessional-survival"
+state_directory="$install_root/var/lib/cointelprofessional"
+socket_directory="$install_root/run/cointelprofessional"
+configuration_directory="$install_root/etc/cointelprofessional"
+unit_directory="$install_root/etc/systemd/system"
+
+command_group=cointelprofessional_command
+spool_group=agent_ecosystem_io
+gateway_user=cointelprofessional
+user_manager=david
+
+if ! getent group "$command_group" >/dev/null; then
+    groupadd --system "$command_group"
+fi
+if ! getent group "$spool_group" >/dev/null; then
+    groupadd --system "$spool_group"
+fi
+
+if account_record="$(getent passwd "$gateway_user")"; then
+    IFS=: read -r account_name ignored_password account_uid account_gid \
+        account_description account_home account_shell <<<"$account_record"
+    if [[ "$account_name" != "$gateway_user" \
+        || "$account_uid" == "0" \
+        || "$account_home" != "/nonexistent" \
+        || "$account_shell" != "/usr/sbin/nologin" \
+        || "$(id -gn "$gateway_user")" != "$gateway_user" ]]; then
+        echo "existing cointelprofessional account does not match the installation contract" >&2
+        exit 1
+    fi
+else
+    useradd --system --user-group --home-dir /nonexistent \
+        --shell /usr/sbin/nologin "$gateway_user"
+fi
+
+usermod --append --groups "$command_group,$spool_group" "$gateway_user"
+usermod --append --groups "$spool_group" "$user_manager"
+gateway_uid="$(id -u "$gateway_user")"
+user_manager_uid="$(id -u "$user_manager")"
+if [[ ! "$gateway_uid" =~ ^[1-9][0-9]*$ || ! "$user_manager_uid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "survival-plane account identities are invalid" >&2
+    exit 1
+fi
+
+install -d -o root -g root -m 0755 \
+    "$install_prefix" "$install_prefix/survival" \
+    "$install_prefix/scripts" "$install_prefix/docs"
+install -d -o root -g "$spool_group" -m 2770 "$state_directory"
+install -d -o root -g "$command_group" -m 0750 "$socket_directory"
+install -d -o root -g "$gateway_user" -m 0750 "$configuration_directory"
+install -d -o root -g root -m 0755 "$unit_directory"
+
+python_modules=(
+    survival/__init__.py
+    survival/gateway.py
+    survival/guardian.py
+    survival/json_codec.py
+    survival/lifecycle.py
+    survival/protocol.py
+    survival/records.py
+    survival/system_control.py
+    survival/systemd_notify.py
+    survival/telegram_api.py
+)
+for module in "${python_modules[@]}"; do
+    source_path="$repository_directory/$module"
+    if [[ ! -f "$source_path" ]]; then
+        echo "missing source: $source_path" >&2
+        exit 1
+    fi
+    install -o root -g root -m 0644 "$source_path" "$install_prefix/$module"
+done
+
+entry_points=(cointelprofessional-gateway cointelprofessional-guardian)
+for entry_point in "${entry_points[@]}"; do
+    source_path="$repository_directory/scripts/$entry_point"
+    if [[ ! -f "$source_path" ]]; then
+        echo "missing entry point: $source_path" >&2
+        exit 1
+    fi
+    install -o root -g root -m 0755 \
+        "$source_path" "$install_prefix/scripts/$entry_point"
+done
+
+install -o root -g root -m 0644 \
+    "$repository_directory/docs/operations.md" "$install_prefix/docs/operations.md"
+install -o root -g root -m 0644 \
+    "$repository_directory/config/time.cfg" "$configuration_directory/time.cfg"
+
+temporary_directory="$(mktemp -d)"
+cleanup() {
+    rm -f "$temporary_directory/guardian.env"
+    rmdir "$temporary_directory"
+}
+trap cleanup EXIT
+printf 'GUARDIAN_GATEWAY_UID=%s\nUSER_MANAGER_UID=%s\n' \
+    "$gateway_uid" "$user_manager_uid" >"$temporary_directory/guardian.env"
+install -o root -g root -m 0600 \
+    "$temporary_directory/guardian.env" "$configuration_directory/guardian.env"
+
+units=(
+    cointelprofessional-survival.slice
+    cointelprofessional-gateway.service
+    cointelprofessional-guardian.socket
+    cointelprofessional-guardian.service
+)
+for unit in "${units[@]}"; do
+    source_path="$repository_directory/services/system/$unit"
+    if [[ ! -f "$source_path" ]]; then
+        echo "missing unit: $source_path" >&2
+        exit 1
+    fi
+    install -o root -g root -m 0644 "$source_path" "$unit_directory/$unit"
+done
+
+systemd-analyze verify \
+    "$unit_directory/cointelprofessional-survival.slice" \
+    "$unit_directory/cointelprofessional-gateway.service" \
+    "$unit_directory/cointelprofessional-guardian.socket" \
+    "$unit_directory/cointelprofessional-guardian.service"
+
+if [[ "$enable" == true ]]; then
+    systemctl daemon-reload
+    systemctl enable --now \
+        cointelprofessional-guardian.socket \
+        cointelprofessional-guardian.service \
+        cointelprofessional-gateway.service
+fi
+
+echo "installed Cointelprofessional survival plane at /usr/local/lib/cointelprofessional-survival"
