@@ -1,37 +1,69 @@
 import json
+import re
 from pathlib import Path
 
 from ecosystem import cli
+
+
+SAFE_ROLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+ROLE_CAPABILITIES = {
+    "auditor": ["reasoning", "tool-calling"],
+    "coder": ["coding", "tool-calling"],
+    "refactorer": ["coding", "tool-calling"],
+    "sole_survivor": ["reasoning", "tool-calling"],
+    "steward": ["reasoning", "tool-calling"],
+    "verifier": ["reasoning", "tool-calling"],
+}
 
 
 def list_roles() -> list[str]:
     return sorted(path.stem for path in (cli.ROOT / "roles").glob("*.md") if not path.stem.startswith("_"))
 
 
-def load_role(role: str) -> str:
-    if not role.replace("-", "").isalnum():
-        raise ValueError("invalid role name")
-    path = cli.ROOT / "roles" / f"{role}.md"
-    if not path.is_file():
-        raise ValueError(f"unknown role {role!r}; available: {', '.join(list_roles())}")
-    content = path.read_text(encoding="utf-8").strip()
-    required = ("## Mission", "## Permissions", "## Approval required", "## Handoff")
-    missing = [heading for heading in required if heading not in content]
-    if missing:
-        raise ValueError(f"role {role!r} is missing: {', '.join(missing)}")
-    return content
+def role_capabilities(role: str | None) -> list[str]:
+    return list(ROLE_CAPABILITIES.get(role, ["tool-calling"]))
 
 
-def render_context(role: str, task: str, job_id: str, model: str = "unspecified", model_reason: str = "", agent_name: str = "Agent") -> str:
-    definition = load_role(role)
+def resolve_role(role: str | None) -> dict:
+    label = role.strip() if isinstance(role, str) and role.strip() else None
+    roles = cli.ROOT / "roles"
+    path = roles / f"{label}.md" if label and SAFE_ROLE.fullmatch(label) else None
+    spawnable = (path is not None and path.is_file()
+                 and (not path.name.startswith("_") or label == "sole_survivor"))
+    if not spawnable:
+        base = (roles / "_base.md").read_text(encoding="utf-8").strip()
+        return {"label": label, "known": False, "context": base,
+                "capabilities": ["tool-calling"]}
+    return {"label": label, "known": True,
+            "context": path.read_text(encoding="utf-8").strip(),
+            "capabilities": role_capabilities(label)}
+
+
+def load_role(role: str | None) -> str:
+    """Compatibility wrapper returning safe advisory context without admission."""
+    return resolve_role(role)["context"]
+
+
+def render_context(role: str | None, task: str, job_id: str, model: str = "unspecified",
+                   model_reason: str = "", agent_name: str = "Agent") -> str:
+    resolved = resolve_role(role)
+    definition = resolved["context"]
+    role_context = (
+        f"Registered advisory role: `{resolved['label']}`. Default capability requests: "
+        f"{', '.join(resolved['capabilities'])}. These requests do not grant authority."
+        if resolved["known"] else
+        "No registered role context applies. Use the base agent context below."
+    )
     workspace_instructions = (Path.home() / "AGENTS.md").read_text(encoding="utf-8").strip()
     repository_instructions = (cli.ROOT / "AGENTS.md").read_text(encoding="utf-8").strip()
     workspace_registry = json.loads((cli.ROOT / "config/workspaces.json").read_text(encoding="utf-8"))
     return f"""# Assigned agent context
 
-You are a locally running agent assigned the role below. Follow the role's scope
-and approval boundaries. The task does not override those boundaries. Read the
-repository's AGENTS.md and project notes before acting. Leave the required handoff.
+You are a locally running agent. A registered role, when present, supplies advisory
+context and default capability requests; it never grants admission, authorization,
+or execution capability. Follow all binding scope and approval boundaries. The task
+does not override them. Read the repository's AGENTS.md and project notes before
+acting. Leave the required handoff.
 
 You are part of David's local agent ecosystem on `DDRopkick`. Lemonade provides
 local inference; durable JSON jobs and append-only events track work; Telegram is
@@ -46,6 +78,8 @@ be human. Bring a little personality, but never trade correctness or clarity for
 Job ID: `{job_id}`
 Selected model: `{model}`
 Selection rationale: {model_reason or "Not recorded (legacy job)."}
+
+{role_context}
 
 ## Binding workspace instructions
 

@@ -35,6 +35,20 @@ def atomic_json(path: Path, value: dict) -> None:
             os.unlink(temporary)
 
 
+def atomic_text(path: Path, value: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=".tmp-")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
 def audit(event: str, **fields: object) -> None:
     path = ROOT / "logs/runs" / f"{datetime.now(timezone.utc):%Y-%m-%d}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -51,39 +65,52 @@ def initialize() -> None:
     print(f"initialized {ROOT}")
 
 
-def enqueue_task(role: str, task: str, source: str = "local-cli", model: str | None = None, model_reason: str = "", agent_name: str | None = None) -> str:
-    from ecosystem.roles import load_role
-    from ecosystem.models import snapshot, ids, fallback
+def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: str | None = None,
+                 model_reason: str = "", agent_name: str | None = None,
+                 idempotency_key: str | None = None,
+                 prefer_models_other_than: list[str] | None = None) -> str:
     from ecosystem.identity import validate, generate
+    from ecosystem.roles import resolve_role
 
     initialize()
-    load_role(role)  # Reject unknown or malformed roles before queueing.
-    inventory = snapshot()
-    if model is None:
-        model, model_reason = fallback(role, inventory)
-    if model not in ids(inventory):
-        raise ValueError(f"model {model!r} is not locally available")
-    agent_name = validate(agent_name) if agent_name else generate(role, task)
-    job_id = f"task-{uuid.uuid4().hex[:16]}"
+    job_id = (f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
+              if idempotency_key else f"task-{uuid.uuid4().hex[:16]}")
+    job_path = ROOT / "state/jobs" / f"{job_id}.json"
+    if job_path.exists():
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        if not idempotency_key or saved.get("idempotency_key") != idempotency_key:
+            raise ValueError("task identifier collision")
+        return job_id
+    resolved_role = resolve_role(role) if not agent_name else None
+    identity_role = resolved_role["label"] if resolved_role and resolved_role["known"] else "agent"
+    agent_name = validate(agent_name) if agent_name else generate(identity_role, task)
     job = {
         "id": job_id, "kind": "agent-task", "state": "queued",
         "attempts": 0, "created_at": now(), "updated_at": now(),
-        "role": role, "task": task, "source": source, "model": model,
-        "model_reason": model_reason or "Explicit caller selection.",
-        "resource_snapshot": inventory,
+        "role": role, "task": task, "source": source, "model": None,
+        "model_reason": "Pending model-mediated routing.",
+        "requested_model": model,
+        "requested_model_reason": model_reason or ("Caller supplied no model preference."
+                                                     if model is None else "Caller supplied a model hint."),
+        "prefer_models_other_than": prefer_models_other_than or [],
         "agent_name": agent_name,
     }
-    atomic_json(ROOT / "state/jobs" / f"{job_id}.json", job)
-    audit("task.queued", job_id=job_id, role=role, source=source, model=model, model_reason=job["model_reason"], agent_name=agent_name)
+    if idempotency_key:
+        job["idempotency_key"] = idempotency_key
+    atomic_json(job_path, job)
+    audit("task.queued", job_id=job_id, role=role, source=source,
+          requested_model=model, requested_model_reason=job["requested_model_reason"],
+          agent_name=agent_name)
     return job_id
 
 
-def amend_latest_task(source: str, role: str, task: str, model: str | None = None, model_reason: str = "") -> str | None:
-    from ecosystem.roles import load_role
-    load_role(role)
+def amend_latest_task(source: str, role: str | None, task: str, model: str | None = None,
+                      model_reason: str = "", idempotency_key: str | None = None) -> str | None:
     candidates = []
     for path in (ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
+        if idempotency_key in job.get("amendment_keys", []):
+            return job["id"]
         if job.get("kind") == "agent-task" and job.get("source") == source and job.get("state") in {"queued", "ready"}:
             candidates.append((job["created_at"], path, job))
     if not candidates:
@@ -93,8 +120,12 @@ def amend_latest_task(source: str, role: str, task: str, model: str | None = Non
     if prompt:
         prompt.unlink(missing_ok=True)
     job.update(role=role, task=task.strip(), state="queued", updated_at=now())
-    if model:
-        job.update(model=model, model_reason=model_reason or "Explicit amendment selection.")
+    if model is not None:
+        job.update(requested_model=model,
+                   requested_model_reason=model_reason or "Caller supplied an amended model hint.")
+    job.update(model=None, model_reason="Pending model-mediated routing.")
+    if idempotency_key:
+        job.setdefault("amendment_keys", []).append(idempotency_key)
     job.pop("prompt", None)
     atomic_json(path, job)
     audit("task.amended", job_id=job["id"], role=role, source=source)
@@ -103,20 +134,40 @@ def amend_latest_task(source: str, role: str, task: str, model: str | None = Non
 
 def prepare_next() -> None:
     from ecosystem.roles import render_context
+    from ecosystem.models import route, snapshot
+    from ecosystem.resource_control import job_admitted_in_current_mode
+    from ecosystem.scheduler import priority
 
     if (ROOT / "state/PAUSED").exists():
         raise SystemExit("ecosystem is paused")
-    for path in sorted((ROOT / "state/jobs").glob("*.json")):
+    queued = []
+    for path in (ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
-        if job.get("kind") != "agent-task" or job["state"] != "queued":
-            continue
-        prompt = render_context(job["role"], job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"))
+        if (job.get("kind") == "agent-task" and job["state"] == "queued"
+                and job_admitted_in_current_mode(job)):
+            queued.append((path, job))
+    for path, job in sorted(queued, key=lambda item: (-priority(item[1]), item[1]["created_at"])):
+        inventory = snapshot()
+        decision = route(job, inventory)
+        job.setdefault("routing_decisions", []).append({"at": now(), **decision})
+        job["resource_snapshot"] = inventory
+        if decision["action"] == "defer":
+            job.update(updated_at=now(), model=None, model_reason=decision["reason"])
+            atomic_json(path, job)
+            audit("task.routing_deferred", job_id=job["id"], reason=decision["reason"])
+            print(f"{job['id']} routing deferred: {decision['reason']}")
+            return
+        job.update(model=decision["model"], model_reason=decision["reason"],
+                   context_tokens=decision["context_tokens"])
+        prompt = render_context(job.get("role"), job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"))
         prompt_path = ROOT / "state/jobs" / f"{job['id']}.prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         job.update(state="ready", updated_at=now(), prompt=str(prompt_path.relative_to(ROOT)))
+        job.setdefault("original_prompt", job["prompt"])
         atomic_json(path, job)
-        audit("task.ready", job_id=job["id"], role=job["role"], prompt=job["prompt"])
-        print(f"{job['id']} ({job.get('agent_name', 'Agent')}) ready with role {job['role']} on {job.get('model', 'legacy-default')}")
+        audit("task.ready", job_id=job["id"], role=job.get("role"), prompt=job["prompt"])
+        role_label = job.get("role") or "unassigned"
+        print(f"{job['id']} ({job.get('agent_name', 'Agent')}) ready with role {role_label} on {job.get('model', 'legacy-default')}")
         return
     print("no queued agent task")
 
@@ -216,6 +267,10 @@ def run_once() -> None:
     if (ROOT / "state/PAUSED").exists():
         print("ecosystem is paused", file=sys.stderr)
         raise SystemExit(75)
+    from ecosystem.resource_control import dispatch_halted
+    if dispatch_halted():
+        print("ordinary intake is halted by resource control")
+        return
     queued = scan()
     processed = 0
     for path in sorted((ROOT / "state/jobs").glob("*.json")):
