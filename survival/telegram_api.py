@@ -1,11 +1,13 @@
 """Literal Telegram, guardian-socket, and gateway-record fingertips."""
 
 import http.client
+import hashlib
 import json
 import math
 import os
 import socket
 import time
+import urllib.parse
 from datetime import datetime
 from pathlib import Path
 
@@ -14,12 +16,13 @@ from survival.json_codec import decode_json_object
 
 
 INBOX_FIELDS = records.ACCEPTED_UPDATE_FIELDS | {
-    "accepted_monotonic_at", "deadline_at", "egress_state",
+    "boot_id", "accepted_monotonic_at", "deadline_at", "egress_state",
 }
 CRITICAL_EGRESS_FIELDS = {
     "schema_version", "id", "chat_id", "text", "egress_state",
 }
 COMMAND_DELIVERY_FIELDS = {"schema_version", "request_id", "egress_state"}
+CRITICAL_DELIVERY_FIELDS = {"schema_version", "message_id", "egress_state"}
 ACKNOWLEDGEMENT_FIELDS = {
     "schema_version", "request_id", "chat_id", "text", "egress_state",
 }
@@ -35,9 +38,14 @@ QUARANTINE_FIELDS = {
     "schema_version", "source_path", "quarantined_path", "error_reason",
     "quarantined_at",
 }
+DISPOSITION_FIELDS = {
+    "schema_version", "telegram_update_id", "state", "reason",
+}
+POLL_OFFSET_FIELDS = {"schema_version", "offset"}
 EGRESS_STATES = {"ready", "sending", "delivered", "delivery_unknown"}
 WORKERS = {"poll", "egress"}
 MAXIMUM_GUARDIAN_RESPONSE_BYTES = 4096
+_BOOT_ID_UNSET = object()
 
 
 def read_bot_token(credentials_directory):
@@ -83,9 +91,11 @@ def get_updates(
         raise ValueError("invalid Telegram update offset")
     _require_positive_number(timeout, "Telegram long-poll timeout")
     _require_positive_number(request_timeout, "Telegram request timeout")
-    query = f"timeout={_format_seconds(timeout)}"
+    query_values = {"timeout": _format_seconds(timeout)}
     if offset is not None:
-        query += f"&offset={offset}"
+        query_values["offset"] = str(offset)
+    query_values["allowed_updates"] = json.dumps(["message"], separators=(",", ":"))
+    query = urllib.parse.urlencode(query_values)
     status, payload = https_exchange(
         "api.telegram.org",
         request_timeout,
@@ -148,15 +158,20 @@ def submit_to_guardian(socket_path, command, timeout):
     encoded = protocol.encode_command(command)
     request = len(encoded).to_bytes(4, "big") + encoded
     connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    deadline = time.monotonic() + timeout
     try:
-        connection.settimeout(timeout)
+        connection.settimeout(_remaining_seconds(deadline))
         connection.connect(socket_path)
+        connection.settimeout(_remaining_seconds(deadline))
         connection.sendall(request)
-        response_size = int.from_bytes(_receive_exact(connection, 4), "big")
+        response_size = int.from_bytes(
+            _receive_exact(connection, 4, deadline=deadline), "big",
+        )
         if response_size <= 0 or response_size > MAXIMUM_GUARDIAN_RESPONSE_BYTES:
             raise ValueError("invalid guardian acknowledgement size")
         acknowledgement = decode_json_object(
-            _receive_exact(connection, response_size), "guardian acknowledgement",
+            _receive_exact(connection, response_size, deadline=deadline),
+            "guardian acknowledgement",
         )
     finally:
         connection.close()
@@ -172,14 +187,23 @@ def submit_to_guardian(socket_path, command, timeout):
     return acknowledgement
 
 
-def _receive_exact(connection, size):
+def _receive_exact(connection, size, deadline=None):
     result = bytearray()
     while len(result) < size:
+        if deadline is not None:
+            connection.settimeout(_remaining_seconds(deadline))
         chunk = connection.recv(size - len(result))
         if not chunk:
             raise ConnectionError("guardian closed socket before complete acknowledgement")
         result.extend(chunk)
     return bytes(result)
+
+
+def _remaining_seconds(deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("guardian acknowledgement deadline expired")
+    return remaining
 
 
 def read_allowed_user_ids(path):
@@ -207,10 +231,61 @@ def read_allowed_user_ids(path):
     return allowed
 
 
-def store_inbound(root, accepted, monotonic_now, deadline_seconds):
+def current_boot_id(path=Path("/proc/sys/kernel/random/boot_id")):
+    """Return the kernel boot identity owning monotonic timestamps."""
+    try:
+        value = Path(path).read_text(encoding="ascii").strip()
+    except OSError as error:
+        raise RuntimeError("cannot read kernel boot identity") from error
+    if not value or any(character.isspace() for character in value):
+        raise RuntimeError("invalid kernel boot identity")
+    return value
+
+
+def telegram_update_id(update):
+    """Decode only the durable Telegram identity before interpreting its body."""
+    try:
+        update_id = update["update_id"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("invalid Telegram update identity") from error
+    if type(update_id) is not int or update_id < 0:
+        raise ValueError("invalid Telegram update identity")
+    return update_id
+
+
+def store_ignored_update(root, update_id, reason="unsupported Telegram update"):
+    """Durably dispose one identified update without retaining unneeded content."""
+    if type(update_id) is not int or update_id < 0 or type(reason) is not str or not reason:
+        raise ValueError("invalid Telegram update disposition")
+    value = {
+        "schema_version": 1,
+        "telegram_update_id": update_id,
+        "state": "ignored",
+        "reason": reason,
+    }
+    path = root / "dispositions" / f"telegram-{update_id}.json"
+    if path.exists():
+        existing = _read_record(path, "Telegram update disposition")
+        if existing != value:
+            raise ValueError("replayed Telegram update disposition mismatch")
+        return existing
+    records.atomic_json(path, value)
+    return value
+
+
+def store_inbound(
+    root, accepted, monotonic_now, deadline_seconds, boot_id=_BOOT_ID_UNSET,
+):
     """Create an idempotent ordinary-message projection with one owned deadline."""
     _require_number(monotonic_now, "inbox acceptance time")
     _require_positive_number(deadline_seconds, "degraded response deadline")
+    if boot_id is _BOOT_ID_UNSET:
+        try:
+            boot_id = current_boot_id()
+        except RuntimeError:
+            boot_id = None
+    if boot_id is not None and (type(boot_id) is not str or not boot_id):
+        raise ValueError("invalid inbox boot identity")
     path = root / "inbox" / f"{accepted['id']}.json"
     if path.exists():
         existing = read_inbox_entry(path)
@@ -219,6 +294,7 @@ def store_inbound(root, accepted, monotonic_now, deadline_seconds):
         return existing
     value = dict(accepted)
     value.update({
+        "boot_id": boot_id,
         "accepted_monotonic_at": float(monotonic_now),
         "deadline_at": float(monotonic_now + deadline_seconds),
         "egress_state": "ready",
@@ -265,6 +341,10 @@ def validate_inbox_entry(value):
     if type(value) is not dict or set(value) != INBOX_FIELDS:
         raise ValueError("invalid inbox fields")
     _validate_accepted_projection(value)
+    if value["boot_id"] is not None and (
+        type(value["boot_id"]) is not str or not value["boot_id"]
+    ):
+        raise ValueError("invalid inbox boot identity")
     _require_number(value["accepted_monotonic_at"], "inbox acceptance time")
     _require_number(value["deadline_at"], "inbox deadline")
     if value["deadline_at"] <= value["accepted_monotonic_at"]:
@@ -283,7 +363,13 @@ def update_inbox_state(path, state):
 def store_critical_outbox_entry(root, value):
     validate_critical_outbox_entry(value)
     path = root / "outbox" / "critical" / f"{value['id']}.json"
+    if path.exists():
+        existing = read_critical_outbox_entry(path)
+        if existing != value:
+            raise ValueError("replayed critical message identity mismatch")
+        return existing
     _write_shared_record(path, value)
+    return value
 
 
 def list_critical_outbox(root):
@@ -322,6 +408,46 @@ def update_critical_outbox_state(path, state):
     value["egress_state"] = state
     _write_shared_record(path, value)
     return value
+
+
+def ensure_critical_delivery(root, message_id, initial_state="ready"):
+    """Own gateway delivery state without mutating a guardian-owned message."""
+    if type(message_id) is not str or not message_id:
+        raise ValueError("invalid critical message identity")
+    _validate_egress_state(initial_state)
+    value = {
+        "schema_version": 1,
+        "message_id": message_id,
+        "egress_state": initial_state,
+    }
+    path = root / "gateway" / "critical-delivery" / f"{message_id}.json"
+    if not path.exists():
+        records.atomic_json(path, value)
+        return path, value
+    existing = _read_record(path, "critical delivery")
+    _validate_critical_delivery(existing, message_id)
+    return path, existing
+
+
+def update_critical_delivery_state(path, state):
+    value = _read_record(path, "critical delivery")
+    _validate_critical_delivery(value, path.stem)
+    _validate_egress_state(state)
+    value["egress_state"] = state
+    records.atomic_json(path, value)
+    return value
+
+
+def _validate_critical_delivery(value, message_id):
+    if type(value) is not dict or set(value) != CRITICAL_DELIVERY_FIELDS:
+        raise ValueError("invalid critical delivery fields")
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or value["message_id"] != message_id
+    ):
+        raise ValueError("invalid critical delivery value")
+    _validate_egress_state(value["egress_state"])
 
 
 def _write_shared_record(path, value):
@@ -417,32 +543,114 @@ def _validate_acknowledgement(value, request_id):
 
 
 def quarantine_record(root, source_path, error_reason):
-    """Move bad bytes aside, then durably publish one visible error record."""
+    """Best-effort isolate bad bytes without turning one record into process death."""
     directory = root / "quarantine"
-    directory.mkdir(parents=True, exist_ok=True)
-    identity = f"{time.time_ns()}-{source_path.name}"
-    quarantined_path = directory / f"{identity}.record"
-    os.replace(source_path, quarantined_path)
-    error = {
+    try:
+        metadata = source_path.stat()
+        identity_source = "\0".join((
+            str(source_path), str(error_reason), str(metadata.st_dev),
+            str(metadata.st_ino), str(metadata.st_size), str(metadata.st_mtime_ns),
+        ))
+    except OSError:
+        identity_source = f"{source_path}\0{error_reason}"
+    incident_id = hashlib.sha256(identity_source.encode("utf-8")).hexdigest()[:32]
+    quarantined_path = directory / f"{incident_id}.record"
+    quarantine_succeeded = False
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        _replace_record(source_path, quarantined_path)
+        quarantine_succeeded = True
+        error = {
+            "schema_version": 1,
+            "source_path": str(source_path),
+            "quarantined_path": str(quarantined_path),
+            "error_reason": str(error_reason),
+            "quarantined_at": datetime.now().astimezone().isoformat(),
+        }
+        error_path = directory / f"{incident_id}.json"
+        if not error_path.exists():
+            records.atomic_json(error_path, error)
+    except OSError:
+        pass
+    health = {
         "schema_version": 1,
+        "state": "degraded",
+        "incident_id": incident_id,
         "source_path": str(source_path),
-        "quarantined_path": str(quarantined_path),
         "error_reason": str(error_reason),
-        "quarantined_at": datetime.now().astimezone().isoformat(),
+        "quarantine_succeeded": quarantine_succeeded,
     }
-    records.atomic_json(directory / f"{identity}.json", error)
+    health_directory = root / "gateway" / "data-health-incidents"
+    try:
+        records.atomic_json(health_directory / f"{incident_id}.json", health)
+    except OSError:
+        pass
+    try:
+        records.atomic_json(root / "gateway" / "data-health.json", health)
+        if not quarantine_succeeded:
+            error_path = directory / f"{incident_id}.json"
+            if not error_path.exists():
+                records.atomic_json(error_path, {
+                    "schema_version": 1,
+                    "source_path": str(source_path),
+                    "quarantined_path": "",
+                    "error_reason": str(error_reason),
+                    "quarantined_at": datetime.now().astimezone().isoformat(),
+                })
+    except OSError:
+        pass
+    return quarantine_succeeded
+
+
+def _replace_record(source_path, quarantined_path):
+    os.replace(source_path, quarantined_path)
 
 
 def list_quarantine_errors(root):
     directory = root / "quarantine"
     if not directory.is_dir():
         return []
-    return sorted(directory.glob("*.json"))
+    try:
+        return sorted(directory.glob("*.json"))
+    except OSError:
+        return []
 
 
 def quarantine_is_empty(root):
     directory = root / "quarantine"
-    return not directory.is_dir() or next(directory.iterdir(), None) is None
+    try:
+        return not directory.is_dir() or next(directory.iterdir(), None) is None
+    except OSError:
+        return False
+
+
+def read_poll_offset(root):
+    path = root / "gateway" / "poll-offset.json"
+    if not path.exists():
+        return None
+    value = _read_record(path, "Telegram poll offset")
+    if (
+        type(value) is not dict
+        or set(value) != POLL_OFFSET_FIELDS
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or type(value["offset"]) is not int
+        or value["offset"] < 0
+    ):
+        raise ValueError("invalid Telegram poll offset")
+    return value["offset"]
+
+
+def store_poll_offset(root, offset):
+    if type(offset) is not int or offset < 0:
+        raise ValueError("invalid Telegram poll offset")
+    previous = read_poll_offset(root)
+    if previous is not None and offset < previous:
+        raise ValueError("Telegram poll offset cannot move backwards")
+    records.atomic_json(root / "gateway" / "poll-offset.json", {
+        "schema_version": 1,
+        "offset": offset,
+    })
 
 
 def write_worker_heartbeat(root, worker, monotonic_at):
@@ -476,7 +684,7 @@ def read_worker_heartbeat(root, worker):
 def write_gateway_heartbeat(root, poll_at, egress_at, monotonic_at):
     for value in (poll_at, egress_at, monotonic_at):
         _require_number(value, "gateway heartbeat")
-    records.atomic_json(root / "heartbeat.json", {
+    records.atomic_json(root / "gateway" / "heartbeat.json", {
         "schema_version": 1,
         "poll_monotonic_at": float(poll_at),
         "egress_monotonic_at": float(egress_at),

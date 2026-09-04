@@ -49,28 +49,34 @@ def test_new_lifecycle_rejects_forged_or_incomplete_command_records():
 
 def test_restart_requests_checkpoint_after_acknowledgement():
     state = lifecycle.new_lifecycle(command_record("restart"), previous_pause=False)
-    state, effects = lifecycle.reduce_lifecycle(state, {"kind": "ack_delivered"})
-    assert state["phase"] == "admission_closed"
-    assert effect_kinds(effects) == ["close_admission", "checkpoint"]
+    state, effects = lifecycle.reduce_lifecycle(state, {"kind": "ack_committed"})
+    assert state["phase"] == "acknowledged"
+    assert effect_kinds(effects) == ["close_admission"]
 
 
 def test_reset_skips_checkpoint():
     state = lifecycle.new_lifecycle(command_record("reset"), previous_pause=True)
-    state, effects = lifecycle.reduce_lifecycle(state, {"kind": "ack_delivered"})
-    assert effect_kinds(effects) == ["close_admission", "kill_units"]
+    state, effects = lifecycle.reduce_lifecycle(state, {"kind": "ack_committed"})
+    assert effect_kinds(effects) == ["close_admission"]
+    state, effects = lifecycle.reduce_lifecycle(state, {"kind": "admission_closed"})
+    assert state["phase"] == "stopping"
+    assert effect_kinds(effects) == ["kill_units"]
 
 
 def test_restart_uses_the_durable_recovery_transition_table():
     state = lifecycle.new_lifecycle(command_record("restart"), previous_pause=False)
     transitions = (
-        ("ack_delivered", "admission_closed", ["close_admission", "checkpoint"]),
+        ("ack_committed", "acknowledged", ["close_admission"]),
+        ("admission_closed", "checkpointing", ["checkpoint"]),
         ("checkpointed", "stopping", ["stop_units"]),
         ("units_stopped", "backend_stopped", ["stop_lemonade"]),
         ("backend_stopped", "starting", ["start_lemonade"]),
-        ("lemonade_started", "reconciling", ["start_units"]),
-        ("units_started", "verifying", ["reconcile"]),
-        ("reconciled", "resumed", ["verify"]),
-        ("verified", "completed", ["resume", "finish"]),
+        ("lemonade_started", "starting", ["start_units"]),
+        ("units_started", "reconciling", ["reconcile"]),
+        ("reconciled", "verifying", ["verify"]),
+        ("verified", "resumed", ["resume"]),
+        ("resumed", "completed", ["finish"]),
+        ("finished", "completed", []),
     )
     for event_kind, phase, kinds in transitions:
         state, effects = lifecycle.reduce_lifecycle(state, {"kind": event_kind})
@@ -81,13 +87,15 @@ def test_restart_uses_the_durable_recovery_transition_table():
 def test_reset_uses_the_fast_recovery_transition_table():
     state = lifecycle.new_lifecycle(command_record("reset"), previous_pause=True)
     transitions = (
-        ("ack_delivered", "admission_closed", ["close_admission", "kill_units"]),
+        ("ack_committed", "acknowledged", ["close_admission"]),
+        ("admission_closed", "stopping", ["kill_units"]),
         ("units_killed", "backend_stopped", ["stop_lemonade"]),
         ("backend_stopped", "starting", ["start_lemonade"]),
-        ("lemonade_started", "reconciling", ["start_units"]),
-        ("units_started", "verifying", ["reconcile"]),
-        ("reconciled", "resumed", ["verify"]),
-        ("verified", "completed", ["finish"]),
+        ("lemonade_started", "starting", ["start_units"]),
+        ("units_started", "reconciling", ["reconcile"]),
+        ("reconciled", "verifying", ["verify"]),
+        ("verified", "resumed", ["finish"]),
+        ("finished", "completed", []),
     )
     for event_kind, phase, kinds in transitions:
         state, effects = lifecycle.reduce_lifecycle(state, {"kind": event_kind})
@@ -98,7 +106,7 @@ def test_reset_uses_the_fast_recovery_transition_table():
 def test_effects_are_complete_declarative_idempotent_requests():
     state, effects = lifecycle.reduce_lifecycle(
         lifecycle.new_lifecycle(command_record("restart"), previous_pause=False),
-        {"kind": "ack_delivered"},
+        {"kind": "ack_committed"},
     )
     assert all(set(effect) == {"kind", "request_id", "phase", "idempotency_key"}
                for effect in effects)
@@ -110,9 +118,9 @@ def test_effects_are_complete_declarative_idempotent_requests():
 def test_pending_effects_survive_a_guardian_restart_without_replaying_completed_work():
     state, effects = lifecycle.reduce_lifecycle(
         lifecycle.new_lifecycle(command_record("restart"), previous_pause=False),
-        {"kind": "ack_delivered"},
+        {"kind": "ack_committed"},
     )
-    close_admission, checkpoint = effects
+    close_admission = effects[0]
     assert state["pending_effects"] == effects
     state, repeated = lifecycle.reduce_lifecycle(state, {
         "kind": "effect_completed",
@@ -121,26 +129,30 @@ def test_pending_effects_survive_a_guardian_restart_without_replaying_completed_
     })
     assert repeated == []
     assert state["completed_effects"] == [close_admission["idempotency_key"]]
-    assert state["pending_effects"] == [checkpoint]
+    assert state["pending_effects"] == []
     _, recovered = lifecycle.reduce_lifecycle(state, {
         "kind": "recover",
         "idempotency_key": "telegram-1:guardian-restart-1",
     })
-    assert recovered == [checkpoint]
+    assert recovered == []
 
 
 def test_keyless_effect_completions_use_the_effect_identity_and_replay_independently():
     state, effects = lifecycle.reduce_lifecycle(
         lifecycle.new_lifecycle(command_record("restart"), previous_pause=False),
-        {"kind": "ack_delivered"},
+        {"kind": "ack_committed"},
     )
-    close_admission, checkpoint = effects
+    close_admission = effects[0]
     first_event = {
         "kind": "effect_completed",
         "effect_idempotency_key": close_admission["idempotency_key"],
     }
     state, ignored = lifecycle.reduce_lifecycle(state, first_event)
     assert ignored == []
+    state, checkpoint_effects = lifecycle.reduce_lifecycle(
+        state, {"kind": "admission_closed"},
+    )
+    checkpoint = checkpoint_effects[0]
     state, ignored = lifecycle.reduce_lifecycle(state, {
         "kind": "effect_completed",
         "effect_idempotency_key": checkpoint["idempotency_key"],
@@ -156,16 +168,18 @@ def test_keyless_effect_completions_use_the_effect_identity_and_replay_independe
 
 
 def test_verification_restores_an_unpaused_lifecycle_only_after_the_health_gate():
-    state = lifecycle_state(phase="resumed", previous_pause=False)
+    state = lifecycle_state(phase="verifying", previous_pause=False)
     state, effects = lifecycle.reduce_lifecycle(state, {"kind": "verified"})
     assert state["previous_pause"] is False
-    assert effect_kinds(effects) == ["resume", "finish"]
+    assert state["phase"] == "resumed"
+    assert effect_kinds(effects) == ["resume"]
 
 
 def test_verification_restores_a_paused_lifecycle_without_resuming_work():
-    state = lifecycle_state(phase="resumed", previous_pause=True)
+    state = lifecycle_state(phase="verifying", previous_pause=True)
     state, effects = lifecycle.reduce_lifecycle(state, {"kind": "verified"})
     assert state["previous_pause"] is True
+    assert state["phase"] == "resumed"
     assert effect_kinds(effects) == ["finish"]
 
 
@@ -177,34 +191,34 @@ def test_replayed_effect_completion_is_idempotent():
     assert second == (first[0], [])
 
 
-def test_keyless_acknowledgement_replay_is_a_request_scoped_no_op():
+def test_keyless_acknowledgement_commit_replay_is_a_request_scoped_no_op():
     state = lifecycle.new_lifecycle(command_record("restart"), previous_pause=False)
-    first = lifecycle.reduce_lifecycle(state, {"kind": "ack_delivered"})
-    second = lifecycle.reduce_lifecycle(first[0], {"kind": "ack_delivered"})
-    assert first[0]["applied_events"] == ["telegram-1:ack_delivered"]
+    first = lifecycle.reduce_lifecycle(state, {"kind": "ack_committed"})
+    second = lifecycle.reduce_lifecycle(first[0], {"kind": "ack_committed"})
+    assert first[0]["applied_events"] == ["telegram-1:ack_committed"]
     assert second == (first[0], [])
 
 
 def test_provided_event_key_must_be_a_nonempty_key_for_this_request():
     state = lifecycle.new_lifecycle(command_record("restart"), previous_pause=False)
-    for key in ("", "telegram-2:ack_delivered", 3):
+    for key in ("", "telegram-2:ack_committed", 3):
         with unittest.TestCase().assertRaisesRegex(ValueError, "idempotency"):
-            lifecycle.reduce_lifecycle(state, {"kind": "ack_delivered", "idempotency_key": key})
+            lifecycle.reduce_lifecycle(state, {"kind": "ack_committed", "idempotency_key": key})
 
 
 def test_blocked_or_failed_lifecycle_retains_pending_work_and_can_recover():
     for terminal_phase in ("blocked", "failed"):
         state, initial_effects = lifecycle.reduce_lifecycle(
             lifecycle.new_lifecycle(command_record("restart"), previous_pause=False),
-            {"kind": "ack_delivered"},
+        {"kind": "ack_committed"},
         )
         state, effects = lifecycle.reduce_lifecycle(state, {"kind": terminal_phase})
         assert state["phase"] == terminal_phase
-        assert state["recovery_phase"] == "admission_closed"
+        assert state["recovery_phase"] == "acknowledged"
         assert state["pending_effects"] == [*initial_effects, *effects]
         assert effect_kinds(effects) == ["notify"]
         state, recovered = lifecycle.reduce_lifecycle(state, {"kind": "recover"})
-        assert state["phase"] == "admission_closed"
+        assert state["phase"] == "acknowledged"
         assert state["recovery_phase"] is None
         assert state["applied_events"].count("telegram-1:recover") == 1
         assert recovered == [*initial_effects, *effects]
@@ -216,17 +230,17 @@ def test_blocked_or_failed_lifecycle_retains_pending_work_and_can_recover():
 def test_malformed_state_and_event_are_rejected_before_reduction():
     malformed_state = lifecycle_state() | {"pending_effects": [{"kind": "checkpoint"}]}
     with unittest.TestCase().assertRaisesRegex(ValueError, "state"):
-        lifecycle.reduce_lifecycle(malformed_state, {"kind": "ack_delivered"})
+        lifecycle.reduce_lifecycle(malformed_state, {"kind": "ack_committed"})
     with unittest.TestCase().assertRaisesRegex(ValueError, "state"):
         lifecycle.reduce_lifecycle(
             lifecycle_state() | {"completed_effects": ["telegram-1:forged"]},
-            {"kind": "ack_delivered"},
+            {"kind": "ack_committed"},
         )
     for field in ("command", "applied_events", "completed_effects"):
         with unittest.TestCase().assertRaisesRegex(ValueError, "state"):
             lifecycle.reduce_lifecycle(
                 lifecycle_state() | {field: [[]]},
-                {"kind": "ack_delivered"},
+                {"kind": "ack_committed"},
             )
     with unittest.TestCase().assertRaisesRegex(ValueError, "event"):
         lifecycle.reduce_lifecycle(lifecycle_state(), {"kind": 1})

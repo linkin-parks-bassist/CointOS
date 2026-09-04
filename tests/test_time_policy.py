@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 
 from ecosystem import time_policy
+from survival import time_policy as survival_time_policy
 
 
 DEFAULT_POLICY = {
@@ -110,6 +111,22 @@ def test_invalid_reload_keeps_last_known_good():
         assert "maximum_age_seconds" in error
 
 
+def test_survival_owner_atomically_retains_last_known_good_after_invalid_edit():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = write_complete_policy(root)
+        accepted_path = root / "accepted.json"
+        policy, error = survival_time_policy.adopt_last_known_good(path, accepted_path)
+        assert error is None
+        assert policy == DEFAULT_POLICY
+
+        path.write_text("[heartbeat]\nmaximum_age_seconds = invalid\n", encoding="utf-8")
+        retained, error = survival_time_policy.adopt_last_known_good(path, accepted_path)
+        assert retained == policy
+        assert "maximum_age_seconds" in error
+        assert survival_time_policy.read_accepted_policy(accepted_path) == policy
+
+
 def test_load_rejects_missing_unknown_boolean_nonfinite_and_nonpositive_values():
     cases = (
         ("[DEFAULT]\n\n[heartbeat]\nprobe_deadline_seconds = 15\nmaximum_age_seconds = 60\n",
@@ -160,6 +177,7 @@ def load_tests(_loader, _tests, _pattern):
         test_loads_explicit_seconds,
         test_probe_deadline_must_be_shorter_than_lease,
         test_invalid_reload_keeps_last_known_good,
+        test_survival_owner_atomically_retains_last_known_good_after_invalid_edit,
         test_load_rejects_missing_unknown_boolean_nonfinite_and_nonpositive_values,
         test_partial_required_mapping_only_checks_relations_when_all_keys_are_present,
         test_seconds_rejects_missing_or_invalid_values,

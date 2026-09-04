@@ -43,23 +43,35 @@ Plan 5 installs that boundary and its live acceptance sequence passes.
 without enabling or starting anything by default. It creates the dedicated
 `cointelprofessional` system account, the private `cointelprofessional_command`
 socket group, and the shared `agent_ecosystem_io` spool group. The installed code,
-entry points, and this operations file are immutable root-owned copies under
-`/usr/local/lib/cointelprofessional-survival/`; services never execute the mutable
-checkout.
+entry points, lifecycle catalogue, and this operations file are immutable root-owned
+copies under content-addressed `releases/`. The single `current` symlink is the
+authoritative package value; services resolve code, units, and documentation through
+it and never execute the mutable checkout. Unit links are constructed before
+`current`, so an interrupted first install has no resolvable operational surface and
+a retry completes it without exposing a partial release.
 
 Before installation, provision the Telegram bot token at
 `/etc/cointelprofessional/telegram_bot_token` and the allowed numeric Telegram user
 identities, one per line, at `/etc/cointelprofessional/allowed_user_ids`. Do not pass
 either value on a command line. The installer deliberately does not create
-placeholder credentials. It installs the accepted timing policy as
-`/etc/cointelprofessional/time.cfg`, resolves the actual gateway and David user IDs
+placeholder credentials. It creates the mutable, root-owned timing policy at
+`/etc/cointelprofessional/time.cfg` only when absent, resolves the actual gateway and David user IDs
 into a root-readable guardian environment file, and creates these runtime boundaries:
 
 ```text
 /run/cointelprofessional/       root:cointelprofessional_command  0750
-/var/lib/cointelprofessional/   root:agent_ecosystem_io           2770
+/var/lib/cointelprofessional/   root:root                          0755
+inbox/                          cointelprofessional:agent_ecosystem_io 2750
+outbox/critical/                root:cointelprofessional           2750
+gateway private state          cointelprofessional:cointelprofessional 0700
+guardian lifecycle state       root:root                          0700
 guardian.sock                   root:cointelprofessional_command  0660
 ```
+
+Inbox records are `0640`: only the gateway writes them and David's ordinary plane
+may consume them. Root critical records are also `0640`; the gateway may read but
+cannot alter them, and keeps delivery state in its own private directory. Neither
+ordinary work nor the gateway can rename or inject entries at the store root.
 
 The guardian service restores the volatile `/run/cointelprofessional` directory
 with that owner and mode after each boot and preserves it across guardian restarts.
@@ -78,7 +90,43 @@ The systemd units supply `NOTIFY_SOCKET`; never put a literal notification socke
 the environment. `NotifyAccess=main` is intentional: gateway workers publish their
 health to their parent, and only the service main process emits readiness/watchdog
 datagrams. The guardian likewise stops watchdog renewal while a lifecycle operation
-is wedged.
+is wedged. During a legitimate bounded checkpoint, systemd operation, or escalation
+grace, its adapter emits progress watchdog observations; the configured policy still
+owns each operation deadline.
+
+`RESTART` and `RESET` are serialized durable lifecycles. The guardian commits
+recoverable pending work before acknowledging the socket, resumes the oldest request
+at startup and on idle polls, and records an immutable result attempt before reducing
+the next phase. `RESTART` closes activation, checkpoints, then performs cooperative
+stop with TERM/KILL escalation; `RESET` skips the handoff and escalates immediately.
+The restart checkpoint request is published as a David-readable `0640`
+`state/lifecycle-checkpoint.json` before the configured grace interval; surviving
+jobs are then recorded as interrupted with any durable OpenCode session identity.
+Both clear systemd failed/start-limit state, start Lemonade and inference/control prerequisites, reconcile jobs, control
+turns, uncertain outbox delivery, and pending verification, verify the pinned-model
+canary, and only then restore prior activation and pause state. The resource guard is
+catalogued as intentionally inactive and is not started.
+
+Monotonic inbox deadlines carry the originating boot identity; an unknown or changed
+boot makes the response immediately due. Unsupported Telegram update bodies receive
+a durable ignored disposition and advance a durable poll offset. A malformed spool
+record is quarantined without withholding worker watchdog renewal. The gateway writes
+a separate durable degraded data-health fact for every incident and the guardian
+emits one root-owned critical report per incident. A failed quarantine move is
+reported truthfully while later egress and watchdog renewal continue.
+
+Both services validate the complete timing schema. Valid live edits are adopted as
+one projection. Invalid edits keep `/var/lib/cointelprofessional/policy/time.json` as
+the guardian's last-known-good value, persist `policy/status.json`, and enqueue a
+deduplicated critical explanation. Inspect offline state with:
+
+```bash
+jq . /var/lib/cointelprofessional/policy/{time,status}.json
+jq '.state | {phase,pending_effects,completed_effects}' \
+  /var/lib/cointelprofessional/lifecycle/telegram-*.json
+find /var/lib/cointelprofessional/{quarantine,lifecycle-result-quarantine} \
+  -maxdepth 1 -type f -print
+```
 
 Keep `agent-resource-guard.service` disabled and stopped across login and reboot. Its
 pending `context_overflow` escalation cannot yet complete automatically; Plan 4 must

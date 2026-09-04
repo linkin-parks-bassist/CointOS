@@ -1,6 +1,6 @@
 [Unit]
 Description=Cointelprofessional guardian - peer-authenticated lifecycle controller
-Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md
+Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
 StartLimitIntervalSec=0
 
 [Service]
@@ -17,21 +17,24 @@ RuntimeDirectory=cointelprofessional
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes
 ExecStart=/usr/bin/python3 -m survival.guardian
-WorkingDirectory=/usr/local/lib/cointelprofessional-survival
+WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current
 EnvironmentFile=/etc/cointelprofessional/guardian.env
 Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock
 Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
-ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/guardian.env /sys/fs/cgroup
-ReadWritePaths=/var/lib/cointelprofessional /run/cointelprofessional
+Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
+Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json
+Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state
+ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/guardian.env /etc/cointelprofessional/time.cfg /sys/fs/cgroup
+ReadWritePaths=/var/lib/cointelprofessional/lifecycle /var/lib/cointelprofessional/lifecycle-runtime /var/lib/cointelprofessional/lifecycle-completions /var/lib/cointelprofessional/lifecycle-result-quarantine /var/lib/cointelprofessional/policy /var/lib/cointelprofessional/outbox/critical /run/cointelprofessional /home/david/agent-ecosystem/state
 PrivateTmp=true
 PrivateDevices=true
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
+ProtectHome=read-only
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-RestrictAddressFamilies=AF_UNIX
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

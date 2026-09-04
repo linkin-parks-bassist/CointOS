@@ -4,8 +4,9 @@ from survival import protocol
 
 
 PHASES = (
-    "accepted", "admission_closed", "stopping", "backend_stopped", "starting",
-    "reconciling", "verifying", "resumed", "completed", "blocked", "failed",
+    "accepted", "acknowledged", "admission_closed", "checkpointing", "stopping",
+    "backend_stopped", "starting", "reconciling", "verifying", "resumed",
+    "completed", "blocked", "failed",
 )
 EFFECT_KINDS = {
     "notify", "close_admission", "checkpoint", "stop_units", "kill_units",
@@ -30,22 +31,23 @@ EVENT_COMPLETIONS = {
 
 
 _RECOVERY_TRANSITIONS = {
-    ("starting", "lemonade_started"): ("reconciling", ("start_units",)),
-    ("reconciling", "units_started"): ("verifying", ("reconcile",)),
-    ("verifying", "reconciled"): ("resumed", ("verify",)),
-    ("resumed", "verified"): ("completed", ()),
+    ("starting", "lemonade_started"): ("starting", ("start_units",)),
+    ("starting", "units_started"): ("reconciling", ("reconcile",)),
+    ("reconciling", "reconciled"): ("verifying", ("verify",)),
+    ("verifying", "verified"): ("resumed", ("resume",)),
+    ("resumed", "resumed"): ("completed", ("finish",)),
+    ("resumed", "finished"): ("completed", ()),
+    ("completed", "finished"): ("completed", ()),
 }
 TRANSITIONS = {
-    ("restart", "accepted", "ack_delivered"): (
-        "admission_closed", ("close_admission", "checkpoint"),
-    ),
-    ("restart", "admission_closed", "checkpointed"): ("stopping", ("stop_units",)),
+    ("restart", "accepted", "ack_committed"): ("acknowledged", ("close_admission",)),
+    ("restart", "acknowledged", "admission_closed"): ("checkpointing", ("checkpoint",)),
+    ("restart", "checkpointing", "checkpointed"): ("stopping", ("stop_units",)),
     ("restart", "stopping", "units_stopped"): ("backend_stopped", ("stop_lemonade",)),
     ("restart", "backend_stopped", "backend_stopped"): ("starting", ("start_lemonade",)),
-    ("reset", "accepted", "ack_delivered"): (
-        "admission_closed", ("close_admission", "kill_units"),
-    ),
-    ("reset", "admission_closed", "units_killed"): ("backend_stopped", ("stop_lemonade",)),
+    ("reset", "accepted", "ack_committed"): ("acknowledged", ("close_admission",)),
+    ("reset", "acknowledged", "admission_closed"): ("stopping", ("kill_units",)),
+    ("reset", "stopping", "units_killed"): ("backend_stopped", ("stop_lemonade",)),
     ("reset", "backend_stopped", "backend_stopped"): ("starting", ("start_lemonade",)),
 }
 
@@ -105,10 +107,8 @@ def apply_transition(
         state, _completed_effect_key(state, event["kind"]), required=False,
     )
     kinds = list(effect_kinds)
-    if phase == "completed":
-        if not state["previous_pause"]:
-            kinds.append("resume")
-        kinds.append("finish")
+    if state["phase"] == "verifying" and event["kind"] == "verified":
+        kinds = ["resume"] if not state["previous_pause"] else ["finish"]
     effects = [_effect(state["request_id"], phase, kind) for kind in kinds]
     pending = [*pending, *(_copy_effect(effect) for effect in effects)]
     next_state = _next_state(

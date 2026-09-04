@@ -1,13 +1,13 @@
 """Permanent Telegram gateway orchestration over explicit durable state."""
 
-import configparser
 import math
 import os
 import signal
+import threading
 import time
 from pathlib import Path
 
-from survival import protocol, records, systemd_notify, telegram_api
+from survival import protocol, records, systemd_notify, telegram_api, time_policy
 
 
 ACKNOWLEDGEMENT_MESSAGES = {
@@ -42,11 +42,18 @@ def handle_update(
     store,
     send,
     send_command,
+    send_acknowledgement=None,
     monotonic_now=time.monotonic,
+    boot_id=telegram_api.current_boot_id,
     degraded_response_deadline_seconds=None,
 ):
     """Authenticate, durably accept, and idempotently dispatch one update."""
-    projection = records._accepted_update(update)
+    update_id = telegram_api.telegram_update_id(update)
+    try:
+        projection = records._accepted_update(update)
+    except ValueError:
+        telegram_api.store_ignored_update(store, update_id)
+        return {"kind": "ignored", "id": f"telegram-{update_id}"}
     if projection["telegram_user_id"] not in allowed:
         telegram_api.store_denied_audit(store, update)
         return {"kind": "denied", "id": projection["id"]}
@@ -59,22 +66,29 @@ def handle_update(
             degraded_response_deadline_seconds = timing[
                 "degraded_response_deadline_seconds"
             ]
+        try:
+            observed_boot_id = boot_id()
+        except RuntimeError:
+            observed_boot_id = None
         telegram_api.store_inbound(
             store,
             accepted,
             monotonic_now(),
             degraded_response_deadline_seconds,
+            boot_id=observed_boot_id,
         )
         return {"kind": "ordinary", "id": accepted["id"]}
 
     request = command_record(accepted, command)
     _deliver_guardian_command(store, request, send_command)
+    if send_acknowledgement is None:
+        send_acknowledgement = send
     _deliver_acknowledgement(
         store,
         accepted["id"],
         accepted["chat_id"],
         acknowledgement(command),
-        send,
+        send_acknowledgement,
     )
     return {"kind": "command", "id": accepted["id"]}
 
@@ -103,18 +117,30 @@ def _deliver_acknowledgement(store, request_id, chat_id, text, send):
     if state["egress_state"] == "sending":
         telegram_api.update_acknowledgement_state(path, "delivery_unknown")
         return "delivery_unknown"
-    return _perform_telegram_send(
-        path,
-        chat_id,
-        text,
-        send,
-        telegram_api.update_acknowledgement_state,
-    )
+    try:
+        return _perform_telegram_send(
+            path,
+            chat_id,
+            text,
+            send,
+            telegram_api.update_acknowledgement_state,
+        )
+    except BaseException:
+        return "delivery_unknown"
 
 
-def send_due_degraded_responses(root, send, now):
+def send_due_degraded_responses(root, send, now, current_boot_id=None):
     """Crash-truthfully send each exact inbox record whose deadline is due."""
     _require_number(now, "degraded response scan time")
+    if current_boot_id is None:
+        try:
+            current_boot_id = telegram_api.current_boot_id()
+        except RuntimeError:
+            current_boot_id = None
+    if current_boot_id is not None and (
+        type(current_boot_id) is not str or not current_boot_id
+    ):
+        raise ValueError("invalid current boot identity")
     count = 0
     for path in telegram_api.list_inbox_entries(root):
         try:
@@ -129,7 +155,12 @@ def send_due_degraded_responses(root, send, now):
             telegram_api.update_inbox_state(path, "delivery_unknown")
             count += 1
             continue
-        if now < value["deadline_at"]:
+        if (
+            current_boot_id is not None
+            and value["boot_id"] is not None
+            and value["boot_id"] == current_boot_id
+            and now < value["deadline_at"]
+        ):
             continue
         _perform_telegram_send(
             path,
@@ -151,19 +182,36 @@ def drain_critical_outbox(store, send):
         except (OSError, ValueError) as error:
             telegram_api.quarantine_record(store, path, str(error))
             continue
-        state = value["egress_state"]
+        initial_state = (
+            "delivery_unknown" if value["egress_state"] == "sending" else "ready"
+        )
+        try:
+            delivery_path, delivery = telegram_api.ensure_critical_delivery(
+                store, value["id"], initial_state=initial_state,
+            )
+        except (OSError, ValueError) as error:
+            delivery_path = (
+                store / "gateway" / "critical-delivery" / f"{value['id']}.json"
+            )
+            telegram_api.quarantine_record(store, delivery_path, str(error))
+            continue
+        state = delivery["egress_state"]
         if state in {"delivered", "delivery_unknown"}:
+            if initial_state == "delivery_unknown":
+                count += 1
             continue
         if state == "sending":
-            telegram_api.update_critical_outbox_state(path, "delivery_unknown")
+            telegram_api.update_critical_delivery_state(
+                delivery_path, "delivery_unknown",
+            )
             count += 1
             continue
         _perform_telegram_send(
-            path,
+            delivery_path,
             value["chat_id"],
             value["text"],
             send,
-            telegram_api.update_critical_outbox_state,
+            telegram_api.update_critical_delivery_state,
         )
         count += 1
     return count
@@ -181,17 +229,41 @@ def _perform_telegram_send(path, chat_id, text, send, update_state):
     return state
 
 
+def _call_with_deadline(operation, deadline_seconds):
+    """Apply one overall wall-clock bound to a transport operation."""
+    _require_positive_number(deadline_seconds, "transport deadline")
+    if not callable(operation):
+        raise ValueError("invalid transport operation")
+    values = []
+    errors = []
+
+    def run():
+        try:
+            values.append(operation())
+        except BaseException as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(deadline_seconds)
+    if worker.is_alive():
+        return False
+    if errors:
+        raise errors[0]
+    if len(values) != 1:
+        raise RuntimeError("transport operation produced no result")
+    return values[0]
+
+
 def check_quarantine_health(store):
     """Report whether durable corruption evidence is absent."""
     return telegram_api.quarantine_is_empty(store)
 
 
 def gateway_is_healthy(store, monotonic_now, maximum_age_seconds):
-    """Require fresh poll and egress observations plus an empty quarantine."""
+    """Require fresh poll and egress observations regardless of isolated records."""
     _require_number(monotonic_now, "gateway health observation time")
     _require_positive_number(maximum_age_seconds, "gateway heartbeat maximum age")
-    if not check_quarantine_health(store):
-        return False
     try:
         heartbeats = {
             worker: telegram_api.read_worker_heartbeat(store, worker)
@@ -242,15 +314,29 @@ def poll_child(
     request_timeout_seconds,
     heartbeat_maximum_age_seconds,
     get_updates,
+    send_acknowledgement=None,
     monotonic_now=time.monotonic,
+    boot_id=telegram_api.current_boot_id,
     sleep=time.sleep,
     maximum_iterations=None,
     notify_parent=None,
+    reload_timing=None,
 ):
     """Long-poll and dispatch; any poll or dispatch failure exits this worker."""
-    offset = None
+    offset = telegram_api.read_poll_offset(store)
     iterations = 0
     while maximum_iterations is None or iterations < maximum_iterations:
+        if reload_timing is not None:
+            timing = reload_timing()
+            degraded_response_deadline_seconds = timing[
+                "degraded_response_deadline_seconds"
+            ]
+            poll_seconds = timing["poll_seconds"]
+            long_poll_seconds = timing["long_poll_seconds"]
+            request_timeout_seconds = timing["request_timeout_seconds"]
+            heartbeat_maximum_age_seconds = timing[
+                "heartbeat_maximum_age_seconds"
+            ]
         updates = get_updates(
             offset=offset,
             timeout=long_poll_seconds,
@@ -265,13 +351,14 @@ def poll_child(
                 store,
                 send,
                 send_command,
+                send_acknowledgement=send_acknowledgement,
                 monotonic_now=monotonic_now,
+                boot_id=boot_id,
                 degraded_response_deadline_seconds=degraded_response_deadline_seconds,
             )
-            update_id = update.get("update_id")
-            if type(update_id) is not int or update_id < 0:
-                raise ValueError("invalid Telegram update identity")
-            offset = update_id + 1
+            update_id = telegram_api.telegram_update_id(update)
+            offset = max(offset or 0, update_id + 1)
+            telegram_api.store_poll_offset(store, offset)
         now = monotonic_now()
         mark_worker_heartbeat(store, "poll", now, heartbeat_maximum_age_seconds)
         if notify_parent is not None:
@@ -285,23 +372,37 @@ def egress_child(
     store,
     send,
     *,
+    allowed=None,
     outbox_poll_seconds,
     heartbeat_maximum_age_seconds,
     monotonic_now=time.monotonic,
+    boot_id=telegram_api.current_boot_id,
     sleep=time.sleep,
     maximum_iterations=None,
     notify_parent=None,
+    reload_timing=None,
 ):
     """Drain Telegram egress and renew only its own successful-loop heartbeat."""
     iterations = 0
     while maximum_iterations is None or iterations < maximum_iterations:
+        if reload_timing is not None:
+            timing = reload_timing()
+            outbox_poll_seconds = timing["outbox_poll_seconds"]
+            heartbeat_maximum_age_seconds = timing[
+                "heartbeat_maximum_age_seconds"
+            ]
         drain_critical_outbox(store, send)
         now = monotonic_now()
-        send_due_degraded_responses(store, send, now)
-        if check_quarantine_health(store):
-            mark_worker_heartbeat(store, "egress", now, heartbeat_maximum_age_seconds)
-            if notify_parent is not None:
-                notify_parent()
+        try:
+            observed_boot_id = boot_id()
+        except RuntimeError:
+            observed_boot_id = None
+        send_due_degraded_responses(
+            store, send, now, current_boot_id=observed_boot_id,
+        )
+        mark_worker_heartbeat(store, "egress", now, heartbeat_maximum_age_seconds)
+        if notify_parent is not None:
+            notify_parent()
         iterations += 1
         if maximum_iterations is None or iterations < maximum_iterations:
             sleep(outbox_poll_seconds)
@@ -320,10 +421,12 @@ def main(
     outbox_poll_seconds,
     heartbeat_maximum_age_seconds,
     get_updates=telegram_api.get_updates,
+    send_acknowledgement=None,
     fork=os.fork,
     waitpid=os.waitpid,
     child_exit=os._exit,
     install_signal_handlers=None,
+    reload_timing=None,
 ):
     """Supervise two tracked workers using exactly one wait result per loop."""
     store.mkdir(parents=True, exist_ok=True)
@@ -333,10 +436,18 @@ def main(
 
     parent_pid = os.getpid()
     readiness = {"sent": False}
+    heartbeat_policy = {"maximum_age_seconds": heartbeat_maximum_age_seconds}
 
     def notify_systemd_if_healthy(_signum, _frame):
+        if reload_timing is not None:
+            timing = reload_timing()
+            maximum_age = timing["heartbeat_maximum_age_seconds"]
+            _require_positive_number(maximum_age, "gateway heartbeat maximum age")
+            heartbeat_policy["maximum_age_seconds"] = maximum_age
         now = time.monotonic()
-        if not gateway_is_healthy(store, now, heartbeat_maximum_age_seconds):
+        if not gateway_is_healthy(
+            store, now, heartbeat_policy["maximum_age_seconds"],
+        ):
             return
         if not readiness["sent"]:
             systemd_notify.notify_systemd("READY=1")
@@ -362,14 +473,18 @@ def main(
             request_timeout_seconds=request_timeout_seconds,
             heartbeat_maximum_age_seconds=heartbeat_maximum_age_seconds,
             get_updates=get_updates,
+            send_acknowledgement=send_acknowledgement,
             notify_parent=notify_parent,
+            reload_timing=reload_timing,
         ),
         "egress": lambda: egress_child(
             store,
             send,
+            allowed=allowed,
             outbox_poll_seconds=outbox_poll_seconds,
             heartbeat_maximum_age_seconds=heartbeat_maximum_age_seconds,
             notify_parent=notify_parent,
+            reload_timing=reload_timing,
         ),
     }
 
@@ -404,13 +519,15 @@ def _install_signal_handlers():
 
 
 def load_gateway_timing(path):
-    """Parse the exact gateway timing projection from central policy."""
-    parser = configparser.ConfigParser(interpolation=None)
+    """Project gateway durations from the one fully validated timing policy."""
     try:
-        with Path(path).open(encoding="utf-8") as source:
-            parser.read_file(source)
-    except (OSError, configparser.Error) as error:
-        raise RuntimeError(f"cannot parse gateway timing configuration: {path}") from error
+        policy = time_policy.load(Path(path))
+    except (OSError, ValueError) as error:
+        raise RuntimeError(str(error) or f"invalid timing policy: {path}") from error
+    return _gateway_timing_projection(policy)
+
+
+def _gateway_timing_projection(policy):
     names = {
         "poll_seconds": ("telegram", "poll_seconds"),
         "long_poll_seconds": ("telegram", "long_poll_seconds"),
@@ -424,16 +541,10 @@ def load_gateway_timing(path):
         "heartbeat_maximum_age_seconds": ("heartbeat", "maximum_age_seconds"),
         "outbox_poll_seconds": ("outbox", "poll_seconds"),
     }
-    values = {}
-    for name, (section, option) in names.items():
-        try:
-            value = parser.getfloat(section, option)
-        except (configparser.Error, ValueError) as error:
-            raise RuntimeError(f"invalid timing key {section}.{option}") from error
-        if not math.isfinite(value) or value <= 0:
-            raise RuntimeError(f"invalid timing key {section}.{option}")
-        values[name] = value
-    return values
+    return {
+        name: time_policy.seconds(policy, section, option)
+        for name, (section, option) in names.items()
+    }
 
 
 def load_production_config(environ=None):
@@ -445,14 +556,60 @@ def load_production_config(environ=None):
     store_path = _required_environment(environ, "SURVIVAL_STORE_DIR")
     guardian_socket_path = _required_environment(environ, "GUARDIAN_SOCKET_PATH")
     time_config_path = _required_environment(environ, "TIME_CONFIG_PATH")
-    timing = load_gateway_timing(time_config_path)
+    source_is_valid = True
+    try:
+        policy = time_policy.load(Path(time_config_path))
+    except (OSError, ValueError):
+        source_is_valid = False
+        try:
+            policy = time_policy.read_accepted_policy(
+                Path(store_path) / "policy" / "time.json",
+            )
+        except ValueError as accepted_error:
+            raise RuntimeError(
+                "timing policy and last-known-good projection are unavailable"
+            ) from accepted_error
+    timing = _gateway_timing_projection(policy)
+    timing_mtime_ns = None
+    if source_is_valid:
+        try:
+            timing_mtime_ns = Path(time_config_path).stat().st_mtime_ns
+        except OSError:
+            pass
     return {
         "bot_token": telegram_api.read_bot_token(credentials_directory),
         "allowed_users": telegram_api.read_allowed_user_ids(allowed_path),
         "store_path": Path(store_path),
         "guardian_socket_path": guardian_socket_path,
+        "time_config_path": Path(time_config_path),
+        "timing_policy": policy,
+        "timing_mtime_ns": timing_mtime_ns,
         **timing,
     }
+
+
+def refresh_gateway_timing(config):
+    """Atomically adopt a whole changed policy or keep one local known-good value."""
+    policy, mtime_ns, error = time_policy.reload_if_changed(
+        config["timing_policy"],
+        config["timing_mtime_ns"],
+        config["time_config_path"],
+    )
+    if error is None:
+        config["timing_policy"] = policy
+        config["timing_mtime_ns"] = mtime_ns
+        config.update(_gateway_timing_projection(policy))
+    status = {
+        "schema_version": 1,
+        "state": "accepted" if error is None else "rejected",
+        "error": error,
+    }
+    if config.get("timing_status") != status:
+        records.atomic_json(
+            config["store_path"] / "gateway/time-policy-status.json", status,
+        )
+        config["timing_status"] = status
+    return config
 
 
 def run_production(
@@ -474,6 +631,18 @@ def run_production(
             request_timeout=config["request_timeout_seconds"],
         )
 
+    def send_acknowledgement(chat_id, text):
+        deadline = config["command_acknowledgement_deadline_seconds"]
+        return _call_with_deadline(
+            lambda: send_message(
+                config["bot_token"],
+                chat_id,
+                text,
+                request_timeout=deadline,
+            ),
+            deadline,
+        )
+
     def send_command(command):
         return submit_to_guardian(
             config["guardian_socket_path"],
@@ -483,6 +652,9 @@ def run_production(
 
     def get_updates(**arguments):
         return get_updates_api(config["bot_token"], **arguments)
+
+    def reload_timing():
+        return refresh_gateway_timing(config)
 
     return run_main(
         config["store_path"],
@@ -498,6 +670,8 @@ def run_production(
         outbox_poll_seconds=config["outbox_poll_seconds"],
         heartbeat_maximum_age_seconds=config["heartbeat_maximum_age_seconds"],
         get_updates=get_updates,
+        send_acknowledgement=send_acknowledgement,
+        reload_timing=reload_timing,
     )
 
 

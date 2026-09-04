@@ -8,7 +8,7 @@ import threading
 import unittest
 from pathlib import Path
 
-from survival import guardian, telegram_api
+from survival import guardian, system_control, telegram_api, time_policy
 
 
 def command_record(command="restart", update_id=42):
@@ -54,8 +54,16 @@ def successful_adapters(events=None):
         return run
 
     def direct(kind):
-        def run(_effect, _policy):
+        def run(effect, policy):
             events.append((kind,))
+            if kind == "close_admission":
+                system_control._write_runtime(policy, {
+                    "schema_version": 1,
+                    "request_id": effect["request_id"],
+                    "previous_pause": False,
+                    "previous_active_user_units": [],
+                    "interrupted_jobs": [],
+                })
             return {"ok": True, "operation": kind}
 
         return run
@@ -72,11 +80,19 @@ def successful_adapters(events=None):
 def guardian_config(root, adapters=None):
     if adapters is None:
         adapters = successful_adapters()
+    agent_state = root / "agent-state"
+    agent_state.mkdir(exist_ok=True)
     return {
         "socket_path": str(root / "guardian.sock"),
         "store_path": root / "state",
+        "agent_state_path": agent_state,
         "gateway_uid": os.getuid(),
         "user_manager_uid": os.getuid(),
+        "lifecycle_catalog": system_control.load_lifecycle_catalog(
+            Path("config/survival-lifecycle.json"),
+        ),
+        "timing_policy": time_policy.load(Path("config/time.cfg")),
+        "guardian_poll_seconds": 0.05,
         "adapters": adapters,
     }
 
@@ -146,7 +162,7 @@ def test_successful_submission_emits_exact_task_3_acknowledgement():
             client_end.close()
 
 
-def test_disconnected_response_peer_leaves_accepted_state_without_noisy_error():
+def test_disconnected_response_peer_leaves_durable_recoverable_work_and_continues():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         events = []
@@ -161,10 +177,77 @@ def test_disconnected_response_peer_leaves_accepted_state_without_noisy_error():
 
         request_path = root / "state" / "lifecycle" / "telegram-43.json"
         state = json.loads(request_path.read_text(encoding="utf-8"))["state"]
-        assert result is None
-        assert state["phase"] == "accepted"
+        assert result["ok"] is True
+        assert state["phase"] == "completed"
         assert state["pending_effects"] == []
-        assert events == []
+        assert events
+
+
+def test_guardian_commits_pending_work_before_the_socket_response():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        observed = []
+        try:
+            send_framed(client_end, command_record(update_id=45))
+
+            def observe_response(_connection, _response):
+                state = json.loads(
+                    (root / "state/lifecycle/telegram-45.json").read_text(encoding="utf-8")
+                )["state"]
+                observed.append((state["phase"], state["pending_effects"][0]["kind"]))
+                return True
+
+            result = guardian.handle_one_request(
+                guardian_end, config, send_response=observe_response,
+            )
+            assert observed == [("acknowledged", "close_admission")]
+            assert result["ok"] is True
+        finally:
+            guardian_end.close()
+            client_end.close()
+
+
+def test_idle_recovery_advances_an_accepted_request_without_telegram_replay():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        path = system_control.accept_request(
+            config["store_path"], command_record(update_id=46), previous_pause=False,
+        )
+        assert system_control._read_request(path)["state"]["phase"] == "accepted"
+        result = guardian.resume_pending_request(config, config["adapters"])
+        assert result["ok"] is True
+        assert system_control._read_request(path)["state"]["phase"] == "completed"
+
+
+def test_oldest_blocked_request_serializes_later_lifecycle_commands():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        events = []
+        failing = successful_adapters(events)
+        failing["close_admission"] = lambda _effect, _policy: {
+            "ok": False, "error": "injected admission failure",
+        }
+        config = guardian_config(root, failing)
+        first = system_control.accept_request(
+            config["store_path"], command_record(update_id=47), previous_pause=False,
+        )
+        second = system_control.accept_request(
+            config["store_path"], command_record(update_id=48), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(first)
+        system_control.commit_acknowledgement(second)
+        result = guardian.resume_pending_request(config, failing, recover_blocked=False)
+        assert result["phase"] == "blocked"
+        assert system_control._read_request(second)["state"]["phase"] == "acknowledged"
+
+        recovered = successful_adapters()
+        result = guardian.resume_pending_request(config, recovered, recover_blocked=True)
+        assert result["ok"] is True
+        assert system_control._read_request(first)["state"]["phase"] == "completed"
+        assert system_control._read_request(second)["state"]["phase"] == "acknowledged"
 
 
 def test_unauthorized_request_is_not_acknowledged_or_persisted():
@@ -247,13 +330,16 @@ def test_load_production_config_delegates_explicit_identity_and_paths():
             "SURVIVAL_STORE_DIR": str(root / "state"),
             "GUARDIAN_GATEWAY_UID": "991",
             "USER_MANAGER_UID": "1000",
+            "TIME_CONFIG_PATH": str(Path("config/time.cfg").resolve()),
+            "LIFECYCLE_CATALOG_PATH": str(Path("config/survival-lifecycle.json").resolve()),
+            "AGENT_STATE_DIR": str(root / "agent-state"),
         }
-        assert guardian.load_production_config(environment) == {
-            "socket_path": str(root / "guardian.sock"),
-            "store_path": root / "state",
-            "gateway_uid": 991,
-            "user_manager_uid": 1000,
-        }
+        config = guardian.load_production_config(environment)
+        assert config["socket_path"] == str(root / "guardian.sock")
+        assert config["store_path"] == root / "state"
+        assert config["agent_state_path"] == root / "agent-state"
+        assert config["gateway_uid"] == 991
+        assert config["user_manager_uid"] == 1000
 
 
 def load_tests(_loader, _tests, _pattern):

@@ -2,7 +2,7 @@
 Description=Cointelprofessional permanent Telegram gateway
 After=network-online.target
 Wants=network-online.target
-Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md
+Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
 StartLimitIntervalSec=0
 
 [Service]
@@ -10,20 +10,20 @@ Type=notify
 NotifyAccess=main
 User=cointelprofessional
 Group=cointelprofessional
-SupplementaryGroups=cointelprofessional_command agent_ecosystem_io
+SupplementaryGroups=cointelprofessional_command
 Slice=cointelprofessional-survival.slice
 Restart=always
 RestartSec=250ms
 WatchdogSec=10s
 ExecStart=/usr/bin/python3 -m survival.gateway
-WorkingDirectory=/usr/local/lib/cointelprofessional-survival
+WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current
 Environment=GUARDIAN_ALLOWED_USER_IDS_PATH=/etc/cointelprofessional/allowed_user_ids
 Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
 Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock
 Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
 LoadCredential=telegram_bot_token:/etc/cointelprofessional/telegram_bot_token
 ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/allowed_user_ids /etc/cointelprofessional/time.cfg
-ReadWritePaths=/var/lib/cointelprofessional
+ReadWritePaths=/var/lib/cointelprofessional/inbox /var/lib/cointelprofessional/commands /var/lib/cointelprofessional/gateway /var/lib/cointelprofessional/gateway_commands /var/lib/cointelprofessional/acks /var/lib/cointelprofessional/heartbeats /var/lib/cointelprofessional/dispositions /var/lib/cointelprofessional/quarantine
 UMask=0007
 PrivateTmp=true
 PrivateDevices=true

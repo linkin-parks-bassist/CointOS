@@ -70,7 +70,7 @@ else
         --shell /usr/sbin/nologin "$gateway_user"
 fi
 
-usermod --append --groups "$command_group,$spool_group" "$gateway_user"
+usermod --append --groups "$command_group" "$gateway_user"
 usermod --append --groups "$spool_group" "$user_manager"
 gateway_uid="$(id -u "$gateway_user")"
 user_manager_uid="$(id -u "$user_manager")"
@@ -168,10 +168,46 @@ cleanup() {
 trap cleanup EXIT
 
 install -d -o root -g root -m 0755 "$install_prefix" "$releases_directory"
-install -d -o root -g "$spool_group" -m 2770 "$state_directory"
+install -d -o root -g root -m 0755 "$state_directory"
+install -d -o "$gateway_user" -g "$spool_group" -m 2750 \
+    "$state_directory/inbox"
+install -d -o "$gateway_user" -g "$gateway_user" -m 0700 \
+    "$state_directory/commands" \
+    "$state_directory/gateway" \
+    "$state_directory/gateway/critical-delivery" \
+    "$state_directory/gateway/data-health-incidents" \
+    "$state_directory/gateway_commands" \
+    "$state_directory/acks" \
+    "$state_directory/heartbeats" \
+    "$state_directory/dispositions" \
+    "$state_directory/quarantine"
+install -d -o root -g root -m 0755 "$state_directory/outbox"
+install -d -o root -g "$gateway_user" -m 2750 \
+    "$state_directory/outbox/critical"
+install -d -o root -g root -m 0700 \
+    "$state_directory/lifecycle" \
+    "$state_directory/lifecycle-runtime" \
+    "$state_directory/lifecycle-completions" \
+    "$state_directory/lifecycle-result-quarantine"
+install -d -o root -g "$gateway_user" -m 2750 "$state_directory/policy"
 install -d -o root -g "$command_group" -m 0750 "$socket_directory"
 install -d -o root -g "$gateway_user" -m 0750 "$configuration_directory"
 install -d -o root -g root -m 0755 "$unit_directory"
+
+if [[ ! -e "$configuration_directory/time.cfg" \
+    && ! -L "$configuration_directory/time.cfg" ]]; then
+    install -o root -g "$gateway_user" -m 0640 \
+        "$repository_directory/config/time.cfg" "$configuration_directory/time.cfg"
+fi
+
+temporary_environment="$configuration_directory/.guardian.env.source.$$"
+candidate_environment="$configuration_directory/.guardian.env.candidate.$$"
+printf 'GUARDIAN_GATEWAY_UID=%s\nUSER_MANAGER_UID=%s\n' \
+    "$gateway_uid" "$user_manager_uid" >"$temporary_environment"
+install -o root -g root -m 0600 \
+    "$temporary_environment" "$candidate_environment"
+rm -f -- "$temporary_environment"
+mv -Tf -- "$candidate_environment" "$configuration_directory/guardian.env"
 
 staging_directory="$(mktemp -d "$releases_directory/.staged.XXXXXX")"
 install -d -o root -g root -m 0700 "$staging_directory"
@@ -194,6 +230,7 @@ python_modules=(
     survival/system_control.py
     survival/systemd_notify.py
     survival/telegram_api.py
+    survival/time_policy.py
 )
 for module in "${python_modules[@]}"; do
     source_path="$repository_directory/$module"
@@ -220,14 +257,8 @@ install -o root -g root -m 0644 \
     "$repository_directory/docs/operations.md" \
     "$staging_directory/docs/operations.md"
 install -o root -g root -m 0644 \
-    "$repository_directory/config/time.cfg" "$staging_directory/config/time.cfg"
-
-temporary_environment="$staging_directory/.guardian.env"
-printf 'GUARDIAN_GATEWAY_UID=%s\nUSER_MANAGER_UID=%s\n' \
-    "$gateway_uid" "$user_manager_uid" >"$temporary_environment"
-install -o root -g root -m 0600 \
-    "$temporary_environment" "$staging_directory/config/guardian.env"
-rm -f -- "$temporary_environment"
+    "$repository_directory/config/survival-lifecycle.json" \
+    "$staging_directory/config/survival-lifecycle.json"
 
 units=(
     cointelprofessional-survival.slice
@@ -252,26 +283,21 @@ systemd-analyze verify \
     "$staging_directory/services/system/cointelprofessional-guardian.socket" \
     "$staging_directory/services/system/cointelprofessional-guardian.service"
 
-symbolic_link_targets=(
-    "current/survival"
-    "current/scripts"
-    "current/docs"
-    "$install_prefix/current/config/time.cfg"
-    "$install_prefix/current/config/guardian.env"
-)
-symbolic_link_paths=(
-    "$install_prefix/survival"
-    "$install_prefix/scripts"
-    "$install_prefix/docs"
-    "$configuration_directory/time.cfg"
-    "$configuration_directory/guardian.env"
-)
+symbolic_link_targets=()
+symbolic_link_paths=()
 for unit in "${units[@]}"; do
     symbolic_link_targets+=("$install_prefix/current/services/system/$unit")
     symbolic_link_paths+=("$unit_directory/$unit")
 done
 for index in "${!symbolic_link_paths[@]}"; do
     validate_symbolic_link \
+        "${symbolic_link_targets[index]}" "${symbolic_link_paths[index]}"
+done
+
+# These stable links are inert until the one authoritative ``current`` value
+# exists.  Publishing that value is therefore the only operational cutover.
+for index in "${!symbolic_link_paths[@]}"; do
+    ensure_symbolic_link \
         "${symbolic_link_targets[index]}" "${symbolic_link_paths[index]}"
 done
 
@@ -307,11 +333,6 @@ else
     rmdir "$commit_directory"
     commit_directory=""
 fi
-
-for index in "${!symbolic_link_paths[@]}"; do
-    ensure_symbolic_link \
-        "${symbolic_link_targets[index]}" "${symbolic_link_paths[index]}"
-done
 
 if [[ "$enable" == true ]]; then
     systemctl daemon-reload

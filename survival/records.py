@@ -18,13 +18,24 @@ ACCEPTED_UPDATE_FIELDS = {
     "received_at",
 }
 PRIVATE_RECORD_MODE = 0o600
-SHARED_RECORD_MODE = 0o660
+SHARED_RECORD_MODE = 0o640
 RECORD_MODES = frozenset((PRIVATE_RECORD_MODE, SHARED_RECORD_MODE))
 
 
-def atomic_json(path: Path, value: dict, mode: int = PRIVATE_RECORD_MODE) -> None:
+def atomic_json(
+    path: Path,
+    value: dict,
+    mode: int = PRIVATE_RECORD_MODE,
+    owner: tuple[int, int] | None = None,
+) -> None:
     """Atomically replace a JSON record after forcing its bytes to disk."""
     _validate_record_mode(mode)
+    if owner is not None and (
+        type(owner) is not tuple
+        or len(owner) != 2
+        or any(type(identity) is not int or identity < 0 for identity in owner)
+    ):
+        raise ValueError("invalid survival record owner")
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
@@ -34,6 +45,8 @@ def atomic_json(path: Path, value: dict, mode: int = PRIVATE_RECORD_MODE) -> Non
             output.flush()
             os.fsync(output.fileno())
             os.fchmod(output.fileno(), mode)
+            if owner is not None:
+                os.fchown(output.fileno(), owner[0], owner[1])
             os.fsync(output.fileno())
         os.replace(temporary_path, path)
         _fsync_directory(path.parent)

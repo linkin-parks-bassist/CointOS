@@ -1,0 +1,31 @@
+{
+  "backend_unit": "lemond.service",
+  "model_health": {
+    "host": "127.0.0.1",
+    "path": "/api/v1/health",
+    "port": 13305,
+    "required_model": "Qwen3.5-4B-GGUF"
+  },
+  "schema_version": 1,
+  "user_units": {
+    "activation_sources": [
+      {"required": true, "unit": "agent-ecosystem.path"},
+      {"required": true, "unit": "agent-ecosystem.timer"},
+      {"required": true, "unit": "agent-watchdog.timer"}
+    ],
+    "control_services": [
+      {"required": true, "unit": "agent-notifier.service"}
+    ],
+    "inactive_units": [
+      {"required": true, "unit": "agent-telegram.service"},
+      {"required": false, "unit": "agent-resource-guard.service"}
+    ],
+    "inference_prerequisites": [
+      {"required": true, "unit": "agent-models.service"}
+    ],
+    "ordinary_services": [
+      {"required": true, "unit": "agent-ecosystem.service"},
+      {"required": true, "unit": "agent-watchdog.service"}
+    ]
+  }
+}

@@ -56,8 +56,8 @@ def test_shared_atomic_json_has_final_mode_before_publication(root):
         records.atomic_json(
             path, {"state": "shared"}, mode=records.SHARED_RECORD_MODE,
         )
-    assert observed == [0o660]
-    assert path.stat().st_mode & 0o777 == 0o660
+    assert observed == [0o640]
+    assert path.stat().st_mode & 0o777 == 0o640
 
 
 @with_survival_root
@@ -75,7 +75,7 @@ def test_permission_failure_leaves_no_published_or_temporary_record(root):
 @with_survival_root
 def test_record_modes_reject_implicit_or_overpermissive_values(root):
     path = root / "state" / "invalid.json"
-    for mode in (True, 0o640, 0o666):
+    for mode in (True, 0o620, 0o666):
         with unittest.TestCase().assertRaisesRegex(ValueError, "mode"):
             records.atomic_json(path, {"state": "invalid"}, mode=mode)
     assert not path.parent.exists()

@@ -1,12 +1,17 @@
 """Behavioral tests for the immutable survival system-control boundary."""
 
 import json
+import os
+import signal
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from survival import system_control
+from survival import lifecycle, system_control, telegram_api, time_policy
 
 
 def command_record(command="reset", update_id=1):
@@ -29,10 +34,11 @@ def read_request_state(path):
 
 
 def read_results(path):
-    results_path = path.with_suffix(".results.jsonl")
-    if not results_path.exists():
-        return []
-    return [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines()]
+    root = path.parent / "results" / path.stem
+    return [
+        json.loads(candidate.read_text(encoding="utf-8"))
+        for candidate in sorted(root.glob("*/*.json"))
+    ] if root.exists() else []
 
 
 def successful_adapters(events=None, observe=None):
@@ -67,6 +73,7 @@ def successful_adapters(events=None, observe=None):
     adapters = {
         "system": manager("system"),
         "user": manager("user"),
+        "wait": lambda _seconds: None,
     }
     for kind in (
         "notify", "close_admission", "checkpoint", "reconcile", "verify",
@@ -74,6 +81,24 @@ def successful_adapters(events=None, observe=None):
     ):
         adapters[kind] = direct(kind)
     return adapters
+
+
+def lifecycle_policy(store, request_id="telegram-1"):
+    policy = {
+        "store_path": Path(store),
+        "lifecycle_catalog": system_control.load_lifecycle_catalog(
+            Path("config/survival-lifecycle.json"),
+        ),
+        "timing_policy": time_policy.load(Path("config/time.cfg")),
+    }
+    system_control._write_runtime(policy, {
+        "schema_version": 1,
+        "request_id": request_id,
+        "previous_pause": False,
+        "previous_active_user_units": ["agent-notifier.service"],
+        "interrupted_jobs": [],
+    })
+    return policy
 
 
 def test_only_gateway_uid_can_submit_lifecycle_request():
@@ -192,6 +217,45 @@ def test_zero_exit_and_state_without_cgroup_proof_is_failure():
     assert result["cgroup_empty"] is False
 
 
+def test_inactive_unit_with_no_realized_cgroup_is_verified_empty():
+    def query(argv):
+        if "--property=ControlGroup" in argv:
+            return process_result(0, stdout="\n")
+        return process_result(3, stdout="inactive\n")
+
+    result = system_control.user_unit(
+        "stop",
+        "agent-telegram.service",
+        uid=1000,
+        runner=lambda _argv: process_result(0),
+        query=query,
+    )
+
+    assert result["ok"] is True
+    assert result["state"] == "inactive"
+    assert result["cgroup_empty"] is True
+    assert result["cgroup"]["path"] == ""
+
+
+def test_reset_failed_uses_exact_allowlisted_systemctl_argv():
+    calls = []
+
+    def runner(argv):
+        calls.append(argv)
+        return process_result(0)
+
+    result = system_control.system_unit(
+        "reset_failed",
+        "lemond.service",
+        runner=runner,
+        query=lambda _argv: process_result(3, stdout="inactive\n"),
+        cgroup=lambda *_args: {"empty": True},
+    )
+
+    assert result["ok"] is True
+    assert calls == [["systemctl", "--system", "reset-failed", "lemond.service"]]
+
+
 def test_unit_adapters_reject_actions_and_units_before_calling_runner():
     def fail_if_called(_argv):
         raise AssertionError("runner must not be called")
@@ -214,6 +278,25 @@ def test_unit_adapters_reject_actions_and_units_before_calling_runner():
             call()
 
 
+def test_status_distinguishes_an_uninstalled_required_unit():
+    calls = []
+
+    def query(argv):
+        calls.append(argv)
+        if "--property=LoadState" in argv:
+            return process_result(0, stdout="not-found\n")
+        return process_result(4, stdout="inactive\n")
+
+    result = system_control.user_unit(
+        "status", "agent-models.service", uid=1000,
+        query=query,
+        cgroup=lambda *_args: {"empty": True},
+    )
+    assert result["installed"] is False
+    assert result["state"] == "not-found"
+    assert any("--property=LoadState" in call for call in calls)
+
+
 def test_lifecycle_effects_map_only_to_legal_allowlisted_systemctl_calls():
     events = []
     adapters = successful_adapters(events)
@@ -230,20 +313,87 @@ def test_lifecycle_effects_map_only_to_legal_allowlisted_systemctl_calls():
          "idempotency_key": "telegram-1:reconciling:start_units"},
     )
 
-    for effect in effects:
-        result = system_control.execute_effect(effect, adapters, {})
-        assert result["ok"] is True
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        policy = {
+            "store_path": store,
+            "lifecycle_catalog": system_control.load_lifecycle_catalog(
+                Path("config/survival-lifecycle.json"),
+            ),
+            "timing_policy": time_policy.load(Path("config/time.cfg")),
+        }
+        system_control._write_runtime(policy, {
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "previous_pause": False,
+            "previous_active_user_units": ["agent-notifier.service"],
+            "interrupted_jobs": [],
+        })
+        for effect in effects:
+            result = system_control.execute_effect(effect, adapters, policy)
+            assert result["ok"] is True
 
     user_events = [event for event in events if event[0] == "user"]
     system_events = [event for event in events if event[0] == "system"]
-    assert {event[1] for event in user_events} == {"start", "stop", "kill"}
+    assert {event[1] for event in user_events} == {
+        "start", "stop", "terminate", "kill", "reset_failed",
+    }
     assert {event[2] for event in user_events} == set(
         system_control.DESTRUCTIBLE_USER_UNITS
     )
     assert system_events == [
         ("system", "stop", "lemond.service"),
+        ("system", "reset_failed", "lemond.service"),
         ("system", "start", "lemond.service"),
     ]
+
+
+def test_watchdog_runner_pulses_during_a_bounded_external_probe():
+    release = threading.Event()
+    pulses = []
+
+    def operation():
+        assert release.wait(1.0)
+        return {"ok": True, "proof": "fresh"}
+
+    result = system_control._run_with_watchdog(
+        operation,
+        deadline_seconds=1.0,
+        heartbeat=lambda: (pulses.append(True), release.set()),
+        pulse_seconds=0.01,
+    )
+
+    assert result == {"ok": True, "proof": "fresh"}
+    assert pulses
+
+
+def test_escalation_observes_configured_terminate_and_kill_grace():
+    waits = []
+    adapters = successful_adapters()
+
+    def manager(action, unit):
+        return {
+            "ok": action != "stop",
+            "action": action,
+            "unit": unit,
+            "exit_code": 0,
+            "state": "inactive" if action == "kill" else "deactivating",
+            "cgroup_empty": action == "kill",
+        }
+
+    adapters["user"] = manager
+    adapters["wait"] = lambda seconds: waits.append(seconds)
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = lifecycle_policy(Path(temporary))
+        result = system_control.execute_effect({
+            "kind": "kill_units",
+            "request_id": "telegram-1",
+            "phase": "stopping",
+            "idempotency_key": "telegram-1:stopping:kill_units",
+        }, adapters, policy)
+    assert result["ok"] is False
+    assert waits
+    assert set(waits) == {5.0, 2.0}
 
 
 def test_execute_effect_rejects_a_mismatched_effect_identity():
@@ -263,6 +413,7 @@ def test_advance_request_persists_reducer_state_before_every_external_action():
         path = system_control.accept_request(
             store, command_record("reset"), previous_pause=False,
         )
+        system_control.commit_acknowledgement(path)
         observations = []
 
         def observe(*_arguments):
@@ -273,15 +424,16 @@ def test_advance_request_persists_reducer_state_before_every_external_action():
             ))
 
         events = []
+        policy = lifecycle_policy(store)
         result = system_control.advance_request(
             path,
             successful_adapters(events, observe),
-            {"verified_event": {"kind": "ack_delivered"}},
+            policy,
         )
 
         assert result == {"ok": True, "phase": "completed", "remaining_effects": 0}
         assert read_request_state(path)["phase"] == "completed"
-        assert observations[0] == ("admission_closed", "close_admission")
+        assert observations[0] == ("acknowledged", "close_admission")
         assert all(pending_kind in {
             "close_admission", "kill_units", "stop_lemonade", "start_lemonade",
             "start_units", "reconcile", "verify", "resume", "finish",
@@ -299,6 +451,7 @@ def test_unverified_effect_result_is_durable_and_effect_remains_pending():
         path = system_control.accept_request(
             Path(temporary), command_record("reset"), previous_pause=False,
         )
+        system_control.commit_acknowledgement(path)
         adapters = successful_adapters()
         adapters["close_admission"] = lambda _effect, _policy: {
             "ok": False,
@@ -308,17 +461,18 @@ def test_unverified_effect_result_is_durable_and_effect_remains_pending():
         result = system_control.advance_request(
             path,
             adapters,
-            {"verified_event": {"kind": "ack_delivered"}},
+            {},
         )
 
         state = read_request_state(path)
         assert result["ok"] is False
-        assert result["failed_effect"] == "telegram-1:admission_closed:close_admission"
-        assert [effect["kind"] for effect in state["pending_effects"]] == [
-            "close_admission", "kill_units",
+        assert result["failed_effect"] == "telegram-1:acknowledged:close_admission"
+        assert state["phase"] == "blocked"
+        assert [effect["kind"] for effect in state["pending_effects"]] == ["close_admission"]
+        assert state["completed_effects"] == [
+            "telegram-1:blocked:notify",
         ]
-        assert state["completed_effects"] == []
-        assert read_results(path)[-1]["ok"] is False
+        assert any(result["ok"] is False for result in read_results(path))
 
 
 def test_durable_verified_result_is_written_before_reducer_completion_and_recovers():
@@ -326,6 +480,7 @@ def test_durable_verified_result_is_written_before_reducer_completion_and_recove
         path = system_control.accept_request(
             Path(temporary), command_record("reset"), previous_pause=False,
         )
+        system_control.commit_acknowledgement(path)
         calls = []
         adapters = successful_adapters(calls)
         real_reduce = system_control.lifecycle.reduce_lifecycle
@@ -341,7 +496,7 @@ def test_durable_verified_result_is_written_before_reducer_completion_and_recove
                 system_control.advance_request(
                     path,
                     adapters,
-                    {"verified_event": {"kind": "ack_delivered"}},
+                    lifecycle_policy(Path(temporary)),
                 )
 
         state = read_request_state(path)
@@ -357,10 +512,89 @@ def test_durable_verified_result_is_written_before_reducer_completion_and_recove
         result = system_control.advance_request(
             path,
             recovered_adapters,
-            {"verified_event": {"kind": "ack_delivered"}},
+            lifecycle_policy(Path(temporary)),
         )
         assert result["ok"] is True
         assert read_request_state(path)["phase"] == "completed"
+
+
+def test_every_success_path_effect_recovers_after_external_action_before_result_commit():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        policy = lifecycle_policy(store) | {"maximum_effects": 1}
+        adapters = successful_adapters()
+        crashed_kinds = []
+
+        while (
+            read_request_state(path)["phase"] != "completed"
+            or read_request_state(path)["pending_effects"]
+        ):
+            state = read_request_state(path)
+            assert state["pending_effects"]
+            effect = state["pending_effects"][0]
+            crashed_kinds.append(effect["kind"])
+            with patch.object(
+                system_control,
+                "_store_effect_result",
+                side_effect=RuntimeError("simulated death before result publication"),
+            ):
+                with unittest.TestCase().assertRaisesRegex(RuntimeError, "simulated death"):
+                    system_control.advance_request(path, adapters, policy)
+            assert read_request_state(path)["pending_effects"][0] == effect
+            system_control.advance_request(path, adapters, policy)
+
+        assert crashed_kinds == [
+            "close_admission", "checkpoint", "stop_units", "stop_lemonade",
+            "start_lemonade", "start_units", "reconcile", "verify", "resume",
+            "finish",
+        ], crashed_kinds
+
+
+def test_every_verified_effect_result_survives_death_before_state_reduction():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        policy = lifecycle_policy(store) | {"maximum_effects": 1}
+        events = []
+        adapters = successful_adapters(events)
+        real_reduce = system_control.lifecycle.reduce_lifecycle
+        crashed_kinds = []
+
+        while (
+            read_request_state(path)["phase"] != "completed"
+            or read_request_state(path)["pending_effects"]
+        ):
+            effect = read_request_state(path)["pending_effects"][0]
+            crashed_kinds.append(effect["kind"])
+
+            def interrupt_after_result(state, event):
+                if event["kind"] == "effect_completed":
+                    raise RuntimeError("simulated death after result publication")
+                return real_reduce(state, event)
+
+            with patch.object(
+                system_control.lifecycle,
+                "reduce_lifecycle",
+                interrupt_after_result,
+            ):
+                with unittest.TestCase().assertRaisesRegex(RuntimeError, "after result"):
+                    system_control.advance_request(path, adapters, policy)
+            event_count = len(events)
+            system_control.advance_request(path, adapters, policy)
+            assert len(events) == event_count
+
+        assert crashed_kinds == [
+            "close_admission", "checkpoint", "stop_units", "stop_lemonade",
+            "start_lemonade", "start_units", "reconcile", "verify", "resume",
+            "finish",
+        ]
 
 
 def test_accepted_request_without_verified_event_does_not_synthesize_effects():
@@ -402,6 +636,9 @@ def guardian_environment(root):
         "SURVIVAL_STORE_DIR": str(root / "state"),
         "GUARDIAN_GATEWAY_UID": "991",
         "USER_MANAGER_UID": "1000",
+        "TIME_CONFIG_PATH": str(Path("config/time.cfg").resolve()),
+        "LIFECYCLE_CATALOG_PATH": str(Path("config/survival-lifecycle.json").resolve()),
+        "AGENT_STATE_DIR": str(root / "agent-state"),
     }
 
 
@@ -409,19 +646,141 @@ def test_load_config_parses_one_explicit_gateway_and_user_manager_uid():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         config = system_control.load_production_config(guardian_environment(root))
-        assert config == {
-            "socket_path": str(root / "guardian.sock"),
-            "store_path": root / "state",
-            "gateway_uid": 991,
-            "user_manager_uid": 1000,
+        assert config["socket_path"] == str(root / "guardian.sock")
+        assert config["store_path"] == root / "state"
+        assert config["agent_state_path"] == root / "agent-state"
+        assert config["gateway_uid"] == 991
+        assert config["user_manager_uid"] == 1000
+        assert config["timing_policy"] == time_policy.load(Path("config/time.cfg"))
+        assert config["lifecycle_catalog"]["schema_version"] == 1
+
+
+def test_guardian_live_policy_reload_persists_rejection_and_keeps_last_known_good():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        source = root / "time.cfg"
+        source.write_bytes(Path("config/time.cfg").read_bytes())
+        environment = guardian_environment(root) | {"TIME_CONFIG_PATH": str(source)}
+        config = system_control.load_production_config(environment)
+        original = config["timing_policy"]
+        path = system_control.accept_request(
+            config["store_path"], command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+
+        source.write_text("[lifecycle]\nservice_stop_deadline_seconds = nan\n")
+        error = system_control.refresh_timing_policy(config)
+        assert "time policy" in error
+        assert config["timing_policy"] == original
+        status = json.loads(
+            (config["store_path"] / "policy/status.json").read_text(encoding="utf-8")
+        )
+        assert status["state"] == "rejected"
+        reports = list((config["store_path"] / "outbox/critical").glob("policy-*.json"))
+        assert len(reports) == 1
+        system_control.refresh_timing_policy(config)
+        assert len(list((config["store_path"] / "outbox/critical").glob("policy-*.json"))) == 1
+
+
+def test_guardian_reports_each_gateway_quarantine_incident_once():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "store"
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        records_path = store / "gateway/data-health.json"
+        records_path.parent.mkdir(parents=True, exist_ok=True)
+        records_path.write_text(json.dumps({
+            "schema_version": 1,
+            "state": "degraded",
+            "incident_id": "quarantine-one",
+            "source_path": "/var/lib/cointelprofessional/inbox/bad.json",
+            "error_reason": "invalid inbox JSON",
+            "quarantine_succeeded": True,
+        }), encoding="utf-8")
+        config = {"store_path": store}
+        system_control.report_gateway_data_health(config)
+        system_control.report_gateway_data_health(config)
+        reports = list((store / "outbox/critical").glob("gateway-quarantine-*.json"))
+        assert len(reports) == 1
+        assert "invalid inbox JSON" in json.loads(reports[0].read_text())["text"]
+
+        records_path.write_text(json.dumps({
+            "schema_version": 1,
+            "state": "degraded",
+            "incident_id": "quarantine-two",
+            "source_path": "/var/lib/cointelprofessional/inbox/stuck.json",
+            "error_reason": "quarantine rename failed",
+            "quarantine_succeeded": False,
+        }), encoding="utf-8")
+        system_control.report_gateway_data_health(config)
+        failed_report = json.loads(
+            (store / "outbox/critical/gateway-quarantine-quarantine-two.json")
+            .read_text(encoding="utf-8")
+        )
+        assert "could not isolate" in failed_report["text"]
+        assert "contact remains live" in failed_report["text"]
+
+
+def test_guardian_reports_every_gateway_incident_even_when_scans_find_several():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        store = root / "store"
+        path = system_control.accept_request(
+            store, command_record("restart"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        inbox = store / "inbox"
+        inbox.mkdir(parents=True)
+        for name in ("bad-one.json", "bad-two.json"):
+            source = inbox / name
+            source.write_text("{", encoding="utf-8")
+            assert telegram_api.quarantine_record(
+                store, source, f"invalid {name}",
+            ) is True
+
+        system_control.report_gateway_data_health({"store_path": store})
+
+        reports = list((store / "outbox/critical").glob("gateway-quarantine-*.json"))
+        assert len(reports) == 2
+
+
+def test_restart_checkpoint_request_is_readable_by_agent_state_owner():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        policy = lifecycle_policy(root / "survival") | {
+            "agent_state_path": agent_state,
         }
+        effect = {
+            "request_id": "telegram-1",
+            "idempotency_key": "telegram-1:checkpointing:checkpoint",
+        }
+
+        result = system_control._checkpoint_runtime(
+            policy, effect, sleep=lambda _seconds: None, sync=lambda: None,
+        )
+
+        checkpoint = agent_state / "lifecycle-checkpoint.json"
+        directory_metadata = agent_state.stat()
+        checkpoint_metadata = checkpoint.stat()
+        assert result["ok"] is True
+        assert checkpoint_metadata.st_uid == directory_metadata.st_uid
+        assert checkpoint_metadata.st_gid == directory_metadata.st_gid
+        assert checkpoint_metadata.st_mode & 0o777 == 0o640
 
 
 def test_load_config_rejects_missing_or_noncanonical_uid():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         environment = guardian_environment(root)
-        for name in ("GUARDIAN_GATEWAY_UID", "USER_MANAGER_UID"):
+        for name in (
+            "GUARDIAN_GATEWAY_UID", "USER_MANAGER_UID", "TIME_CONFIG_PATH",
+            "LIFECYCLE_CATALOG_PATH", "AGENT_STATE_DIR",
+        ):
             missing = dict(environment)
             del missing[name]
             with unittest.TestCase().assertRaisesRegex(RuntimeError, name):
@@ -430,6 +789,370 @@ def test_load_config_rejects_missing_or_noncanonical_uid():
             malformed = dict(environment) | {"GUARDIAN_GATEWAY_UID": value}
             with unittest.TestCase().assertRaisesRegex(RuntimeError, "GUARDIAN_GATEWAY_UID"):
                 system_control.load_production_config(malformed)
+
+
+def test_catalog_has_semantic_stages_and_excludes_survival_units():
+    catalog = system_control.load_lifecycle_catalog(
+        Path("config/survival-lifecycle.json"),
+    )
+    assert set(catalog["user_units"]) == {
+        "activation_sources", "inference_prerequisites", "control_services",
+        "ordinary_services", "inactive_units",
+    }
+    units = [
+        item["unit"]
+        for category in catalog["user_units"].values()
+        for item in category
+    ]
+    assert not set(units) & system_control.SURVIVAL_UNITS
+    assert "agent-resource-guard.service" in {
+        item["unit"] for item in catalog["user_units"]["inactive_units"]
+    }
+
+
+def test_production_constructor_is_complete_and_drives_both_commands():
+    for command in ("restart", "reset"):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            agent_state = root / "agent-state"
+            (agent_state / "jobs").mkdir(parents=True)
+            (agent_state / "jobs" / "task-live.json").write_text(json.dumps({
+                "id": "task-live",
+                "kind": "agent-task",
+                "state": "running",
+                "opencode_session": "ses_live",
+            }), encoding="utf-8")
+            catalog = system_control.load_lifecycle_catalog(
+                Path("config/survival-lifecycle.json"),
+            )
+            state = {
+                ("system", catalog["backend_unit"]): "active",
+            }
+            for category, entries in catalog["user_units"].items():
+                for entry in entries:
+                    state[("user", entry["unit"])] = (
+                        "inactive" if category == "inactive_units" else "active"
+                    )
+            trace = []
+
+            def manager(kind):
+                def run(action, unit):
+                    trace.append((kind, action, unit))
+                    if action == "start":
+                        state[(kind, unit)] = "active"
+                    elif action in {"stop", "terminate", "kill"}:
+                        state[(kind, unit)] = "inactive"
+                    return {
+                        "ok": True,
+                        "action": action,
+                        "unit": unit,
+                        "state": state[(kind, unit)],
+                        "cgroup_empty": state[(kind, unit)] == "inactive",
+                    }
+                return run
+
+            config = {
+                "store_path": root / "survival",
+                "agent_state_path": agent_state,
+                "user_manager_uid": 1000,
+                "lifecycle_catalog": catalog,
+                "timing_policy": time_policy.load(Path("config/time.cfg")),
+            }
+            adapters = system_control.production_adapters(
+                config,
+                system_adapter=manager("system"),
+                user_adapter=manager("user"),
+                observe_system=lambda unit: state[("system", unit)],
+                observe_user=lambda unit: state[("user", unit)],
+                model_probe=lambda _catalog, _deadline: {"ok": True},
+                sleep=lambda _seconds: None,
+                sync=lambda: None,
+            )
+            assert set(adapters) == system_control.PRODUCTION_ADAPTER_KINDS
+
+            path = system_control.accept_request(
+                config["store_path"], command_record(command), previous_pause=False,
+            )
+            system_control.commit_acknowledgement(path)
+            result = system_control.advance_request(path, adapters, config)
+
+            assert result == {"ok": True, "phase": "completed", "remaining_effects": 0}
+            assert state[("system", catalog["backend_unit"])] == "active"
+            assert state[("user", "agent-models.service")] == "active"
+            assert state[("user", "agent-ecosystem.service")] == "active"
+            assert state[("user", "agent-watchdog.service")] == "active"
+            assert state[("user", "agent-resource-guard.service")] == "inactive"
+            first_activation_stop = next(
+                index for index, event in enumerate(trace)
+                if event[1:] == ("stop", "agent-ecosystem.path")
+            )
+            lemonade_stop = trace.index(("system", "stop", catalog["backend_unit"]))
+            lemonade_start = trace.index(("system", "start", catalog["backend_unit"]))
+            activation_restart = max(
+                index for index, event in enumerate(trace)
+                if event[1:] == ("start", "agent-ecosystem.path")
+            )
+            assert first_activation_stop < lemonade_stop < lemonade_start < activation_restart
+            job = json.loads(
+                (agent_state / "jobs" / "task-live.json").read_text(encoding="utf-8")
+            )
+            assert job["state"] == "ready"
+            assert job["resume_available"] is True
+            assert not (agent_state / "PAUSED").exists()
+
+
+def test_production_route_restores_an_initially_inactive_inference_service():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        catalog = system_control.load_lifecycle_catalog(
+            Path("config/survival-lifecycle.json"),
+        )
+        state = {("system", catalog["backend_unit"]): "active"}
+        for entries in catalog["user_units"].values():
+            for entry in entries:
+                state[("user", entry["unit"])] = "inactive"
+        trace = []
+
+        def manager(kind):
+            def run(action, unit):
+                trace.append((kind, action, unit))
+                if action == "start":
+                    state[(kind, unit)] = "active"
+                elif action in {"stop", "terminate", "kill"}:
+                    state[(kind, unit)] = "inactive"
+                return {
+                    "ok": True,
+                    "exit_code": 0,
+                    "action": action,
+                    "unit": unit,
+                    "state": state[(kind, unit)],
+                    "cgroup_empty": state[(kind, unit)] == "inactive",
+                }
+            return run
+
+        config = {
+            "store_path": root / "survival",
+            "agent_state_path": agent_state,
+            "user_manager_uid": os.getuid(),
+            "lifecycle_catalog": catalog,
+            "timing_policy": time_policy.load(Path("config/time.cfg")),
+        }
+        adapters = system_control.production_adapters(
+            config,
+            system_adapter=manager("system"),
+            user_adapter=manager("user"),
+            observe_system=lambda unit: state[("system", unit)],
+            observe_user=lambda unit: state[("user", unit)],
+            model_probe=lambda _catalog, _deadline: {"ok": True},
+            sleep=lambda _seconds: None,
+            sync=lambda: None,
+        )
+        path = system_control.accept_request(
+            config["store_path"], command_record("restart"), previous_pause=True,
+        )
+        system_control.commit_acknowledgement(path)
+
+        result = system_control.advance_request(path, adapters, config)
+
+        model = catalog["user_units"]["inference_prerequisites"][0]["unit"]
+        assert result["ok"] is True
+        assert state[("user", model)] == "inactive"
+        assert (agent_state / "PAUSED").exists()
+        start_index = trace.index(("user", "start", model))
+        assert any(
+            index > start_index and event == ("user", "stop", model)
+            for index, event in enumerate(trace)
+        )
+
+
+def test_production_route_turns_over_disposable_real_process_groups():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        (agent_state / "jobs").mkdir(parents=True)
+        catalog = system_control.load_lifecycle_catalog(
+            Path("config/survival-lifecycle.json"),
+        )
+        processes = {}
+
+        def launch(kind, unit):
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            processes[(kind, unit)] = process
+            return process
+
+        def observed(kind, unit):
+            process = processes.get((kind, unit))
+            return "active" if process is not None and process.poll() is None else "inactive"
+
+        def manager(kind):
+            def run(action, unit):
+                process = processes.get((kind, unit))
+                if action == "start" and observed(kind, unit) != "active":
+                    process = launch(kind, unit)
+                elif action in {"stop", "terminate", "kill"} and process is not None:
+                    if process.poll() is None:
+                        os.killpg(
+                            process.pid,
+                            signal.SIGKILL if action == "kill" else signal.SIGTERM,
+                        )
+                        process.wait(timeout=2)
+                state = observed(kind, unit)
+                return {
+                    "ok": state == ("active" if action == "start" else "inactive"),
+                    "exit_code": 0,
+                    "action": action,
+                    "unit": unit,
+                    "state": state,
+                    "cgroup_empty": state == "inactive",
+                }
+            return run
+
+        try:
+            backend = launch("system", catalog["backend_unit"])
+            for category, entries in catalog["user_units"].items():
+                if category == "inactive_units":
+                    continue
+                for entry in entries:
+                    launch("user", entry["unit"])
+            config = {
+                "store_path": root / "survival",
+                "agent_state_path": agent_state,
+                "user_manager_uid": os.getuid(),
+                "lifecycle_catalog": catalog,
+                "timing_policy": time_policy.load(Path("config/time.cfg")),
+            }
+            adapters = system_control.production_adapters(
+                config,
+                system_adapter=manager("system"),
+                user_adapter=manager("user"),
+                observe_system=lambda unit: observed("system", unit),
+                observe_user=lambda unit: observed("user", unit),
+                model_probe=lambda _catalog, _deadline: {"ok": True},
+                sleep=lambda _seconds: None,
+                sync=lambda: None,
+            )
+            for update_id, command in enumerate(("restart", "reset"), start=1):
+                original_backend_pid = processes[("system", catalog["backend_unit"])].pid
+                original_model_pid = processes[("user", "agent-models.service")].pid
+                path = system_control.accept_request(
+                    config["store_path"],
+                    command_record(command, update_id=update_id),
+                    previous_pause=False,
+                )
+                system_control.commit_acknowledgement(path)
+                result = system_control.advance_request(path, adapters, config)
+                assert result["ok"] is True
+                assert processes[("system", catalog["backend_unit"])].pid != original_backend_pid
+                assert processes[("user", "agent-models.service")].pid != original_model_pid
+                assert processes[("system", catalog["backend_unit"])].poll() is None
+                assert processes[("user", "agent-models.service")].poll() is None
+        finally:
+            for process in processes.values():
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=2)
+
+
+def test_reconciliation_repairs_jobs_control_turns_outbox_and_verification_ownership():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "state"
+        (agent_state / "jobs").mkdir(parents=True)
+        (agent_state / "control-turns").mkdir()
+        (agent_state / "verifications").mkdir()
+        (agent_state / "jobs/task-running.json").write_text(json.dumps({
+            "id": "task-running", "kind": "agent-task", "state": "running",
+        }), encoding="utf-8")
+        (agent_state / "jobs/outbox-one.json").write_text(json.dumps({
+            "id": "outbox-one", "kind": "outbound-message", "state": "sending",
+        }), encoding="utf-8")
+        (agent_state / "jobs/task-awaiting.json").write_text(json.dumps({
+            "id": "task-awaiting", "kind": "agent-task",
+            "state": "awaiting_verification",
+        }), encoding="utf-8")
+        (agent_state / "control-turns/telegram-8.json").write_text(json.dumps({
+            "schema_version": 1, "id": "telegram-8", "deep_state": "running",
+            "deep_worker_pid": 777, "deep_worker_identity": "old:777:1",
+        }), encoding="utf-8")
+        config = {
+            "store_path": root / "survival",
+            "agent_state_path": agent_state,
+            "lifecycle_catalog": system_control.load_lifecycle_catalog(
+                Path("config/survival-lifecycle.json"),
+            ),
+            "timing_policy": time_policy.load(Path("config/time.cfg")),
+        }
+        system_control._write_runtime(config, {
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "previous_pause": False,
+            "previous_active_user_units": [],
+            "interrupted_jobs": [],
+        })
+        result = system_control._reconcile_runtime(config, {
+            "request_id": "telegram-1",
+        })
+        assert result["ok"] is True
+        assert json.loads((agent_state / "jobs/task-running.json").read_text())["state"] == "interrupted"
+        assert json.loads((agent_state / "jobs/outbox-one.json").read_text())["state"] == "delivery_unknown"
+        turn = json.loads((agent_state / "control-turns/telegram-8.json").read_text())
+        assert turn["deep_state"] == "queued"
+        assert "deep_worker_pid" not in turn
+        assert result["awaiting_verifications"] == ["task-awaiting"]
+
+
+def test_interruption_recovers_opencode_session_from_durable_output():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        state = root / "state"
+        logs = root / "logs/runs"
+        (state / "jobs").mkdir(parents=True)
+        logs.mkdir(parents=True)
+        output = logs / "task-live.opencode.log"
+        output.write_text('{"sessionID":"ses_durable"}\n', encoding="utf-8")
+        job_path = state / "jobs/task-live.json"
+        job_path.write_text(json.dumps({
+            "id": "task-live",
+            "kind": "agent-task",
+            "state": "running",
+            "output": "logs/runs/task-live.opencode.log",
+        }), encoding="utf-8")
+        interrupted = system_control._interrupt_job_records(
+            {"agent_state_path": state},
+            {"request_id": "telegram-1"},
+            [job_path],
+        )
+        job = json.loads(job_path.read_text(encoding="utf-8"))
+        assert interrupted == ["task-live"]
+        assert job["opencode_session"] == "ses_durable"
+        assert job["resume_available"] is True
+
+
+def test_atomic_result_records_isolate_a_torn_attempt_tail():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = system_control.accept_request(
+            root, command_record("reset"), previous_pause=False,
+        )
+        system_control.commit_acknowledgement(path)
+        effect = read_request_state(path)["pending_effects"][0]
+        system_control._store_effect_result(path, effect, {"ok": True, "proof": "done"})
+        attempt_directory = system_control._effect_result_directory(path, effect["idempotency_key"])
+        (attempt_directory / "000002.json").write_text('{"partial":', encoding="utf-8")
+
+        assert system_control._verified_effect_result(
+            path, effect["idempotency_key"],
+        )["proof"] == "done"
+        assert not (attempt_directory / "000002.json").exists()
+        assert list((root / "lifecycle-result-quarantine").glob("*.record"))
 
 
 def load_tests(_loader, _tests, _pattern):

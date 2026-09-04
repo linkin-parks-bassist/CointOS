@@ -3,14 +3,19 @@
 import builtins
 import importlib
 import json
+import math
 import os
+import signal
 import socket
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from survival import gateway, protocol, records, telegram_api
+from survival import gateway, protocol, records, telegram_api, time_policy
 
 
 def telegram_update(update_id, user_id, text, chat_id=None):
@@ -34,11 +39,60 @@ def write_time_config(path, degraded_deadline=3, heartbeat_maximum_age=60):
             "command_acknowledgement_deadline_seconds = 2",
             f"degraded_response_deadline_seconds = {degraded_deadline}",
             "",
+            "[fast_control]",
+            "response_deadline_seconds = 10",
+            "maximum_queue_age_seconds = 5",
+            "",
+            "[inference]",
+            "model_stop_deadline_seconds = 15",
+            "model_start_deadline_seconds = 180",
+            "health_verification_deadline_seconds = 60",
+            "",
             "[heartbeat]",
+            "probe_period_seconds = 20",
+            "probe_deadline_seconds = 15",
             f"maximum_age_seconds = {heartbeat_maximum_age}",
+            "guardian_poll_seconds = 5",
+            "",
+            "[monitor]",
+            "activation_period_seconds = 300",
+            "stagger_spacing_seconds = 25",
+            "run_deadline_seconds = 120",
+            "",
+            "[repair]",
+            "initial_model_deadline_seconds = 180",
+            "progress_lease_seconds = 60",
+            "progress_update_period_seconds = 60",
+            "emergency_model_deadline_seconds = 900",
+            "",
+            "[resource]",
+            "poll_seconds = 1",
+            "pressure_confirmation_seconds = 5",
+            "emergency_confirmation_seconds = 10",
+            "healthy_release_seconds = 60",
+            "",
+            "[lifecycle]",
+            "restart_checkpoint_grace_seconds = 30",
+            "service_stop_deadline_seconds = 10",
+            "terminate_grace_seconds = 5",
+            "kill_grace_seconds = 2",
+            "reconciliation_deadline_seconds = 60",
+            "progress_update_period_seconds = 30",
+            "",
+            "[control_turn]",
+            "run_deadline_seconds = 600",
+            "",
+            "[executor]",
+            "run_deadline_seconds = 1800",
+            "time_slice_seconds = 300",
+            "",
+            "[verification]",
+            "run_deadline_seconds = 900",
             "",
             "[outbox]",
             "poll_seconds = 2",
+            "retry_initial_seconds = 5",
+            "retry_maximum_seconds = 60",
             "",
         )),
         encoding="utf-8",
@@ -60,7 +114,13 @@ def production_environment(root, time_config):
     }
 
 
-def inbox_record(update_id, state="ready", deadline_at=103.0, extra=None):
+def inbox_record(
+    update_id,
+    state="ready",
+    deadline_at=103.0,
+    extra=None,
+    boot_id="boot-a",
+):
     value = {
         "schema_version": 1,
         "id": f"telegram-{update_id}",
@@ -69,6 +129,7 @@ def inbox_record(update_id, state="ready", deadline_at=103.0, extra=None):
         "chat_id": 42,
         "text": f"message {update_id}",
         "received_at": "2026-09-04T00:00:00+00:00",
+        "boot_id": boot_id,
         "accepted_monotonic_at": 100.0,
         "deadline_at": deadline_at,
         "egress_state": state,
@@ -118,7 +179,7 @@ def test_missing_explicit_config_fails_before_heartbeat():
         root = Path(temporary)
         with unittest.TestCase().assertRaisesRegex(RuntimeError, "CREDENTIALS_DIRECTORY"):
             gateway.load_production_config({})
-        assert not (root / "heartbeat.json").exists()
+        assert not (root / "gateway/heartbeat.json").exists()
 
 
 def test_gateway_timing_rejects_nonfinite_values():
@@ -128,6 +189,16 @@ def test_gateway_timing_rejects_nonfinite_values():
         with unittest.TestCase().assertRaisesRegex(
             RuntimeError, "telegram.degraded_response_deadline_seconds",
         ):
+            gateway.load_gateway_timing(path)
+
+
+def test_gateway_timing_rejects_unknown_global_policy_instead_of_parsing_a_subset():
+    with tempfile.TemporaryDirectory() as temporary:
+        path = Path(temporary) / "time.cfg"
+        write_time_config(path)
+        with path.open("a", encoding="utf-8") as output:
+            output.write("\n[unknown]\nperiod_seconds = 1\n")
+        with unittest.TestCase().assertRaisesRegex(RuntimeError, "unknown time policy section"):
             gateway.load_gateway_timing(path)
 
 
@@ -148,7 +219,7 @@ def test_ordinary_message_uses_injected_configured_deadline_without_model_call()
         assert stored["accepted_monotonic_at"] == 100.0
         assert stored["deadline_at"] == 107.0
         assert stored["egress_state"] == "ready"
-        assert (root / "inbox" / "telegram-8.json").stat().st_mode & 0o777 == 0o660
+        assert (root / "inbox" / "telegram-8.json").stat().st_mode & 0o777 == 0o640
 
 
 def test_ordinary_replay_preserves_existing_egress_state_and_deadline():
@@ -276,20 +347,69 @@ def test_acknowledgement_false_return_is_delivery_unknown_not_delivered():
         assert read_json(root / "acks" / "telegram-14.json")["egress_state"] == "delivery_unknown"
 
 
-def test_acknowledgement_exception_is_recorded_unknown_and_remains_fatal():
+def test_acknowledgement_exception_is_recorded_unknown_without_stopping_contact():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
 
         def fail_send(_chat_id, _text):
             raise ConnectionError("Telegram request failed")
 
-        with unittest.TestCase().assertRaises(ConnectionError):
-            gateway.handle_update(
-                telegram_update(15, 42, "RESTART"), {42}, root,
-                send=fail_send,
-                send_command=lambda *_: None,
-            )
+        result = gateway.handle_update(
+            telegram_update(15, 42, "RESTART"), {42}, root,
+            send=fail_send,
+            send_command=lambda *_: None,
+        )
+        assert result == {"kind": "command", "id": "telegram-15"}
         assert read_json(root / "acks" / "telegram-15.json")["egress_state"] == "delivery_unknown"
+
+
+def test_acknowledgement_uses_its_own_deadline_and_failure_does_not_cancel_command():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        commands = []
+
+        def fail_ack(_chat_id, _text):
+            raise TimeoutError("two-second acknowledgement deadline")
+
+        result = gateway.handle_update(
+            telegram_update(16, 42, "RESET"),
+            {42},
+            root,
+            send=lambda *_: (_ for _ in ()).throw(AssertionError("generic send used")),
+            send_acknowledgement=fail_ack,
+            send_command=lambda command: commands.append(command),
+        )
+
+        assert result == {"kind": "command", "id": "telegram-16"}
+        assert [command["request_id"] for command in commands] == ["telegram-16"]
+        assert read_json(root / "acks" / "telegram-16.json")["egress_state"] == "delivery_unknown"
+
+
+def test_acknowledgement_deadline_is_an_overall_wall_clock_bound():
+    release = threading.Event()
+    try:
+        assert gateway._call_with_deadline(
+            lambda: release.wait(1.0) or True,
+            0.01,
+        ) is False
+    finally:
+        release.set()
+
+
+def test_acknowledgement_api_rejection_is_durably_unknown():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+
+        def rejected_send(chat_id, text):
+            return telegram_api.send_message(
+                "123:abc", chat_id, text, request_timeout=2.0,
+                https_exchange=lambda *_args: (200, b'{"ok":false}'),
+            )
+
+        assert gateway._deliver_acknowledgement(
+            root, "telegram-17", 42, "accepted", rejected_send,
+        ) == "delivery_unknown"
+        assert read_json(root / "acks/telegram-17.json")["egress_state"] == "delivery_unknown"
 
 
 def test_due_degraded_reply_persists_sending_before_https_and_delivered_after():
@@ -303,11 +423,13 @@ def test_due_degraded_reply_persists_sending_before_https_and_delivered_after():
             observed.append((chat_id, text, read_json(path)["egress_state"]))
             return True
 
-        count = gateway.send_due_degraded_responses(root, send, now=104.0)
+        count = gateway.send_due_degraded_responses(
+            root, send, now=104.0, current_boot_id="boot-a",
+        )
         assert count == 1
         assert observed == [(42, gateway.DEGRADED_REPLY, "sending")]
         assert read_json(path)["egress_state"] == "delivered"
-        assert path.stat().st_mode & 0o777 == 0o660
+        assert path.stat().st_mode & 0o777 == 0o640
 
 
 def test_due_degraded_reply_failure_becomes_delivery_unknown_and_is_not_replayed():
@@ -318,10 +440,12 @@ def test_due_degraded_reply_failure_becomes_delivery_unknown_and_is_not_replayed
         calls = []
         assert gateway.send_due_degraded_responses(
             root, lambda *args: calls.append(args) or False, now=104.0,
+            current_boot_id="boot-a",
         ) == 1
         assert read_json(path)["egress_state"] == "delivery_unknown"
         assert gateway.send_due_degraded_responses(
             root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")), now=105.0,
+            current_boot_id="boot-a",
         ) == 0
         assert len(calls) == 1
 
@@ -333,6 +457,7 @@ def test_degraded_reply_discovered_sending_becomes_unknown_without_replay():
         write_json(path, inbox_record(22, state="sending"))
         assert gateway.send_due_degraded_responses(
             root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")), now=104.0,
+            current_boot_id="boot-a",
         ) == 1
         assert read_json(path)["egress_state"] == "delivery_unknown"
 
@@ -343,7 +468,9 @@ def test_degraded_scan_quarantines_malformed_json_instead_of_silently_skipping()
         path = root / "inbox" / "telegram-23.json"
         path.parent.mkdir(parents=True)
         path.write_text("{broken", encoding="utf-8")
-        assert gateway.send_due_degraded_responses(root, lambda *_: True, now=104.0) == 0
+        assert gateway.send_due_degraded_responses(
+            root, lambda *_: True, now=104.0, current_boot_id="boot-a",
+        ) == 0
         assert not path.exists()
         errors = telegram_api.list_quarantine_errors(root)
         assert len(errors) == 1
@@ -358,6 +485,22 @@ def test_degraded_scan_quarantines_extra_fields_before_delivery():
         write_json(path, inbox_record(24, extra={"unexpected": True}))
         assert gateway.send_due_degraded_responses(
             root, lambda *_: (_ for _ in ()).throw(AssertionError("malformed delivery")), now=104.0,
+            current_boot_id="boot-a",
+        ) == 0
+        assert not path.exists()
+        assert len(telegram_api.list_quarantine_errors(root)) == 1
+
+
+def test_nonfinite_persisted_deadline_is_quarantined_before_egress():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox/telegram-25.json"
+        write_json(path, inbox_record(25, deadline_at=math.inf))
+        assert gateway.send_due_degraded_responses(
+            root,
+            lambda *_: (_ for _ in ()).throw(AssertionError("nonfinite delivery")),
+            now=104.0,
+            current_boot_id="boot-a",
         ) == 0
         assert not path.exists()
         assert len(telegram_api.list_quarantine_errors(root)) == 1
@@ -371,23 +514,31 @@ def test_critical_outbox_is_exact_and_crash_truthful():
         observed = []
 
         def send(chat_id, text):
-            observed.append((chat_id, text, read_json(path)["egress_state"]))
+            delivery = root / "gateway/critical-delivery/message-1.json"
+            observed.append((chat_id, text, read_json(delivery)["egress_state"]))
             return True
 
         assert gateway.drain_critical_outbox(root, send) == 1
         assert observed == [(42, "critical message", "sending")]
-        assert read_json(path)["egress_state"] == "delivered"
+        assert read_json(path)["egress_state"] == "ready"
+        assert read_json(
+            root / "gateway/critical-delivery/message-1.json"
+        )["egress_state"] == "delivered"
 
 
-def test_critical_outbox_publication_and_replacement_remain_group_writable():
+def test_guardian_critical_message_is_group_readable_but_immutable_to_gateway():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         value = critical_record("message-shared")
         telegram_api.store_critical_outbox_entry(root, value)
         path = root / "outbox" / "critical" / "message-shared.json"
-        assert path.stat().st_mode & 0o777 == 0o660
-        telegram_api.update_critical_outbox_state(path, "delivered")
-        assert path.stat().st_mode & 0o777 == 0o660
+        assert path.stat().st_mode & 0o777 == 0o640
+        telegram_api.ensure_critical_delivery(root, "message-shared")
+        delivery = root / "gateway/critical-delivery/message-shared.json"
+        telegram_api.update_critical_delivery_state(delivery, "delivered")
+        assert read_json(path)["egress_state"] == "ready"
+        assert read_json(delivery)["egress_state"] == "delivered"
+        assert delivery.stat().st_mode & 0o777 == 0o600
 
 
 def test_critical_false_return_is_unknown_and_never_recursively_requeued():
@@ -396,7 +547,10 @@ def test_critical_false_return_is_unknown_and_never_recursively_requeued():
         path = root / "outbox" / "critical" / "message-2.json"
         write_json(path, critical_record("message-2"))
         assert gateway.drain_critical_outbox(root, lambda *_: False) == 1
-        assert read_json(path)["egress_state"] == "delivery_unknown"
+        assert read_json(path)["egress_state"] == "ready"
+        assert read_json(
+            root / "gateway/critical-delivery/message-2.json"
+        )["egress_state"] == "delivery_unknown"
         assert [entry.name for entry in telegram_api.list_critical_outbox(root)] == ["message-2.json"]
         assert gateway.drain_critical_outbox(
             root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
@@ -411,7 +565,10 @@ def test_critical_discovered_sending_becomes_unknown_without_replay():
         assert gateway.drain_critical_outbox(
             root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
         ) == 1
-        assert read_json(path)["egress_state"] == "delivery_unknown"
+        assert read_json(path)["egress_state"] == "sending"
+        assert read_json(
+            root / "gateway/critical-delivery/message-3.json"
+        )["egress_state"] == "delivery_unknown"
 
 
 def test_critical_scan_quarantines_nonexact_record():
@@ -451,11 +608,11 @@ def test_poll_and_egress_workers_renew_independent_heartbeats():
         )
         assert read_json(root / "heartbeats" / "egress.json")["monotonic_at"] == 11.0
         assert gateway.gateway_is_healthy(root, 12.0, 5.0) is True
-        assert read_json(root / "heartbeat.json")["monotonic_at"] == 11.0
+        assert read_json(root / "gateway/heartbeat.json")["monotonic_at"] == 11.0
         for path in (
             root / "heartbeats" / "poll.json",
             root / "heartbeats" / "egress.json",
-            root / "heartbeat.json",
+            root / "gateway/heartbeat.json",
         ):
             assert path.stat().st_mode & 0o777 == 0o600
 
@@ -466,10 +623,10 @@ def test_overall_health_requires_both_fresh_heartbeats():
         gateway.mark_worker_heartbeat(root, "poll", 10.0, 5.0)
         gateway.mark_worker_heartbeat(root, "egress", 11.0, 5.0)
         assert gateway.gateway_is_healthy(root, 12.0, 5.0) is True
-        previous = read_json(root / "heartbeat.json")
+        previous = read_json(root / "gateway/heartbeat.json")
         gateway.mark_worker_heartbeat(root, "egress", 17.0, 5.0)
         assert gateway.gateway_is_healthy(root, 17.0, 5.0) is False
-        assert read_json(root / "heartbeat.json") == previous
+        assert read_json(root / "gateway/heartbeat.json") == previous
 
 
 def test_fatal_poll_error_propagates_and_does_not_renew_poll_heartbeat():
@@ -495,7 +652,7 @@ def test_fatal_poll_error_propagates_and_does_not_renew_poll_heartbeat():
         assert not (root / "heartbeats" / "poll.json").exists()
 
 
-def test_quarantine_prevents_egress_heartbeat_renewal():
+def test_quarantine_degrades_data_health_without_stopping_egress_heartbeat():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         path = root / "inbox" / "telegram-30.json"
@@ -503,14 +660,91 @@ def test_quarantine_prevents_egress_heartbeat_renewal():
         path.write_text("bad", encoding="utf-8")
         gateway.egress_child(
             root, lambda *_: True,
+            allowed={42},
             outbox_poll_seconds=0.0,
             heartbeat_maximum_age_seconds=5.0,
             monotonic_now=lambda: 20.0,
+            boot_id=lambda: "boot-a",
             sleep=lambda _seconds: None,
             maximum_iterations=1,
         )
-        assert not (root / "heartbeats" / "egress.json").exists()
+        assert read_json(root / "heartbeats" / "egress.json")["monotonic_at"] == 20.0
         assert gateway.check_quarantine_health(root) is False
+
+
+def test_unmovable_malformed_record_does_not_withhold_egress_heartbeat():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox/telegram-29.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("bad", encoding="utf-8")
+        original_quarantine = telegram_api.quarantine_record
+        telegram_api.quarantine_record = lambda *_args: False
+        try:
+            gateway.egress_child(
+                root, lambda *_: True,
+                outbox_poll_seconds=0.0,
+                heartbeat_maximum_age_seconds=5.0,
+                monotonic_now=lambda: 20.0,
+                boot_id=lambda: "boot-a",
+                sleep=lambda _seconds: None,
+                maximum_iterations=1,
+            )
+        finally:
+            telegram_api.quarantine_record = original_quarantine
+        assert path.exists()
+        assert read_json(root / "heartbeats/egress.json")["monotonic_at"] == 20.0
+
+
+def test_unmovable_quarantine_incident_is_deduplicated_and_visible():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox/telegram-28.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("bad", encoding="utf-8")
+        with patch.object(
+            telegram_api, "_replace_record", side_effect=PermissionError("read-only source"),
+        ):
+            assert telegram_api.quarantine_record(root, path, "invalid inbox JSON") is False
+            assert telegram_api.quarantine_record(root, path, "invalid inbox JSON") is False
+        assert len(telegram_api.list_quarantine_errors(root)) == 1
+        health = read_json(root / "gateway/data-health.json")
+        assert health["state"] == "degraded"
+        assert health["quarantine_succeeded"] is False
+
+
+def test_boot_id_read_failure_does_not_crash_poll_or_egress():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        updates = [telegram_update(32, 42, "ordinary")]
+
+        def fail_boot_id():
+            raise RuntimeError("proc unavailable")
+
+        gateway.poll_child(
+            root, {42}, lambda *_: True, lambda *_: None,
+            degraded_response_deadline_seconds=3.0,
+            poll_seconds=0.0,
+            long_poll_seconds=25.0,
+            request_timeout_seconds=40.0,
+            heartbeat_maximum_age_seconds=5.0,
+            get_updates=lambda **_arguments: updates,
+            monotonic_now=lambda: 20.0,
+            boot_id=fail_boot_id,
+            maximum_iterations=1,
+        )
+        assert read_json(root / "inbox/telegram-32.json")["boot_id"] is None
+        sent = []
+        gateway.egress_child(
+            root, lambda *arguments: sent.append(arguments) or True,
+            outbox_poll_seconds=0.0,
+            heartbeat_maximum_age_seconds=5.0,
+            monotonic_now=lambda: 20.1,
+            boot_id=fail_boot_id,
+            maximum_iterations=1,
+        )
+        assert sent == [(42, gateway.DEGRADED_REPLY)]
+        assert read_json(root / "heartbeats/egress.json")["monotonic_at"] == 20.1
 
 
 def test_orphaned_quarantine_payload_is_still_unhealthy():
@@ -520,6 +754,111 @@ def test_orphaned_quarantine_payload_is_still_unhealthy():
         directory.mkdir()
         (directory / "interrupted.record").write_bytes(b"corrupt source")
         assert gateway.check_quarantine_health(root) is False
+
+
+def test_rebooted_monotonic_deadline_is_immediately_due():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-31.json"
+        write_json(path, inbox_record(31, deadline_at=900000.0, boot_id="old-boot"))
+        sent = []
+
+        assert gateway.send_due_degraded_responses(
+            root,
+            lambda *arguments: sent.append(arguments) or True,
+            now=1.0,
+            current_boot_id="new-boot",
+        ) == 1
+        assert sent == [(42, gateway.DEGRADED_REPLY)]
+        assert read_json(path)["egress_state"] == "delivered"
+
+
+def test_unsupported_update_is_disposed_and_later_command_is_received():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        submissions = []
+        batches = iter(([
+            {"update_id": 40, "callback_query": {"id": "callback"}},
+            telegram_update(41, 42, "RESTART"),
+        ],))
+
+        gateway.poll_child(
+            root,
+            {42},
+            lambda *_: True,
+            lambda command: submissions.append(command),
+            degraded_response_deadline_seconds=3.0,
+            poll_seconds=0.0,
+            long_poll_seconds=25.0,
+            request_timeout_seconds=40.0,
+            heartbeat_maximum_age_seconds=5.0,
+            get_updates=lambda **_arguments: next(batches),
+            monotonic_now=lambda: 10.0,
+            boot_id=lambda: "boot-a",
+            sleep=lambda _seconds: None,
+            maximum_iterations=1,
+        )
+
+        assert [command["request_id"] for command in submissions] == ["telegram-41"]
+        assert read_json(root / "dispositions" / "telegram-40.json") == {
+            "schema_version": 1,
+            "telegram_update_id": 40,
+            "state": "ignored",
+            "reason": "unsupported Telegram update",
+        }
+
+
+def test_all_identified_non_message_shapes_are_disposed_and_offset_survives_restart():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        unsupported = [
+            {"update_id": 50, "callback_query": {"id": "callback"}},
+            {"update_id": 51, "channel_post": {"text": "channel"}},
+            {"update_id": 52, "edited_message": {"text": "edited"}},
+            {"update_id": 53, "message": {"chat": {"id": 42}}},
+        ]
+        observed_offsets = []
+
+        gateway.poll_child(
+            root, {42}, lambda *_: True, lambda *_: None,
+            degraded_response_deadline_seconds=3.0,
+            poll_seconds=0.0,
+            long_poll_seconds=25.0,
+            request_timeout_seconds=40.0,
+            heartbeat_maximum_age_seconds=5.0,
+            get_updates=lambda **arguments: (
+                observed_offsets.append(arguments["offset"]) or unsupported
+            ),
+            monotonic_now=lambda: 10.0,
+            boot_id=lambda: "boot-a",
+            maximum_iterations=1,
+        )
+        gateway.poll_child(
+            root, {42}, lambda *_: True, lambda *_: None,
+            degraded_response_deadline_seconds=3.0,
+            poll_seconds=0.0,
+            long_poll_seconds=25.0,
+            request_timeout_seconds=40.0,
+            heartbeat_maximum_age_seconds=5.0,
+            get_updates=lambda **arguments: (
+                observed_offsets.append(arguments["offset"]) or []
+            ),
+            monotonic_now=lambda: 11.0,
+            boot_id=lambda: "boot-a",
+            maximum_iterations=1,
+        )
+        assert observed_offsets == [None, 54]
+        assert sorted(path.stem for path in (root / "dispositions").glob("*.json")) == [
+            "telegram-50", "telegram-51", "telegram-52", "telegram-53",
+        ]
+
+
+def test_http_200_non_json_response_is_explicit_failure():
+    with unittest.TestCase().assertRaisesRegex(RuntimeError, "invalid Telegram response"):
+        telegram_api.get_updates(
+            "123:abc", offset=None, timeout=25.0, request_timeout=40.0,
+            https_exchange=lambda *_args: (200, b"not-json"),
+        )
 
 
 def test_main_behaviorally_tracks_two_successive_replacements_per_role():
@@ -558,6 +897,49 @@ def test_main_behaviorally_tracks_two_successive_replacements_per_role():
         assert tracked == {"poll": 102, "egress": 202}
 
 
+def test_gateway_supervisor_applies_live_heartbeat_age_policy():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        telegram_api.write_worker_heartbeat(root, "poll", 50.0)
+        telegram_api.write_worker_heartbeat(root, "egress", 50.0)
+        handlers = {}
+        notifications = []
+
+        def install_handler(number, handler):
+            previous = handlers.get(number, signal.SIG_DFL)
+            handlers[number] = handler
+            return previous
+
+        def waitpid(_pid, _options):
+            handlers[signal.SIGUSR1](signal.SIGUSR1, None)
+            raise ChildProcessError
+
+        with (
+            patch.object(gateway.signal, "signal", side_effect=install_handler),
+            patch.object(gateway.time, "monotonic", return_value=100.0),
+            patch.object(
+                gateway.systemd_notify,
+                "notify_systemd",
+                side_effect=lambda value: notifications.append(value),
+            ),
+        ):
+            gateway.main(
+                root, {42}, lambda *_: True, lambda *_: None,
+                degraded_response_deadline_seconds=3.0,
+                poll_seconds=1.0,
+                long_poll_seconds=25.0,
+                request_timeout_seconds=40.0,
+                outbox_poll_seconds=2.0,
+                heartbeat_maximum_age_seconds=1.0,
+                fork=lambda: 100,
+                waitpid=waitpid,
+                install_signal_handlers=lambda: None,
+                reload_timing=lambda: {"heartbeat_maximum_age_seconds": 60.0},
+            )
+
+        assert notifications == ["READY=1", "WATCHDOG=1"]
+
+
 def test_send_message_exercises_https_encoding_through_injected_exchange():
     calls = []
 
@@ -590,7 +972,7 @@ def test_get_updates_exercises_https_long_poll_through_injected_exchange():
     assert updates == [{"update_id": 7}]
     assert calls == [(
         "api.telegram.org", 40.0, "GET",
-        "/bot123:abc/getUpdates?timeout=25&offset=5", None, {},
+        "/bot123:abc/getUpdates?timeout=25&offset=5&allowed_updates=%5B%22message%22%5D", None, {},
     )]
 
 
@@ -629,6 +1011,86 @@ def test_production_send_adapter_never_recursively_creates_a_ready_record():
         )
         assert https_calls == [("123:secret", 42, "message", 40.0)]
         assert telegram_api.list_critical_outbox(root / "state") == []
+
+
+def test_production_acknowledgement_adapter_uses_command_deadline():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        time_config = root / "time.cfg"
+        write_time_config(time_config)
+        environment = production_environment(root, time_config)
+        calls = []
+
+        def send_message(bot_token, chat_id, text, request_timeout):
+            calls.append((bot_token, chat_id, text, request_timeout))
+            return True
+
+        def run_main(_store, _allowed, _send, _send_command, **arguments):
+            arguments["send_acknowledgement"](42, "ack")
+
+        gateway.run_production(
+            environment,
+            send_message=send_message,
+            submit_to_guardian=lambda *_args, **_kwargs: None,
+            get_updates_api=lambda *_args, **_kwargs: [],
+            run_main=run_main,
+        )
+        assert calls == [("123:secret", 42, "ack", 2.0)]
+
+
+def test_production_gateway_live_reload_adopts_complete_policy_and_retains_invalid_edit():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        time_config = root / "time.cfg"
+        write_time_config(time_config)
+        environment = production_environment(root, time_config)
+        calls = []
+
+        def send_message(_token, _chat_id, _text, request_timeout):
+            calls.append(request_timeout)
+            return True
+
+        def run_main(_store, _allowed, _send, _send_command, **arguments):
+            write_time_config(time_config)
+            text = time_config.read_text(encoding="utf-8").replace(
+                "command_acknowledgement_deadline_seconds = 2",
+                "command_acknowledgement_deadline_seconds = 1.5",
+            )
+            time_config.write_text(text, encoding="utf-8")
+            arguments["reload_timing"]()
+            arguments["send_acknowledgement"](42, "ack")
+            time_config.write_text("[telegram]\nbroken = yes\n", encoding="utf-8")
+            arguments["reload_timing"]()
+            arguments["send_acknowledgement"](42, "ack")
+
+        gateway.run_production(
+            environment,
+            send_message=send_message,
+            submit_to_guardian=lambda *_args, **_kwargs: None,
+            get_updates_api=lambda *_args, **_kwargs: [],
+            run_main=run_main,
+        )
+        assert calls == [1.5, 1.5]
+        status = read_json(root / "state/gateway/time-policy-status.json")
+        assert status["state"] == "rejected"
+        assert "unknown time policy" in status["error"]
+
+
+def test_gateway_restart_uses_guardian_last_known_good_when_mutable_source_is_invalid():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        time_config = root / "time.cfg"
+        write_time_config(time_config)
+        environment = production_environment(root, time_config)
+        accepted = root / "state/policy/time.json"
+        time_policy.adopt_last_known_good(time_config, accepted)
+        time_config.write_text("[telegram]\nbroken = yes\n", encoding="utf-8")
+        config = gateway.load_production_config(environment)
+        assert config["command_acknowledgement_deadline_seconds"] == 2.0
+        assert accepted.stat().st_mode & 0o777 == 0o640
+        gateway.refresh_gateway_timing(config)
+        status = read_json(root / "state/gateway/time-policy-status.json")
+        assert status["state"] == "rejected"
 
 
 def receive_exact(connection, size):
@@ -687,6 +1149,50 @@ def test_submit_to_guardian_uses_real_unix_socket_and_typed_framing():
             "request_id": "telegram-40",
             "status": "accepted",
         }
+
+
+def test_guardian_acknowledgement_deadline_bounds_a_dribbling_frame():
+    with tempfile.TemporaryDirectory() as temporary:
+        socket_path = str(Path(temporary) / "guardian.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(socket_path)
+        listener.listen(1)
+        command = {
+            "schema_version": 1,
+            "request_id": "telegram-41",
+            "telegram_update_id": 41,
+            "telegram_user_id": 42,
+            "command": "restart",
+            "received_at": "2026-09-04T00:00:00+00:00",
+        }
+
+        def serve():
+            connection, _address = listener.accept()
+            try:
+                request_size = int.from_bytes(receive_exact(connection, 4), "big")
+                receive_exact(connection, request_size)
+                response = json.dumps({
+                    "schema_version": 1,
+                    "request_id": "telegram-41",
+                    "status": "accepted",
+                }, separators=(",", ":")).encode("utf-8")
+                frame = len(response).to_bytes(4, "big") + response
+                for byte in frame:
+                    time.sleep(0.01)
+                    connection.sendall(bytes((byte,)))
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                connection.close()
+
+        server = threading.Thread(target=serve, daemon=True)
+        server.start()
+        try:
+            with unittest.TestCase().assertRaises(TimeoutError):
+                telegram_api.submit_to_guardian(socket_path, command, timeout=0.05)
+        finally:
+            listener.close()
+            server.join(1.0)
 
 
 def test_gateway_import_succeeds_when_ecosystem_imports_are_forbidden():

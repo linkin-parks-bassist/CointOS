@@ -34,8 +34,10 @@ installer_source_paths = (
     "survival/system_control.py",
     "survival/systemd_notify.py",
     "survival/telegram_api.py",
+    "survival/time_policy.py",
     "docs/operations.md",
     "config/time.cfg",
+    "config/survival-lifecycle.json",
     "services/system/cointelprofessional-survival.slice",
     "services/system/cointelprofessional-gateway.service",
     "services/system/cointelprofessional-guardian.socket",
@@ -202,10 +204,9 @@ def test_units_execute_only_the_installed_snapshot():
     for name, module in modules.items():
         text = load_unit(name)
         assert f"ExecStart=/usr/bin/python3 -m {module}" in text
-        assert "WorkingDirectory=/usr/local/lib/cointelprofessional-survival" in text
+        assert "WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current" in text
         assert "%h" not in text
-        assert "/home/" not in text
-        assert "agent-ecosystem" not in text
+        assert f"ExecStart=/home/" not in text
 
 
 def test_units_use_systemd_notification_and_local_documentation_paths():
@@ -213,14 +214,15 @@ def test_units_use_systemd_notification_and_local_documentation_paths():
         text = path.read_text(encoding="utf-8")
         assert "Environment=NOTIFY_SOCKET=" not in text
         assert "github.com" not in text
-    assert "Documentation=file:///usr/local/lib/cointelprofessional-survival/docs/operations.md" in load_unit(
+    assert "Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md" in load_unit(
         "cointelprofessional-gateway.service",
     )
 
 
 def test_units_project_task_3_and_4_paths_and_groups():
     gateway_text = load_unit("cointelprofessional-gateway.service")
-    assert "SupplementaryGroups=cointelprofessional_command agent_ecosystem_io" in gateway_text
+    assert "SupplementaryGroups=cointelprofessional_command" in gateway_text
+    assert "SupplementaryGroups=cointelprofessional_command agent_ecosystem_io" not in gateway_text
     assert "Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock" in gateway_text
     assert "Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional" in gateway_text
     assert "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg" in gateway_text
@@ -229,6 +231,10 @@ def test_units_project_task_3_and_4_paths_and_groups():
     assert "EnvironmentFile=/etc/cointelprofessional/guardian.env" in guardian_text
     assert "Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock" in guardian_text
     assert "Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional" in guardian_text
+    assert "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg" in guardian_text
+    assert "Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json" in guardian_text
+    assert "Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state" in guardian_text
+    assert "ProtectHome=read-only" in guardian_text
 
 
 def test_notify_systemd_uses_explicit_filesystem_datagram_path():
@@ -295,7 +301,7 @@ gateway.main(
             assert process.poll() is None
         finally:
             stderr = stop_process(process)
-        assert stderr == ""
+        assert stderr == "", stderr
 
 
 def test_gateway_main_owns_notifications_and_stops_when_polling_wedges():
@@ -346,7 +352,7 @@ gateway.main(
         finally:
             stderr = stop_process(process)
             receiver.close()
-        assert stderr == ""
+        assert stderr == "", stderr
 
 
 def test_guardian_main_owns_notifications_and_stops_when_request_wedges():
@@ -373,6 +379,7 @@ guardian.run_loop({{
     "store_path": Path({str(root / "state")!r}),
     "gateway_uid": {os.getuid()},
     "user_manager_uid": {os.getuid()},
+    "guardian_poll_seconds": 0.05,
     "adapters": {{}},
 }}, on_accept=wedge)
 '''
@@ -435,6 +442,7 @@ guardian.run_loop({{
     "store_path": Path({str(root / "state")!r}),
     "gateway_uid": {os.getuid()},
     "user_manager_uid": {os.getuid()},
+    "guardian_poll_seconds": 0.05,
     "adapters": {{}},
 }}, on_accept=accept_once)
 '''
@@ -547,8 +555,7 @@ if name == "systemd-analyze":
         "scripts/cointelprofessional-gateway",
         "scripts/cointelprofessional-guardian",
         "docs/operations.md",
-        "config/time.cfg",
-        "config/guardian.env",
+        "config/survival-lifecycle.json",
         "services/system/cointelprofessional-survival.slice",
         "services/system/cointelprofessional-gateway.service",
         "services/system/cointelprofessional-guardian.socket",
@@ -580,6 +587,16 @@ if name == "mv":
         print("injected post-commit interruption", file=sys.stderr)
         raise SystemExit(77)
     raise SystemExit(result.returncode)
+if name == "ln":
+    result = subprocess.run(["/usr/bin/ln", *sys.argv[1:]], check=False)
+    destination = sys.argv[-1]
+    if result.returncode == 0 and "/etc/systemd/system/" in destination:
+        counter = state / "wrapper-count"
+        value = int(counter.read_text()) + 1 if counter.exists() else 1
+        counter.write_text(str(value))
+        if os.environ.get("FAKE_WRAPPER_KILL_INDEX") == str(value):
+            os.kill(os.getppid(), signal.SIGKILL)
+    raise SystemExit(result.returncode)
 if name == "systemctl":
     raise SystemExit(0)
 raise SystemExit(127)
@@ -589,7 +606,7 @@ raise SystemExit(127)
     backend.chmod(0o755)
     for name in (
         "getent", "groupadd", "useradd", "usermod", "id", "install",
-        "systemd-analyze", "systemctl", "mv",
+        "systemd-analyze", "systemctl", "mv", "ln",
     ):
         (fake_directory / name).symlink_to(backend)
     return fake_directory, state_directory
@@ -677,7 +694,7 @@ def prepare_release_update(root):
 def assert_failed_update_is_invisible(image, prior_digest):
     assert installed_tree_digest(image) == prior_digest
     authoritative_gateway = (
-        image / "usr/local/lib/cointelprofessional-survival/survival/gateway.py"
+        image / "usr/local/lib/cointelprofessional-survival/current/survival/gateway.py"
     )
     assert b"candidate-two" not in authoritative_gateway.read_bytes()
     authoritative_guardian_unit = (
@@ -690,11 +707,6 @@ def published_installation_paths(image):
     snapshot = image / "usr/local/lib/cointelprofessional-survival"
     return (
         snapshot / "current",
-        snapshot / "survival",
-        snapshot / "scripts",
-        snapshot / "docs",
-        image / "etc/cointelprofessional/time.cfg",
-        image / "etc/cointelprofessional/guardian.env",
         image / "etc/systemd/system/cointelprofessional-survival.slice",
         image / "etc/systemd/system/cointelprofessional-gateway.service",
         image / "etc/systemd/system/cointelprofessional-guardian.socket",
@@ -708,6 +720,14 @@ def test_installer_is_idempotent_and_install_only_by_default():
         result, first_trace, image, state = run_fake_installer(root)
         assert result.returncode == 0, result.stderr
         first_digest = installed_tree_digest(image)
+        time_config = image / "etc/cointelprofessional/time.cfg"
+        time_config.write_text(
+            time_config.read_text(encoding="utf-8").replace(
+                "poll_seconds = 1", "poll_seconds = 1.5",
+            ),
+            encoding="utf-8",
+        )
+        edited_digest = installed_tree_digest(image)
         environment = os.environ.copy()
         environment.update({
             "PATH": str(root / "fake-bin") + ":/usr/bin:/bin",
@@ -723,7 +743,9 @@ def test_installer_is_idempotent_and_install_only_by_default():
             json.loads(line)
             for line in (state / "trace.jsonl").read_text(encoding="utf-8").splitlines()
         ]
-        assert first_digest == installed_tree_digest(image)
+        assert edited_digest != first_digest
+        assert installed_tree_digest(image) == edited_digest
+        assert "poll_seconds = 1.5" in time_config.read_text(encoding="utf-8")
         assert not any(call[0] == "systemctl" for call in second_trace)
         assert sum(call[0] == "groupadd" for call in second_trace) == 2
         assert sum(call[0] == "useradd" for call in second_trace) == 1
@@ -733,7 +755,10 @@ def test_installer_is_idempotent_and_install_only_by_default():
             "useradd", "--system", "--user-group", "--home-dir", "/nonexistent",
             "--shell", "/usr/sbin/nologin", "cointelprofessional",
         ] in first_trace
-        assert any(call[:3] == ["usermod", "--append", "--groups"] and call[-1] == "cointelprofessional" for call in first_trace)
+        assert [
+            "usermod", "--append", "--groups", "cointelprofessional_command",
+            "cointelprofessional",
+        ] in first_trace
         assert any(call[:3] == ["usermod", "--append", "--groups"] and call[-1] == "david" for call in first_trace)
 
 
@@ -743,13 +768,28 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
         result, trace, image, _state = run_fake_installer(root)
         assert result.returncode == 0, result.stderr
         snapshot = image / "usr/local/lib/cointelprofessional-survival"
-        assert (snapshot / "survival/gateway.py").read_bytes() == (base / "survival/gateway.py").read_bytes()
-        assert (snapshot / "scripts/cointelprofessional-gateway").read_bytes() == (
+        assert (snapshot / "current/survival/gateway.py").read_bytes() == (base / "survival/gateway.py").read_bytes()
+        assert (snapshot / "current/scripts/cointelprofessional-gateway").read_bytes() == (
             base / "scripts/cointelprofessional-gateway"
         ).read_bytes()
-        assert (snapshot / "docs/operations.md").read_bytes() == (base / "docs/operations.md").read_bytes()
-        assert (snapshot / "scripts/cointelprofessional-gateway").stat().st_mode & 0o777 == 0o755
-        assert (image / "var/lib/cointelprofessional").stat().st_mode & 0o7777 == 0o2770
+        assert (snapshot / "current/docs/operations.md").read_bytes() == (base / "docs/operations.md").read_bytes()
+        assert (snapshot / "current/scripts/cointelprofessional-gateway").stat().st_mode & 0o777 == 0o755
+        store = image / "var/lib/cointelprofessional"
+        assert store.stat().st_mode & 0o777 == 0o755
+        assert (store / "inbox").stat().st_mode & 0o7777 == 0o2750
+        assert (store / "outbox/critical").stat().st_mode & 0o7777 == 0o2750
+        for relative in (
+            "commands", "gateway", "gateway_commands", "acks", "heartbeats",
+            "dispositions", "quarantine", "gateway/critical-delivery",
+            "gateway/data-health-incidents",
+        ):
+            assert (store / relative).stat().st_mode & 0o777 == 0o700
+        for relative in (
+            "lifecycle", "lifecycle-runtime", "lifecycle-completions",
+            "lifecycle-result-quarantine",
+        ):
+            assert (store / relative).stat().st_mode & 0o777 == 0o700
+        assert (store / "policy").stat().st_mode & 0o7777 == 0o2750
         assert (image / "run/cointelprofessional").stat().st_mode & 0o777 == 0o750
         assert (image / "etc/cointelprofessional").stat().st_mode & 0o777 == 0o750
         guardian_environment = image / "etc/cointelprofessional/guardian.env"
@@ -757,11 +797,23 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
         assert guardian_environment.read_text(encoding="utf-8") == (
             "GUARDIAN_GATEWAY_UID=991\nUSER_MANAGER_UID=1000\n"
         )
+        time_config = image / "etc/cointelprofessional/time.cfg"
+        assert time_config.stat().st_mode & 0o777 == 0o640
+        assert time_config.read_bytes() == (base / "config/time.cfg").read_bytes()
+        assert not (snapshot / "current/config/time.cfg").exists()
         assert not (image / "etc/cointelprofessional/telegram_bot_token").exists()
         assert not (image / "etc/cointelprofessional/allowed_user_ids").exists()
         assert [
-            "install", "-d", "-o", "root", "-g", "agent_ecosystem_io",
-            "-m", "2770", str(image / "var/lib/cointelprofessional"),
+            "install", "-d", "-o", "root", "-g", "root",
+            "-m", "0755", str(store),
+        ] in trace
+        assert [
+            "install", "-d", "-o", "cointelprofessional", "-g", "agent_ecosystem_io",
+            "-m", "2750", str(store / "inbox"),
+        ] in trace
+        assert [
+            "install", "-d", "-o", "root", "-g", "cointelprofessional",
+            "-m", "2750", str(store / "outbox/critical"),
         ] in trace
         assert [
             "install", "-d", "-o", "root", "-g", "cointelprofessional_command",
@@ -846,10 +898,9 @@ def test_installer_initial_commit_failure_leaves_no_published_wrappers():
         )
         assert result.returncode == 75
         snapshot = image / "usr/local/lib/cointelprofessional-survival"
-        assert not any(
-            path.exists() or path.is_symlink()
-            for path in published_installation_paths(image)
-        )
+        paths = published_installation_paths(image)
+        assert not paths[0].exists() and not paths[0].is_symlink()
+        assert all(path.is_symlink() and not path.exists() for path in paths[1:])
         assert list((snapshot / "releases").iterdir()) == []
 
 
@@ -862,10 +913,9 @@ def test_installer_abrupt_pre_commit_interruption_publishes_no_wrappers():
         )
         assert result.returncode == -signal.SIGKILL
         snapshot = image / "usr/local/lib/cointelprofessional-survival"
-        assert not any(
-            path.exists() or path.is_symlink()
-            for path in published_installation_paths(image)
-        )
+        paths = published_installation_paths(image)
+        assert not paths[0].exists() and not paths[0].is_symlink()
+        assert all(path.is_symlink() and not path.exists() for path in paths[1:])
         releases = list((snapshot / "releases").glob("release-*"))
         assert len(releases) == 1
         release = releases[0]
@@ -877,6 +927,27 @@ def test_installer_abrupt_pre_commit_interruption_publishes_no_wrappers():
         assert guardian_unit.read_bytes() == (
             base / "services/system/cointelprofessional-guardian.service"
         ).read_bytes()
+
+
+def test_first_install_interruption_at_each_wrapper_keeps_authoritative_root_absent():
+    for wrapper_index in range(1, 5):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            result, _trace, image, state = run_fake_installer(
+                root,
+                extra_environment={"FAKE_WRAPPER_KILL_INDEX": str(wrapper_index)},
+            )
+            assert result.returncode == -signal.SIGKILL
+            snapshot = image / "usr/local/lib/cointelprofessional-survival"
+            assert not (snapshot / "current").exists()
+            for unit_path in published_installation_paths(image)[1:]:
+                assert not unit_path.exists()
+            retry = invoke_fake_installer(
+                installer_path, root / "fake-bin", state, image,
+            )
+            assert retry.returncode == 0, retry.stderr
+            assert (snapshot / "current").resolve().is_dir()
+            assert all(path.exists() for path in published_installation_paths(image))
 
 
 def test_installer_post_commit_interruption_keeps_a_complete_release_visible():
@@ -891,7 +962,7 @@ def test_installer_post_commit_interruption_keeps_a_complete_release_visible():
         )
         assert result.returncode == 77
         assert (snapshot / "current").resolve().is_dir()
-        assert b"candidate-two" in (snapshot / "survival/gateway.py").read_bytes()
+        assert b"candidate-two" in (snapshot / "current/survival/gateway.py").read_bytes()
         guardian_unit = image / "etc/systemd/system/cointelprofessional-guardian.service"
         assert b"candidate-two" in guardian_unit.read_bytes()
         assert prior_releases <= set((snapshot / "releases").iterdir())

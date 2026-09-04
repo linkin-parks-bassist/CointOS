@@ -1,10 +1,17 @@
 """Durable lifecycle-effect execution at the privileged system fingertip."""
 
+import hashlib
+import json
+import math
 import os
 import subprocess
+import tempfile
+import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
-from survival import lifecycle, protocol, records
+from survival import lifecycle, protocol, records, systemd_notify, time_policy
 from survival.json_codec import decode_json_object
 
 
@@ -16,9 +23,7 @@ SURVIVAL_UNITS = frozenset((
 DESTRUCTIBLE_SYSTEM_UNITS = frozenset(("lemond.service",))
 DESTRUCTIBLE_USER_UNITS = frozenset((
     "agent-models.service",
-    "agent-inference-arbiter.service",
-    "agent-fast-control.service",
-    "agent-control-worker.service",
+    "agent-telegram.service",
     "agent-notifier.service",
     "agent-ecosystem.service",
     "agent-ecosystem.path",
@@ -28,12 +33,17 @@ DESTRUCTIBLE_USER_UNITS = frozenset((
     "agent-resource-guard.service",
 ))
 DESTRUCTIBLE_UNITS = DESTRUCTIBLE_SYSTEM_UNITS | DESTRUCTIBLE_USER_UNITS
-SYSTEMCTL_ACTIONS = frozenset(("start", "stop", "kill"))
+SYSTEMCTL_ACTIONS = frozenset((
+    "start", "stop", "terminate", "kill", "reset_failed", "status",
+))
 DIRECT_EFFECT_KINDS = frozenset((
     "notify", "close_admission", "checkpoint", "reconcile", "verify",
     "resume", "finish",
 ))
+REQUIRED_ADAPTER_KINDS = DIRECT_EFFECT_KINDS | frozenset(("system", "user"))
+PRODUCTION_ADAPTER_KINDS = REQUIRED_ADAPTER_KINDS | frozenset(("wait",))
 EFFECT_COMPLETION_EVENTS = {
+    "close_admission": "admission_closed",
     "checkpoint": "checkpointed",
     "stop_units": "units_stopped",
     "kill_units": "units_killed",
@@ -42,6 +52,8 @@ EFFECT_COMPLETION_EVENTS = {
     "start_units": "units_started",
     "reconcile": "reconciled",
     "verify": "verified",
+    "resume": "resumed",
+    "finish": "finished",
 }
 REQUEST_FIELDS = frozenset(("schema_version", "command", "state"))
 RESULT_FIELDS = frozenset((
@@ -50,6 +62,13 @@ RESULT_FIELDS = frozenset((
 MAX_EFFECT_OUTPUT_BYTES = 4096
 MAXIMUM_EFFECTS_PER_ADVANCE = 128
 USER_MANAGER_HOST = "david@.host"
+CATALOG_FIELDS = frozenset(("schema_version", "backend_unit", "model_health", "user_units"))
+CATALOG_CATEGORIES = (
+    "activation_sources", "inference_prerequisites", "control_services",
+    "ordinary_services", "inactive_units",
+)
+MODEL_HEALTH_FIELDS = frozenset(("host", "port", "path", "required_model"))
+UNIT_ENTRY_FIELDS = frozenset(("unit", "required"))
 
 
 def authorize_peer(uid: int, gateway_uid: int) -> None:
@@ -77,6 +96,54 @@ def validate_destructible_units(units: list[str]) -> list[str]:
     return list(units)
 
 
+def load_lifecycle_catalog(path):
+    """Decode the installed semantic unit catalogue as exact plain data."""
+    try:
+        value = decode_json_object(Path(path).read_bytes(), "lifecycle catalogue")
+    except OSError as error:
+        raise ValueError("cannot read lifecycle catalogue") from error
+    if set(value) != CATALOG_FIELDS or value.get("schema_version") != 1:
+        raise ValueError("invalid lifecycle catalogue fields")
+    if type(value["backend_unit"]) is not str:
+        raise ValueError("invalid lifecycle backend unit")
+    validate_destructible_units([value["backend_unit"]])
+    model_health = value["model_health"]
+    if (
+        type(model_health) is not dict
+        or set(model_health) != MODEL_HEALTH_FIELDS
+        or type(model_health["host"]) is not str
+        or not model_health["host"]
+        or type(model_health["port"]) is not int
+        or not 0 < model_health["port"] < 65536
+        or type(model_health["path"]) is not str
+        or not model_health["path"].startswith("/")
+        or type(model_health["required_model"]) is not str
+        or not model_health["required_model"]
+    ):
+        raise ValueError("invalid lifecycle model health contract")
+    categories = value["user_units"]
+    if type(categories) is not dict or set(categories) != set(CATALOG_CATEGORIES):
+        raise ValueError("invalid lifecycle catalogue categories")
+    seen = set()
+    for category in CATALOG_CATEGORIES:
+        entries = categories[category]
+        if type(entries) is not list:
+            raise ValueError("invalid lifecycle unit entries")
+        for entry in entries:
+            if (
+                type(entry) is not dict
+                or set(entry) != UNIT_ENTRY_FIELDS
+                or type(entry["unit"]) is not str
+                or type(entry["required"]) is not bool
+            ):
+                raise ValueError("invalid lifecycle unit entry")
+            validate_destructible_units([entry["unit"]])
+            if entry["unit"] in seen:
+                raise ValueError("duplicate lifecycle unit")
+            seen.add(entry["unit"])
+    return value
+
+
 def checked_action(run, verify) -> dict:
     """Require both a zero command status and an independently checked condition."""
     result = _normalise_process_result(run())
@@ -87,23 +154,85 @@ def checked_action(run, verify) -> dict:
     }
 
 
-def _subprocess_runner(argv: list[str]) -> dict:
+def _subprocess_runner(argv: list[str], timeout=10, heartbeat=None) -> dict:
     """Run one fixed-argv command and retain only bounded diagnostics."""
     try:
-        result = subprocess.run(
+        process = subprocess.Popen(
             argv,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=10,
-            check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return {
+                    "exit_code": -1,
+                    "stdout": _bounded_text(stdout),
+                    "stderr": _bounded_text(
+                        stderr or f"command exceeded {timeout:g}-second deadline"
+                    ),
+                }
+            try:
+                stdout, stderr = process.communicate(timeout=min(1.0, remaining))
+                return _normalise_process_result({
+                    "exit_code": process.returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                })
+            except subprocess.TimeoutExpired:
+                if heartbeat is not None:
+                    heartbeat()
+    except OSError as error:
         return {
             "exit_code": -1,
             "stdout": "",
             "stderr": _bounded_text(str(error)),
         }
-    return _normalise_process_result(result)
+
+
+def _run_with_watchdog(
+    operation,
+    deadline_seconds,
+    heartbeat,
+    pulse_seconds=1.0,
+):
+    """Bound a non-subprocess fingertip while preserving guardian liveness."""
+    for value, name in (
+        (deadline_seconds, "external operation deadline"),
+        (pulse_seconds, "watchdog pulse period"),
+    ):
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"invalid {name}")
+    if not callable(operation) or not callable(heartbeat):
+        raise ValueError("invalid watchdog operation")
+    values = []
+    errors = []
+
+    def run():
+        try:
+            values.append(operation())
+        except Exception as error:
+            errors.append(error)
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    deadline = time.monotonic() + deadline_seconds
+    while worker.is_alive():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {"ok": False, "error": "external operation deadline expired"}
+        worker.join(min(pulse_seconds, remaining))
+        if worker.is_alive():
+            heartbeat()
+    if errors:
+        return {"ok": False, "error": _bounded_text(str(errors[0]))}
+    if len(values) != 1 or type(values[0]) is not dict:
+        return {"ok": False, "error": "invalid external operation result"}
+    return values[0]
 
 
 def _normalise_process_result(result) -> dict:
@@ -171,7 +300,13 @@ def _query_cgroup_empty(manager: str, unit: str, uid: int | None, query) -> dict
         "path": cgroup_path,
         "query": show,
     }
-    if show["exit_code"] != 0 or not cgroup_path.startswith("/"):
+    if show["exit_code"] != 0:
+        result["error"] = "cgroup path was not verified"
+        return result
+    if not cgroup_path:
+        result["empty"] = True
+        return result
+    if not cgroup_path.startswith("/"):
         result["error"] = "cgroup path was not verified"
         return result
     if manager == "user":
@@ -235,10 +370,31 @@ def _unit_action(
         raise ValueError("user manager uid must be configured explicitly")
 
     prefix = _manager_prefix(manager)
-    action_result = _invoke(runner, prefix + [action, unit])
+    if action == "status":
+        action_result = {"exit_code": 0, "stdout": "", "stderr": ""}
+    elif action in {"terminate", "kill"}:
+        signal_name = "SIGTERM" if action == "terminate" else "SIGKILL"
+        action_result = _invoke(
+            runner,
+            prefix + ["kill", "--kill-who=all", f"--signal={signal_name}", unit],
+        )
+    elif action == "reset_failed":
+        action_result = _invoke(runner, prefix + ["reset-failed", unit])
+    else:
+        action_result = _invoke(runner, prefix + [action, unit])
+    load_result = None
+    installed = True
+    if action == "status":
+        load_result = _invoke(
+            query,
+            prefix + ["show", "--property=LoadState", "--value", unit],
+        )
+        installed = load_result["exit_code"] == 0 and load_result["stdout"].strip() == "loaded"
     state_result = _invoke(query, prefix + ["is-active", unit])
-    state = _active_state(state_result)
-    if cgroup is None:
+    state = _active_state(state_result) if installed else "not-found"
+    if action == "status":
+        cgroup_result = {"empty": False}
+    elif cgroup is None:
         cgroup_result = _query_cgroup_empty(manager, unit, uid, query)
     else:
         try:
@@ -246,15 +402,21 @@ def _unit_action(
         except OSError as error:
             cgroup_result = {"empty": False, "error": _bounded_text(str(error))}
 
-    if action == "start":
+    if action == "status":
+        postcondition = installed and state != "unknown"
+    elif action == "start":
         postcondition = state == "active"
     elif action == "stop":
         postcondition = state == "inactive" and cgroup_result["empty"] is True
-    else:
+    elif action == "kill":
         postcondition = (
             state in {"active", "inactive", "failed"}
             and cgroup_result["empty"] is True
         )
+    elif action == "reset_failed":
+        postcondition = state in {"active", "inactive"}
+    else:
+        postcondition = state in {"active", "inactive", "failed", "deactivating"}
     return {
         "ok": action_result["exit_code"] == 0 and postcondition,
         "action": action,
@@ -266,6 +428,8 @@ def _unit_action(
         "state_query": state_result,
         "cgroup_empty": cgroup_result["empty"],
         "cgroup": cgroup_result,
+        "installed": installed,
+        "load_query": load_result,
     }
 
 
@@ -321,6 +485,84 @@ def _normalise_effect_result(kind: str, effect_key: str, results: list[dict]) ->
     }
 
 
+def _catalog_entries(policy, category):
+    try:
+        return policy["lifecycle_catalog"]["user_units"][category]
+    except (KeyError, TypeError) as error:
+        raise ValueError("missing lifecycle catalogue policy") from error
+
+
+def _manager_result(adapter, action, unit):
+    if not callable(adapter):
+        return {"ok": False, "error": "missing manager adapter", "unit": unit}
+    try:
+        result = adapter(action, unit)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return {"ok": False, "error": _bounded_text(str(error)), "unit": unit}
+    if type(result) is not dict:
+        return {"ok": False, "error": "invalid manager adapter result", "unit": unit}
+    return result
+
+
+def _stop_with_escalation(adapter, unit, immediate, policy, wait):
+    results = []
+    if not immediate:
+        cooperative = _manager_result(adapter, "stop", unit)
+        results.append(cooperative)
+        if cooperative.get("ok") is True:
+            return {"ok": True, "unit": unit, "stages": results}
+    results.append(_manager_result(adapter, "terminate", unit))
+    wait(time_policy.seconds(
+        policy["timing_policy"], "lifecycle", "terminate_grace_seconds",
+    ))
+    final = _manager_result(adapter, "kill", unit)
+    results.append(final)
+    wait(time_policy.seconds(
+        policy["timing_policy"], "lifecycle", "kill_grace_seconds",
+    ))
+    stopped = _manager_result(adapter, "stop", unit)
+    results.append(stopped)
+    return {
+        "ok": final.get("exit_code", 0) == 0 and stopped.get("ok") is True,
+        "unit": unit,
+        "stages": results,
+    }
+
+
+def _runtime_path(policy, request_id):
+    try:
+        store = Path(policy["store_path"])
+    except (KeyError, TypeError) as error:
+        raise ValueError("missing lifecycle store policy") from error
+    return store / "lifecycle-runtime" / f"{request_id}.json"
+
+
+def _read_runtime(policy, request_id):
+    path = _runtime_path(policy, request_id)
+    try:
+        value = decode_json_object(path.read_bytes(), "lifecycle runtime")
+    except OSError as error:
+        raise ValueError("missing lifecycle runtime snapshot") from error
+    if (
+        set(value) != {
+            "schema_version", "request_id", "previous_pause",
+            "previous_active_user_units", "interrupted_jobs",
+        }
+        or value.get("schema_version") != 1
+        or value.get("request_id") != request_id
+        or type(value.get("previous_pause")) is not bool
+        or type(value.get("previous_active_user_units")) is not list
+        or any(type(unit) is not str for unit in value["previous_active_user_units"])
+        or type(value.get("interrupted_jobs")) is not list
+    ):
+        raise ValueError("invalid lifecycle runtime snapshot")
+    return value
+
+
+def _write_runtime(policy, value):
+    records.atomic_json(_runtime_path(policy, value["request_id"]), value)
+
+
 def execute_effect(effect: dict, adapters: dict, policy: dict) -> dict:
     """Interpret one Task 2 effect through explicit external adapters."""
     _validate_effect(effect)
@@ -336,40 +578,76 @@ def execute_effect(effect: dict, adapters: dict, policy: dict) -> dict:
                 "ok": False,
                 "error": f"missing {kind} adapter",
             }])
-        result = adapter(dict(effect), dict(policy))
+        try:
+            result = adapter(dict(effect), dict(policy))
+        except (OSError, RuntimeError, ValueError) as error:
+            result = {"ok": False, "error": _bounded_text(str(error))}
         if type(result) is not dict:
             result = {"ok": False, "error": f"invalid {kind} adapter result"}
         return _normalise_effect_result(kind, effect_key, [result])
 
-    operations = []
+    results = []
+    user_adapter = adapters.get("user")
+    system_adapter = adapters.get("system")
+    wait = adapters.get("wait", lambda _seconds: None)
+    if not callable(wait):
+        raise ValueError("invalid lifecycle wait adapter")
     if kind == "stop_units":
-        operations = [
-            ("user", "stop", unit) for unit in sorted(DESTRUCTIBLE_USER_UNITS)
-        ]
+        for category in (
+            "activation_sources", "ordinary_services", "control_services",
+            "inference_prerequisites", "inactive_units",
+        ):
+            for entry in _catalog_entries(policy, category):
+                results.append(_stop_with_escalation(
+                    user_adapter, entry["unit"], immediate=False,
+                    policy=policy, wait=wait,
+                ))
     elif kind == "kill_units":
-        for unit in sorted(DESTRUCTIBLE_USER_UNITS):
-            operations.extend((("user", "kill", unit), ("user", "stop", unit)))
+        for entry in _catalog_entries(policy, "activation_sources"):
+            results.append(_stop_with_escalation(
+                user_adapter, entry["unit"], immediate=False,
+                policy=policy, wait=wait,
+            ))
+        for category in (
+            "ordinary_services", "control_services", "inference_prerequisites",
+            "inactive_units",
+        ):
+            for entry in _catalog_entries(policy, category):
+                results.append(_stop_with_escalation(
+                    user_adapter, entry["unit"], immediate=True,
+                    policy=policy, wait=wait,
+                ))
     elif kind == "stop_lemonade":
-        operations = [("system", "stop", "lemond.service")]
+        results.append(_stop_with_escalation(
+            system_adapter,
+            policy["lifecycle_catalog"]["backend_unit"],
+            immediate=False,
+            policy=policy,
+            wait=wait,
+        ))
     elif kind == "start_lemonade":
-        operations = [("system", "start", "lemond.service")]
+        results.append(_manager_result(
+            system_adapter, "reset_failed", policy["lifecycle_catalog"]["backend_unit"],
+        ))
+        results.append(_manager_result(
+            system_adapter, "start", policy["lifecycle_catalog"]["backend_unit"],
+        ))
     elif kind == "start_units":
-        operations = [
-            ("user", "start", unit) for unit in sorted(DESTRUCTIBLE_USER_UNITS)
-        ]
+        runtime = _read_runtime(policy, effect["request_id"])
+        previous_active = set(runtime["previous_active_user_units"])
+        for entry in _catalog_entries(policy, "inference_prerequisites"):
+            results.append(_manager_result(user_adapter, "reset_failed", entry["unit"]))
+            results.append(_manager_result(user_adapter, "start", entry["unit"]))
+        for entry in _catalog_entries(policy, "control_services"):
+            if entry["unit"] in previous_active:
+                results.append(_manager_result(user_adapter, "reset_failed", entry["unit"]))
+                results.append(_manager_result(user_adapter, "start", entry["unit"]))
     else:
         return _normalise_effect_result(kind, effect_key, [{
             "ok": False,
             "error": f"unsupported lifecycle effect: {kind}",
         }])
 
-    results = []
-    for manager, action, unit in operations:
-        adapter = adapters.get(manager)
-        if not callable(adapter):
-            results.append({"ok": False, "error": f"missing {manager} adapter"})
-            continue
-        results.append(adapter(action, unit))
     return _normalise_effect_result(kind, effect_key, results)
 
 
@@ -426,41 +704,72 @@ def accept_request(store: Path, command: dict, previous_pause: bool) -> Path:
     return path
 
 
-def _results_path(path: Path) -> Path:
-    return path.with_suffix(".results.jsonl")
+def _effect_result_directory(path, effect_key):
+    digest = hashlib.sha256(effect_key.encode("utf-8")).hexdigest()
+    return path.parent / "results" / path.stem / digest
 
 
-def _append_effect_result(path: Path, effect: dict, result: dict) -> None:
-    records.append_event(_results_path(path), {
+def _store_effect_result(path, effect, result):
+    """Publish one complete immutable result attempt; a torn peer cannot poison it."""
+    directory = _effect_result_directory(Path(path), effect["idempotency_key"])
+    directory.mkdir(parents=True, exist_ok=True)
+    attempts = [
+        int(candidate.stem)
+        for candidate in directory.glob("[0-9][0-9][0-9][0-9][0-9][0-9].json")
+        if candidate.stem.isdecimal()
+    ]
+    attempt = max(attempts, default=0) + 1
+    destination = directory / f"{attempt:06d}.json"
+    value = {
         "schema_version": 1,
         "effect_idempotency_key": effect["idempotency_key"],
         "ok": result.get("ok") is True,
         "result": result,
+    }
+    records._create_exclusive_json(destination, value)
+    return destination
+
+
+def _append_effect_result(path: Path, effect: dict, result: dict) -> None:
+    _store_effect_result(path, effect, result)
+
+
+def _quarantine_result(path, result_path, reason):
+    directory = path.parent.parent / "lifecycle-result-quarantine"
+    directory.mkdir(parents=True, exist_ok=True)
+    identity = f"{path.stem}-{time.time_ns()}-{result_path.name}"
+    quarantined = directory / f"{identity}.record"
+    os.replace(result_path, quarantined)
+    records.atomic_json(directory / f"{identity}.json", {
+        "schema_version": 1,
+        "source_path": str(result_path),
+        "quarantined_path": str(quarantined),
+        "error_reason": str(reason),
     })
 
 
 def _verified_effect_result(path: Path, effect_key: str) -> dict | None:
-    results_path = _results_path(path)
-    if not results_path.exists():
+    directory = _effect_result_directory(Path(path), effect_key)
+    if not directory.exists():
         return None
-    try:
-        lines = results_path.read_text(encoding="utf-8").splitlines()
-    except OSError as error:
-        raise ValueError(f"cannot read lifecycle results: {results_path}") from error
     verified = None
-    for line in lines:
-        record = decode_json_object(line, "lifecycle effect result")
-        if type(record) is not dict or set(record) != RESULT_FIELDS:
-            raise ValueError("invalid lifecycle effect result")
-        if (
-            type(record["schema_version"]) is not int
-            or record["schema_version"] != 1
-            or type(record["effect_idempotency_key"]) is not str
-            or type(record["ok"]) is not bool
-            or type(record["result"]) is not dict
-        ):
-            raise ValueError("invalid lifecycle effect result")
-        if record["effect_idempotency_key"] == effect_key and record["ok"] is True:
+    for result_path in sorted(directory.glob("*.json")):
+        try:
+            record = decode_json_object(result_path.read_bytes(), "lifecycle effect result")
+            if type(record) is not dict or set(record) != RESULT_FIELDS:
+                raise ValueError("invalid lifecycle effect result")
+            if (
+                type(record["schema_version"]) is not int
+                or record["schema_version"] != 1
+                or record["effect_idempotency_key"] != effect_key
+                or type(record["ok"]) is not bool
+                or type(record["result"]) is not dict
+            ):
+                raise ValueError("invalid lifecycle effect result")
+        except (OSError, ValueError) as error:
+            _quarantine_result(Path(path), result_path, str(error))
+            continue
+        if record["ok"] is True:
             verified = record["result"]
     return verified
 
@@ -498,8 +807,26 @@ def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
         result = _verified_effect_result(path, effect["idempotency_key"])
         if result is None:
             result = execute_effect(effect, adapters, policy)
-            _append_effect_result(path, effect, result)
+            _store_effect_result(path, effect, result)
             if result["ok"] is not True:
+                if state["phase"] not in {"blocked", "failed"}:
+                    state = _persist_reduction(path, command, state, {
+                        "kind": "blocked",
+                        "idempotency_key": (
+                            f"{state['request_id']}:blocked:{effect['idempotency_key']}"
+                        ),
+                    })
+                    report = next(
+                        candidate for candidate in reversed(state["pending_effects"])
+                        if candidate["kind"] == "notify"
+                    )
+                    report_result = execute_effect(report, adapters, policy)
+                    _store_effect_result(path, report, report_result)
+                    if report_result["ok"] is True:
+                        state = _persist_reduction(path, command, state, {
+                            "kind": "effect_completed",
+                            "effect_idempotency_key": report["idempotency_key"],
+                        })
                 return {
                     "ok": False,
                     "phase": state["phase"],
@@ -525,12 +852,438 @@ def advance_request(path: Path, adapters: dict, policy: dict) -> dict:
     }
 
 
+def commit_acknowledgement(path):
+    """Make an accepted socket response imply durable pending lifecycle work."""
+    path = Path(path)
+    record = _read_request(path)
+    state = record["state"]
+    if state["phase"] == "accepted":
+        _persist_reduction(path, record["command"], state, {"kind": "ack_committed"})
+    return _read_request(path)["state"]
+
+
+def recover_request(path):
+    path = Path(path)
+    record = _read_request(path)
+    state = record["state"]
+    if state["phase"] in {"blocked", "failed"}:
+        return _persist_reduction(path, record["command"], state, {
+            "kind": "recover",
+            "idempotency_key": f"{state['request_id']}:recover:{time.time_ns()}",
+        })
+    return state
+
+
+def incomplete_request_paths(store):
+    directory = Path(store) / "lifecycle"
+    if not directory.is_dir():
+        return []
+    paths = []
+    for path in sorted(directory.glob("telegram-*.json")):
+        record = _read_request(path)
+        state = record["state"]
+        if state["phase"] != "completed" or state["pending_effects"]:
+            paths.append(path)
+    return sorted(
+        paths,
+        key=lambda path: _read_request(path)["command"]["telegram_update_id"],
+    )
+
+
+def prior_pause_for_new_request(store, agent_state_path):
+    """Preserve the operator state across any serialized lifecycle queue."""
+    pending = incomplete_request_paths(store)
+    if pending:
+        return _read_request(pending[0])["state"]["previous_pause"]
+    return (Path(agent_state_path) / "PAUSED").exists()
+
+
 def new_lifecycle(command: dict, previous_pause: bool) -> dict:
     return lifecycle.new_lifecycle(command, previous_pause)
 
 
 def reduce_lifecycle(state: dict, event: dict) -> tuple[dict, list[dict]]:
     return lifecycle.reduce_lifecycle(state, event)
+
+
+def _agent_record(path):
+    try:
+        return decode_json_object(path.read_bytes(), "agent runtime record")
+    except OSError as error:
+        raise ValueError(f"cannot read agent runtime record: {path}") from error
+
+
+def _write_agent_record(path, value):
+    metadata = path.stat()
+    records.atomic_json(
+        path,
+        value,
+        mode=records.PRIVATE_RECORD_MODE,
+        owner=(metadata.st_uid, metadata.st_gid),
+    )
+
+
+def _active_job_paths(agent_state_path):
+    directory = Path(agent_state_path) / "jobs"
+    if not directory.is_dir():
+        return []
+    paths = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            value = _agent_record(path)
+        except ValueError:
+            continue
+        if value.get("kind") == "agent-task" and value.get("state") in {
+            "claimed", "reserved", "running", "verifying",
+        }:
+            paths.append(path)
+    return paths
+
+
+def _interrupt_job_records(config, effect, paths):
+    interrupted = []
+    for path in paths:
+        job = _agent_record(path)
+        if job.get("state") not in {"claimed", "reserved", "running", "verifying"}:
+            continue
+        job["state"] = "interrupted"
+        job["interrupted_by"] = effect["request_id"]
+        job["interruption_reason"] = "survival lifecycle teardown"
+        session = job.get("opencode_session")
+        if type(session) is not str or not session.startswith("ses_"):
+            session = _opencode_session_id(config, job)
+        if session is not None:
+            job["opencode_session"] = session
+        job["resume_available"] = session is not None
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_agent_record(path, job)
+        interrupted.append(path.stem)
+    return interrupted
+
+
+def _opencode_session_id(config, job):
+    output = job.get("output")
+    if type(output) is not str or not output:
+        return None
+    relative = Path(output)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    path = Path(config["agent_state_path"]).parent / relative
+    try:
+        with path.open(encoding="utf-8", errors="replace") as source:
+            consumed = 0
+            for line in source:
+                consumed += len(line.encode("utf-8", errors="replace"))
+                if consumed > 1024 * 1024:
+                    break
+                try:
+                    value = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                session = value.get("sessionID") if type(value) is dict else None
+                if type(session) is str and session.startswith("ses_"):
+                    return session
+    except OSError:
+        return None
+    return None
+
+
+def _critical_message(policy, effect, text, suffix):
+    from survival import telegram_api
+
+    request = _read_request(_request_path(policy["store_path"], effect["request_id"]))
+    identifier = effect["idempotency_key"].replace(":", "-") + f"-{suffix}"
+    telegram_api.store_critical_outbox_entry(policy["store_path"], {
+        "schema_version": 1,
+        "id": identifier,
+        "chat_id": request["command"]["telegram_user_id"],
+        "text": text,
+        "egress_state": "ready",
+    })
+    return {"ok": True, "message_id": identifier}
+
+
+def _default_model_probe(catalog, deadline):
+    import http.client
+
+    contract = catalog["model_health"]
+    connection = http.client.HTTPConnection(
+        contract["host"], contract["port"], timeout=deadline,
+    )
+    try:
+        connection.request("GET", contract["path"])
+        response = connection.getresponse()
+        payload = response.read(MAX_EFFECT_OUTPUT_BYTES + 1)
+    except (OSError, TimeoutError) as error:
+        return {"ok": False, "error": _bounded_text(str(error))}
+    finally:
+        connection.close()
+    if response.status != 200 or len(payload) > MAX_EFFECT_OUTPUT_BYTES:
+        return {"ok": False, "status": response.status}
+    try:
+        value = decode_json_object(payload, "Lemonade health")
+    except ValueError as error:
+        return {"ok": False, "error": str(error)}
+    expected = contract["required_model"]
+    models = value.get("all_models_loaded")
+    alive = type(models) is list and any(
+        type(item) is dict
+        and item.get("model_name") == expected
+        and item.get("loaded") is True
+        and item.get("status") in {"ready", "busy", "in_use"}
+        for item in models
+    )
+    return {"ok": alive, "required_model": expected}
+
+
+def _runtime_snapshot(config, request_id, observe_user):
+    request = _read_request(_request_path(config["store_path"], request_id))
+    previous_active = []
+    for category in CATALOG_CATEGORIES:
+        for entry in config["lifecycle_catalog"]["user_units"][category]:
+            if observe_user(entry["unit"]) == "active":
+                previous_active.append(entry["unit"])
+    return {
+        "schema_version": 1,
+        "request_id": request_id,
+        "previous_pause": request["state"]["previous_pause"],
+        "previous_active_user_units": sorted(previous_active),
+        "interrupted_jobs": [],
+    }
+
+
+def _ensure_admission_closed(config, effect, observe_user, sync):
+    runtime_path = _runtime_path(config, effect["request_id"])
+    if runtime_path.exists():
+        runtime = _read_runtime(config, effect["request_id"])
+    else:
+        runtime = _runtime_snapshot(config, effect["request_id"], observe_user)
+        _write_runtime(config, runtime)
+    paused = Path(config["agent_state_path"]) / "PAUSED"
+    if not paused.exists():
+        records.atomic_json(paused, {
+            "schema_version": 1,
+            "request_id": effect["request_id"],
+            "state": "lifecycle_paused",
+        })
+    if not paused.exists():
+        return {"ok": False, "error": "admission pause was not observed"}
+    request = _read_request(_request_path(config["store_path"], effect["request_id"]))
+    if request["command"]["command"] == "reset":
+        runtime["interrupted_jobs"] = _interrupt_job_records(
+            config,
+            effect,
+            _active_job_paths(config["agent_state_path"]),
+        )
+        _write_runtime(config, runtime)
+    sync()
+    _critical_message(
+        config,
+        effect,
+        f"{effect['request_id']} lifecycle recovery started; admission is closed.",
+        "started",
+    )
+    return {"ok": True, "previous_pause": runtime["previous_pause"]}
+
+
+def _checkpoint_runtime(config, effect, sleep, sync):
+    runtime = _read_runtime(config, effect["request_id"])
+    agent_state_path = Path(config["agent_state_path"])
+    active_paths = _active_job_paths(agent_state_path)
+    request = {
+        "schema_version": 1,
+        "request_id": effect["request_id"],
+        "job_ids": [path.stem for path in active_paths],
+        "requested_at": datetime.now(timezone.utc).isoformat(),
+    }
+    state_metadata = agent_state_path.stat()
+    records.atomic_json(
+        agent_state_path / "lifecycle-checkpoint.json",
+        request,
+        mode=records.SHARED_RECORD_MODE,
+        owner=(os.geteuid(), state_metadata.st_gid),
+    )
+    sleep(time_policy.seconds(
+        config["timing_policy"], "lifecycle", "restart_checkpoint_grace_seconds",
+    ))
+    runtime["interrupted_jobs"] = _interrupt_job_records(
+        config,
+        effect,
+        _active_job_paths(config["agent_state_path"]),
+    )
+    _write_runtime(config, runtime)
+    sync()
+    return {"ok": True, "jobs": runtime["interrupted_jobs"]}
+
+
+def _reconcile_runtime(config, effect):
+    deadline = time.monotonic() + time_policy.seconds(
+        config["timing_policy"], "lifecycle", "reconciliation_deadline_seconds",
+    )
+
+    def deadline_expired():
+        return time.monotonic() >= deadline
+
+    runtime = _read_runtime(config, effect["request_id"])
+    interrupted = []
+    for path in _active_job_paths(config["agent_state_path"]):
+        if deadline_expired():
+            return {"ok": False, "error": "lifecycle reconciliation deadline expired"}
+        job = _agent_record(path)
+        job["state"] = "interrupted"
+        job["interrupted_by"] = effect["request_id"]
+        job["interruption_reason"] = "survival lifecycle teardown"
+        job["resume_available"] = type(job.get("opencode_session")) is str
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_agent_record(path, job)
+        interrupted.append(path.stem)
+    runtime["interrupted_jobs"] = sorted(set(runtime["interrupted_jobs"] + interrupted))
+    _write_runtime(config, runtime)
+    outbox_unknown = []
+    jobs_directory = Path(config["agent_state_path"]) / "jobs"
+    for path in sorted(jobs_directory.glob("outbox-*.json")):
+        if deadline_expired():
+            return {"ok": False, "error": "lifecycle reconciliation deadline expired"}
+        job = _agent_record(path)
+        if job.get("kind") != "outbound-message" or job.get("state") != "sending":
+            continue
+        job["state"] = "delivery_unknown"
+        job["error"] = "survival lifecycle interrupted Telegram delivery; not replayed"
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_agent_record(path, job)
+        outbox_unknown.append(path.stem)
+
+    recovered_turns = []
+    turns_directory = Path(config["agent_state_path"]) / "control-turns"
+    for path in sorted(turns_directory.glob("telegram-*.json")):
+        if deadline_expired():
+            return {"ok": False, "error": "lifecycle reconciliation deadline expired"}
+        turn = _agent_record(path)
+        if turn.get("deep_state") not in {"reserved", "running", "followup_ready"}:
+            continue
+        turn["deep_state"] = "queued"
+        turn["deep_recovered_at"] = datetime.now(timezone.utc).isoformat()
+        for field in (
+            "deep_owner_pid", "deep_owner_identity", "deep_worker_pid",
+            "deep_worker_identity",
+        ):
+            turn.pop(field, None)
+        _write_agent_record(path, turn)
+        recovered_turns.append(path.stem)
+
+    awaiting_verifications = []
+    for path in sorted(jobs_directory.glob("*.json")):
+        if deadline_expired():
+            return {"ok": False, "error": "lifecycle reconciliation deadline expired"}
+        job = _agent_record(path)
+        if job.get("kind") == "agent-task" and job.get("state") == "awaiting_verification":
+            awaiting_verifications.append(path.stem)
+    remaining = _active_job_paths(config["agent_state_path"])
+    return {
+        "ok": not remaining,
+        "interrupted_jobs": runtime["interrupted_jobs"],
+        "recovered_control_turns": recovered_turns,
+        "uncertain_outbox": outbox_unknown,
+        "awaiting_verifications": awaiting_verifications,
+    }
+
+
+def _restore_inference_state(config, effect, user_adapter, wait):
+    runtime = _read_runtime(config, effect["request_id"])
+    prior_active = set(runtime["previous_active_user_units"])
+    results = []
+    for entry in config["lifecycle_catalog"]["user_units"]["inference_prerequisites"]:
+        if entry["unit"] not in prior_active:
+            results.append(_stop_with_escalation(
+                user_adapter,
+                entry["unit"],
+                immediate=False,
+                policy=config,
+                wait=wait,
+            ))
+    return results
+
+
+def _resume_runtime(config, effect, user_adapter, wait):
+    runtime = _read_runtime(config, effect["request_id"])
+    for identifier in runtime["interrupted_jobs"]:
+        path = Path(config["agent_state_path"]) / "jobs" / f"{identifier}.json"
+        if not path.exists():
+            continue
+        job = _agent_record(path)
+        if job.get("state") != "interrupted" or job.get("interrupted_by") != effect["request_id"]:
+            continue
+        job["state"] = "ready" if job.get("resume_available") is True else "queued"
+        job["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _write_agent_record(path, job)
+    results = _restore_inference_state(config, effect, user_adapter, wait)
+    prior_active = set(runtime["previous_active_user_units"])
+    for entry in config["lifecycle_catalog"]["user_units"]["ordinary_services"]:
+        if entry["unit"] in prior_active:
+            results.append(_manager_result(user_adapter, "start", entry["unit"]))
+    for entry in config["lifecycle_catalog"]["user_units"]["activation_sources"]:
+        if entry["unit"] in prior_active:
+            results.append(_manager_result(user_adapter, "start", entry["unit"]))
+    paused = Path(config["agent_state_path"]) / "PAUSED"
+    paused.unlink(missing_ok=True)
+    return {
+        "ok": all(result.get("ok") is True for result in results) and not paused.exists(),
+        "activation_results": results,
+    }
+
+
+def _verify_runtime(config, effect, observe_system, observe_user, model_probe):
+    runtime = _read_runtime(config, effect["request_id"])
+    catalogue = config["lifecycle_catalog"]
+    checks = [{
+        "name": "backend",
+        "ok": observe_system(catalogue["backend_unit"]) == "active",
+    }]
+    prior_active = set(runtime["previous_active_user_units"])
+    for entry in catalogue["user_units"]["inference_prerequisites"]:
+        checks.append({
+            "name": entry["unit"],
+            "ok": observe_user(entry["unit"]) == "active",
+        })
+    for entry in catalogue["user_units"]["control_services"]:
+        if entry["unit"] in prior_active:
+            checks.append({
+                "name": entry["unit"],
+                "ok": observe_user(entry["unit"]) == "active",
+            })
+    for entry in catalogue["user_units"]["ordinary_services"]:
+        checks.append({
+            "name": f"gated:{entry['unit']}",
+            "ok": observe_user(entry["unit"]) != "active",
+        })
+    for entry in catalogue["user_units"]["activation_sources"]:
+        checks.append({
+            "name": f"gated:{entry['unit']}",
+            "ok": observe_user(entry["unit"]) != "active",
+        })
+    for entry in catalogue["user_units"]["inactive_units"]:
+        checks.append({
+            "name": f"inactive:{entry['unit']}",
+            "ok": observe_user(entry["unit"]) != "active",
+        })
+    canary = model_probe(
+        catalogue,
+        time_policy.seconds(
+            config["timing_policy"], "inference", "health_verification_deadline_seconds",
+        ),
+    )
+    checks.append({"name": "fast_model_canary", "ok": canary.get("ok") is True})
+    return {"ok": all(check["ok"] for check in checks), "checks": checks, "canary": canary}
+
+
+def _validate_catalog_presence(config, observe_system, observe_user):
+    catalogue = config["lifecycle_catalog"]
+    if observe_system(catalogue["backend_unit"]) == "not-found":
+        raise RuntimeError(f"required lifecycle unit is not installed: {catalogue['backend_unit']}")
+    for category in CATALOG_CATEGORIES:
+        for entry in catalogue["user_units"][category]:
+            if entry["required"] and observe_user(entry["unit"]) == "not-found":
+                raise RuntimeError(f"required lifecycle unit is not installed: {entry['unit']}")
 
 
 def _required_environment(environ: dict, name: str) -> str:
@@ -551,25 +1304,298 @@ def _parse_uid(environ: dict, name: str) -> int:
 
 
 def load_production_config(environ: dict | None = None) -> dict:
-    """Load explicit peer, user-manager, socket, and durable-store identities."""
+    """Load every installed lifecycle identity and fully validated policy."""
     if environ is None:
         environ = os.environ
+    store_path = Path(_required_environment(environ, "SURVIVAL_STORE_DIR"))
+    time_config_path = Path(_required_environment(environ, "TIME_CONFIG_PATH"))
+    accepted_policy_path = store_path / "policy" / "time.json"
+    try:
+        timing, policy_error = time_policy.adopt_last_known_good(
+            time_config_path, accepted_policy_path,
+        )
+        catalogue = load_lifecycle_catalog(
+            Path(_required_environment(environ, "LIFECYCLE_CATALOG_PATH")),
+        )
+    except (OSError, ValueError) as error:
+        raise RuntimeError(str(error) or "invalid lifecycle policy") from error
     return {
         "socket_path": _required_environment(environ, "GUARDIAN_SOCKET_PATH"),
-        "store_path": Path(_required_environment(environ, "SURVIVAL_STORE_DIR")),
+        "store_path": store_path,
+        "agent_state_path": Path(_required_environment(environ, "AGENT_STATE_DIR")),
         "gateway_uid": _parse_uid(environ, "GUARDIAN_GATEWAY_UID"),
         "user_manager_uid": _parse_uid(environ, "USER_MANAGER_UID"),
+        "time_config_path": time_config_path,
+        "accepted_policy_path": accepted_policy_path,
+        "timing_policy": timing,
+        "timing_policy_error": policy_error,
+        "lifecycle_catalog": catalogue,
+        "guardian_poll_seconds": time_policy.seconds(
+            timing, "heartbeat", "guardian_poll_seconds",
+        ),
     }
 
 
-def production_adapters(config: dict) -> dict:
-    """Bind the configured user uid to the two literal systemd fingertips."""
+def refresh_timing_policy(config):
+    """Adopt one complete live policy and durably expose any rejected edit."""
+    required = {"time_config_path", "accepted_policy_path", "timing_policy", "store_path"}
+    if not required <= set(config):
+        return None
+    policy, error = time_policy.adopt_last_known_good(
+        config["time_config_path"], config["accepted_policy_path"],
+    )
+    config["timing_policy"] = policy
+    config["timing_policy_error"] = error
+    config["guardian_poll_seconds"] = time_policy.seconds(
+        policy, "heartbeat", "guardian_poll_seconds",
+    )
+    status = {
+        "schema_version": 1,
+        "state": "accepted" if error is None else "rejected",
+        "error": error,
+    }
+    status_path = Path(config["store_path"]) / "policy" / "status.json"
+    if not status_path.exists() or decode_json_object(
+        status_path.read_bytes(), "timing policy status",
+    ) != status:
+        records.atomic_json(status_path, status)
+    if error is not None:
+        _report_policy_rejection(config, error)
+    return error
+
+
+def _report_policy_rejection(config, error):
+    from survival import telegram_api
+
+    request = _latest_lifecycle_request(config["store_path"])
+    if request is None:
+        return
+    fingerprint = hashlib.sha256(str(error).encode("utf-8")).hexdigest()[:24]
+    telegram_api.store_critical_outbox_entry(config["store_path"], {
+        "schema_version": 1,
+        "id": f"policy-rejected-{fingerprint}",
+        "chat_id": request["command"]["telegram_user_id"],
+        "text": f"Timing policy edit rejected; last known good remains active: {error}",
+        "egress_state": "ready",
+    })
+
+
+def _latest_lifecycle_request(store):
+    directory = Path(store) / "lifecycle"
+    candidates = sorted(directory.glob("telegram-*.json")) if directory.is_dir() else []
+    if not candidates:
+        return None
+    return max(
+        (_read_request(path) for path in candidates),
+        key=lambda record: record["command"]["telegram_update_id"],
+    )
+
+
+def report_gateway_data_health(config):
+    """Translate every gateway-owned degradation fact into root-owned reports."""
+    from survival import telegram_api
+
+    gateway_path = Path(config["store_path"]) / "gateway"
+    candidates = []
+    incident_directory = gateway_path / "data-health-incidents"
+    try:
+        if incident_directory.is_dir():
+            candidates.extend(sorted(incident_directory.glob("*.json")))
+    except OSError:
+        pass
+    latest_path = gateway_path / "data-health.json"
+    if latest_path.exists():
+        candidates.append(latest_path)
+    values = {}
+    for path in candidates:
+        try:
+            value = decode_json_object(path.read_bytes(), "gateway data health")
+        except (OSError, ValueError):
+            continue
+        if _valid_gateway_data_health(value):
+            values[value["incident_id"]] = value
+    request = _latest_lifecycle_request(config["store_path"])
+    if request is None:
+        return None
+    reported = None
+    for incident_id in sorted(values):
+        value = values[incident_id]
+        message_id = f"gateway-quarantine-{incident_id}"
+        outcome = (
+            "isolated a malformed survival record"
+            if value["quarantine_succeeded"]
+            else "could not isolate a malformed survival record"
+        )
+        telegram_api.store_critical_outbox_entry(config["store_path"], {
+            "schema_version": 1,
+            "id": message_id,
+            "chat_id": request["command"]["telegram_user_id"],
+            "text": (
+                f"Gateway {outcome} and contact remains live: "
+                f"{value['error_reason']}"
+            ),
+            "egress_state": "ready",
+        })
+        reported = message_id
+    return reported
+
+
+def _valid_gateway_data_health(value):
+    fields = {
+        "schema_version", "state", "incident_id", "source_path",
+        "error_reason", "quarantine_succeeded",
+    }
+    return not (
+        set(value) != fields
+        or value.get("schema_version") != 1
+        or value.get("state") != "degraded"
+        or type(value.get("incident_id")) is not str
+        or not value["incident_id"]
+        or type(value.get("source_path")) is not str
+        or type(value.get("error_reason")) is not str
+        or type(value.get("quarantine_succeeded")) is not bool
+    )
+
+
+def production_adapters(
+    config,
+    *,
+    system_adapter=None,
+    user_adapter=None,
+    observe_system=None,
+    observe_user=None,
+    model_probe=None,
+    sleep=time.sleep,
+    sync=os.sync,
+):
+    """Compose every reducer effect over only literal injected fingertips."""
     user_manager_uid = config["user_manager_uid"]
 
-    def run_user_unit(action, unit):
-        return user_unit(action, unit, uid=user_manager_uid)
+    def heartbeat():
+        systemd_notify.notify_systemd("WATCHDOG=1")
 
-    return {
-        "system": system_unit,
-        "user": run_user_unit,
+    def progress_wait(seconds):
+        remaining = float(seconds)
+        while remaining > 0:
+            interval = min(1.0, remaining)
+            sleep(interval)
+            remaining -= interval
+            heartbeat()
+
+    if model_probe is None:
+        model_probe = _default_model_probe
+
+    def guarded_model_probe(catalogue, deadline):
+        return _run_with_watchdog(
+            lambda: model_probe(catalogue, deadline),
+            deadline,
+            heartbeat,
+        )
+
+    if system_adapter is None:
+        def system_adapter(action, unit):
+            if action == "start":
+                section, key = "inference", "model_start_deadline_seconds"
+            elif unit == config["lifecycle_catalog"]["backend_unit"]:
+                section, key = "inference", "model_stop_deadline_seconds"
+            else:
+                section, key = "lifecycle", "service_stop_deadline_seconds"
+            deadline = time_policy.seconds(config["timing_policy"], section, key)
+            run = lambda argv: _subprocess_runner(
+                argv, timeout=deadline, heartbeat=heartbeat,
+            )
+            return system_unit(action, unit, runner=run, query=run)
+
+    if user_adapter is None:
+        def user_adapter(action, unit):
+            if action == "start" and unit == "agent-models.service":
+                section, key = "inference", "model_start_deadline_seconds"
+            else:
+                section, key = "lifecycle", "service_stop_deadline_seconds"
+            deadline = time_policy.seconds(config["timing_policy"], section, key)
+            run = lambda argv: _subprocess_runner(
+                argv, timeout=deadline, heartbeat=heartbeat,
+            )
+            return user_unit(
+                action, unit, uid=user_manager_uid, runner=run, query=run,
+            )
+
+    if observe_system is None:
+        observe_system = lambda unit: system_adapter("status", unit).get("state", "unknown")
+    if observe_user is None:
+        observe_user = lambda unit: user_adapter("status", unit).get("state", "unknown")
+
+    for adapter in (
+        system_adapter, user_adapter, observe_system, observe_user, model_probe, sleep,
+        sync,
+    ):
+        if not callable(adapter):
+            raise RuntimeError("incomplete production lifecycle adapter composition")
+    _validate_catalog_presence(config, observe_system, observe_user)
+
+    def notify(effect, _policy):
+        return _critical_message(
+            config,
+            effect,
+            f"{effect['request_id']} lifecycle recovery is blocked; retry remains scheduled.",
+            "blocked",
+        )
+
+    def close_admission(effect, _policy):
+        return _ensure_admission_closed(config, effect, observe_user, sync)
+
+    def checkpoint(effect, _policy):
+        return _checkpoint_runtime(config, effect, progress_wait, sync)
+
+    def reconcile(effect, _policy):
+        return _reconcile_runtime(config, effect)
+
+    def verify(effect, _policy):
+        return _verify_runtime(
+            config, effect, observe_system, observe_user, guarded_model_probe,
+        )
+
+    def resume(effect, _policy):
+        return _resume_runtime(config, effect, user_adapter, progress_wait)
+
+    def finish(effect, _policy):
+        restoration = _restore_inference_state(
+            config, effect, user_adapter, progress_wait,
+        )
+        if not all(result.get("ok") is True for result in restoration):
+            return {
+                "ok": False,
+                "error": "prior inference state was not restored",
+                "restoration": restoration,
+            }
+        records.atomic_json(
+            Path(config["store_path"]) / "lifecycle-completions" / f"{effect['request_id']}.json",
+            {
+                "schema_version": 1,
+                "request_id": effect["request_id"],
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        report = _critical_message(
+            config,
+            effect,
+            f"{effect['request_id']} lifecycle recovery completed and passed verification.",
+            "completed",
+        )
+        return {"ok": report["ok"] is True, "restoration": restoration, **report}
+
+    adapters = {
+        "system": system_adapter,
+        "user": user_adapter,
+        "notify": notify,
+        "close_admission": close_admission,
+        "checkpoint": checkpoint,
+        "reconcile": reconcile,
+        "verify": verify,
+        "resume": resume,
+        "finish": finish,
+        "wait": progress_wait,
     }
+    if set(adapters) != PRODUCTION_ADAPTER_KINDS:
+        raise RuntimeError("incomplete production lifecycle adapter composition")
+    return adapters

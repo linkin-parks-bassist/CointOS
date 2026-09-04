@@ -44,3 +44,10 @@ permitted to become conditional on either of the first two.
 - Status and incident messages continue through Coin throughout repair whenever the
   underlying house, power, and hardware still permit communication.
 
+## Plan 2 repair observation
+
+Noether (`/root/plan2_final_fix`) verified on 2026-09-05 that survival liveness and
+data integrity must remain separate durable facts: isolating or failing to isolate
+one malformed spool record cannot disable the gateway watchdog. Lifecycle effect
+success is likewise not inferred from a command exit; each phase owns an atomic
+result attempt and an independently observed service, cgroup, or health postcondition.
