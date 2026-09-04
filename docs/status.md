@@ -62,6 +62,10 @@ foreground tick persisted one deduplicated `context_overflow` emergency-escalati
 record for the replacement. The resource guard remains stopped; Telegram and the
 notifier retained PIDs 272721 and 272720 with zero restarts.
 
+The resource guard is also disabled at the user-service boot boundary, not merely
+inactive for the current session. Telegram and the notifier remain active and
+enabled.
+
 Task 4 is therefore safely contained, not fully accepted. Automated completion of
 this failure class is deferred to Plan 4's required context-overflow escalation to a
 larger safe model/context. Lemonade's configured local API is port 13305.

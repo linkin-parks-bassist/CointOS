@@ -26,15 +26,21 @@ cp services/systemd/agent-{telegram,control-worker,notifier,models}.service ~/.c
 cp services/systemd/agent-resource-guard.service ~/.config/systemd/user/
 cp services/systemd/{control,background}.slice ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now agent-resource-guard.service agent-models.service agent-telegram.service \
-  agent-control-worker.service agent-notifier.service agent-ecosystem.path \
-  agent-ecosystem.timer agent-watchdog.timer
+systemctl --user disable --now agent-resource-guard.service
+systemctl --user enable --now agent-models.service agent-telegram.service \
+  agent-control-worker.service agent-notifier.service \
+  agent-ecosystem.path agent-ecosystem.timer agent-watchdog.timer
 ```
 
 These are the current user services. They are recoverable development infrastructure,
 not the root-installed permanent gateway and hard guardian designed for the survival
 plane. Do not describe them as permanent or test `RESTART`/`RESET` against them until
 Plan 5 installs that boundary and its live acceptance sequence passes.
+
+Keep `agent-resource-guard.service` disabled and stopped across login and reboot. Its
+pending `context_overflow` escalation cannot yet complete automatically; Plan 4 must
+implement that escalation and the final live acceptance gate must pass before the
+guard may be enabled or started.
 
 The resource guard samples the kernel OOM counter, Linux available memory, swap,
 memory PSI, and AMD GTT use once per second. `pressure` checkpoints and interrupts

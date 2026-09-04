@@ -124,7 +124,8 @@ handoff was written and a fresh session began. The new session then reread the f
 incident, issued a 33,891-token request against 32,768 effective tokens, and failed.
 One foreground tick preserved a single deduplicated `emergency_escalation` with
 reason `context_overflow` for that replacement. Telegram/notifier PIDs 272721 and
-272720 remained unchanged with zero restarts; the guard remains stopped.
+272720 remained unchanged with zero restarts; the guard remains stopped and disabled
+at the user-service boot boundary.
 
 This closes the unsafe retry-loop boundary but not automated repair. Plan 4 owns the
 required escalation from a context-overflow finding to a larger safely supportable
