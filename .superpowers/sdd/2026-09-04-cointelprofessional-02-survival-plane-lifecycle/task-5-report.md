@@ -479,3 +479,101 @@ systemd-analyze verify \
 ```
 
 Observed: exit 0 with empty stdout/stderr.
+
+## Fix round 2/5 — abrupt first-install publication boundary
+
+**Agent:** Codex agent `/root/plan2_task5_complete`
+
+### Re-review findings and root cause
+
+The first scoped re-review returned two binding Important findings. Both arose from
+one ordering error: stable snapshot, configuration, and unit wrappers were created
+before the atomic `current` rename. The round-1 EXIT trap removed them after an
+ordinary command failure, but an abrupt process death cannot run shell cleanup and
+therefore left reachable wrappers dangling through a nonexistent `current`.
+
+The corresponding test used a fake `mv` failure which returned normally. It proved
+rollback on an ordinary shell exit, not the abrupt interruption boundary claimed
+by the report.
+
+### RED evidence
+
+The new test's fake `mv` fingertip sends `SIGKILL` to the installer shell immediately
+before the `current` rename. The fake then exits, so the test process regains control
+without the installer's EXIT trap having run. It checks the literal stable snapshot,
+configuration, and all four unit paths, and independently checks that the abandoned
+content-addressed release is nevertheless complete.
+
+Before changing the installer, the focused run observed `Ran 24 tests in 14.459s`
+with exactly one failure:
+`test_installer_abrupt_pre_commit_interruption_publishes_no_wrappers`. The stable
+wrappers remained visible and dangling after the killed installer.
+
+### Resolution and architectural re-audit
+
+- Wrapper targets and paths now have one paired representation. The installer
+  preflights every existing path after candidate verification without creating or
+  changing anything. A mismatched symlink or blocking non-symlink therefore fails
+  while the old release remains authoritative.
+- A complete candidate is still identified and placed under `releases/` before the
+  commit. The one same-filesystem rename of `current` remains the sole semantic
+  cutover.
+- Existing update wrappers are untouched before that rename and consequently change
+  meaning together only when `current` changes.
+- Missing wrappers, including every wrapper on a first installation, are created
+  only after `current` names a verified complete release. Publication of individual
+  wrapper names can be interrupted, but every name which becomes visible resolves
+  to the same complete authoritative release; no dangling or mixed-version route is
+  constructible by this ordering.
+- An abrupt pre-commit interruption may leave a complete, unreferenced
+  content-addressed release and a private `.commit.*` directory. Neither is an
+  authoritative fingertip. Prior complete releases remain retained, and a later
+  idempotent install validates/reuses the release.
+
+This keeps vertical details localized: gateway, guardian, units, and record logic
+still know only stable installed paths. Literal symlink targets, path conflict
+checks, and rename ordering remain in the installer fingertip. Horizontally, code,
+configuration, documentation, and units are deliberately traversed together as one
+release through plain paired arrays. The boundary is semi-permeable for validation
+and hashing but has one authority transition. No cleanup path is treated as a
+substitute for transactional construction, and no second semantic version route
+was introduced.
+
+### GREEN evidence
+
+```sh
+python3 -m unittest tests.integration.test_survival_processes
+```
+
+Observed after the final test refactor: `Ran 24 tests in 14.767s`, `OK`. The abrupt
+pre-commit case proves no stable wrapper is present while the retained unreferenced
+release is complete. The existing post-commit interruption case continues to prove
+that `current`, snapshot, and unit paths all expose the complete new release while
+the prior release remains retained.
+
+```sh
+python3 -m unittest \
+  tests.test_survival_records tests.test_survival_protocol \
+  tests.test_survival_lifecycle tests.test_survival_gateway \
+  tests.test_survival_guardian tests.test_system_control \
+  tests.integration.test_survival_processes
+```
+
+Observed: `Ran 124 tests in 16.750s`, `OK`.
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+Observed: `Ran 225 tests in 4.175s`, `OK`, with only the suite's existing expected
+application stdout and no warning or traceback.
+
+```sh
+systemd-analyze verify \
+  services/system/cointelprofessional-survival.slice \
+  services/system/cointelprofessional-gateway.service \
+  services/system/cointelprofessional-guardian.socket \
+  services/system/cointelprofessional-guardian.service
+```
+
+Observed: exit 0 with empty stdout/stderr.

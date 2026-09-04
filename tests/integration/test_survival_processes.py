@@ -483,6 +483,7 @@ def write_fake_command_backend(root):
         '''#!/usr/bin/env python3
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
@@ -561,6 +562,12 @@ if name == "systemd-analyze":
         raise SystemExit(76)
     raise SystemExit(0)
 if name == "mv":
+    if (
+        os.environ.get("FAKE_PRE_COMMIT_ABRUPT") == "1"
+        and sys.argv[-1].endswith("/current")
+    ):
+        os.kill(os.getppid(), signal.SIGKILL)
+        raise SystemExit(78)
     if os.environ.get("FAKE_COMMIT_FAILURE") == "1" and sys.argv[-1].endswith("/current"):
         print("injected commit failure", file=sys.stderr)
         raise SystemExit(75)
@@ -677,6 +684,22 @@ def assert_failed_update_is_invisible(image, prior_digest):
         image / "etc/systemd/system/cointelprofessional-guardian.service"
     )
     assert b"candidate-two" not in authoritative_guardian_unit.read_bytes()
+
+
+def published_installation_paths(image):
+    snapshot = image / "usr/local/lib/cointelprofessional-survival"
+    return (
+        snapshot / "current",
+        snapshot / "survival",
+        snapshot / "scripts",
+        snapshot / "docs",
+        image / "etc/cointelprofessional/time.cfg",
+        image / "etc/cointelprofessional/guardian.env",
+        image / "etc/systemd/system/cointelprofessional-survival.slice",
+        image / "etc/systemd/system/cointelprofessional-gateway.service",
+        image / "etc/systemd/system/cointelprofessional-guardian.socket",
+        image / "etc/systemd/system/cointelprofessional-guardian.service",
+    )
 
 
 def test_installer_is_idempotent_and_install_only_by_default():
@@ -823,20 +846,37 @@ def test_installer_initial_commit_failure_leaves_no_published_wrappers():
         )
         assert result.returncode == 75
         snapshot = image / "usr/local/lib/cointelprofessional-survival"
-        published_paths = (
-            snapshot / "current",
-            snapshot / "survival",
-            snapshot / "scripts",
-            snapshot / "docs",
-            image / "etc/cointelprofessional/time.cfg",
-            image / "etc/cointelprofessional/guardian.env",
-            image / "etc/systemd/system/cointelprofessional-survival.slice",
-            image / "etc/systemd/system/cointelprofessional-gateway.service",
-            image / "etc/systemd/system/cointelprofessional-guardian.socket",
-            image / "etc/systemd/system/cointelprofessional-guardian.service",
+        assert not any(
+            path.exists() or path.is_symlink()
+            for path in published_installation_paths(image)
         )
-        assert not any(path.exists() or path.is_symlink() for path in published_paths)
         assert list((snapshot / "releases").iterdir()) == []
+
+
+def test_installer_abrupt_pre_commit_interruption_publishes_no_wrappers():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        result, _trace, image, _state = run_fake_installer(
+            root,
+            extra_environment={"FAKE_PRE_COMMIT_ABRUPT": "1"},
+        )
+        assert result.returncode == -signal.SIGKILL
+        snapshot = image / "usr/local/lib/cointelprofessional-survival"
+        assert not any(
+            path.exists() or path.is_symlink()
+            for path in published_installation_paths(image)
+        )
+        releases = list((snapshot / "releases").glob("release-*"))
+        assert len(releases) == 1
+        release = releases[0]
+        assert release.stat().st_mode & 0o777 == 0o755
+        assert (release / "survival/gateway.py").read_bytes() == (
+            base / "survival/gateway.py"
+        ).read_bytes()
+        guardian_unit = release / "services/system/cointelprofessional-guardian.service"
+        assert guardian_unit.read_bytes() == (
+            base / "services/system/cointelprofessional-guardian.service"
+        ).read_bytes()
 
 
 def test_installer_post_commit_interruption_keeps_a_complete_release_visible():

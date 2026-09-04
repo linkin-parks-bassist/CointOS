@@ -111,7 +111,7 @@ release_digest() {
     printf '%s\n' "${digest_line%% *}"
 }
 
-ensure_symbolic_link() {
+validate_symbolic_link() {
     local target="$1"
     local link="$2"
     local existing_target
@@ -122,26 +122,31 @@ ensure_symbolic_link() {
             echo "existing symbolic link does not match installation contract: $link" >&2
             exit 1
         fi
-        return
+        return 0
     fi
     if [[ -e "$link" ]]; then
         echo "existing path blocks transactional installation: $link" >&2
         exit 1
     fi
-    ln -s "$target" "$link"
-    created_symbolic_links+=("$link")
+    return 0
+}
+
+ensure_symbolic_link() {
+    local target="$1"
+    local link="$2"
+
+    validate_symbolic_link "$target" "$link"
+    if [[ ! -L "$link" ]]; then
+        ln -s "$target" "$link"
+    fi
 }
 
 staging_directory=""
 commit_directory=""
 uncommitted_release=""
-desired_release_target=""
-created_symbolic_links=()
 cleanup() {
     local active_target=""
     local candidate_target
-    local index
-    local link
 
     if [[ -L "$current_release" ]]; then
         active_target="$(readlink "$current_release")"
@@ -158,13 +163,6 @@ cleanup() {
         if [[ "$active_target" != "$candidate_target" ]]; then
             rm -rf -- "$uncommitted_release"
         fi
-    fi
-    if [[ -z "$desired_release_target" \
-        || "$active_target" != "$desired_release_target" ]]; then
-        for ((index=${#created_symbolic_links[@]} - 1; index >= 0; index--)); do
-            link="${created_symbolic_links[index]}"
-            rm -f -- "$link"
-        done
     fi
 }
 trap cleanup EXIT
@@ -254,19 +252,27 @@ systemd-analyze verify \
     "$staging_directory/services/system/cointelprofessional-guardian.socket" \
     "$staging_directory/services/system/cointelprofessional-guardian.service"
 
-ensure_symbolic_link "current/survival" "$install_prefix/survival"
-ensure_symbolic_link "current/scripts" "$install_prefix/scripts"
-ensure_symbolic_link "current/docs" "$install_prefix/docs"
-ensure_symbolic_link \
-    "$install_prefix/current/config/time.cfg" \
+symbolic_link_targets=(
+    "current/survival"
+    "current/scripts"
+    "current/docs"
+    "$install_prefix/current/config/time.cfg"
+    "$install_prefix/current/config/guardian.env"
+)
+symbolic_link_paths=(
+    "$install_prefix/survival"
+    "$install_prefix/scripts"
+    "$install_prefix/docs"
     "$configuration_directory/time.cfg"
-ensure_symbolic_link \
-    "$install_prefix/current/config/guardian.env" \
     "$configuration_directory/guardian.env"
+)
 for unit in "${units[@]}"; do
-    ensure_symbolic_link \
-        "$install_prefix/current/services/system/$unit" \
-        "$unit_directory/$unit"
+    symbolic_link_targets+=("$install_prefix/current/services/system/$unit")
+    symbolic_link_paths+=("$unit_directory/$unit")
+done
+for index in "${!symbolic_link_paths[@]}"; do
+    validate_symbolic_link \
+        "${symbolic_link_targets[index]}" "${symbolic_link_paths[index]}"
 done
 
 digest="$(release_digest "$staging_directory")"
@@ -301,6 +307,11 @@ else
     rmdir "$commit_directory"
     commit_directory=""
 fi
+
+for index in "${!symbolic_link_paths[@]}"; do
+    ensure_symbolic_link \
+        "${symbolic_link_targets[index]}" "${symbolic_link_paths[index]}"
+done
 
 if [[ "$enable" == true ]]; then
     systemctl daemon-reload
