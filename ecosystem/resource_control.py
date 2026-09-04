@@ -27,6 +27,30 @@ SURVIVOR_ACTIVE_STATES = {"ready", "running"}
 SURVIVOR_INCOMPLETE_STATES = {"awaiting_verification"}
 SURVIVOR_TERMINAL_STATES = {"completed", "failed", "rejected"}
 SURVIVOR_RETRYABLE_STATES = SURVIVOR_INCOMPLETE_STATES | SURVIVOR_TERMINAL_STATES
+SURVIVOR_ROLE = "sole_survivor"
+SURVIVOR_AGENT_NAME = "Sole Survivor"
+SURVIVOR_PENDING_MODEL_REASON = "Pending model-mediated routing."
+SURVIVOR_REQUESTED_MODEL_REASON = (
+    "The dedicated bounded emergency model is the only model admitted after OOM."
+)
+SURVIVOR_MODEL_REASON = (
+    "Emergency policy mechanically assigns the sole bounded survivor model."
+)
+SURVIVOR_QUEUED_FIELDS = frozenset({
+    "id", "kind", "state", "attempts", "created_at", "updated_at", "role",
+    "task", "source", "model", "model_reason", "requested_model",
+    "requested_model_reason", "prefer_models_other_than", "agent_name",
+    "idempotency_key",
+})
+SURVIVOR_READY_FIELDS = SURVIVOR_QUEUED_FIELDS | {
+    "context_tokens", "prompt", "original_prompt",
+}
+SURVIVOR_RETRY_REQUESTED_FIELDS = frozenset({
+    "version", "status", "reason", "replaces", "requested_at", "trigger",
+})
+SURVIVOR_RETRY_ACTIVE_FIELDS = SURVIVOR_RETRY_REQUESTED_FIELDS | {
+    "replacement", "activated_at",
+}
 STARTED_UNIT_STATES = {"active", "activating", "reloading"}
 STOPPED_UNIT_STATES = {"inactive", "failed"}
 FAILURE_LOG_TAIL_BYTES = 65536
@@ -645,11 +669,8 @@ def load_emergency_model() -> dict:
                 "health": lemonade_health()}
 
 
-def _prepare_survivor(incident_path: Path, incident_id: str,
-                      replacement_for: str | None = None) -> str:
-    from ecosystem.roles import render_context
-
-    emergency_model = policy()["emergency"]["chat_model"]
+def _survivor_task(incident_path: Path, incident_id: str,
+                   replacement_for: str | None) -> str:
     task = f"""Recover resource incident `{incident_id}`.
 
 The immutable incident snapshot is `{incident_path}`. Ordinary dispatch is
@@ -671,33 +692,105 @@ conclusion to `state/resource-incidents/{incident_id}-conclusion.md`."""
             f"`{replacement_for}` after correcting its backend allocation. Preserve that "
             f"job and transcript as incident evidence.\n\n{task}"
         )
+    return task
+
+
+def _require_canonical_survivor_job(job: dict, expected: dict,
+                                    allowed_fields: frozenset[str]) -> None:
+    timestamps_are_typed = (
+        isinstance(job.get("created_at"), str) and bool(job["created_at"])
+        and isinstance(job.get("updated_at"), str) and bool(job["updated_at"])
+    )
+    if (set(job) != allowed_fields or not timestamps_are_typed
+            or any(job.get(key) != value for key, value in expected.items())):
+        raise RuntimeError("sole survivor job has a non-canonical descriptor")
+
+
+def _require_canonical_survivor_prompt(path: Path, expected: str) -> None:
+    try:
+        observed = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(
+            f"sole survivor job has no canonical prompt: {type(error).__name__}: {error}"
+        ) from error
+    if observed != expected:
+        raise RuntimeError("sole survivor job has a non-canonical prompt")
+
+
+def _prepare_survivor(incident_path: Path, incident_id: str,
+                      replacement_for: str | None = None) -> str:
+    from ecosystem.roles import render_context
+
+    emergency = policy()["emergency"]
+    emergency_model = emergency["chat_model"]
+    task = _survivor_task(incident_path, incident_id, replacement_for)
     idempotency_key = (f"resource-emergency:{incident_id}:replace:{replacement_for}"
                        if replacement_for else f"resource-emergency:{incident_id}")
-    job_id = cli.enqueue_task(
-        "sole_survivor", task, source=f"resource-emergency:{incident_id}",
-        model=emergency_model,
-        model_reason="The dedicated bounded emergency model is the only model admitted after OOM.",
-        agent_name="Sole Survivor",
-        idempotency_key=idempotency_key,
-    )
+    try:
+        job_id = cli.enqueue_task(
+            SURVIVOR_ROLE, task, source=f"resource-emergency:{incident_id}",
+            model=emergency_model,
+            model_reason=SURVIVOR_REQUESTED_MODEL_REASON,
+            agent_name=SURVIVOR_AGENT_NAME,
+            idempotency_key=idempotency_key,
+        )
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError(
+            "sole survivor job has a non-canonical descriptor"
+        ) from error
     path = cli.ROOT / "state/jobs" / f"{job_id}.json"
     job = json.loads(path.read_text(encoding="utf-8"))
     expected_source = f"resource-emergency:{incident_id}"
-    if (job.get("id") != job_id or job.get("idempotency_key") != idempotency_key
-            or job.get("source") != expected_source):
-        raise RuntimeError("sole survivor idempotency record has inconsistent identity")
-    if (job.get("state") == "ready" and job.get("model") == emergency_model
-            and job.get("role") == "sole_survivor" and job.get("prompt")):
-        return job_id
-    job.update(
-        model=emergency_model,
-        model_reason="Emergency policy mechanically assigns the sole bounded survivor model.",
-    )
+    common = {
+        "id": job_id,
+        "kind": "agent-task",
+        "attempts": 0,
+        "role": SURVIVOR_ROLE,
+        "task": task,
+        "source": expected_source,
+        "requested_model": emergency_model,
+        "requested_model_reason": SURVIVOR_REQUESTED_MODEL_REASON,
+        "prefer_models_other_than": [],
+        "agent_name": SURVIVOR_AGENT_NAME,
+        "idempotency_key": idempotency_key,
+    }
     prompt_path = cli.ROOT / "state/jobs" / f"{job_id}.prompt.md"
-    prompt = render_context(job.get("role"), job["task"], job["id"], job["model"],
-                            job["model_reason"], job["agent_name"])
-    cli.atomic_text(prompt_path, prompt)
-    job.update(state="ready", updated_at=cli.now(), prompt=str(prompt_path.relative_to(cli.ROOT)))
+    relative_prompt = str(prompt_path.relative_to(cli.ROOT))
+    expected_prompt = render_context(
+        SURVIVOR_ROLE, task, job_id, emergency_model,
+        SURVIVOR_MODEL_REASON, SURVIVOR_AGENT_NAME,
+    )
+    if job.get("state") == "ready":
+        _require_canonical_survivor_job(job, {
+            **common,
+            "state": "ready",
+            "model": emergency_model,
+            "model_reason": SURVIVOR_MODEL_REASON,
+            "context_tokens": emergency["chat_context_tokens"],
+            "prompt": relative_prompt,
+            "original_prompt": relative_prompt,
+        }, SURVIVOR_READY_FIELDS)
+        _require_canonical_survivor_prompt(prompt_path, expected_prompt)
+        return job_id
+    _require_canonical_survivor_job(job, {
+        **common,
+        "state": "queued",
+        "model": None,
+        "model_reason": SURVIVOR_PENDING_MODEL_REASON,
+    }, SURVIVOR_QUEUED_FIELDS)
+    if prompt_path.exists():
+        _require_canonical_survivor_prompt(prompt_path, expected_prompt)
+    else:
+        cli.atomic_text(prompt_path, expected_prompt)
+    job.update(
+        state="ready",
+        model=emergency_model,
+        model_reason=SURVIVOR_MODEL_REASON,
+        context_tokens=emergency["chat_context_tokens"],
+        prompt=relative_prompt,
+        original_prompt=relative_prompt,
+        updated_at=cli.now(),
+    )
     cli.atomic_json(path, job)
     cli.audit("resource.sole_survivor_ready", incident_id=incident_id, job_id=job_id)
     return job_id
@@ -840,10 +933,16 @@ def _survivor_retry_record(state: dict) -> dict | None:
     record = state.get("survivor_retry")
     if record is None:
         return None
-    valid = (isinstance(record, dict)
+    if not isinstance(record, dict):
+        raise RuntimeError("invalid survivor retry record")
+    status = record.get("status")
+    allowed_fields = (SURVIVOR_RETRY_REQUESTED_FIELDS if status == "requested"
+                      else SURVIVOR_RETRY_ACTIVE_FIELDS if status == "active"
+                      else frozenset())
+    valid = (set(record) == allowed_fields
              and type(record.get("version")) is int
              and record["version"] == 1
-             and record.get("status") in {"requested", "active"}
+             and status in {"requested", "active"}
              and record.get("reason") == "corrected_same_model_allocation"
              and isinstance(record.get("replaces"), str)
              and bool(record["replaces"])
@@ -851,15 +950,11 @@ def _survivor_retry_record(state: dict) -> dict | None:
              and bool(record["requested_at"])
              and (record.get("trigger") is None
                   or isinstance(record.get("trigger"), dict)))
-    if not isinstance(record, dict):
-        raise RuntimeError("invalid survivor retry record")
     replacement = record.get("replacement")
-    if record.get("status") == "active":
+    if status == "active":
         valid = (valid and isinstance(replacement, str) and bool(replacement)
                  and isinstance(record.get("activated_at"), str)
                  and bool(record["activated_at"]))
-    elif replacement is not None:
-        valid = valid and isinstance(replacement, str) and bool(replacement)
     if replacement is not None:
         valid = valid and replacement != record.get("replaces")
     if not valid:
@@ -983,8 +1078,6 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
                 state, f"sole survivor preparation failed: {type(error).__name__}: {error}"
             )
         state["sole_survivor_job"] = survivor
-        if retry is not None:
-            retry["replacement"] = survivor
         if not _survivor_is_ready(state):
             return _record_emergency_error(state, "sole survivor job was not durably ready")
         _persist_emergency_phase(state, "survivor_ready")
@@ -1011,7 +1104,11 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
         os.sync()
         retry = _survivor_retry_record(state)
         if retry is not None and retry["status"] == "requested":
-            retry.update(status="active", activated_at=cli.now())
+            retry.update(
+                status="active",
+                replacement=state["sole_survivor_job"],
+                activated_at=cli.now(),
+            )
         _persist_emergency_phase(state, "active")
         cli.audit("resource.emergency_entered", incident_id=state["incident_id"],
                   reason=state["emergency_reason"], survivor_job=state["sole_survivor_job"],

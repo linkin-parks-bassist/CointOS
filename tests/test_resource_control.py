@@ -1231,6 +1231,141 @@ def test_operator_survivor_retry_is_durable_idempotent_and_single_owner(root):
 
 
 @with_root
+def test_survivor_collision_with_unintended_task_is_not_promoted(root):
+    initialize_survivor_context(root)
+    incident_id = "emergency-canonical"
+    incident_path = root / "state/resource-incidents/emergency-canonical.json"
+    incident_path.parent.mkdir(parents=True, exist_ok=True)
+    cli.atomic_json(incident_path, {"version": 1, "id": incident_id})
+    idempotency_key = f"resource-emergency:{incident_id}:replace:task-failed"
+    identifier = cli.enqueue_task(
+        "unrelated_role",
+        "UNINTENDED TASK",
+        source=f"resource-emergency:{incident_id}",
+        model="Qwen3.5-4B-GGUF",
+        model_reason="The dedicated bounded emergency model is the only model admitted after OOM.",
+        agent_name="Sole Survivor",
+        idempotency_key=idempotency_key,
+    )
+    before = read_job(root, identifier)
+
+    with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "canonical descriptor"):
+        resource_control._prepare_survivor(
+            incident_path, incident_id, replacement_for="task-failed"
+        )
+
+    assert read_job(root, identifier) == before
+    assert before["role"] == "unrelated_role"
+    assert before["task"] == "UNINTENDED TASK"
+    assert not (root / "state/jobs" / f"{identifier}.prompt.md").exists()
+
+
+@with_root
+def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
+    initialize_survivor_context(root)
+    incident_id = "emergency-canonical"
+    incident_path = root / "state/resource-incidents/emergency-canonical.json"
+    incident_path.parent.mkdir(parents=True, exist_ok=True)
+    cli.atomic_json(incident_path, {"version": 1, "id": incident_id})
+    identifier = resource_control._prepare_survivor(
+        incident_path, incident_id, replacement_for="task-failed"
+    )
+    canonical = read_job(root, identifier)
+    prompt = f"state/jobs/{identifier}.prompt.md"
+    prompt_path = root / prompt
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+
+    assert set(canonical) == {
+        "id", "kind", "state", "attempts", "created_at", "updated_at", "role",
+        "task", "source", "model", "model_reason", "requested_model",
+        "requested_model_reason", "prefer_models_other_than", "agent_name",
+        "idempotency_key", "context_tokens", "prompt", "original_prompt",
+    }
+    assert canonical["kind"] == "agent-task"
+    assert canonical["state"] == "ready"
+    assert canonical["attempts"] == 0
+    assert canonical["role"] == "sole_survivor"
+    assert canonical["source"] == f"resource-emergency:{incident_id}"
+    assert canonical["model"] == "Qwen3.5-4B-GGUF"
+    assert canonical["model_reason"] == (
+        "Emergency policy mechanically assigns the sole bounded survivor model."
+    )
+    assert canonical["requested_model"] == "Qwen3.5-4B-GGUF"
+    assert canonical["requested_model_reason"] == (
+        "The dedicated bounded emergency model is the only model admitted after OOM."
+    )
+    assert canonical["prefer_models_other_than"] == []
+    assert canonical["agent_name"] == "Sole Survivor"
+    assert canonical["context_tokens"] == 32768
+    assert canonical["prompt"] == prompt
+    assert canonical["original_prompt"] == prompt
+    assert resource_control._prepare_survivor(
+        incident_path, incident_id, replacement_for="task-failed"
+    ) == identifier
+
+    mutations = (
+        {"id": "task-unintended"},
+        {"kind": "unrelated-kind"},
+        {"state": "running"},
+        {"attempts": True},
+        {"created_at": 7},
+        {"updated_at": 7},
+        {"role": "unrelated_role"},
+        {"task": "UNINTENDED TASK"},
+        {"source": "unrelated-source"},
+        {"model": "unrelated-model"},
+        {"model_reason": "unrelated reason"},
+        {"requested_model": "unrelated-model"},
+        {"requested_model_reason": "unrelated reason"},
+        {"prefer_models_other_than": ["unrelated-model"]},
+        {"agent_name": "Unintended Agent"},
+        {"idempotency_key": "unrelated-key"},
+        {"context_tokens": 16384},
+        {"prompt": "state/jobs/unintended.prompt.md"},
+        {"original_prompt": "state/jobs/unintended.prompt.md"},
+        {"unknown_authority": True},
+    )
+    for mutation in mutations:
+        corrupted = {**canonical, **mutation}
+        cli.atomic_json(root / "state/jobs" / f"{identifier}.json", corrupted)
+        with unittest.TestCase().assertRaisesRegex(
+                RuntimeError, "canonical descriptor"):
+            resource_control._prepare_survivor(
+                incident_path, incident_id, replacement_for="task-failed"
+            )
+        assert read_job(root, identifier) == corrupted
+
+    missing_task = {key: value for key, value in canonical.items() if key != "task"}
+    cli.atomic_json(root / "state/jobs" / f"{identifier}.json", missing_task)
+    with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "canonical descriptor"):
+        resource_control._prepare_survivor(
+            incident_path, incident_id, replacement_for="task-failed"
+        )
+    assert read_job(root, identifier) == missing_task
+
+    cli.atomic_json(root / "state/jobs" / f"{identifier}.json", canonical)
+    prompt_path.write_text("UNINTENDED PROMPT\n", encoding="utf-8")
+    with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "canonical prompt"):
+        resource_control._prepare_survivor(
+            incident_path, incident_id, replacement_for="task-failed"
+        )
+    assert read_job(root, identifier) == canonical
+    assert prompt_path.read_text(encoding="utf-8") == "UNINTENDED PROMPT\n"
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+
+    cli.atomic_json(root / "state/jobs" / f"{identifier}.json", "not-a-record")
+    with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "canonical descriptor"):
+        resource_control._prepare_survivor(
+            incident_path, incident_id, replacement_for="task-failed"
+        )
+    assert read_job(root, identifier) == "not-a-record"
+
+
+@with_root
 def test_survivor_retry_rejects_malformed_durable_record(_root):
     state = transition_state(phase="model_loaded", sole_survivor_job="task-old")
     valid = {
@@ -1243,6 +1378,8 @@ def test_survivor_retry_rejects_malformed_durable_record(_root):
     }
     cases = (
         "not-a-record",
+        {key: value for key, value in valid.items() if key != "trigger"},
+        {**valid, "unknown": True},
         {**valid, "version": "1"},
         {**valid, "status": "pending"},
         {**valid, "reason": "arbitrary"},
