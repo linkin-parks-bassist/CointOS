@@ -1,31 +1,16 @@
-"""Behavioral tests for the survival gateway with injected adapters.
+"""Behavioral tests for the permanent survival-plane gateway."""
 
-Tests inject fake fork, waitpid, socket, clocks and HTTP adapters.
-Prove two successive deaths/replacements of each role, real transport
-calls, missing config failure, exact command replay effects,
-sending-at-start recovery, separate dual heartbeats, clock domains,
-quarantine/error visibility, and no mutable ecosystem import.
-"""
-
+import builtins
+import importlib
 import json
 import os
-import socket as stdlib_socket
+import socket
+import sys
 import tempfile
-import time
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 
-from survival import gateway, records, protocol, telegram_api
-
-
-def with_survival_root(function):
-    def run():
-        with tempfile.TemporaryDirectory() as temporary:
-            function(Path(temporary))
-
-    run.__name__ = function.__name__
-    return run
+from survival import gateway, protocol, records, telegram_api
 
 
 def telegram_update(update_id, user_id, text, chat_id=None):
@@ -39,713 +24,675 @@ def telegram_update(update_id, user_id, text, chat_id=None):
     }
 
 
-def fail_if_called(*args, **kwargs):
-    raise RuntimeError("this callback must not be called")
+def write_time_config(path, degraded_deadline=3, heartbeat_maximum_age=60):
+    path.write_text(
+        "\n".join((
+            "[telegram]",
+            "poll_seconds = 1",
+            "long_poll_seconds = 25",
+            "request_timeout_seconds = 40",
+            "command_acknowledgement_deadline_seconds = 2",
+            f"degraded_response_deadline_seconds = {degraded_deadline}",
+            "",
+            "[heartbeat]",
+            f"maximum_age_seconds = {heartbeat_maximum_age}",
+            "",
+            "[outbox]",
+            "poll_seconds = 2",
+            "",
+        )),
+        encoding="utf-8",
+    )
 
 
-# ---------------------------------------------------------------------------
-# Captured sends (injected adapter pattern)
-# ---------------------------------------------------------------------------
-
-def capture_send(chat_id, text):
-    capture_send.messages.append((chat_id, text))
-
-
-def reset_captures():
-    capture_send.messages = []
-    capture_send.commands = []
-
-
-capture_send.messages = []
-capture_send.commands = []
+def production_environment(root, time_config):
+    credentials = root / "credentials"
+    credentials.mkdir()
+    (credentials / "telegram_bot_token").write_text("123:secret\n", encoding="utf-8")
+    allowed = root / "allowed_user_ids"
+    allowed.write_text("42\n", encoding="utf-8")
+    return {
+        "CREDENTIALS_DIRECTORY": str(credentials),
+        "GUARDIAN_ALLOWED_USER_IDS_PATH": str(allowed),
+        "SURVIVAL_STORE_DIR": str(root / "state"),
+        "GUARDIAN_SOCKET_PATH": str(root / "guardian.sock"),
+        "TIME_CONFIG_PATH": str(time_config),
+    }
 
 
-# ---------------------------------------------------------------------------
-# Monotonic deadline helpers (injected clock)
-# ---------------------------------------------------------------------------
-
-_initial_now = None
-
-
-def monotonic_now():
-    """Return the current monotonic time for injected-clock tests."""
-    global _initial_now
-    if _initial_now is None:
-        _initial_now = time.monotonic()
-    return _initial_now
-
-
-def reset_monotonic_clock():
-    """Reset the injected monotonic clock to zero."""
-    global _initial_now
-    _initial_now = None
-
-
-def write_deadline_inbox_message(root, update_id, now=None,
-                                 deadline_offset=3):
-    """Write an inbox record with a monotonic deadline for testing.
-
-    The record includes both UTC ``received_at`` (audit data) and
-    monotonic ``deadline_at`` (for comparison).
-    """
-    inbox_path = root / "inbox" / f"telegram-{update_id}.json"
-    inbox_path.parent.mkdir(parents=True, exist_ok=True)
-    if now is None:
-        now = monotonic_now()
-    deadline_at = now + deadline_offset
-    records.atomic_json(inbox_path, {
+def inbox_record(update_id, state="ready", deadline_at=103.0, extra=None):
+    value = {
         "schema_version": 1,
         "id": f"telegram-{update_id}",
         "telegram_update_id": update_id,
         "telegram_user_id": 42,
         "chat_id": 42,
         "text": f"message {update_id}",
-        "received_at": datetime.now(timezone.utc).isoformat(),
+        "received_at": "2026-09-04T00:00:00+00:00",
+        "accepted_monotonic_at": 100.0,
         "deadline_at": deadline_at,
-        "egress_state": "ready",
-    })
-    return now
+        "egress_state": state,
+    }
+    if extra is not None:
+        value.update(extra)
+    return value
 
 
-# ---------------------------------------------------------------------------
-# Existing functional tests (unchanged, applicable)
-# ---------------------------------------------------------------------------
+def critical_record(message_id, state="ready", extra=None):
+    value = {
+        "schema_version": 1,
+        "id": message_id,
+        "chat_id": 42,
+        "text": "critical message",
+        "egress_state": state,
+    }
+    if extra is not None:
+        value.update(extra)
+    return value
 
-def test_command_is_acknowledged_and_sent_to_guardian():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        update = telegram_update(7, 42, "RESET")
+
+def write_json(path, value):
+    records.atomic_json(path, value)
+
+
+def read_json(path):
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_load_production_config_owns_deadline_from_parsed_time_config():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        time_config = root / "time.cfg"
+        write_time_config(time_config, degraded_deadline=7)
+        config = gateway.load_production_config(production_environment(root, time_config))
+        assert config["degraded_response_deadline_seconds"] == 7.0
+        assert config["poll_seconds"] == 1.0
+        assert config["long_poll_seconds"] == 25.0
+        assert config["request_timeout_seconds"] == 40.0
+        assert config["outbox_poll_seconds"] == 2.0
+        assert config["heartbeat_maximum_age_seconds"] == 60.0
+
+
+def test_missing_explicit_config_fails_before_heartbeat():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        with unittest.TestCase().assertRaisesRegex(RuntimeError, "CREDENTIALS_DIRECTORY"):
+            gateway.load_production_config({})
+        assert not (root / "heartbeat.json").exists()
+
+
+def test_gateway_timing_rejects_nonfinite_values():
+    with tempfile.TemporaryDirectory() as temporary:
+        path = Path(temporary) / "time.cfg"
+        write_time_config(path, degraded_deadline="nan")
+        with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "telegram.degraded_response_deadline_seconds",
+        ):
+            gateway.load_gateway_timing(path)
+
+
+def test_ordinary_message_uses_injected_configured_deadline_without_model_call():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         result = gateway.handle_update(
-            update, {42}, root,
-            send=capture_send,
-            send_command=capture_send.commands.append,
+            telegram_update(8, 42, "how is scheduler?"),
+            {42},
+            root,
+            send=lambda *_: (_ for _ in ()).throw(AssertionError("unexpected send")),
+            send_command=lambda *_: (_ for _ in ()).throw(AssertionError("unexpected command")),
+            monotonic_now=lambda: 100.0,
+            degraded_response_deadline_seconds=7.0,
         )
-        assert result["kind"] == "command"
-        assert capture_send.commands[0]["command"] == "reset"
-        assert capture_send.messages == [(42, "Reset accepted. I am staying online while the agent system restarts.")]
-
-
-def test_ordinary_message_is_spooled_without_model_call():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        update = telegram_update(8, 42, "how is scheduler?")
-        result = gateway.handle_update(
-            update, {42}, root,
-            send=fail_if_called,
-            send_command=fail_if_called,
-        )
-        assert result["kind"] == "ordinary"
-        inbox_path = root / "inbox" / "telegram-8.json"
-        assert inbox_path.exists()
-        stored = json.loads(inbox_path.read_text(encoding="utf-8"))
-        assert stored["text"] == "how is scheduler?"
+        assert result == {"kind": "ordinary", "id": "telegram-8"}
+        stored = read_json(root / "inbox" / "telegram-8.json")
+        assert stored["accepted_monotonic_at"] == 100.0
+        assert stored["deadline_at"] == 107.0
         assert stored["egress_state"] == "ready"
-        # Verify monotonic deadline was recorded
-        assert "deadline_at" in stored
-        assert type(stored["deadline_at"]) is float
 
 
-def test_denied_user_creates_audit_without_message_text():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        update = telegram_update(9, 7, "RESTART")
+def test_ordinary_replay_preserves_existing_egress_state_and_deadline():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        update = telegram_update(9, 42, "hello")
+        arguments = {
+            "send": lambda *_: None,
+            "send_command": lambda *_: None,
+            "degraded_response_deadline_seconds": 7.0,
+        }
+        gateway.handle_update(update, {42}, root, monotonic_now=lambda: 100.0, **arguments)
+        path = root / "inbox" / "telegram-9.json"
+        value = read_json(path)
+        value["egress_state"] = "delivered"
+        write_json(path, value)
+        gateway.handle_update(update, {42}, root, monotonic_now=lambda: 900.0, **arguments)
+        replayed = read_json(path)
+        assert replayed["egress_state"] == "delivered"
+        assert replayed["deadline_at"] == 107.0
+
+
+def test_denied_user_creates_only_minimal_audit():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
         result = gateway.handle_update(
-            update, {42}, root,
-            send=fail_if_called,
-            send_command=fail_if_called,
+            telegram_update(10, 7, "RESTART"), {42}, root,
+            send=lambda *_: None,
+            send_command=lambda *_: None,
+            degraded_response_deadline_seconds=3.0,
         )
-        assert result["kind"] == "denied"
-        audit_path = root / "inbox" / "denied-7.json"
-        assert audit_path.exists()
-        stored = json.loads(audit_path.read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "denied"
+        assert result == {"kind": "denied", "id": "telegram-10"}
+        stored = read_json(root / "inbox" / "denied-10.json")
+        assert set(stored) == {"schema_version", "telegram_update_id", "telegram_user_id", "chat_id", "state"}
         assert "text" not in stored
 
 
-def test_due_message_gets_honest_degraded_reply():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        now = write_deadline_inbox_message(root, 8, now=monotonic_now(),
-                                           deadline_offset=3)
-        past_deadline = now + 4  # 4 seconds after now, past 3-second deadline
-        count = gateway.send_due_degraded_responses(
-            root, send=capture_send, now=past_deadline,
-        )
-        assert count == 1
-        assert capture_send.messages == [(42, "I am degraded. I will reply properly after restart.")]
-        inbox_path = root / "inbox" / "telegram-8.json"
-        stored = json.loads(inbox_path.read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "delivered"
+def test_command_replay_emits_one_guardian_submission_and_one_acknowledgement():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        submissions = []
+        messages = []
 
+        def send_command(command):
+            state = read_json(root / "gateway_commands" / "telegram-11.json")
+            assert state["egress_state"] == "sending"
+            submissions.append(dict(command))
 
-def test_no_due_messages_returns_zero():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        count = gateway.send_due_degraded_responses(
-            root, send=capture_send, now=monotonic_now(),
-        )
-        assert count == 0
-        assert capture_send.messages == []
+        def send(chat_id, text):
+            state = read_json(root / "acks" / "telegram-11.json")
+            assert state["egress_state"] == "sending"
+            messages.append((chat_id, text))
+            return True
 
-
-def test_critical_outbox_is_sent_and_marked():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        records.atomic_json(outbox_path / "telegram-10.json", {
+        update = telegram_update(11, 42, "RESET")
+        first = gateway.handle_update(update, {42}, root, send, send_command)
+        second = gateway.handle_update(update, {42}, root, send, send_command)
+        assert first == second == {"kind": "command", "id": "telegram-11"}
+        assert [entry["request_id"] for entry in submissions] == ["telegram-11"]
+        assert messages == [(42, "Reset accepted. I am staying online while the agent system restarts.")]
+        accepted = read_json(root / "commands" / "telegram-11.json")
+        assert set(accepted) == records.ACCEPTED_UPDATE_FIELDS
+        assert read_json(root / "gateway_commands" / "telegram-11.json") == {
             "schema_version": 1,
-            "id": "telegram-10",
-            "telegram_update_id": 10,
-            "telegram_user_id": 42,
-            "chat_id": 42,
-            "text": "critical message",
-            "received_at": "2026-09-04T00:00:00+00:00",
-            "egress_state": "ready",
-        })
-        count = gateway.drain_critical_outbox(root, send=capture_send)
-        assert count == 1
-        assert capture_send.messages == [(42, "critical message")]
-        stored = json.loads((outbox_path / "telegram-10.json").read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "delivered"
-
-
-def test_empty_outbox_returns_zero():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        count = gateway.drain_critical_outbox(root, send=capture_send)
-        assert count == 0
-
-
-def test_heartbeat_is_written():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        gateway.mark_gateway_heartbeat(root, 100.5)
-        hb_path = root / "heartbeat.json"
-        assert hb_path.exists()
-        stored = json.loads(hb_path.read_text(encoding="utf-8"))
-        assert stored["gateway_heartbeat"] == 100.5
-
-
-def test_acknowledgement_returns_expected_text():
-    assert gateway.acknowledgement("restart") == "Restart accepted. I am staying online while the agent system restarts."
-    assert gateway.acknowledgement("reset") == "Reset accepted. I am staying online while the agent system restarts."
-
-
-def test_command_record_has_strict_fields():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_monotonic_clock()
-        accepted = records.accept_update(root, telegram_update(91, 42, "RESTART"), {42})
-        cmd = gateway.command_record(accepted, "restart")
-        assert set(cmd) == {"schema_version", "request_id", "telegram_update_id",
-                            "telegram_user_id", "command", "received_at"}
-        assert cmd["command"] == "restart"
-        assert cmd["request_id"] == "telegram-91"
-
-
-def test_ordinary_update_with_different_chat_id():
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_monotonic_clock()
-        update = telegram_update(15, 42, "hello", chat_id=99)
-        result = gateway.handle_update(
-            update, {42}, root,
-            send=fail_if_called,
-            send_command=fail_if_called,
-        )
-        assert result["kind"] == "ordinary"
-        inbox_path = root / "inbox" / "telegram-15.json"
-        stored = json.loads(inbox_path.read_text(encoding="utf-8"))
-        assert stored["chat_id"] == 99
-
-
-# --- Regression tests for review findings ---
-
-
-def test_acknowledgement_stores_separately_not_in_accepted_record():
-    """Critical 5: mark_acknowledged must not mutate the accepted command record."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        update = telegram_update(99, 42, "RESTART")
-        gateway.handle_update(
-            update, {42}, root,
-            send=capture_send,
-            send_command=capture_send.commands.append,
-        )
-        cmd_path = root / "commands" / "telegram-99.json"
-        stored = json.loads(cmd_path.read_text(encoding="utf-8"))
-        assert set(stored) == {
-            "schema_version", "id", "telegram_update_id",
-            "telegram_user_id", "chat_id", "text", "received_at",
-        }
-        ack_path = root / "acks" / "telegram-99.json"
-        assert ack_path.exists()
-        ack_data = json.loads(ack_path.read_text(encoding="utf-8"))
-        assert ack_data["update_id"] == "telegram-99"
-        assert "acknowledged_at" in ack_data
-
-
-def test_degraded_reply_respects_3s_monotonic_deadline():
-    """Finding 4: degraded reply must use 3-second monotonic deadline."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        now = monotonic_now()
-        write_deadline_inbox_message(root, 50, now=now, deadline_offset=3)
-        # Call with now + 2 (under 3s deadline)
-        count = gateway.send_due_degraded_responses(root, send=capture_send, now=now + 2.0)
-        assert count == 0
-        assert capture_send.messages == []
-        # Verify record still has ready state (not delivered)
-        inbox_path = root / "inbox" / "telegram-50.json"
-        stored = json.loads(inbox_path.read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "ready"
-
-
-def test_degraded_reply_sends_when_past_3s_deadline():
-    """Finding 4: messages past the 3s monotonic deadline get degraded reply."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        now = monotonic_now()
-        write_deadline_inbox_message(root, 51, now=now, deadline_offset=3)
-        # Call with now + 5 (past 3s deadline)
-        count = gateway.send_due_degraded_responses(root, send=capture_send, now=now + 5.0)
-        assert count == 1
-        assert capture_send.messages == [(42, "I am degraded. I will reply properly after restart.")]
-        inbox_path = root / "inbox" / "telegram-51.json"
-        stored = json.loads(inbox_path.read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "delivered"
-
-
-def test_monotonic_clock_domain_preserves_utc_audit():
-    """Clock domains: UTC received_at is audit data, monotonic deadline is for comparison."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        now = monotonic_now()
-        write_deadline_inbox_message(root, 55, now=now, deadline_offset=3)
-        inbox_path = root / "inbox" / "telegram-55.json"
-        stored = json.loads(inbox_path.read_text(encoding="utf-8"))
-        # UTC received_at exists and has timezone
-        assert "received_at" in stored
-        ts = datetime.fromisoformat(stored["received_at"])
-        assert ts.tzinfo is not None
-        # Monotonic deadline_at exists and is a float
-        assert "deadline_at" in stored
-        assert type(stored["deadline_at"]) is float
-        # deadline_at is ahead of now (by deadline_offset)
-        assert stored["deadline_at"] == now + 3.0
-
-
-def test_drain_persists_sending_before_send():
-    """Critical 3: drain must persist 'sending' state before attempting send."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        records.atomic_json(outbox_path / "telegram-60.json", {
-            "schema_version": 1,
-            "id": "telegram-60",
-            "telegram_update_id": 60,
-            "telegram_user_id": 42,
-            "chat_id": 42,
-            "text": "crash-safe message",
-            "received_at": "2026-09-04T00:00:00+00:00",
-            "egress_state": "ready",
-        })
-        gateway.drain_critical_outbox(root, send=capture_send)
-        stored = json.loads((outbox_path / "telegram-60.json").read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "delivered"
-        assert capture_send.messages == [(42, "crash-safe message")]
-
-
-def test_drain_marks_delivery_unknown_on_send_failure():
-    """Critical 3: failed send must become delivery_unknown, not delivered."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        records.atomic_json(outbox_path / "telegram-61.json", {
-            "schema_version": 1,
-            "id": "telegram-61",
-            "telegram_update_id": 61,
-            "telegram_user_id": 42,
-            "chat_id": 42,
-            "text": "failing message",
-            "received_at": "2026-09-04T00:00:00+00:00",
-            "egress_state": "ready",
-        })
-
-        def failing_send(chat_id, text):
-            raise ConnectionError("network down")
-
-        count = gateway.drain_critical_outbox(root, send=failing_send)
-        assert count == 1
-        stored = json.loads((outbox_path / "telegram-61.json").read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "delivery_unknown"
-
-
-def test_drain_sending_becomes_delivery_unknown_no_replay():
-    """Finding 3: stuck 'sending' records become delivery_unknown and are NOT replayed."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        # Record stuck in "sending" from a prior crash
-        records.atomic_json(outbox_path / "telegram-63.json", {
-            "schema_version": 1,
-            "id": "telegram-63",
-            "telegram_update_id": 63,
-            "telegram_user_id": 42,
-            "chat_id": 42,
-            "text": "stuck message",
-            "received_at": "2026-09-04T00:00:00+00:00",
-            "egress_state": "sending",
-        })
-        count = gateway.drain_critical_outbox(root, send=capture_send)
-        assert count == 1
-        # The stuck send should NOT be replayed
-        assert capture_send.messages == []
-        stored = json.loads((outbox_path / "telegram-63.json").read_text(encoding="utf-8"))
-        assert stored["egress_state"] == "delivery_unknown"
-
-
-def test_command_replay_does_not_corrupt_record():
-    """Critical 5: replaying an accepted update must not break replay detection."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        update = telegram_update(100, 42, "RESTART")
-        first = gateway.handle_update(
-            update, {42}, root,
-            send=capture_send,
-            send_command=capture_send.commands.append,
-        )
-        assert first["kind"] == "command"
-        second = gateway.handle_update(
-            update, {42}, root,
-            send=capture_send,
-            send_command=capture_send.commands.append,
-        )
-        assert second["kind"] == "command"
-        cmd_path = root / "commands" / "telegram-100.json"
-        stored = json.loads(cmd_path.read_text(encoding="utf-8"))
-        assert set(stored) == {
-            "schema_version", "id", "telegram_update_id",
-            "telegram_user_id", "chat_id", "text", "received_at",
-        }
-
-
-def test_send_due_quarantines_malformed_records():
-    """Finding 7: corrupted records must be quarantined, not silently skipped.
-
-    Verifies quarantine through the outbox drain path (also tested via
-    send_due_degraded_responses for field-level corruption).
-    """
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        # Write valid JSON first so list_critical_outbox returns the path
-        records.atomic_json(outbox_path / "telegram-70.json", {
-            "schema_version": 1,
-            "id": "telegram-70",
-            "telegram_update_id": 70,
-            "telegram_user_id": 42,
-            "chat_id": 42,
-            "text": "valid then corrupt",
-            "received_at": "2026-09-04T00:00:00+00:00",
-            "egress_state": "ready",
-        })
-        # Now overwrite with garbage JSON
-        outbox_path.joinpath("telegram-70.json").write_text("NOT JSON", encoding="utf-8")
-        count = gateway.drain_critical_outbox(root, send=capture_send)
-        assert count == 0
-        assert capture_send.messages == []
-        # Quarantine record must exist
-        quarantine_dir = root / "quarantine"
-        assert quarantine_dir.is_dir()
-        quarantine_files = list(quarantine_dir.glob("quarantine-*.json"))
-        assert len(quarantine_files) >= 1
-        error_record = json.loads(quarantine_files[0].read_text(encoding="utf-8"))
-        assert error_record["error_reason"] == "malformed_json"
-        # Original file removed from outbox
-        assert not (outbox_path / "telegram-70.json").exists()
-
-
-def test_send_due_quarantines_missing_chat_id():
-    """Finding 7: records with missing chat_id are quarantined."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-        inbox_path = root / "inbox" / "telegram-71.json"
-        inbox_path.parent.mkdir(parents=True, exist_ok=True)
-        now = monotonic_now()
-        records.atomic_json(inbox_path, {
-            "schema_version": 1,
-            "id": "telegram-71",
-            "telegram_update_id": 71,
-            "chat_id": None,  # missing/invalid chat_id
-            "text": "no chat",
-            "received_at": datetime.now(timezone.utc).isoformat(),
-            "deadline_at": now + 1.0,
-            "egress_state": "ready",
-        })
-        count = gateway.send_due_degraded_responses(root, send=capture_send, now=now + 2.0)
-        assert count == 0
-        quarantine_dir = root / "quarantine"
-        assert quarantine_dir.is_dir()
-        quarantine_files = list(quarantine_dir.glob("quarantine-*.json"))
-        assert len(quarantine_files) >= 1
-        error_record = json.loads(quarantine_files[0].read_text(encoding="utf-8"))
-        assert "chat_id" in error_record["error_reason"]
-
-
-def test_guardian_command_submission():
-    """Behavioral: handle_update sends command records via guardian socket client."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        reset_monotonic_clock()
-
-        ack_received = []
-        submitted_commands = []
-
-        def fake_submit(socket_path_val, command):
-            # Simulate guardian processing: validate and acknowledge
-            encoded = gateway.protocol.encode_command(command)
-            decoded = gateway.protocol.decode_command(encoded)
-            ack = {"status": "accepted", "request_id": decoded["request_id"],
-                   "guardian_pid": 42}
-            ack_received.append(True)
-            submitted_commands.append(decoded)
-            capture_send.commands.append(decoded)
-            return ack
-
-        # Patch submit_to_guardian with the fake
-        original_submit = gateway.telegram_api.submit_to_guardian
-        gateway.telegram_api.submit_to_guardian = fake_submit
-
-        try:
-            update = telegram_update(20, 42, "RESTART")
-            result = gateway.handle_update(
-                update, {42}, root,
-                send=capture_send,
-                send_command=lambda cmd: fake_submit(str(root), cmd),
-            )
-            assert result["kind"] == "command"
-            assert capture_send.commands[0]["command"] == "restart"
-            assert len(ack_received) == 1
-            assert submitted_commands[0]["command"] == "restart"
-            assert submitted_commands[0]["request_id"] == "telegram-20"
-        finally:
-            gateway.telegram_api.submit_to_guardian = original_submit
-
-
-def test_parent_supervision_with_injected_waitpid():
-    """Behavioral: parent uses single waitpid(-1, 0) per iteration and
-    replaces the correct child, updating PID tracking deterministically.
-
-    Directly simulates the parent loop logic to prove correctness.
-    """
-    # Simulate the parent loop: one waitpid per iteration, tracked replacement
-    poll_pid = 100
-    outbox_pid = 200
-    replacements = []
-
-    # Event sequence: child deaths and fork replacements
-    # Each tuple is (event_type, pid)
-    # 'death' means waitpid returned this PID
-    # 'fork' means fork returned this PID (replacement)
-    events = [
-        ("death", 100),  # initial poll dies
-        ("fork", 101),   # poll replacement
-        ("death", 200),  # initial outbox dies
-        ("fork", 201),   # outbox replacement
-        ("death", 101),  # replaced poll dies
-        ("fork", 102),   # poll replacement
-        ("death", 201),  # replaced outbox dies
-        ("fork", 202),   # outbox replacement
-    ]
-
-    idx = 0
-    while idx < len(events):
-        etype, pid = events[idx]
-        idx += 1
-        if etype == "death":
-            if pid == poll_pid:
-                replacements.append(("poll", pid))
-                # Next event is fork replacement
-                etype2, new_pid = events[idx]
-                idx += 1
-                poll_pid = new_pid
-            elif pid == outbox_pid:
-                replacements.append(("outbox", pid))
-                # Next event is fork replacement
-                etype2, new_pid = events[idx]
-                idx += 1
-                outbox_pid = new_pid
-            # else: unknown PID, skip
-
-    poll_count = sum(1 for r in replacements if r[0] == "poll")
-    outbox_count = sum(1 for r in replacements if r[0] == "outbox")
-    assert poll_count >= 2, f"expected >=2 poll deaths, got {poll_count}"
-    assert outbox_count >= 2, f"expected >=2 outbox deaths, got {outbox_count}"
-
-
-def test_two_successive_child_replacements():
-    """Behavioral: two successive deaths/replacements of each role
-    are handled correctly with tracked PIDs."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        store_path = root / "state"
-        store_path.mkdir(parents=True, exist_ok=True)
-
-        # Simulate the parent loop behavior with tracked PIDs
-        poll_pid = 100
-        outbox_pid = 200
-        tracked_replacements = []
-
-        for round_num in range(2):
-            # Poll child dies
-            new_poll = 100 + (round_num + 1) * 10
-            tracked_replacements.append(("poll", round_num, poll_pid, new_poll))
-            poll_pid = new_poll
-            # Outbox child dies
-            new_outbox = 200 + (round_num + 1) * 10
-            tracked_replacements.append(("outbox", round_num, outbox_pid, new_outbox))
-            outbox_pid = new_outbox
-
-        # Verify: each role got two replacements with tracked PIDs
-        poll_replacements = [r for r in tracked_replacements if r[0] == "poll"]
-        outbox_replacements = [r for r in tracked_replacements if r[0] == "outbox"]
-        assert len(poll_replacements) == 2
-        assert len(outbox_replacements) == 2
-        # PIDs are updated deterministically (no ambiguity)
-        assert poll_replacements[0][3] == 110
-        assert poll_replacements[1][3] == 120
-        assert outbox_replacements[0][3] == 210
-        assert outbox_replacements[1][3] == 220
-
-
-def test_missing_config_fails_before_ready():
-    """Behavioral: missing systemd credentials or malformed user IDs
-    cause failure before READY/heartbeat."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        # No CREDENTIALS_DIRECTORY set - should fail
-        original_env = os.environ.get("CREDENTIALS_DIRECTORY")
-        if "CREDENTIALS_DIRECTORY" in os.environ:
-            del os.environ["CREDENTIALS_DIRECTORY"]
-        try:
-            try:
-                telegram_api._get_bot_token()
-                assert False, "should have raised RuntimeError"
-            except RuntimeError as e:
-                assert "CREDENTIALS_DIRECTORY" in str(e) or "telegram bot token" in str(e)
-        finally:
-            if original_env is not None:
-                os.environ["CREDENTIALS_DIRECTORY"] = original_env
-
-
-def test_no_ecosystem_import_in_gateway():
-    """Behavioral: gateway.py must not import ecosystem.telegram.
-    The survival plane owns its own Telegram transport."""
-    import importlib
-    # Force reimport to check for ecosystem dependency
-    # (previous imports may cache the module)
-    import sys
-    # Remove any cached survival modules
-    cached = {k: v for k, v in sys.modules.items() if k.startswith("survival")}
-    for k in cached:
-        del sys.modules[k]
-
-    from survival import gateway as fresh_gateway
-    import inspect
-    source = inspect.getsource(fresh_gateway)
-    assert "ecosystem.telegram" not in source, \
-        "gateway must not import ecosystem.telegram"
-    assert "ecosystem" not in source, \
-        "gateway must have no ecosystem dependency"
-
-
-def test_outbox_ignores_delivered_and_unknown():
-    """Critical 3: drain skips delivered and delivery_unknown, leaves them untouched."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        reset_captures()
-        outbox_path = root / "outbox" / "critical"
-        outbox_path.mkdir(parents=True, exist_ok=True)
-        records.atomic_json(outbox_path / "telegram-80.json", {
-            "schema_version": 1,
-            "id": "telegram-80",
-            "telegram_update_id": 80,
-            "telegram_user_id": 42,
-            "chat_id": 42,
-            "text": "already done",
-            "received_at": "2026-09-04T00:00:00+00:00",
+            "request_id": "telegram-11",
             "egress_state": "delivered",
-        })
-        records.atomic_json(outbox_path / "telegram-81.json", {
+        }
+        assert read_json(root / "acks" / "telegram-11.json") == {
             "schema_version": 1,
-            "id": "telegram-81",
-            "telegram_update_id": 81,
-            "telegram_user_id": 42,
+            "request_id": "telegram-11",
             "chat_id": 42,
-            "text": "failed",
-            "received_at": "2026-09-04T00:00:00+00:00",
-            "egress_state": "delivery_unknown",
-        })
-        count = gateway.drain_critical_outbox(root, send=capture_send)
-        assert count == 0
-        assert capture_send.messages == []
-        delivered = json.loads((outbox_path / "telegram-80.json").read_text(encoding="utf-8"))
-        unknown = json.loads((outbox_path / "telegram-81.json").read_text(encoding="utf-8"))
-        assert delivered["egress_state"] == "delivered"
-        assert unknown["egress_state"] == "delivery_unknown"
+            "text": "Reset accepted. I am staying online while the agent system restarts.",
+            "egress_state": "delivered",
+        }
 
 
-def test_quarantine_health_indicator():
-    """Finding 7: quarantine error visibility is reported via health check."""
-    with tempfile.TemporaryDirectory() as temp:
-        root = Path(temp)
-        # No quarantine: healthy
-        assert gateway.check_quarantine_health(root) is True
-        # Create a quarantine file: unhealthy
-        qdir = root / "quarantine"
-        qdir.mkdir(parents=True, exist_ok=True)
-        (qdir / "quarantine-1.json").write_text(
-            json.dumps({"error_reason": "test"}), encoding="utf-8"
+def test_unknown_guardian_submission_retries_only_same_request_identity():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        request_ids = []
+
+        def send_command(command):
+            request_ids.append(command["request_id"])
+            if len(request_ids) == 1:
+                raise ConnectionError("lost acknowledgement")
+
+        update = telegram_update(12, 42, "RESTART")
+        with unittest.TestCase().assertRaises(ConnectionError):
+            gateway.handle_update(update, {42}, root, lambda *_: True, send_command)
+        assert read_json(root / "gateway_commands" / "telegram-12.json")["egress_state"] == "delivery_unknown"
+        gateway.handle_update(update, {42}, root, lambda *_: True, send_command)
+        gateway.handle_update(update, {42}, root, lambda *_: True, send_command)
+        assert request_ids == ["telegram-12", "telegram-12"]
+
+
+def test_acknowledgement_discovered_sending_becomes_unknown_without_replay():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        update = telegram_update(13, 42, "RESTART")
+        gateway.handle_update(update, {42}, root, lambda *_: True, lambda *_: None)
+        ack_path = root / "acks" / "telegram-13.json"
+        ack = read_json(ack_path)
+        ack["egress_state"] = "sending"
+        write_json(ack_path, ack)
+        sent = []
+        gateway.handle_update(update, {42}, root, lambda *args: sent.append(args), lambda *_: None)
+        assert sent == []
+        assert read_json(ack_path)["egress_state"] == "delivery_unknown"
+
+
+def test_acknowledgement_false_return_is_delivery_unknown_not_delivered():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        gateway.handle_update(
+            telegram_update(14, 42, "RESTART"), {42}, root,
+            send=lambda *_: False,
+            send_command=lambda *_: None,
         )
+        assert read_json(root / "acks" / "telegram-14.json")["egress_state"] == "delivery_unknown"
+
+
+def test_acknowledgement_exception_is_recorded_unknown_and_remains_fatal():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+
+        def fail_send(_chat_id, _text):
+            raise ConnectionError("Telegram request failed")
+
+        with unittest.TestCase().assertRaises(ConnectionError):
+            gateway.handle_update(
+                telegram_update(15, 42, "RESTART"), {42}, root,
+                send=fail_send,
+                send_command=lambda *_: None,
+            )
+        assert read_json(root / "acks" / "telegram-15.json")["egress_state"] == "delivery_unknown"
+
+
+def test_due_degraded_reply_persists_sending_before_https_and_delivered_after():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-20.json"
+        write_json(path, inbox_record(20))
+        observed = []
+
+        def send(chat_id, text):
+            observed.append((chat_id, text, read_json(path)["egress_state"]))
+            return True
+
+        count = gateway.send_due_degraded_responses(root, send, now=104.0)
+        assert count == 1
+        assert observed == [(42, gateway.DEGRADED_REPLY, "sending")]
+        assert read_json(path)["egress_state"] == "delivered"
+
+
+def test_due_degraded_reply_failure_becomes_delivery_unknown_and_is_not_replayed():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-21.json"
+        write_json(path, inbox_record(21))
+        calls = []
+        assert gateway.send_due_degraded_responses(
+            root, lambda *args: calls.append(args) or False, now=104.0,
+        ) == 1
+        assert read_json(path)["egress_state"] == "delivery_unknown"
+        assert gateway.send_due_degraded_responses(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")), now=105.0,
+        ) == 0
+        assert len(calls) == 1
+
+
+def test_degraded_reply_discovered_sending_becomes_unknown_without_replay():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-22.json"
+        write_json(path, inbox_record(22, state="sending"))
+        assert gateway.send_due_degraded_responses(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")), now=104.0,
+        ) == 1
+        assert read_json(path)["egress_state"] == "delivery_unknown"
+
+
+def test_degraded_scan_quarantines_malformed_json_instead_of_silently_skipping():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-23.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("{broken", encoding="utf-8")
+        assert gateway.send_due_degraded_responses(root, lambda *_: True, now=104.0) == 0
+        assert not path.exists()
+        errors = telegram_api.list_quarantine_errors(root)
+        assert len(errors) == 1
+        assert read_json(errors[0])["error_reason"] == "invalid inbox JSON"
         assert gateway.check_quarantine_health(root) is False
 
 
+def test_degraded_scan_quarantines_extra_fields_before_delivery():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-24.json"
+        write_json(path, inbox_record(24, extra={"unexpected": True}))
+        assert gateway.send_due_degraded_responses(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("malformed delivery")), now=104.0,
+        ) == 0
+        assert not path.exists()
+        assert len(telegram_api.list_quarantine_errors(root)) == 1
+
+
+def test_critical_outbox_is_exact_and_crash_truthful():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "outbox" / "critical" / "message-1.json"
+        write_json(path, critical_record("message-1"))
+        observed = []
+
+        def send(chat_id, text):
+            observed.append((chat_id, text, read_json(path)["egress_state"]))
+            return True
+
+        assert gateway.drain_critical_outbox(root, send) == 1
+        assert observed == [(42, "critical message", "sending")]
+        assert read_json(path)["egress_state"] == "delivered"
+
+
+def test_critical_false_return_is_unknown_and_never_recursively_requeued():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "outbox" / "critical" / "message-2.json"
+        write_json(path, critical_record("message-2"))
+        assert gateway.drain_critical_outbox(root, lambda *_: False) == 1
+        assert read_json(path)["egress_state"] == "delivery_unknown"
+        assert [entry.name for entry in telegram_api.list_critical_outbox(root)] == ["message-2.json"]
+        assert gateway.drain_critical_outbox(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
+        ) == 0
+
+
+def test_critical_discovered_sending_becomes_unknown_without_replay():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "outbox" / "critical" / "message-3.json"
+        write_json(path, critical_record("message-3", state="sending"))
+        assert gateway.drain_critical_outbox(
+            root, lambda *_: (_ for _ in ()).throw(AssertionError("replayed")),
+        ) == 1
+        assert read_json(path)["egress_state"] == "delivery_unknown"
+
+
+def test_critical_scan_quarantines_nonexact_record():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "outbox" / "critical" / "message-4.json"
+        write_json(path, critical_record("message-4", extra={"unexpected": True}))
+        assert gateway.drain_critical_outbox(root, lambda *_: True) == 0
+        assert not path.exists()
+        assert len(telegram_api.list_quarantine_errors(root)) == 1
+
+
+def test_poll_and_egress_workers_renew_independent_heartbeats():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        gateway.poll_child(
+            root, {42}, lambda *_: True, lambda *_: None,
+            degraded_response_deadline_seconds=3.0,
+            poll_seconds=0.0,
+            long_poll_seconds=25.0,
+            request_timeout_seconds=40.0,
+            heartbeat_maximum_age_seconds=5.0,
+            get_updates=lambda **_kwargs: [],
+            monotonic_now=lambda: 10.0,
+            sleep=lambda _seconds: None,
+            maximum_iterations=1,
+        )
+        assert read_json(root / "heartbeats" / "poll.json")["monotonic_at"] == 10.0
+        assert not (root / "heartbeat.json").exists()
+        gateway.egress_child(
+            root, lambda *_: True,
+            outbox_poll_seconds=0.0,
+            heartbeat_maximum_age_seconds=5.0,
+            monotonic_now=lambda: 11.0,
+            sleep=lambda _seconds: None,
+            maximum_iterations=1,
+        )
+        assert read_json(root / "heartbeats" / "egress.json")["monotonic_at"] == 11.0
+        assert gateway.gateway_is_healthy(root, 12.0, 5.0) is True
+        assert read_json(root / "heartbeat.json")["monotonic_at"] == 11.0
+
+
+def test_overall_health_requires_both_fresh_heartbeats():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        gateway.mark_worker_heartbeat(root, "poll", 10.0, 5.0)
+        gateway.mark_worker_heartbeat(root, "egress", 11.0, 5.0)
+        assert gateway.gateway_is_healthy(root, 12.0, 5.0) is True
+        previous = read_json(root / "heartbeat.json")
+        gateway.mark_worker_heartbeat(root, "egress", 17.0, 5.0)
+        assert gateway.gateway_is_healthy(root, 17.0, 5.0) is False
+        assert read_json(root / "heartbeat.json") == previous
+
+
+def test_fatal_poll_error_propagates_and_does_not_renew_poll_heartbeat():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+
+        def fail_poll(**_kwargs):
+            raise ConnectionError("Telegram unavailable")
+
+        with unittest.TestCase().assertRaises(ConnectionError):
+            gateway.poll_child(
+                root, {42}, lambda *_: True, lambda *_: None,
+                degraded_response_deadline_seconds=3.0,
+                poll_seconds=0.0,
+                long_poll_seconds=25.0,
+                request_timeout_seconds=40.0,
+                heartbeat_maximum_age_seconds=5.0,
+                get_updates=fail_poll,
+                monotonic_now=lambda: 10.0,
+                sleep=lambda _seconds: None,
+                maximum_iterations=1,
+            )
+        assert not (root / "heartbeats" / "poll.json").exists()
+
+
+def test_quarantine_prevents_egress_heartbeat_renewal():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        path = root / "inbox" / "telegram-30.json"
+        path.parent.mkdir(parents=True)
+        path.write_text("bad", encoding="utf-8")
+        gateway.egress_child(
+            root, lambda *_: True,
+            outbox_poll_seconds=0.0,
+            heartbeat_maximum_age_seconds=5.0,
+            monotonic_now=lambda: 20.0,
+            sleep=lambda _seconds: None,
+            maximum_iterations=1,
+        )
+        assert not (root / "heartbeats" / "egress.json").exists()
+        assert gateway.check_quarantine_health(root) is False
+
+
+def test_orphaned_quarantine_payload_is_still_unhealthy():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        directory = root / "quarantine"
+        directory.mkdir()
+        (directory / "interrupted.record").write_bytes(b"corrupt source")
+        assert gateway.check_quarantine_health(root) is False
+
+
+def test_main_behaviorally_tracks_two_successive_replacements_per_role():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        fork_results = iter((100, 200, 101, 201, 102, 202))
+        deaths = iter((100, 200, 101, 201))
+        fork_calls = []
+        wait_calls = []
+
+        def fork():
+            fork_calls.append(True)
+            return next(fork_results)
+
+        def waitpid(pid, options):
+            wait_calls.append((pid, options))
+            try:
+                return next(deaths), 0
+            except StopIteration as error:
+                raise ChildProcessError from error
+
+        tracked = gateway.main(
+            root, {42}, lambda *_: True, lambda *_: None,
+            degraded_response_deadline_seconds=3.0,
+            poll_seconds=1.0,
+            long_poll_seconds=25.0,
+            request_timeout_seconds=40.0,
+            outbox_poll_seconds=2.0,
+            heartbeat_maximum_age_seconds=60.0,
+            fork=fork,
+            waitpid=waitpid,
+            install_signal_handlers=lambda: None,
+        )
+        assert len(fork_calls) == 6
+        assert wait_calls == [(-1, 0), (-1, 0), (-1, 0), (-1, 0), (-1, 0)]
+        assert tracked == {"poll": 102, "egress": 202}
+
+
+def test_send_message_exercises_https_encoding_through_injected_exchange():
+    calls = []
+
+    def exchange(host, timeout, method, path, body, headers):
+        calls.append((host, timeout, method, path, body, headers))
+        return 200, b'{"ok":true,"result":{"message_id":9}}'
+
+    assert telegram_api.send_message(
+        "123:abc", 42, "hello", request_timeout=7.0, https_exchange=exchange,
+    ) is True
+    host, timeout, method, path, body, headers = calls[0]
+    assert (host, timeout, method, path) == (
+        "api.telegram.org", 7.0, "POST", "/bot123:abc/sendMessage",
+    )
+    assert json.loads(body) == {"chat_id": 42, "text": "hello"}
+    assert headers == {"Content-Type": "application/json"}
+
+
+def test_get_updates_exercises_https_long_poll_through_injected_exchange():
+    calls = []
+
+    def exchange(host, timeout, method, path, body, headers):
+        calls.append((host, timeout, method, path, body, headers))
+        return 200, b'{"ok":true,"result":[{"update_id":7}]}'
+
+    updates = telegram_api.get_updates(
+        "123:abc", offset=5, timeout=25.0, request_timeout=40.0,
+        https_exchange=exchange,
+    )
+    assert updates == [{"update_id": 7}]
+    assert calls == [(
+        "api.telegram.org", 40.0, "GET",
+        "/bot123:abc/getUpdates?timeout=25&offset=5", None, {},
+    )]
+
+
+def test_telegram_api_failure_is_explicit_not_a_false_success():
+    def exchange(*_args):
+        return 500, b'{"ok":false,"description":"down"}'
+
+    with unittest.TestCase().assertRaisesRegex(RuntimeError, "Telegram"):
+        telegram_api.send_message(
+            "123:abc", 42, "hello", request_timeout=7.0,
+            https_exchange=exchange,
+        )
+
+
+def test_production_send_adapter_never_recursively_creates_a_ready_record():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        time_config = root / "time.cfg"
+        write_time_config(time_config)
+        environment = production_environment(root, time_config)
+        https_calls = []
+
+        def send_message(bot_token, chat_id, text, request_timeout):
+            https_calls.append((bot_token, chat_id, text, request_timeout))
+            return False
+
+        def run_main(_store, _allowed, send, _send_command, **_arguments):
+            assert send(42, "message") is False
+
+        gateway.run_production(
+            environment,
+            send_message=send_message,
+            submit_to_guardian=lambda *_args, **_kwargs: None,
+            get_updates_api=lambda *_args, **_kwargs: [],
+            run_main=run_main,
+        )
+        assert https_calls == [("123:secret", 42, "message", 40.0)]
+        assert telegram_api.list_critical_outbox(root / "state") == []
+
+
+def receive_exact(connection, size):
+    chunks = []
+    received = 0
+    while received < size:
+        chunk = connection.recv(size - received)
+        if not chunk:
+            raise RuntimeError("unexpected socket EOF")
+        chunks.append(chunk)
+        received += len(chunk)
+    return b"".join(chunks)
+
+
+def test_submit_to_guardian_uses_real_unix_socket_and_typed_framing():
+    with tempfile.TemporaryDirectory() as temporary:
+        socket_path = str(Path(temporary) / "guardian.sock")
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        listener.bind(socket_path)
+        listener.listen(1)
+        pid = os.fork()
+        if pid == 0:
+            try:
+                connection, _address = listener.accept()
+                with connection:
+                    size = int.from_bytes(receive_exact(connection, 4), "big")
+                    command = protocol.decode_command(receive_exact(connection, size))
+                    response = json.dumps({
+                        "schema_version": 1,
+                        "request_id": command["request_id"],
+                        "status": "accepted",
+                    }, separators=(",", ":")).encode("utf-8")
+                    connection.sendall(len(response).to_bytes(4, "big") + response)
+                os._exit(0)
+            except BaseException:
+                os._exit(1)
+        command = {
+            "schema_version": 1,
+            "request_id": "telegram-40",
+            "telegram_update_id": 40,
+            "telegram_user_id": 42,
+            "command": "restart",
+            "received_at": "2026-09-04T00:00:00+00:00",
+        }
+        try:
+            acknowledgement = telegram_api.submit_to_guardian(
+                socket_path, command, timeout=2.0,
+            )
+        finally:
+            listener.close()
+        child_pid, status = os.waitpid(pid, 0)
+        assert child_pid == pid
+        assert os.waitstatus_to_exitcode(status) == 0
+        assert acknowledgement == {
+            "schema_version": 1,
+            "request_id": "telegram-40",
+            "status": "accepted",
+        }
+
+
+def test_gateway_import_succeeds_when_ecosystem_imports_are_forbidden():
+    survival_package = importlib.import_module("survival")
+    previous_module = sys.modules.pop("survival.gateway", None)
+    previous_attribute = getattr(survival_package, "gateway", None)
+    if hasattr(survival_package, "gateway"):
+        delattr(survival_package, "gateway")
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "ecosystem" or name.startswith("ecosystem."):
+            raise AssertionError(f"forbidden mutable import: {name}")
+        return original_import(name, *args, **kwargs)
+
+    builtins.__import__ = guarded_import
+    try:
+        imported = importlib.import_module("survival.gateway")
+        assert callable(imported.handle_update)
+    finally:
+        builtins.__import__ = original_import
+        sys.modules.pop("survival.gateway", None)
+        if previous_module is not None:
+            sys.modules["survival.gateway"] = previous_module
+        if previous_attribute is not None:
+            survival_package.gateway = previous_attribute
+
+
 def load_tests(_loader, _tests, _pattern):
-    functions = [value for name, value in globals().items()
-                 if name.startswith("test_") and callable(value)]
+    functions = [
+        value for name, value in globals().items()
+        if name.startswith("test_") and callable(value)
+    ]
     return unittest.TestSuite(unittest.FunctionTestCase(function) for function in functions)
