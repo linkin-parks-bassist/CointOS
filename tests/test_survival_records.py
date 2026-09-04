@@ -84,6 +84,20 @@ def test_replay_rejects_persisted_record_with_extra_field(root):
 
 
 @with_survival_root
+def test_replay_rejects_persisted_duplicate_json_field(root):
+    records.accept_update(root, telegram_update(91, 42, "RESTART"), {42})
+    path = root / "commands" / "telegram-91.json"
+    path.write_text(
+        '{"schema_version":1,"id":"telegram-91","telegram_update_id":91,'
+        '"telegram_user_id":42,"chat_id":42,"text":"RESTART",'
+        '"text":"RESTART","received_at":"2026-09-04T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    with unittest.TestCase().assertRaisesRegex(ValueError, "duplicate"):
+        records.accept_update(root, telegram_update(91, 42, "RESTART"), {42})
+
+
+@with_survival_root
 def test_unauthorized_user_does_not_create_a_command(root):
     with unittest.TestCase().assertRaisesRegex(ValueError, "unauthorized"):
         records.accept_update(root, telegram_update(91, 7, "RESTART"), {42})

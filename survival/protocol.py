@@ -3,6 +3,8 @@
 import json
 from datetime import datetime
 
+from survival.json_codec import decode_json_object
+
 
 COMMAND_FIELDS = {
     "schema_version",
@@ -29,20 +31,8 @@ def encode_command(command: dict) -> bytes:
 
 def decode_command(payload: bytes) -> dict:
     """Decode and validate one complete lifecycle command record."""
-    try:
-        value = json.loads(payload, object_pairs_hook=_object_without_duplicate_fields)
-    except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ValueError("invalid command JSON") from error
+    value = decode_json_object(payload, "command")
     _validate_command(value)
-    return value
-
-
-def _object_without_duplicate_fields(pairs: list[tuple[str, object]]) -> dict:
-    value = {}
-    for key, member in pairs:
-        if key in value:
-            raise ValueError("duplicate command field")
-        value[key] = member
     return value
 
 

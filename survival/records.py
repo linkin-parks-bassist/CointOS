@@ -6,6 +6,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from survival.json_codec import decode_json_object
+
 ACCEPTED_UPDATE_FIELDS = {
     "schema_version",
     "id",
@@ -136,12 +138,9 @@ def _create_exclusive_json(path: Path, value: dict) -> None:
 def _read_existing_command(path: Path) -> dict:
     try:
         with path.open(encoding="utf-8") as source:
-            value = json.load(source)
-    except (OSError, json.JSONDecodeError) as error:
+            return decode_json_object(source.read(), "accepted update")
+    except OSError as error:
         raise ValueError("invalid existing command record") from error
-    if type(value) is not dict:
-        raise ValueError("invalid existing command record")
-    return value
 
 
 def _fsync_directory(path: Path) -> None:
