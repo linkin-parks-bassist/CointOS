@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import shutil
 import signal
 import socket
 import struct
@@ -19,6 +20,27 @@ from survival import guardian, systemd_notify
 base = Path(__file__).resolve().parent.parent.parent
 unit_directory = base / "services" / "system"
 installer_path = base / "scripts" / "install-survival-plane"
+installer_source_paths = (
+    "scripts/install-survival-plane",
+    "scripts/cointelprofessional-gateway",
+    "scripts/cointelprofessional-guardian",
+    "survival/__init__.py",
+    "survival/gateway.py",
+    "survival/guardian.py",
+    "survival/json_codec.py",
+    "survival/lifecycle.py",
+    "survival/protocol.py",
+    "survival/records.py",
+    "survival/system_control.py",
+    "survival/systemd_notify.py",
+    "survival/telegram_api.py",
+    "docs/operations.md",
+    "config/time.cfg",
+    "services/system/cointelprofessional-survival.slice",
+    "services/system/cointelprofessional-gateway.service",
+    "services/system/cointelprofessional-guardian.socket",
+    "services/system/cointelprofessional-guardian.service",
+)
 
 
 def load_unit(name):
@@ -500,6 +522,10 @@ if name == "id":
         raise SystemExit(2)
     raise SystemExit(0)
 if name == "install":
+    failure_suffix = os.environ.get("FAKE_INSTALL_FAILURE_SUFFIX")
+    if failure_suffix and sys.argv[-1].endswith(failure_suffix):
+        print("injected install failure", file=sys.stderr)
+        raise SystemExit(73)
     arguments = []
     index = 1
     while index < len(sys.argv):
@@ -509,7 +535,45 @@ if name == "install":
         arguments.append(sys.argv[index])
         index += 1
     raise SystemExit(subprocess.run(["/usr/bin/install", *arguments], check=False).returncode)
-if name in {"systemd-analyze", "systemctl"}:
+if name == "systemd-analyze":
+    if os.environ.get("FAKE_VERIFY_FAILURE") == "1":
+        print("injected verification failure", file=sys.stderr)
+        raise SystemExit(74)
+    release_root = Path(sys.argv[2]).parents[2]
+    required_release_entries = (
+        "survival/gateway.py",
+        "survival/guardian.py",
+        "scripts/cointelprofessional-gateway",
+        "scripts/cointelprofessional-guardian",
+        "docs/operations.md",
+        "config/time.cfg",
+        "config/guardian.env",
+        "services/system/cointelprofessional-survival.slice",
+        "services/system/cointelprofessional-gateway.service",
+        "services/system/cointelprofessional-guardian.socket",
+        "services/system/cointelprofessional-guardian.service",
+    )
+    if (
+        release_root.stat().st_mode & 0o777 != 0o755
+        or any(not (release_root / relative).is_file() for relative in required_release_entries)
+    ):
+        print("release was not complete before verification", file=sys.stderr)
+        raise SystemExit(76)
+    raise SystemExit(0)
+if name == "mv":
+    if os.environ.get("FAKE_COMMIT_FAILURE") == "1" and sys.argv[-1].endswith("/current"):
+        print("injected commit failure", file=sys.stderr)
+        raise SystemExit(75)
+    result = subprocess.run(["/usr/bin/mv", *sys.argv[1:]], check=False)
+    if (
+        result.returncode == 0
+        and os.environ.get("FAKE_POST_COMMIT_INTERRUPTION") == "1"
+        and sys.argv[-1].endswith("/current")
+    ):
+        print("injected post-commit interruption", file=sys.stderr)
+        raise SystemExit(77)
+    raise SystemExit(result.returncode)
+if name == "systemctl":
     raise SystemExit(0)
 raise SystemExit(127)
 ''',
@@ -518,22 +582,26 @@ raise SystemExit(127)
     backend.chmod(0o755)
     for name in (
         "getent", "groupadd", "useradd", "usermod", "id", "install",
-        "systemd-analyze", "systemctl",
+        "systemd-analyze", "systemctl", "mv",
     ):
         (fake_directory / name).symlink_to(backend)
     return fake_directory, state_directory
 
 
-def run_fake_installer(root, *arguments):
-    fake_directory, state_directory = write_fake_command_backend(root)
+def invoke_fake_installer(
+    installer, fake_directory, state_directory, image, arguments=(),
+    extra_environment=None,
+):
     environment = os.environ.copy()
     environment.update({
         "PATH": str(fake_directory) + ":/usr/bin:/bin",
         "FAKE_STATE_DIRECTORY": str(state_directory),
-        "COINTELPROFESSIONAL_INSTALL_ROOT": str(root / "image"),
+        "COINTELPROFESSIONAL_INSTALL_ROOT": str(image),
     })
-    result = subprocess.run(
-        [str(installer_path), *arguments],
+    if extra_environment is not None:
+        environment.update(extra_environment)
+    return subprocess.run(
+        [str(installer), *arguments],
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
@@ -541,21 +609,74 @@ def run_fake_installer(root, *arguments):
         timeout=10,
         check=False,
     )
+
+
+def run_fake_installer(
+    root, *arguments, installer=installer_path, extra_environment=None,
+):
+    fake_directory, state_directory = write_fake_command_backend(root)
+    image = root / "image"
+    result = invoke_fake_installer(
+        installer, fake_directory, state_directory, image, arguments,
+        extra_environment,
+    )
     trace_path = state_directory / "trace.jsonl"
     trace = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-    return result, trace, root / "image", state_directory
+    return result, trace, image, state_directory
 
 
 def installed_tree_digest(root):
     values = []
     for path in sorted(root.rglob("*")):
-        if path.is_file():
+        relative = str(path.relative_to(root))
+        if path.is_symlink():
+            values.append((relative, "symlink", os.readlink(path)))
+        elif path.is_dir():
+            values.append((relative, "directory", path.stat().st_mode & 0o7777))
+        elif path.is_file():
             values.append((
-                str(path.relative_to(root)),
+                relative,
                 path.stat().st_mode & 0o7777,
                 hashlib.sha256(path.read_bytes()).hexdigest(),
             ))
     return values
+
+
+def copy_installer_source(root):
+    source_root = root / "source"
+    for relative in installer_source_paths:
+        destination = source_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(base / relative, destination)
+    return source_root, source_root / "scripts/install-survival-plane"
+
+
+def prepare_release_update(root):
+    source_root, copied_installer = copy_installer_source(root)
+    first, _trace, image, state = run_fake_installer(
+        root, installer=copied_installer,
+    )
+    assert first.returncode == 0, first.stderr
+    prior_digest = installed_tree_digest(image)
+    with (source_root / "survival/gateway.py").open("a", encoding="utf-8") as output:
+        output.write("\nrelease_marker = 'candidate-two'\n")
+    with (
+        source_root / "services/system/cointelprofessional-guardian.service"
+    ).open("a", encoding="utf-8") as output:
+        output.write("\n# candidate-two\n")
+    return copied_installer, image, state, prior_digest
+
+
+def assert_failed_update_is_invisible(image, prior_digest):
+    assert installed_tree_digest(image) == prior_digest
+    authoritative_gateway = (
+        image / "usr/local/lib/cointelprofessional-survival/survival/gateway.py"
+    )
+    assert b"candidate-two" not in authoritative_gateway.read_bytes()
+    authoritative_guardian_unit = (
+        image / "etc/systemd/system/cointelprofessional-guardian.service"
+    )
+    assert b"candidate-two" not in authoritative_guardian_unit.read_bytes()
 
 
 def test_installer_is_idempotent_and_install_only_by_default():
@@ -653,6 +774,79 @@ def test_installer_enable_is_explicit_and_unknown_arguments_are_not_echoed():
         )
         assert rejected.returncode == 64
         assert "credential-value-must-not-leak" not in rejected.stderr
+
+
+def test_installer_construction_failure_preserves_the_authoritative_release():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        installer, image, state, prior_digest = prepare_release_update(root)
+        result = invoke_fake_installer(
+            installer, root / "fake-bin", state, image,
+            extra_environment={
+                "FAKE_INSTALL_FAILURE_SUFFIX": "/survival/telegram_api.py",
+            },
+        )
+        assert result.returncode == 73
+        assert_failed_update_is_invisible(image, prior_digest)
+
+
+def test_installer_verification_failure_preserves_the_authoritative_release():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        installer, image, state, prior_digest = prepare_release_update(root)
+        result = invoke_fake_installer(
+            installer, root / "fake-bin", state, image,
+            extra_environment={"FAKE_VERIFY_FAILURE": "1"},
+        )
+        assert result.returncode == 74
+        assert_failed_update_is_invisible(image, prior_digest)
+
+
+def test_installer_commit_failure_preserves_the_authoritative_release():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        installer, image, state, prior_digest = prepare_release_update(root)
+        result = invoke_fake_installer(
+            installer, root / "fake-bin", state, image,
+            extra_environment={"FAKE_COMMIT_FAILURE": "1"},
+        )
+        assert result.returncode == 75
+        assert_failed_update_is_invisible(image, prior_digest)
+
+
+def test_installer_post_commit_interruption_keeps_a_complete_release_visible():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        installer, image, state, _prior_digest = prepare_release_update(root)
+        snapshot = image / "usr/local/lib/cointelprofessional-survival"
+        prior_releases = set((snapshot / "releases").iterdir())
+        result = invoke_fake_installer(
+            installer, root / "fake-bin", state, image,
+            extra_environment={"FAKE_POST_COMMIT_INTERRUPTION": "1"},
+        )
+        assert result.returncode == 77
+        assert (snapshot / "current").resolve().is_dir()
+        assert b"candidate-two" in (snapshot / "survival/gateway.py").read_bytes()
+        guardian_unit = image / "etc/systemd/system/cointelprofessional-guardian.service"
+        assert b"candidate-two" in guardian_unit.read_bytes()
+        assert prior_releases <= set((snapshot / "releases").iterdir())
+
+
+def test_installer_rejects_a_release_with_tampered_root_metadata():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        result, _trace, image, state = run_fake_installer(root)
+        assert result.returncode == 0, result.stderr
+        snapshot = image / "usr/local/lib/cointelprofessional-survival"
+        release = (snapshot / "current").resolve()
+        current_target = os.readlink(snapshot / "current")
+        release.chmod(0o700)
+        result = invoke_fake_installer(
+            installer_path, root / "fake-bin", state, image,
+        )
+        assert result.returncode == 1
+        assert "content identity" in result.stderr
+        assert os.readlink(snapshot / "current") == current_target
 
 
 def load_tests(_loader, _tests, _pattern):

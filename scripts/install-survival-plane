@@ -35,6 +35,8 @@ fi
 
 repository_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install_prefix="$install_root/usr/local/lib/cointelprofessional-survival"
+releases_directory="$install_prefix/releases"
+current_release="$install_prefix/current"
 state_directory="$install_root/var/lib/cointelprofessional"
 socket_directory="$install_root/run/cointelprofessional"
 configuration_directory="$install_root/etc/cointelprofessional"
@@ -77,13 +79,99 @@ if [[ ! "$gateway_uid" =~ ^[1-9][0-9]*$ || ! "$user_manager_uid" =~ ^[1-9][0-9]*
     exit 1
 fi
 
-install -d -o root -g root -m 0755 \
-    "$install_prefix" "$install_prefix/survival" \
-    "$install_prefix/scripts" "$install_prefix/docs"
+release_digest() {
+    local release_root="$1"
+    local content_digest
+    local content_line
+    local digest_line
+    local metadata
+    local path
+    local relative
+
+    digest_line="$(
+        (
+            cd "$release_root"
+            while IFS= read -r -d '' path; do
+                relative="${path#./}"
+                metadata="$(stat -c '%a:%u:%g' -- "$path")"
+                if [[ -d "$path" ]]; then
+                    printf 'directory\0%s\0%s\0' "$relative" "$metadata"
+                elif [[ -f "$path" && ! -L "$path" ]]; then
+                    content_line="$(sha256sum -- "$path")"
+                    content_digest="${content_line%% *}"
+                    printf 'file\0%s\0%s\0%s\0' \
+                        "$relative" "$metadata" "$content_digest"
+                else
+                    echo "invalid release entry: $relative" >&2
+                    exit 1
+                fi
+            done < <(find . -mindepth 0 -print0 | LC_ALL=C sort -z)
+        ) | sha256sum
+    )"
+    printf '%s\n' "${digest_line%% *}"
+}
+
+ensure_symbolic_link() {
+    local target="$1"
+    local link="$2"
+    local existing_target
+
+    if [[ -L "$link" ]]; then
+        existing_target="$(readlink "$link")"
+        if [[ "$existing_target" != "$target" ]]; then
+            echo "existing symbolic link does not match installation contract: $link" >&2
+            exit 1
+        fi
+        return
+    fi
+    if [[ -e "$link" ]]; then
+        echo "existing path blocks transactional installation: $link" >&2
+        exit 1
+    fi
+    ln -s "$target" "$link"
+}
+
+staging_directory=""
+commit_directory=""
+uncommitted_release=""
+cleanup() {
+    local active_target
+    local candidate_target
+
+    if [[ -n "$commit_directory" && -d "$commit_directory" ]]; then
+        rm -rf -- "$commit_directory"
+    fi
+    if [[ -n "$staging_directory" && -d "$staging_directory" ]]; then
+        rm -rf -- "$staging_directory"
+    fi
+    if [[ -n "$uncommitted_release" && -d "$uncommitted_release" ]]; then
+        candidate_target="releases/${uncommitted_release##*/}"
+        active_target=""
+        if [[ -L "$current_release" ]]; then
+            active_target="$(readlink "$current_release")"
+        fi
+        if [[ "$active_target" != "$candidate_target" ]]; then
+            rm -rf -- "$uncommitted_release"
+        fi
+    fi
+}
+trap cleanup EXIT
+
+install -d -o root -g root -m 0755 "$install_prefix" "$releases_directory"
 install -d -o root -g "$spool_group" -m 2770 "$state_directory"
 install -d -o root -g "$command_group" -m 0750 "$socket_directory"
 install -d -o root -g "$gateway_user" -m 0750 "$configuration_directory"
 install -d -o root -g root -m 0755 "$unit_directory"
+
+staging_directory="$(mktemp -d "$releases_directory/.staged.XXXXXX")"
+install -d -o root -g root -m 0700 "$staging_directory"
+install -d -o root -g root -m 0755 \
+    "$staging_directory/survival" \
+    "$staging_directory/scripts" \
+    "$staging_directory/docs" \
+    "$staging_directory/config" \
+    "$staging_directory/services" \
+    "$staging_directory/services/system"
 
 python_modules=(
     survival/__init__.py
@@ -103,7 +191,8 @@ for module in "${python_modules[@]}"; do
         echo "missing source: $source_path" >&2
         exit 1
     fi
-    install -o root -g root -m 0644 "$source_path" "$install_prefix/$module"
+    install -o root -g root -m 0644 \
+        "$source_path" "$staging_directory/$module"
 done
 
 entry_points=(cointelprofessional-gateway cointelprofessional-guardian)
@@ -114,24 +203,21 @@ for entry_point in "${entry_points[@]}"; do
         exit 1
     fi
     install -o root -g root -m 0755 \
-        "$source_path" "$install_prefix/scripts/$entry_point"
+        "$source_path" "$staging_directory/scripts/$entry_point"
 done
 
 install -o root -g root -m 0644 \
-    "$repository_directory/docs/operations.md" "$install_prefix/docs/operations.md"
+    "$repository_directory/docs/operations.md" \
+    "$staging_directory/docs/operations.md"
 install -o root -g root -m 0644 \
-    "$repository_directory/config/time.cfg" "$configuration_directory/time.cfg"
+    "$repository_directory/config/time.cfg" "$staging_directory/config/time.cfg"
 
-temporary_directory="$(mktemp -d)"
-cleanup() {
-    rm -f "$temporary_directory/guardian.env"
-    rmdir "$temporary_directory"
-}
-trap cleanup EXIT
+temporary_environment="$staging_directory/.guardian.env"
 printf 'GUARDIAN_GATEWAY_UID=%s\nUSER_MANAGER_UID=%s\n' \
-    "$gateway_uid" "$user_manager_uid" >"$temporary_directory/guardian.env"
+    "$gateway_uid" "$user_manager_uid" >"$temporary_environment"
 install -o root -g root -m 0600 \
-    "$temporary_directory/guardian.env" "$configuration_directory/guardian.env"
+    "$temporary_environment" "$staging_directory/config/guardian.env"
+rm -f -- "$temporary_environment"
 
 units=(
     cointelprofessional-survival.slice
@@ -145,14 +231,64 @@ for unit in "${units[@]}"; do
         echo "missing unit: $source_path" >&2
         exit 1
     fi
-    install -o root -g root -m 0644 "$source_path" "$unit_directory/$unit"
+    install -o root -g root -m 0644 \
+        "$source_path" "$staging_directory/services/system/$unit"
 done
 
+install -d -o root -g root -m 0755 "$staging_directory"
 systemd-analyze verify \
-    "$unit_directory/cointelprofessional-survival.slice" \
-    "$unit_directory/cointelprofessional-gateway.service" \
-    "$unit_directory/cointelprofessional-guardian.socket" \
-    "$unit_directory/cointelprofessional-guardian.service"
+    "$staging_directory/services/system/cointelprofessional-survival.slice" \
+    "$staging_directory/services/system/cointelprofessional-gateway.service" \
+    "$staging_directory/services/system/cointelprofessional-guardian.socket" \
+    "$staging_directory/services/system/cointelprofessional-guardian.service"
+
+ensure_symbolic_link "current/survival" "$install_prefix/survival"
+ensure_symbolic_link "current/scripts" "$install_prefix/scripts"
+ensure_symbolic_link "current/docs" "$install_prefix/docs"
+ensure_symbolic_link \
+    "$install_prefix/current/config/time.cfg" \
+    "$configuration_directory/time.cfg"
+ensure_symbolic_link \
+    "$install_prefix/current/config/guardian.env" \
+    "$configuration_directory/guardian.env"
+for unit in "${units[@]}"; do
+    ensure_symbolic_link \
+        "$install_prefix/current/services/system/$unit" \
+        "$unit_directory/$unit"
+done
+
+digest="$(release_digest "$staging_directory")"
+release_name="release-$digest"
+release_path="$releases_directory/$release_name"
+if [[ -e "$release_path" || -L "$release_path" ]]; then
+    if [[ ! -d "$release_path" || -L "$release_path" \
+        || "$(release_digest "$release_path")" != "$digest" ]]; then
+        echo "existing release does not match its content identity" >&2
+        exit 1
+    fi
+    rm -rf -- "$staging_directory"
+    staging_directory=""
+else
+    mv -T -- "$staging_directory" "$release_path"
+    staging_directory=""
+    uncommitted_release="$release_path"
+fi
+
+desired_release_target="releases/$release_name"
+if [[ -L "$current_release" \
+    && "$(readlink "$current_release")" == "$desired_release_target" ]]; then
+    uncommitted_release=""
+elif [[ -e "$current_release" && ! -L "$current_release" ]]; then
+    echo "existing current release path is not a symbolic link" >&2
+    exit 1
+else
+    commit_directory="$(mktemp -d "$install_prefix/.commit.XXXXXX")"
+    ln -s "$desired_release_target" "$commit_directory/current"
+    mv -Tf -- "$commit_directory/current" "$current_release"
+    uncommitted_release=""
+    rmdir "$commit_directory"
+    commit_directory=""
+fi
 
 if [[ "$enable" == true ]]; then
     systemctl daemon-reload

@@ -262,3 +262,114 @@ their harnesses running.
 - `tests/test_survival_gateway.py`
 - `docs/operations.md`
 - `.superpowers/sdd/2026-09-04-cointelprofessional-02-survival-plane-lifecycle/task-5-report.md`
+
+## Fix round 1/5 — atomic installer deployment boundary
+
+**Agent:** Codex agent `/root/plan2_task5_complete`
+
+### Review finding and root cause
+
+Task 5 review reported 0 Critical, 1 Important, and 0 Minor findings. The Important
+finding was reproducible: the installer copied code, configuration, documentation,
+and four units directly over their authoritative paths, then verified the already
+published unit files. Any construction or verification failure could therefore
+leave a service restart observing an internally mixed release.
+
+This was not a missing rollback around one copy operation. The root cause was the
+absence of a single representation and commit point for an installed release.
+
+### RED evidence
+
+The failure tests use a private copied source tree so a second release can differ
+from the first without modifying the checkout. They run the real installer and real
+filesystem operations below a temporary install root, replacing only account,
+systemd, and injected-failure command boundaries.
+
+Before changing the installer, construction and verification were failed after a
+different gateway and guardian unit had begun deployment, and commit failure was
+injected. The run observed `Ran 20 tests in 9.215s` with exactly 3 failures: both
+pre-commit failures changed the byte-for-byte installed-tree digest, while the old
+installer had no atomic commit operation to fail.
+
+A verifier-boundary test then required the candidate root's final mode and all code,
+entry-point, documentation, configuration, and unit families to exist before unit
+verification. It observed `Ran 20 tests in 7.336s` with 6 expected failures because
+the candidate still had its private construction mode at verification time.
+
+Finally, an injected interruption immediately after the current-link rename
+observed `Ran 21 tests in 11.601s` with 1 failure: cleanup removed the now-current
+release during the narrow interval before the shell cleared its candidate marker.
+
+An integrity mutation then changed only the published release root's mode. The
+22-test run failed exactly that test because the initial content identity covered
+descendants but not the root itself. The final identity includes both.
+
+### Resolution
+
+- `/usr/local/lib/cointelprofessional-survival` is now a stable release container.
+  Candidates are built beneath its `releases/` directory, on the same filesystem as
+  the commit point, and remain mode `0700` while incomplete.
+- Every Python module, entry point, operations document, timing configuration,
+  generated numeric-UID environment, and systemd unit is copied into the candidate
+  with its final owner and mode. The candidate root changes to its final `0755`
+  mode only after construction is complete.
+- `systemd-analyze verify` receives only the candidate's four unit paths and must
+  succeed before any release directory is published.
+- A release identity hashes the release root and every relative path, entry kind,
+  mode, numeric owner, numeric group, and regular-file byte digest. An
+  already-present content-addressed release must reproduce that identity exactly or
+  installation fails explicitly.
+- Stable code, entry-point, documentation, configuration, and `/etc/systemd/system`
+  unit links all resolve through one `current` link. Unit updates therefore cannot
+  publish four independently versioned files.
+- A complete candidate is renamed into `releases/` atomically. A temporary symlink
+  is then renamed over `current` with `mv -T`; this single same-filesystem rename is
+  the authoritative commit operation.
+- Construction, verification, or pre-rename commit failure removes only temporary
+  or newly published uncommitted content. The prior current link and its full
+  release remain byte-for-byte unchanged. Cleanup re-reads `current` before removing
+  a candidate, so an interruption immediately after a successful rename cannot
+  delete the newly authoritative release.
+- Successful commits retain the prior complete content-addressed release. Repeating
+  an identical install reuses the same verified identity and leaves the installed
+  tree and current target unchanged.
+
+This is the manifesto's transactional-construction boundary expressed directly in
+filesystem terms: an inaccessible candidate, a verified complete value, and one
+atomic symbolic publication. There is no compensating sequence which attempts to
+reconstruct overwritten state.
+
+### GREEN evidence
+
+```sh
+python3 -m unittest tests.integration.test_survival_processes -v
+```
+
+Observed: `Ran 22 tests in 13.152s`, `OK`, with no warning, traceback, leaked
+process, live-system write, credential access, or network access.
+
+```sh
+python3 -m unittest \
+  tests.test_survival_records tests.test_survival_protocol \
+  tests.test_survival_lifecycle tests.test_survival_gateway \
+  tests.test_survival_guardian tests.test_system_control \
+  tests.integration.test_survival_processes -v
+```
+
+Observed: `Ran 122 tests in 14.956s`, `OK`.
+
+```sh
+python3 -m unittest discover -s tests -v
+```
+
+Observed: `Ran 225 tests in 3.741s`, `OK`, with no warning or traceback. As before,
+repository discovery does not descend into the un-packaged integration directory;
+the explicit commands above cover it.
+
+### Remaining boundary
+
+No installation or activation was performed. Old complete content-addressed
+releases are intentionally retained rather than pruned during Task 5; any future
+retention policy is a separate destructive-operation decision. Live ownership,
+manager reload, activation, restart, reboot, watchdog, credentials, and Telegram
+acceptance remain Plan 5 work.
