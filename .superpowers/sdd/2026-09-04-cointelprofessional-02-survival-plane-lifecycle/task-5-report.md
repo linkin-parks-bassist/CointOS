@@ -373,3 +373,109 @@ releases are intentionally retained rather than pruned during Task 5; any future
 retention policy is a separate destructive-operation decision. Live ownership,
 manager reload, activation, restart, reboot, watchdog, credentials, and Telegram
 acceptance remain Plan 5 work.
+
+### Post-commit manifesto audit and first-install rollback closure
+
+The updated workspace doctrine was read in full after the first atomic-installer
+commit. Auditing the implementation against reachable partial construction found
+one narrower instance of the same transactional cause: on a first installation,
+the stable code, configuration, and unit symlinks were created before the
+`current` rename. They could not resolve without `current`, so no release became
+authoritative, but an injected commit failure left those broken wrappers visible.
+
+A focused RED run observed `Ran 23 tests in 14.048s` with exactly one failure:
+`test_installer_initial_commit_failure_leaves_no_published_wrappers`. The installer
+now records only wrappers it creates during the current invocation. Cleanup reads
+the authoritative `current` target: before commit, it removes those wrappers in
+reverse order together with the uncommitted release; after a successful atomic
+rename, including an injected interruption before the next shell statement, it
+retains both the complete release and its wrappers. Existing wrappers are never
+registered for rollback and therefore remain untouched during a failed update.
+
+The architectural review questions resolve as follows:
+
+1. Source files become a private candidate with explicit installed metadata, then
+   a verified content-addressed release, then an authoritative value through
+   `current`. Bytes often pass unchanged, while ownership, mode, provenance, and
+   publication role change at the installation boundary.
+2. The candidate contract is root-owned, same-filesystem, complete before verify,
+   and non-authoritative before the `current` rename. Pre-commit failure preserves
+   the prior release or restores the empty first-install surface; post-rename
+   failure exposes only the complete new release and retains the old one.
+3. Release names, staging names, hashing, rollback bookkeeping, and rename mechanics
+   remain installer concerns. Service code and systemd units consume only stable
+   installed paths.
+4. Literal paths, modes, owner/group spellings, unit filenames, digest framing, and
+   filesystem commands occur at the installer fingertip. They are not reconstructed
+   by gateway, guardian, lifecycle, or record code.
+5. Code, entry points, configuration, documentation, and units legitimately cross
+   horizontal regions together because they form one release. Plain arrays and
+   direct functions construct, verify, identify, and publish that shared tree.
+6. The install transaction contains no control cycle. Existing watchdog and
+   lifecycle feedback remains explicit in the service contracts and was not given
+   a second route by this fix.
+7. The boundaries are semi-permeable: the digest traverses the real candidate and
+   tests inspect the real staged filesystem. No mirrored release model, callback
+   choreography, or actor-like installer abstraction was introduced.
+8. Varying file families have coherent owners in `python_modules`, `entry_points`,
+   and `units`; visibility is owned by the single `current` reference. Tests repeat
+   only acceptance expectations, not runtime policy.
+9. Replacing release storage would affect the installer and its adjacent tests,
+   while services retain their stable path contract. Adding a module or unit changes
+   its owning list and focused acceptance evidence, not unrelated runtime layers.
+10. An active release cannot be incrementally overwritten. Incomplete candidates
+    remain unreferenced; failed first-install wrappers are removed; failed updates
+    retain the byte-for-byte prior tree; and interruption after commit leaves a
+    complete digest-identified tree. Identity and state directories may already
+    exist because they are installation prerequisites, not a semantic release.
+11. Injected construction, verification, pre-commit, first-install commit, and
+    post-commit failures exercise the boundary. Content mutation and root-mode
+    mutation exercise release identity. Live manager and power-loss durability
+    remain deliberately unintegrated for Plan 5 rather than represented by an
+    offline placeholder.
+12. The incremental-copy route has been removed. Candidate, release, reference, and
+    wrapper roles are distinct, with one semantic cutover rather than compensating
+    overwrite/rollback sequences.
+13. Root ownership, final modes, complete verification, content identity, and
+    same-filesystem atomic rename are laws of this installer. Activation is the
+    explicit `--enable` policy; the alternate install root is solely an offline
+    test fingertip.
+14. A future module extends the module list; a future unit extends the unit list,
+    verifier arguments, and wrapper acceptance test. The release transaction and
+    service consumers otherwise remain unchanged, demonstrating a prepared joint
+    rather than distributed version selection.
+
+Fresh GREEN evidence after this closure:
+
+```sh
+python3 -m unittest tests.integration.test_survival_processes
+```
+
+Observed: `Ran 23 tests in 14.178s`, `OK`.
+
+```sh
+python3 -m unittest \
+  tests.test_survival_records tests.test_survival_protocol \
+  tests.test_survival_lifecycle tests.test_survival_gateway \
+  tests.test_survival_guardian tests.test_system_control \
+  tests.integration.test_survival_processes
+```
+
+Observed: `Ran 123 tests in 16.308s`, `OK`.
+
+```sh
+python3 -m unittest discover -s tests
+```
+
+Observed: `Ran 225 tests in 4.134s`, `OK`, with only the suite's existing expected
+application stdout and no warning or traceback.
+
+```sh
+systemd-analyze verify \
+  services/system/cointelprofessional-survival.slice \
+  services/system/cointelprofessional-gateway.service \
+  services/system/cointelprofessional-guardian.socket \
+  services/system/cointelprofessional-guardian.service
+```
+
+Observed: exit 0 with empty stdout/stderr.

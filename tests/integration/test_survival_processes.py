@@ -814,6 +814,31 @@ def test_installer_commit_failure_preserves_the_authoritative_release():
         assert_failed_update_is_invisible(image, prior_digest)
 
 
+def test_installer_initial_commit_failure_leaves_no_published_wrappers():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        result, _trace, image, _state = run_fake_installer(
+            root,
+            extra_environment={"FAKE_COMMIT_FAILURE": "1"},
+        )
+        assert result.returncode == 75
+        snapshot = image / "usr/local/lib/cointelprofessional-survival"
+        published_paths = (
+            snapshot / "current",
+            snapshot / "survival",
+            snapshot / "scripts",
+            snapshot / "docs",
+            image / "etc/cointelprofessional/time.cfg",
+            image / "etc/cointelprofessional/guardian.env",
+            image / "etc/systemd/system/cointelprofessional-survival.slice",
+            image / "etc/systemd/system/cointelprofessional-gateway.service",
+            image / "etc/systemd/system/cointelprofessional-guardian.socket",
+            image / "etc/systemd/system/cointelprofessional-guardian.service",
+        )
+        assert not any(path.exists() or path.is_symlink() for path in published_paths)
+        assert list((snapshot / "releases").iterdir()) == []
+
+
 def test_installer_post_commit_interruption_keeps_a_complete_release_visible():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)

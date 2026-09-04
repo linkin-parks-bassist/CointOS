@@ -129,14 +129,23 @@ ensure_symbolic_link() {
         exit 1
     fi
     ln -s "$target" "$link"
+    created_symbolic_links+=("$link")
 }
 
 staging_directory=""
 commit_directory=""
 uncommitted_release=""
+desired_release_target=""
+created_symbolic_links=()
 cleanup() {
-    local active_target
+    local active_target=""
     local candidate_target
+    local index
+    local link
+
+    if [[ -L "$current_release" ]]; then
+        active_target="$(readlink "$current_release")"
+    fi
 
     if [[ -n "$commit_directory" && -d "$commit_directory" ]]; then
         rm -rf -- "$commit_directory"
@@ -146,13 +155,16 @@ cleanup() {
     fi
     if [[ -n "$uncommitted_release" && -d "$uncommitted_release" ]]; then
         candidate_target="releases/${uncommitted_release##*/}"
-        active_target=""
-        if [[ -L "$current_release" ]]; then
-            active_target="$(readlink "$current_release")"
-        fi
         if [[ "$active_target" != "$candidate_target" ]]; then
             rm -rf -- "$uncommitted_release"
         fi
+    fi
+    if [[ -z "$desired_release_target" \
+        || "$active_target" != "$desired_release_target" ]]; then
+        for ((index=${#created_symbolic_links[@]} - 1; index >= 0; index--)); do
+            link="${created_symbolic_links[index]}"
+            rm -f -- "$link"
+        done
     fi
 }
 trap cleanup EXIT
