@@ -1,8 +1,6 @@
-"""Tests for survival system_control: peer auth, allowlists, unit management, effects."""
+"""Behavioral tests for the immutable survival system-control boundary."""
 
-import os
-import subprocess
-import sys
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,303 +9,428 @@ from unittest.mock import patch
 from survival import system_control
 
 
-def completed(exit_code: int) -> dict:
-    return {"exit_code": exit_code}
-
-
-def fake_adapters() -> dict:
+def command_record(command="reset", update_id=1):
     return {
-        "system": _fake_system_unit,
-        "user": _fake_user_unit,
+        "schema_version": 1,
+        "request_id": f"telegram-{update_id}",
+        "telegram_update_id": update_id,
+        "telegram_user_id": 42,
+        "command": command,
+        "received_at": "2026-09-04T00:00:00+00:00",
     }
 
 
-def _fake_system_unit(action: str, unit: str) -> dict:
-    return {"action": action, "unit": unit, "state": "inactive"}
+def process_result(exit_code=0, stdout="", stderr=""):
+    return {"exit_code": exit_code, "stdout": stdout, "stderr": stderr}
 
 
-def _fake_user_unit(action: str, unit: str) -> dict:
-    return {"action": action, "unit": unit, "state": "inactive"}
+def read_request_state(path):
+    return json.loads(path.read_text(encoding="utf-8"))["state"]
 
 
-# ---------------------------------------------------------------------------
-# Step 1: peer auth, allowlist, kill-order, postcondition tests
-# ---------------------------------------------------------------------------
+def read_results(path):
+    results_path = path.with_suffix(".results.jsonl")
+    if not results_path.exists():
+        return []
+    return [json.loads(line) for line in results_path.read_text(encoding="utf-8").splitlines()]
+
+
+def successful_adapters(events=None, observe=None):
+    if events is None:
+        events = []
+
+    def manager(name):
+        def run(action, unit):
+            if observe is not None:
+                observe(name, action, unit)
+            events.append((name, action, unit))
+            state = "active" if action == "start" else "inactive"
+            return {
+                "ok": True,
+                "action": action,
+                "unit": unit,
+                "state": state,
+                "cgroup_empty": action != "start",
+            }
+
+        return run
+
+    def direct(kind):
+        def run(effect, policy):
+            if observe is not None:
+                observe(kind, effect, policy)
+            events.append((kind,))
+            return {"ok": True, "operation": kind}
+
+        return run
+
+    adapters = {
+        "system": manager("system"),
+        "user": manager("user"),
+    }
+    for kind in (
+        "notify", "close_admission", "checkpoint", "reconcile", "verify",
+        "resume", "finish",
+    ):
+        adapters[kind] = direct(kind)
+    return adapters
 
 
 def test_only_gateway_uid_can_submit_lifecycle_request():
-    gateway_uid = 991
     system_control.authorize_peer(991, gateway_uid=991)
     with unittest.TestCase().assertRaises(PermissionError):
         system_control.authorize_peer(1000, gateway_uid=991)
+    with unittest.TestCase().assertRaises(PermissionError):
+        system_control.authorize_peer(True, gateway_uid=1)
 
 
-def test_gateway_and_guardian_cannot_enter_destructible_set():
-    with unittest.TestCase().assertRaisesRegex(ValueError, "survival"):
-        system_control.validate_destructible_units(
-            ["cointelprofessional-gateway.service"])
-
-
-def test_gateway_unit_is_also_protected():
-    with unittest.TestCase().assertRaisesRegex(ValueError, "survival"):
-        system_control.validate_destructible_units(
-            ["cointelprofessional-guardian.service"])
-
-
-def test_guardian_socket_is_also_protected():
-    with unittest.TestCase().assertRaisesRegex(ValueError, "survival"):
-        system_control.validate_destructible_units(
-            ["cointelprofessional-guardian.socket"])
-
-
-def test_lemond_service_is_destructible():
-    result = system_control.validate_destructible_units(["lemond.service"])
-    assert result == ["lemond.service"]
-
-
-def test_user_units_are_destructible():
-    for unit in (
-        "agent-models.service",
-        "agent-inference-arbiter.service",
-        "agent-fast-control.service",
-        "agent-control-worker.service",
-        "agent-notifier.service",
-        "agent-ecosystem.service",
-        "agent-ecosystem.path",
-        "agent-ecosystem.timer",
-        "agent-watchdog.service",
-        "agent-watchdog.timer",
-        "agent-resource-guard.service",
-    ):
-        result = system_control.validate_destructible_units([unit])
-        assert result == [unit], f"expected {unit} to be destructible"
-
-
-def test_empty_list_passes_validation():
-    result = system_control.validate_destructible_units([])
-    assert result == []
-
-
-def test_reset_kills_user_units_before_lemonade_start():
-    events: list[str] = []
-
-    def recording_adapters():
-        def record(action, unit):
-            events.append(action)
-            return {"action": action, "unit": unit, "state": "inactive"}
-        return {
-            "system": record,
-            "user": record,
-        }
-
-    run_effects_for("reset", recording_adapters())
-    assert events.index("kill_user_units") < events.index("stop_lemonade")
-    assert events.index("stop_lemonade") < events.index("start_lemonade")
-
-
-def test_restart_stops_units_before_Lemond_stop():
-    events: list[str] = []
-
-    def recording_adapters():
-        def record(action, unit):
-            events.append(action)
-            return {"action": action, "unit": unit, "state": "inactive"}
-        return {
-            "system": record,
-            "user": record,
-        }
-
-    run_effects_for("restart", recording_adapters())
-    assert events.index("stop_units") < events.index("stop_lemonade")
-    assert events.index("stop_lemonade") < events.index("start_lemonade")
-    assert events.index("start_lemonade") < events.index("start_units")
+def test_only_explicit_destructible_units_are_admitted():
+    for unit in system_control.SURVIVAL_UNITS:
+        with unittest.TestCase().assertRaisesRegex(ValueError, "survival"):
+            system_control.validate_destructible_units([unit])
+    with unittest.TestCase().assertRaisesRegex(ValueError, "allowlist"):
+        system_control.validate_destructible_units(["ssh.service"])
+    assert system_control.validate_destructible_units(["lemond.service"]) == [
+        "lemond.service"
+    ]
 
 
 def test_zero_exit_without_postcondition_is_failure():
     result = system_control.checked_action(
-        run=lambda *_: completed(0),
+        run=lambda: process_result(0),
         verify=lambda: False,
     )
-    assert result["ok"] is False
+    assert result == {"ok": False, "exit_code": 0}
 
 
-def test_nonzero_exit_is_failure():
+def test_nonzero_exit_with_postcondition_is_failure():
     result = system_control.checked_action(
-        run=lambda *_: completed(1),
+        run=lambda: process_result(1),
         verify=lambda: True,
     )
-    assert result["ok"] is False
+    assert result == {"ok": False, "exit_code": 1}
 
 
-def test_zero_exit_with_true_postcondition_is_success():
-    result = system_control.checked_action(
-        run=lambda *_: completed(0),
-        verify=lambda: True,
+def test_system_unit_uses_exact_argv_and_requires_inactive_empty_postcondition():
+    action_calls = []
+    query_calls = []
+    cgroup_calls = []
+
+    def runner(argv):
+        action_calls.append(argv)
+        return process_result(0, stdout="stopped\n", stderr="x" * 5000)
+
+    def query(argv):
+        query_calls.append(argv)
+        return process_result(3, stdout="inactive\n")
+
+    def cgroup(manager, unit, uid):
+        cgroup_calls.append((manager, unit, uid))
+        return {"empty": True, "path": "/system.slice/lemond.service"}
+
+    result = system_control.system_unit(
+        "stop", "lemond.service", runner=runner, query=query, cgroup=cgroup,
     )
+
+    assert action_calls == [["systemctl", "--system", "stop", "lemond.service"]]
+    assert query_calls == [[
+        "systemctl", "--system", "is-active", "lemond.service",
+    ]]
+    assert cgroup_calls == [("system", "lemond.service", None)]
     assert result["ok"] is True
+    assert result["state"] == "inactive"
+    assert result["cgroup_empty"] is True
+    assert len(result["stderr"]) == system_control.MAX_EFFECT_OUTPUT_BYTES
 
 
-def test_checked_action_returns_bounded_result():
-    result = system_control.checked_action(
-        run=lambda *_: completed(0),
-        verify=lambda: True,
+def test_user_unit_uses_configured_uid_and_exact_machine_argv():
+    action_calls = []
+    query_calls = []
+    cgroup_calls = []
+
+    def runner(argv):
+        action_calls.append(argv)
+        return process_result(0)
+
+    def query(argv):
+        query_calls.append(argv)
+        return process_result(0, stdout="active\n")
+
+    def cgroup(manager, unit, uid):
+        cgroup_calls.append((manager, unit, uid))
+        return {"empty": False, "path": "/user.slice/user-1000.slice"}
+
+    result = system_control.user_unit(
+        "start",
+        "agent-ecosystem.service",
+        uid=1000,
+        runner=runner,
+        query=query,
+        cgroup=cgroup,
     )
-    assert set(result) == {"ok", "exit_code"}
+
+    prefix = ["systemctl", "--user", "--machine=david@.host"]
+    assert action_calls == [prefix + ["start", "agent-ecosystem.service"]]
+    assert query_calls == [prefix + ["is-active", "agent-ecosystem.service"]]
+    assert cgroup_calls == [("user", "agent-ecosystem.service", 1000)]
     assert result["ok"] is True
-    assert result["exit_code"] == 0
+    assert result["state"] == "active"
 
 
-# ---------------------------------------------------------------------------
-# Step 2: advance_request tests
-# ---------------------------------------------------------------------------
+def test_zero_exit_and_state_without_cgroup_proof_is_failure():
+    result = system_control.system_unit(
+        "stop",
+        "lemond.service",
+        runner=lambda _argv: process_result(0),
+        query=lambda _argv: process_result(3, stdout="inactive\n"),
+        cgroup=lambda _manager, _unit, _uid: {
+            "empty": False,
+            "error": "cgroup unreadable",
+        },
+    )
+    assert result["ok"] is False
+    assert result["cgroup_empty"] is False
 
 
-def test_advance_request_writes_durable_phase_before_effect():
-    """advance_request must write the next durable phase before executing its effect."""
-    with tempfile.TemporaryDirectory() as tmp:
-        store = Path(tmp)
-        (store / "durable").mkdir()
-        durable_path = store / "durable" / "phase.json"
+def test_unit_adapters_reject_actions_and_units_before_calling_runner():
+    def fail_if_called(_argv):
+        raise AssertionError("runner must not be called")
 
-        effect_was_run = False
+    for call in (
+        lambda: system_control.system_unit(
+            "restart", "lemond.service", runner=fail_if_called,
+        ),
+        lambda: system_control.system_unit(
+            "stop", "cointelprofessional-gateway.service", runner=fail_if_called,
+        ),
+        lambda: system_control.user_unit(
+            "stop", "ssh.service", uid=1000, runner=fail_if_called,
+        ),
+        lambda: system_control.user_unit(
+            "stop", "agent-ecosystem.service", uid=None, runner=fail_if_called,
+        ),
+    ):
+        with unittest.TestCase().assertRaises(ValueError):
+            call()
 
-        def effect_runner(action, unit):
-            nonlocal effect_was_run
-            effect_was_run = True
-            return {"action": action, "unit": unit, "state": "inactive"}
 
-        adapters = {"system": effect_runner, "user": effect_runner}
+def test_lifecycle_effects_map_only_to_legal_allowlisted_systemctl_calls():
+    events = []
+    adapters = successful_adapters(events)
+    effects = (
+        {"kind": "stop_units", "request_id": "telegram-1", "phase": "stopping",
+         "idempotency_key": "telegram-1:stopping:stop_units"},
+        {"kind": "kill_units", "request_id": "telegram-1", "phase": "admission_closed",
+         "idempotency_key": "telegram-1:admission_closed:kill_units"},
+        {"kind": "stop_lemonade", "request_id": "telegram-1", "phase": "backend_stopped",
+         "idempotency_key": "telegram-1:backend_stopped:stop_lemonade"},
+        {"kind": "start_lemonade", "request_id": "telegram-1", "phase": "starting",
+         "idempotency_key": "telegram-1:starting:start_lemonade"},
+        {"kind": "start_units", "request_id": "telegram-1", "phase": "reconciling",
+         "idempotency_key": "telegram-1:reconciling:start_units"},
+    )
 
-        # Write initial phase
-        system_control._write_durable_phase(store, "accepted")
-        assert durable_path.exists()
+    for effect in effects:
+        result = system_control.execute_effect(effect, adapters, {})
+        assert result["ok"] is True
 
-        result = system_control.advance_request(
-            store, adapters, policy={"command": "reset", "max_retries": 3}
+    user_events = [event for event in events if event[0] == "user"]
+    system_events = [event for event in events if event[0] == "system"]
+    assert {event[1] for event in user_events} == {"start", "stop", "kill"}
+    assert {event[2] for event in user_events} == set(
+        system_control.DESTRUCTIBLE_USER_UNITS
+    )
+    assert system_events == [
+        ("system", "stop", "lemond.service"),
+        ("system", "start", "lemond.service"),
+    ]
+
+
+def test_execute_effect_rejects_a_mismatched_effect_identity():
+    effect = {
+        "kind": "stop_lemonade",
+        "request_id": "telegram-1",
+        "phase": "backend_stopped",
+        "idempotency_key": "telegram-1:backend_stopped:start_lemonade",
+    }
+    with unittest.TestCase().assertRaisesRegex(ValueError, "effect"):
+        system_control.execute_effect(effect, successful_adapters(), {})
+
+
+def test_advance_request_persists_reducer_state_before_every_external_action():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        path = system_control.accept_request(
+            store, command_record("reset"), previous_pause=False,
         )
-        assert "ok" in result
-        assert effect_was_run is True
-        phase = system_control._read_durable_phase(store)
-        assert phase == "completed"
+        observations = []
+
+        def observe(*_arguments):
+            state = read_request_state(path)
+            assert state["pending_effects"]
+            observations.append((
+                state["phase"], state["pending_effects"][0]["kind"],
+            ))
+
+        events = []
+        result = system_control.advance_request(
+            path,
+            successful_adapters(events, observe),
+            {"verified_event": {"kind": "ack_delivered"}},
+        )
+
+        assert result == {"ok": True, "phase": "completed", "remaining_effects": 0}
+        assert read_request_state(path)["phase"] == "completed"
+        assert observations[0] == ("admission_closed", "close_admission")
+        assert all(pending_kind in {
+            "close_admission", "kill_units", "stop_lemonade", "start_lemonade",
+            "start_units", "reconcile", "verify", "resume", "finish",
+        } for _phase, pending_kind in observations)
+
+        first_kill = events.index(next(event for event in events
+                                       if event[:2] == ("user", "kill")))
+        stop_lemonade = events.index(("system", "stop", "lemond.service"))
+        start_lemonade = events.index(("system", "start", "lemond.service"))
+        assert first_kill < stop_lemonade < start_lemonade
 
 
-def test_advance_request_picks_up_pending_effects():
-    """When effects already exist, advance should execute them."""
-    with tempfile.TemporaryDirectory() as tmp:
-        store = Path(tmp)
-        (store / "durable").mkdir()
-
-        run_count = [0]
-
-        def effect_runner(action, unit):
-            run_count[0] += 1
-            return {"action": action, "unit": unit, "state": "inactive"}
-
-        adapters = {"system": effect_runner, "user": effect_runner}
-        policy = {"command": "reset", "max_retries": 3}
-
-        # Create a proper command record with all required fields
-        command = {
-            "schema_version": 1,
-            "request_id": "telegram-1",
-            "telegram_update_id": 1,
-            "telegram_user_id": 42,
-            "command": "reset",
-            "received_at": "2026-09-04T00:00:00+00:00",
+def test_unverified_effect_result_is_durable_and_effect_remains_pending():
+    with tempfile.TemporaryDirectory() as temporary:
+        path = system_control.accept_request(
+            Path(temporary), command_record("reset"), previous_pause=False,
+        )
+        adapters = successful_adapters()
+        adapters["close_admission"] = lambda _effect, _policy: {
+            "ok": False,
+            "error": "admission latch not observed",
         }
-        state = system_control.new_lifecycle(command, previous_pause=False)
-        system_control._write_durable_state(store, state)
-
-        # Feed the first event to generate effects
-        state, effects = system_control.reduce_lifecycle(
-            state, {"kind": "ack_delivered"}
-        )
-        system_control._write_durable_state(store, state)
 
         result = system_control.advance_request(
-            store, adapters, policy=policy
+            path,
+            adapters,
+            {"verified_event": {"kind": "ack_delivered"}},
         )
-        assert "ok" in result
-        assert run_count[0] > 0
+
+        state = read_request_state(path)
+        assert result["ok"] is False
+        assert result["failed_effect"] == "telegram-1:admission_closed:close_admission"
+        assert [effect["kind"] for effect in state["pending_effects"]] == [
+            "close_admission", "kill_units",
+        ]
+        assert state["completed_effects"] == []
+        assert read_results(path)[-1]["ok"] is False
 
 
-# ---------------------------------------------------------------------------
-# Step 3: system_unit / user_unit tests
-# ---------------------------------------------------------------------------
+def test_durable_verified_result_is_written_before_reducer_completion_and_recovers():
+    with tempfile.TemporaryDirectory() as temporary:
+        path = system_control.accept_request(
+            Path(temporary), command_record("reset"), previous_pause=False,
+        )
+        calls = []
+        adapters = successful_adapters(calls)
+        real_reduce = system_control.lifecycle.reduce_lifecycle
+
+        def interrupt_after_result(state, event):
+            if event["kind"] == "effect_completed":
+                assert read_results(path)[-1]["ok"] is True
+                raise RuntimeError("simulated crash after durable result")
+            return real_reduce(state, event)
+
+        with patch.object(system_control.lifecycle, "reduce_lifecycle", interrupt_after_result):
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "simulated crash"):
+                system_control.advance_request(
+                    path,
+                    adapters,
+                    {"verified_event": {"kind": "ack_delivered"}},
+                )
+
+        state = read_request_state(path)
+        assert state["pending_effects"][0]["kind"] == "close_admission"
+        assert calls == [("close_admission",)]
+
+        recovered_adapters = successful_adapters()
+
+        def fail_if_replayed(_effect, _policy):
+            raise AssertionError("durably verified effect was replayed")
+
+        recovered_adapters["close_admission"] = fail_if_replayed
+        result = system_control.advance_request(
+            path,
+            recovered_adapters,
+            {"verified_event": {"kind": "ack_delivered"}},
+        )
+        assert result["ok"] is True
+        assert read_request_state(path)["phase"] == "completed"
 
 
-def test_system_unit_restart_returns_result():
-    result = system_control.system_unit("restart", "lemond.service")
-    assert "ok" in result
-    assert "exit_code" in result
+def test_accepted_request_without_verified_event_does_not_synthesize_effects():
+    with tempfile.TemporaryDirectory() as temporary:
+        path = system_control.accept_request(
+            Path(temporary), command_record("restart"), previous_pause=False,
+        )
+
+        def fail_if_called(*_arguments):
+            raise AssertionError("no reducer effect is pending")
+
+        result = system_control.advance_request(
+            path,
+            {"system": fail_if_called, "user": fail_if_called},
+            {},
+        )
+        assert result == {"ok": False, "phase": "accepted", "remaining_effects": 0}
 
 
-def test_system_unit_stop_returns_result():
-    result = system_control.system_unit("stop", "lemond.service")
-    assert "ok" in result
+def test_request_identity_replay_is_exact_and_reuses_one_lifecycle_path():
+    with tempfile.TemporaryDirectory() as temporary:
+        store = Path(temporary)
+        command = command_record("restart")
+        first = system_control.accept_request(store, command, previous_pause=True)
+        second = system_control.accept_request(store, command, previous_pause=True)
+        assert first == second
+        assert read_request_state(first)["previous_pause"] is True
+        with unittest.TestCase().assertRaisesRegex(ValueError, "identity"):
+            system_control.accept_request(
+                store,
+                command | {"telegram_user_id": 99},
+                previous_pause=True,
+            )
 
 
-def test_user_unit_action_returns_result():
-    result = system_control.user_unit("stop", "agent-ecosystem.service")
-    assert "ok" in result
+def guardian_environment(root):
+    return {
+        "GUARDIAN_SOCKET_PATH": str(root / "guardian.sock"),
+        "SURVIVAL_STORE_DIR": str(root / "state"),
+        "GUARDIAN_GATEWAY_UID": "991",
+        "USER_MANAGER_UID": "1000",
+    }
 
 
-def test_user_unit_kill_returns_result():
-    result = system_control.user_unit("kill", "agent-ecosystem.service")
-    assert "ok" in result
+def test_load_config_parses_one_explicit_gateway_and_user_manager_uid():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = system_control.load_production_config(guardian_environment(root))
+        assert config == {
+            "socket_path": str(root / "guardian.sock"),
+            "store_path": root / "state",
+            "gateway_uid": 991,
+            "user_manager_uid": 1000,
+        }
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+def test_load_config_rejects_missing_or_noncanonical_uid():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        environment = guardian_environment(root)
+        for name in ("GUARDIAN_GATEWAY_UID", "USER_MANAGER_UID"):
+            missing = dict(environment)
+            del missing[name]
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, name):
+                system_control.load_production_config(missing)
+        for value in ("", "-1", "+991", "0991", "not-a-uid"):
+            malformed = dict(environment) | {"GUARDIAN_GATEWAY_UID": value}
+            with unittest.TestCase().assertRaisesRegex(RuntimeError, "GUARDIAN_GATEWAY_UID"):
+                system_control.load_production_config(malformed)
 
-def run_effects_for(command: str, adapters: dict) -> list[str]:
-    """Run through the effect sequence for a command, recording effect kinds."""
-    # Use run_effects which iterates all effect kinds
-    return system_control.run_effects(command, adapters)
-
-
-# ---------------------------------------------------------------------------
-# load_config tests
-# ---------------------------------------------------------------------------
-
-
-def test_load_config_requires_socket_path():
-    with unittest.TestCase().assertRaisesRegex(RuntimeError, "GUARDIAN_SOCKET_PATH"):
-        system_control.load_production_config({"USER": "david"})
-
-
-def test_load_config_requires_user():
-    with tempfile.TemporaryDirectory() as tmp:
-        sock = Path(tmp) / "guardian.sock"
-        with unittest.TestCase().assertRaisesRegex(
-            RuntimeError, "GUARDIAN_ALLOWED_USER_IDS_PATH"
-        ):
-            system_control.load_production_config({
-                "USER": "david",
-                "GUARDIAN_SOCKET_PATH": str(sock),
-            })
-
-
-def test_load_config_reads_user_id_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        sock = tmp / "guardian.sock"
-        allowed = tmp / "allowed"
-        allowed.write_text("991\n", encoding="utf-8")
-        config = system_control.load_production_config({
-            "USER": "david",
-            "GUARDIAN_SOCKET_PATH": str(sock),
-            "GUARDIAN_ALLOWED_USER_IDS_PATH": str(allowed),
-        })
-        assert config["gateway_uid"] == 991
-        assert config["user"] == "david"
-        assert config["socket_path"] == str(sock)
-
-
-# ---------------------------------------------------------------------------
-# load_tests discovery
-# ---------------------------------------------------------------------------
 
 def load_tests(_loader, _tests, _pattern):
     functions = [

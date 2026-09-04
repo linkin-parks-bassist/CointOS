@@ -1,28 +1,25 @@
-"""Tests for survival guardian: framed socket, peer auth, lifecycle dispatch."""
+"""Behavioral tests for guardian authentication, framing, and lifecycle dispatch."""
 
 import json
 import os
 import socket
-import struct
-import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 
-from survival import guardian, protocol
+from survival import guardian, telegram_api
 
 
-def receive_exact(connection, size):
-    chunks = []
-    received = 0
-    while received < size:
-        chunk = connection.recv(size - received)
-        if not chunk:
-            raise RuntimeError("unexpected socket EOF")
-        chunks.append(chunk)
-        received += len(chunk)
-    return b"".join(chunks)
+def command_record(command="restart", update_id=42):
+    return {
+        "schema_version": 1,
+        "request_id": f"telegram-{update_id}",
+        "telegram_update_id": update_id,
+        "telegram_user_id": 42,
+        "command": command,
+        "received_at": "2026-09-04T00:00:00+00:00",
+    }
 
 
 def send_framed(connection, data):
@@ -30,281 +27,234 @@ def send_framed(connection, data):
     connection.sendall(len(encoded).to_bytes(4, "big") + encoded)
 
 
+def receive_exact(connection, size):
+    payload = bytearray()
+    while len(payload) < size:
+        chunk = connection.recv(size - len(payload))
+        if not chunk:
+            raise ConnectionError("unexpected socket EOF")
+        payload.extend(chunk)
+    return bytes(payload)
+
+
 def receive_framed(connection):
     size = int.from_bytes(receive_exact(connection, 4), "big")
-    if size <= 0 or size > 4096:
-        raise ValueError(f"invalid response size: {size}")
-    payload = receive_exact(connection, size)
-    return json.loads(payload)
+    return json.loads(receive_exact(connection, size))
 
 
-def make_command(update_id, user_id, text):
+def successful_adapters(events=None):
+    if events is None:
+        events = []
+
+    def manager(name):
+        def run(action, unit):
+            events.append((name, action, unit))
+            return {"ok": True, "action": action, "unit": unit}
+
+        return run
+
+    def direct(kind):
+        def run(_effect, _policy):
+            events.append((kind,))
+            return {"ok": True, "operation": kind}
+
+        return run
+
+    adapters = {"system": manager("system"), "user": manager("user")}
+    for kind in (
+        "notify", "close_admission", "checkpoint", "reconcile", "verify",
+        "resume", "finish",
+    ):
+        adapters[kind] = direct(kind)
+    return adapters
+
+
+def guardian_config(root, adapters=None):
+    if adapters is None:
+        adapters = successful_adapters()
     return {
-        "schema_version": 1,
-        "request_id": f"telegram-{update_id}",
-        "telegram_update_id": update_id,
-        "telegram_user_id": user_id,
-        "command": text.lower(),
-        "received_at": "2026-09-04T00:00:00+00:00",
+        "socket_path": str(root / "guardian.sock"),
+        "store_path": root / "state",
+        "gateway_uid": os.getuid(),
+        "user_manager_uid": os.getuid(),
+        "adapters": adapters,
     }
 
 
-def _run_guardian_server(config, stop_event):
-    """Run guardian accept loop until stop_event is set."""
-    server = guardian.start_server(config)
+def test_peer_uid_uses_unix_peer_credentials():
+    guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        while not stop_event.is_set():
+        assert guardian.peer_uid(guardian_end) == os.getuid()
+    finally:
+        guardian_end.close()
+        client_end.close()
+
+
+def test_only_gateway_uid_is_authorized():
+    guardian.authorize_peer(991, gateway_uid=991)
+    with unittest.TestCase().assertRaises(PermissionError):
+        guardian.authorize_peer(1000, gateway_uid=991)
+
+
+def test_send_framed_uses_four_byte_big_endian_length():
+    guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        acknowledgement = {
+            "schema_version": 1,
+            "request_id": "telegram-42",
+            "status": "accepted",
+        }
+        assert guardian._send_framed(guardian_end, acknowledgement) is True
+        header = receive_exact(client_end, 4)
+        payload = receive_exact(client_end, int.from_bytes(header, "big"))
+        assert header == len(payload).to_bytes(4, "big")
+        assert json.loads(payload) == acknowledgement
+    finally:
+        guardian_end.close()
+        client_end.close()
+
+
+def test_send_framed_rejects_oversize_json_instead_of_truncating_it():
+    guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        with unittest.TestCase().assertRaisesRegex(ValueError, "response size"):
+            guardian._send_framed(guardian_end, {"text": "x" * 5000})
+    finally:
+        guardian_end.close()
+        client_end.close()
+
+
+def test_successful_submission_emits_exact_task_3_acknowledgement():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            send_framed(client_end, command_record())
+            result = guardian.handle_one_request(guardian_end, config)
+            assert receive_framed(client_end) == {
+                "schema_version": 1,
+                "request_id": "telegram-42",
+                "status": "accepted",
+            }
+            assert result["ok"] is True
+            request_path = root / "state" / "lifecycle" / "telegram-42.json"
+            state = json.loads(request_path.read_text(encoding="utf-8"))["state"]
+            assert state["phase"] == "completed"
+        finally:
+            guardian_end.close()
+            client_end.close()
+
+
+def test_disconnected_response_peer_leaves_accepted_state_without_noisy_error():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        events = []
+        config = guardian_config(root, successful_adapters(events))
+        guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        send_framed(client_end, command_record(update_id=43))
+        client_end.close()
+        try:
+            result = guardian.handle_one_request(guardian_end, config)
+        finally:
+            guardian_end.close()
+
+        request_path = root / "state" / "lifecycle" / "telegram-43.json"
+        state = json.loads(request_path.read_text(encoding="utf-8"))["state"]
+        assert result is None
+        assert state["phase"] == "accepted"
+        assert state["pending_effects"] == []
+        assert events == []
+
+
+def test_unauthorized_request_is_not_acknowledged_or_persisted():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        guardian_end, client_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            send_framed(client_end, command_record())
+            result = guardian.handle_one_request(
+                guardian_end,
+                config,
+                get_peer_uid=lambda _connection: config["gateway_uid"] + 1,
+            )
+            assert result is None
+            client_end.settimeout(0.1)
+            with unittest.TestCase().assertRaises(socket.timeout):
+                client_end.recv(1)
+            assert not (root / "state" / "lifecycle").exists()
+        finally:
+            guardian_end.close()
+            client_end.close()
+
+
+def test_socket_server_and_task_3_client_interoperate_without_real_systemd():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        server = guardian.start_server(config)
+        errors = []
+
+        def serve_one():
             try:
                 connection, _address = server.accept()
-            except socket.timeout:
-                continue
-            try:
-                guardian.handle_one_request(connection, config)
-            finally:
-                connection.close()
-    finally:
-        server.close()
+                with connection:
+                    guardian.handle_one_request(connection, config)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=serve_one)
+        thread.start()
         try:
+            acknowledgement = telegram_api.submit_to_guardian(
+                config["socket_path"], command_record("reset", 44), timeout=2.0,
+            )
+        finally:
+            thread.join(timeout=2.0)
+            server.close()
+            try:
+                os.unlink(config["socket_path"])
+            except FileNotFoundError:
+                pass
+
+        assert thread.is_alive() is False
+        assert errors == []
+        assert acknowledgement == {
+            "schema_version": 1,
+            "request_id": "telegram-44",
+            "status": "accepted",
+        }
+
+
+def test_start_server_creates_the_configured_unix_socket():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        config = guardian_config(root)
+        server = guardian.start_server(config)
+        try:
+            assert Path(config["socket_path"]).is_socket()
+        finally:
+            server.close()
             os.unlink(config["socket_path"])
-        except OSError:
-            pass
 
 
-def _make_guardian_config(tmp_dir, socket_name="guardian.sock"):
-    """Create a guardian config that matches the current process uid."""
-    tmp = Path(tmp_dir)
-    socket_path = tmp / socket_name
-    allowed_path = tmp / "allowed"
-    gateway_uid = os.getuid()
-    allowed_path.write_text(f"{gateway_uid}\n", encoding="utf-8")
-    return guardian.load_production_config({
-        "USER": "david",
-        "GUARDIAN_SOCKET_PATH": str(socket_path),
-        "GUARDIAN_ALLOWED_USER_IDS_PATH": str(allowed_path),
-    })
+def test_load_production_config_delegates_explicit_identity_and_paths():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        environment = {
+            "GUARDIAN_SOCKET_PATH": str(root / "guardian.sock"),
+            "SURVIVAL_STORE_DIR": str(root / "state"),
+            "GUARDIAN_GATEWAY_UID": "991",
+            "USER_MANAGER_UID": "1000",
+        }
+        assert guardian.load_production_config(environment) == {
+            "socket_path": str(root / "guardian.sock"),
+            "store_path": root / "state",
+            "gateway_uid": 991,
+            "user_manager_uid": 1000,
+        }
 
-
-# ---------------------------------------------------------------------------
-# Peer authentication tests
-# ---------------------------------------------------------------------------
-
-
-def test_authorize_peer_rejects_non_gateway_uid():
-    with unittest.TestCase().assertRaises(PermissionError):
-        guardian.authorize_peer(999, gateway_uid=991)
-
-
-def test_authorize_peer_accepts_gateway_uid():
-    guardian.authorize_peer(991, gateway_uid=991)
-
-
-# ---------------------------------------------------------------------------
-# Framed socket server tests
-# ---------------------------------------------------------------------------
-
-
-def test_guardian_server_echoes_acknowledgement():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-        socket_path = config["socket_path"]
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            # Give the server time to bind
-            import time
-            time.sleep(0.1)
-
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(2.0)
-            client.connect(str(socket_path))
-
-            command = make_command(42, 991, "RESTART")
-            send_framed(client, command)
-            response = receive_framed(client)
-
-            assert response["request_id"] == "telegram-42"
-            assert response["status"] in ("accepted", "reducing")
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-            client.close()
-
-
-def test_guardian_server_rejects_invalid_framing():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-        socket_path = config["socket_path"]
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            import time
-            time.sleep(0.1)
-
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(2.0)
-            client.connect(str(socket_path))
-
-            # Send garbage that is not valid framing
-            client.sendall(b"not-valid-framing-at-all")
-            try:
-                receive_framed(client)
-            except (ValueError, RuntimeError, ConnectionError, struct.error):
-                pass  # Expected: bad framing is rejected
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-            client.close()
-
-
-def test_guardian_server_bounded_response_size():
-    """Response must be bounded (MAXIMUM_GUARDIAN_RESPONSE_BYTES)."""
-    assert guardian.MAXIMUM_GUARDIAN_RESPONSE_BYTES == 4096
-
-
-def test_guardian_server_framing_is_big_endian():
-    """Four-byte big-endian framing must be used."""
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-        socket_path = config["socket_path"]
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            import time
-            time.sleep(0.1)
-
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(2.0)
-            client.connect(str(socket_path))
-
-            command = make_command(43, 991, "RESET")
-            encoded = json.dumps(command, separators=(",", ":")).encode("utf-8")
-            frame = len(encoded).to_bytes(4, "big") + encoded
-            client.sendall(frame)
-
-            # Read size header
-            size_bytes = receive_exact(client, 4)
-            size = struct.unpack(">I", size_bytes)[0]
-            assert size > 0
-            assert size <= 4096
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-            client.close()
-
-
-# ---------------------------------------------------------------------------
-# start_server tests
-# ---------------------------------------------------------------------------
-
-
-def test_start_server_creates_socket_file():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-        socket_path = config["socket_path"]
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            import time
-            time.sleep(0.1)
-            assert Path(socket_path).exists()
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-
-
-def test_start_server_reuses_config():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            import time
-            time.sleep(0.1)
-            assert thread is not None
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-
-
-# ---------------------------------------------------------------------------
-# handle_one_request tests
-# ---------------------------------------------------------------------------
-
-
-def test_handle_one_request_returns_accepted():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-        socket_path = config["socket_path"]
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            import time
-            time.sleep(0.1)
-
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(2.0)
-            client.connect(str(socket_path))
-
-            command = make_command(50, 991, "RESTART")
-            send_framed(client, command)
-            response = receive_framed(client)
-
-            assert response["request_id"] == "telegram-50"
-            assert "status" in response
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-            client.close()
-
-
-# ---------------------------------------------------------------------------
-# peer_uid tests
-# ---------------------------------------------------------------------------
-
-
-def test_peer_uid_returns_pid():
-    with tempfile.TemporaryDirectory() as tmp:
-        config = _make_guardian_config(tmp)
-        socket_path = config["socket_path"]
-
-        stop_event = threading.Event()
-        thread = threading.Thread(target=_run_guardian_server, args=(config, stop_event))
-        thread.start()
-        try:
-            import time
-            time.sleep(0.1)
-
-            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            client.settimeout(2.0)
-            client.connect(str(socket_path))
-
-            uid = guardian.peer_uid(client)
-            assert isinstance(uid, int)
-            assert uid >= 0
-            # Close client before the server handler processes
-            client.close()
-            # Small delay to let the server finish
-            time.sleep(0.1)
-        finally:
-            stop_event.set()
-            thread.join(timeout=2)
-
-
-# ---------------------------------------------------------------------------
-# load_tests discovery
-# ---------------------------------------------------------------------------
 
 def load_tests(_loader, _tests, _pattern):
     functions = [
