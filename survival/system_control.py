@@ -78,7 +78,12 @@ CATALOG_CATEGORIES = (
     "activation_sources", "inference_prerequisites", "control_services",
     "ordinary_services", "inactive_units",
 )
+ACTIVITY_RESTORE_CATEGORIES = (
+    "inference_prerequisites", "control_services", "ordinary_services",
+    "activation_sources",
+)
 MODEL_HEALTH_FIELDS = frozenset(("host", "port", "path", "required_model"))
+LIVE_MODEL_STATUSES = frozenset(("ready", "busy", "in_use"))
 UNIT_ENTRY_FIELDS = frozenset(("unit", "required"))
 ACTIVE_JOB_STATES = frozenset(("claimed", "reserved", "running", "verifying"))
 JOB_TRANSITION_FIELDS = frozenset((
@@ -279,10 +284,10 @@ def _bounded_text(value) -> str:
     return value[:MAX_EFFECT_OUTPUT_BYTES]
 
 
-def _invoke(adapter, argv: list[str]) -> dict:
+def _invoke(adapter, argv: list[str], timeout: float) -> dict:
     try:
-        return _normalise_process_result(adapter(list(argv)))
-    except (OSError, subprocess.TimeoutExpired) as error:
+        return _normalise_process_result(adapter(list(argv), timeout=timeout))
+    except (OSError, subprocess.TimeoutExpired, TypeError) as error:
         return {
             "exit_code": -1,
             "stdout": "",
@@ -305,12 +310,19 @@ def _active_state(result: dict) -> str:
     return "unknown"
 
 
-def _query_cgroup_empty(manager: str, unit: str, uid: int | None, query) -> dict:
+def _query_cgroup_empty(
+    manager: str,
+    unit: str,
+    uid: int | None,
+    query,
+    timeout: float,
+) -> dict:
     show = _invoke(
         query,
         _manager_prefix(manager) + [
             "show", "--property=ControlGroup", "--value", unit,
         ],
+        timeout,
     )
     cgroup_path = show["stdout"].strip()
     result = {
@@ -376,6 +388,10 @@ def _unit_action(
     runner,
     query,
     cgroup,
+    deadline_seconds,
+    poll_seconds,
+    wait,
+    monotonic,
 ) -> dict:
     if action not in SYSTEMCTL_ACTIONS:
         raise ValueError(f"systemctl action is outside the allowlist: {action!r}")
@@ -386,55 +402,129 @@ def _unit_action(
         raise ValueError(f"unit is outside the {manager} allowlist: {unit}")
     if manager == "user" and (type(uid) is not int or uid < 0):
         raise ValueError("user manager uid must be configured explicitly")
+    for value, name in (
+        (deadline_seconds, "systemd action deadline"),
+        (poll_seconds, "systemd poll period"),
+    ):
+        if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"invalid {name}")
+    if not callable(runner) or not callable(query) or not callable(wait) or not callable(monotonic):
+        raise ValueError("invalid systemd action adapter")
+
+    started = monotonic()
+    if type(started) not in (int, float) or not math.isfinite(started):
+        raise ValueError("invalid monotonic observation")
+    deadline = started + deadline_seconds
+
+    def remaining():
+        observed = monotonic()
+        if type(observed) not in (int, float) or not math.isfinite(observed):
+            return 0.0
+        return max(0.0, deadline - observed)
+
+    def invoke_before_deadline(adapter, argv):
+        available = remaining()
+        if available <= 0:
+            return {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": "systemd action deadline expired",
+            }
+        return _invoke(adapter, argv, available)
 
     prefix = _manager_prefix(manager)
     if action == "status":
         action_result = {"exit_code": 0, "stdout": "", "stderr": ""}
     elif action in {"terminate", "kill"}:
         signal_name = "SIGTERM" if action == "terminate" else "SIGKILL"
-        action_result = _invoke(
+        action_result = invoke_before_deadline(
             runner,
             prefix + ["kill", "--kill-who=all", f"--signal={signal_name}", unit],
         )
     elif action == "reset_failed":
-        action_result = _invoke(runner, prefix + ["reset-failed", unit])
+        action_result = invoke_before_deadline(runner, prefix + ["reset-failed", unit])
     else:
-        action_result = _invoke(runner, prefix + [action, unit])
+        action_result = invoke_before_deadline(
+            runner, prefix + ["--no-block", action, unit],
+        )
     load_result = None
     installed = True
     if action == "status":
-        load_result = _invoke(
+        load_result = invoke_before_deadline(
             query,
             prefix + ["show", "--property=LoadState", "--value", unit],
         )
         installed = load_result["exit_code"] == 0 and load_result["stdout"].strip() == "loaded"
-    state_result = _invoke(query, prefix + ["is-active", unit])
-    state = _active_state(state_result) if installed else "not-found"
-    if action == "status":
-        cgroup_result = {"empty": False}
-    elif cgroup is None:
-        cgroup_result = _query_cgroup_empty(manager, unit, uid, query)
-    else:
-        try:
-            cgroup_result = _normalise_cgroup_result(cgroup(manager, unit, uid))
-        except OSError as error:
-            cgroup_result = {"empty": False, "error": _bounded_text(str(error))}
 
-    if action == "status":
-        postcondition = installed and state != "unknown"
-    elif action == "start":
-        postcondition = state == "active"
-    elif action == "stop":
-        postcondition = state == "inactive" and cgroup_result["empty"] is True
-    elif action == "kill":
-        postcondition = (
-            state in {"active", "inactive", "failed"}
-            and cgroup_result["empty"] is True
+    state_result = {"exit_code": -1, "stdout": "", "stderr": "not observed"}
+    job_result = {"exit_code": -1, "stdout": "", "stderr": "not observed"}
+    cgroup_result = {"empty": False, "error": "cgroup was not observed"}
+    state = "not-found" if not installed else "unknown"
+    manager_job_known = False
+    manager_job_pending = True
+    postcondition = False
+    while True:
+        state_result = invoke_before_deadline(query, prefix + ["is-active", unit])
+        state = _active_state(state_result) if installed else "not-found"
+        job_result = invoke_before_deadline(
+            query,
+            prefix + ["show", "--property=Job", "--value", unit],
         )
-    elif action == "reset_failed":
-        postcondition = state in {"active", "inactive"}
-    else:
-        postcondition = state in {"active", "inactive", "failed", "deactivating"}
+        manager_job_known = job_result["exit_code"] == 0
+        manager_job_pending = not manager_job_known or bool(job_result["stdout"].strip())
+        if action != "status":
+            available = remaining()
+            if available <= 0:
+                cgroup_result = {
+                    "empty": False,
+                    "error": "systemd action deadline expired before cgroup proof",
+                }
+            elif cgroup is None:
+                cgroup_result = _query_cgroup_empty(
+                    manager, unit, uid, query, available,
+                )
+            else:
+                try:
+                    cgroup_result = _normalise_cgroup_result(
+                        cgroup(manager, unit, uid, timeout=available),
+                    )
+                except (OSError, TypeError) as error:
+                    cgroup_result = {"empty": False, "error": _bounded_text(str(error))}
+
+        stable_manager = manager_job_known and not manager_job_pending
+        if action == "status":
+            postcondition = installed and state != "unknown"
+        elif action == "start":
+            postcondition = state == "active" and stable_manager
+        elif action == "stop":
+            postcondition = (
+                state in {"inactive", "failed"}
+                and cgroup_result["empty"] is True
+                and stable_manager
+            )
+        elif action == "kill":
+            postcondition = (
+                state in {"active", "inactive", "failed"}
+                and cgroup_result["empty"] is True
+                and stable_manager
+            )
+        elif action == "reset_failed":
+            postcondition = state in {"active", "inactive"} and stable_manager
+        else:
+            postcondition = state in {
+                "active", "inactive", "failed", "deactivating",
+            } and manager_job_known
+        postcondition = postcondition and remaining() > 0
+        if postcondition or action == "status" or remaining() <= 0:
+            break
+        wait(min(poll_seconds, remaining()))
+
+    safe_terminal = (
+        state in {"inactive", "failed"}
+        and cgroup_result["empty"] is True
+        and manager_job_known
+        and not manager_job_pending
+    )
     return {
         "ok": action_result["exit_code"] == 0 and postcondition,
         "action": action,
@@ -444,8 +534,11 @@ def _unit_action(
         "stderr": action_result["stderr"],
         "state": state,
         "state_query": state_result,
+        "manager_job_pending": manager_job_pending,
+        "manager_job_query": job_result,
         "cgroup_empty": cgroup_result["empty"],
         "cgroup": cgroup_result,
+        "safe_terminal": safe_terminal,
         "installed": installed,
         "load_query": load_result,
     }
@@ -458,9 +551,16 @@ def system_unit(
     runner=_subprocess_runner,
     query=_subprocess_runner,
     cgroup=None,
+    deadline_seconds=10.0,
+    poll_seconds=1.0,
+    wait=time.sleep,
+    monotonic=time.monotonic,
 ) -> dict:
     """Execute one allowlisted system-manager operation and verify its result."""
-    return _unit_action("system", action, unit, None, runner, query, cgroup)
+    return _unit_action(
+        "system", action, unit, None, runner, query, cgroup,
+        deadline_seconds, poll_seconds, wait, monotonic,
+    )
 
 
 def user_unit(
@@ -471,9 +571,16 @@ def user_unit(
     runner=_subprocess_runner,
     query=_subprocess_runner,
     cgroup=None,
+    deadline_seconds=10.0,
+    poll_seconds=1.0,
+    wait=time.sleep,
+    monotonic=time.monotonic,
 ) -> dict:
     """Execute one allowlisted user-manager operation for the configured uid."""
-    return _unit_action("user", action, unit, uid, runner, query, cgroup)
+    return _unit_action(
+        "user", action, unit, uid, runner, query, cgroup,
+        deadline_seconds, poll_seconds, wait, monotonic,
+    )
 
 
 def _validate_effect(effect: object) -> None:
@@ -528,7 +635,19 @@ def _stop_with_escalation(adapter, unit, immediate, policy, wait):
         cooperative = _manager_result(adapter, "stop", unit)
         results.append(cooperative)
         if cooperative.get("ok") is True:
-            return {"ok": True, "unit": unit, "stages": results}
+            return {
+                "ok": True,
+                "safe_terminal": True,
+                "unit": unit,
+                "stages": results,
+            }
+        if cooperative.get("safe_terminal") is True:
+            return {
+                "ok": False,
+                "safe_terminal": True,
+                "unit": unit,
+                "stages": results,
+            }
     results.append(_manager_result(adapter, "terminate", unit))
     wait(time_policy.seconds(
         policy["timing_policy"], "lifecycle", "terminate_grace_seconds",
@@ -540,11 +659,31 @@ def _stop_with_escalation(adapter, unit, immediate, policy, wait):
     ))
     stopped = _manager_result(adapter, "stop", unit)
     results.append(stopped)
+    safe_terminal = stopped.get("ok") is True or stopped.get("safe_terminal") is True
     return {
-        "ok": final.get("exit_code", 0) == 0 and stopped.get("ok") is True,
+        "ok": final.get("exit_code", 0) == 0 and safe_terminal,
+        "safe_terminal": safe_terminal,
         "unit": unit,
         "stages": results,
     }
+
+
+def _start_with_cleanup(adapter, unit, policy, wait):
+    reset = _manager_result(adapter, "reset_failed", unit)
+    results = [reset]
+    if reset.get("ok") is not True:
+        if reset.get("safe_terminal") is not True:
+            results.append(_stop_with_escalation(
+                adapter, unit, immediate=False, policy=policy, wait=wait,
+            ))
+        return results
+    started = _manager_result(adapter, "start", unit)
+    results.append(started)
+    if started.get("ok") is not True and started.get("safe_terminal") is not True:
+        results.append(_stop_with_escalation(
+            adapter, unit, immediate=False, policy=policy, wait=wait,
+        ))
+    return results
 
 
 def _runtime_path(policy, request_id):
@@ -644,22 +783,24 @@ def execute_effect(effect: dict, adapters: dict, policy: dict) -> dict:
             wait=wait,
         ))
     elif kind == "start_lemonade":
-        results.append(_manager_result(
-            system_adapter, "reset_failed", policy["lifecycle_catalog"]["backend_unit"],
-        ))
-        results.append(_manager_result(
-            system_adapter, "start", policy["lifecycle_catalog"]["backend_unit"],
+        results.extend(_start_with_cleanup(
+            system_adapter,
+            policy["lifecycle_catalog"]["backend_unit"],
+            policy,
+            wait,
         ))
     elif kind == "start_units":
         runtime = _read_runtime(policy, effect["request_id"])
         previous_active = set(runtime["previous_active_user_units"])
         for entry in _catalog_entries(policy, "inference_prerequisites"):
-            results.append(_manager_result(user_adapter, "reset_failed", entry["unit"]))
-            results.append(_manager_result(user_adapter, "start", entry["unit"]))
+            results.extend(_start_with_cleanup(
+                user_adapter, entry["unit"], policy, wait,
+            ))
         for entry in _catalog_entries(policy, "control_services"):
             if entry["unit"] in previous_active:
-                results.append(_manager_result(user_adapter, "reset_failed", entry["unit"]))
-                results.append(_manager_result(user_adapter, "start", entry["unit"]))
+                results.extend(_start_with_cleanup(
+                    user_adapter, entry["unit"], policy, wait,
+                ))
     else:
         return _normalise_effect_result(kind, effect_key, [{
             "ok": False,
@@ -1176,43 +1317,177 @@ def _critical_message(policy, effect, text, suffix):
     return {"ok": True, "message_id": identifier}
 
 
-def _default_model_probe(catalog, deadline):
+def _http_json_request(host, port, method, path, payload, timeout):
     import http.client
 
-    contract = catalog["model_health"]
     connection = http.client.HTTPConnection(
-        contract["host"], contract["port"], timeout=deadline,
+        host, port, timeout=timeout,
     )
     try:
-        connection.request("GET", contract["path"])
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        connection.request(
+            method,
+            path,
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer lemonade",
+            },
+        )
         response = connection.getresponse()
-        payload = response.read(MAX_EFFECT_OUTPUT_BYTES + 1)
+        response_payload = response.read(MAX_EFFECT_OUTPUT_BYTES + 1)
     except (OSError, TimeoutError) as error:
-        return {"ok": False, "error": _bounded_text(str(error))}
+        return {"status": None, "error": _bounded_text(str(error))}
     finally:
         connection.close()
-    if response.status != 200 or len(payload) > MAX_EFFECT_OUTPUT_BYTES:
-        return {"ok": False, "status": response.status}
+    if len(response_payload) > MAX_EFFECT_OUTPUT_BYTES:
+        return {"status": response.status, "error": "response exceeded bounded read"}
     try:
-        value = decode_json_object(payload, "Lemonade health")
+        value = decode_json_object(response_payload, "Lemonade response")
     except ValueError as error:
-        return {"ok": False, "error": str(error)}
-    expected = contract["required_model"]
-    models = value.get("all_models_loaded")
-    alive = type(models) is list and any(
-        type(item) is dict
-        and item.get("model_name") == expected
-        and item.get("loaded") is True
-        and item.get("status") in {"ready", "busy", "in_use"}
-        for item in models
+        return {"status": response.status, "error": str(error)}
+    return {"status": response.status, "value": value}
+
+
+def _positive_finite_seconds(value, name):
+    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"invalid {name}")
+    return float(value)
+
+
+def _model_probe_succeeded(catalog, result):
+    expected = catalog["model_health"]["required_model"]
+    return (
+        type(result) is dict
+        and result.get("ok") is True
+        and result.get("required_model") == expected
+        and result.get("model_name") == expected
+        and result.get("loaded") is True
+        and result.get("backend_alive") is True
+        and type(result.get("status")) is str
+        and result.get("status") in LIVE_MODEL_STATUSES
+        and result.get("inference_canary") is True
+        and type(result.get("health_status")) is int
+        and result["health_status"] == 200
+        and type(result.get("inference_status")) is int
+        and result["inference_status"] == 200
     )
-    return {"ok": alive, "required_model": expected}
+
+
+def _default_model_probe(
+    catalog,
+    deadline,
+    request=_http_json_request,
+    monotonic=time.monotonic,
+):
+    deadline_seconds = _positive_finite_seconds(deadline, "model canary deadline")
+    if not callable(request) or not callable(monotonic):
+        raise ValueError("invalid model canary adapter")
+    started = monotonic()
+    if type(started) not in (int, float) or not math.isfinite(started):
+        raise ValueError("invalid model canary clock")
+    absolute_deadline = started + deadline_seconds
+    contract = catalog["model_health"]
+    expected = contract["required_model"]
+    result = {
+        "ok": False,
+        "required_model": expected,
+        "model_name": None,
+        "loaded": None,
+        "status": None,
+        "backend_alive": None,
+        "inference_canary": False,
+        "health_status": None,
+        "inference_status": None,
+    }
+
+    def remaining():
+        observed = monotonic()
+        if type(observed) not in (int, float) or not math.isfinite(observed):
+            return 0.0
+        return max(0.0, absolute_deadline - observed)
+
+    health_timeout = remaining()
+    if health_timeout <= 0:
+        return result | {"error": "model canary deadline expired before health probe"}
+    health = request(
+        contract["host"],
+        contract["port"],
+        "GET",
+        contract["path"],
+        None,
+        health_timeout,
+    )
+    if type(health) is not dict:
+        return result | {"error": "invalid model health response"}
+    result["health_status"] = health.get("status")
+    value = health.get("value")
+    models = value.get("all_models_loaded") if type(value) is dict else None
+    matches = [
+        item for item in models
+        if type(item) is dict and item.get("model_name") == expected
+    ] if type(models) is list else []
+    if len(matches) != 1:
+        return result | {"error": "expected model health was not uniquely observed"}
+    model = matches[0]
+    for field in ("model_name", "loaded", "status", "backend_alive"):
+        result[field] = model.get(field)
+    if not (
+        type(result["health_status"]) is int
+        and result["health_status"] == 200
+        and result["model_name"] == expected
+        and result["loaded"] is True
+        and result["backend_alive"] is True
+        and type(result["status"]) is str
+        and result["status"] in LIVE_MODEL_STATUSES
+    ):
+        return result | {"error": "expected model is not live"}
+
+    inference_timeout = remaining()
+    if inference_timeout <= 0:
+        return result | {"error": "model canary deadline expired before inference"}
+    inference = request(
+        contract["host"],
+        contract["port"],
+        "POST",
+        "/v1/chat/completions",
+        {
+            "model": expected,
+            "messages": [{"role": "user", "content": "Reply with one short word."}],
+            "temperature": 0,
+            "max_tokens": 4,
+            "chat_template_kwargs": {"enable_thinking": False},
+        },
+        inference_timeout,
+    )
+    if type(inference) is not dict:
+        return result | {"error": "invalid inference canary response"}
+    result["inference_status"] = inference.get("status")
+    inference_value = inference.get("value")
+    choices = inference_value.get("choices") if type(inference_value) is dict else None
+    content = None
+    if type(choices) is list and len(choices) == 1 and type(choices[0]) is dict:
+        message = choices[0].get("message")
+        if type(message) is dict:
+            content = message.get("content")
+    result["inference_canary"] = (
+        remaining() > 0
+        and type(result["inference_status"]) is int
+        and result["inference_status"] == 200
+        and type(content) is str
+        and bool(content.strip())
+    )
+    result["ok"] = True
+    result["ok"] = _model_probe_succeeded(catalog, result)
+    if result["ok"] is not True:
+        result["error"] = "bounded inference canary failed"
+    return result
 
 
 def _runtime_snapshot(config, request_id, observe_user):
     request = _read_request(_request_path(config["store_path"], request_id))
     previous_active = []
-    for category in CATALOG_CATEGORIES:
+    for category in ACTIVITY_RESTORE_CATEGORIES:
         for entry in config["lifecycle_catalog"]["user_units"][category]:
             if observe_user(entry["unit"]) == "active":
                 previous_active.append(entry["unit"])
@@ -1225,13 +1500,7 @@ def _runtime_snapshot(config, request_id, observe_user):
     }
 
 
-def _ensure_admission_closed(config, effect, observe_user, sync):
-    runtime_path = _runtime_path(config, effect["request_id"])
-    if runtime_path.exists():
-        runtime = _read_runtime(config, effect["request_id"])
-    else:
-        runtime = _runtime_snapshot(config, effect["request_id"], observe_user)
-        _write_runtime(config, runtime)
+def _ensure_pause_marker(config, effect):
     paused = Path(config["agent_state_path"]) / "PAUSED"
     if not paused.exists():
         records.atomic_json(paused, {
@@ -1239,6 +1508,17 @@ def _ensure_admission_closed(config, effect, observe_user, sync):
             "request_id": effect["request_id"],
             "state": "lifecycle_paused",
         })
+    return paused
+
+
+def _ensure_admission_closed(config, effect, observe_user, sync):
+    runtime_path = _runtime_path(config, effect["request_id"])
+    if runtime_path.exists():
+        runtime = _read_runtime(config, effect["request_id"])
+    else:
+        runtime = _runtime_snapshot(config, effect["request_id"], observe_user)
+        _write_runtime(config, runtime)
+    paused = _ensure_pause_marker(config, effect)
     if not paused.exists():
         return {"ok": False, "error": "admission pause was not observed"}
     request = _read_request(_request_path(config["store_path"], effect["request_id"]))
@@ -1482,48 +1762,66 @@ def _reconcile_runtime(config, effect):
     }
 
 
-def _restore_inference_state(config, effect, user_adapter, wait):
+def restore_runtime_activity(
+    config,
+    effect,
+    user_adapter,
+    wait,
+    reopen_admission: bool,
+):
+    """Restore the captured unit activity, then optionally reopen ordinary work."""
+    if type(reopen_admission) is not bool:
+        raise ValueError("invalid admission restoration policy")
     runtime = _read_runtime(config, effect["request_id"])
+    paused = _ensure_pause_marker(config, effect)
     prior_active = set(runtime["previous_active_user_units"])
     results = []
-    for entry in config["lifecycle_catalog"]["user_units"]["inference_prerequisites"]:
-        if entry["unit"] not in prior_active:
-            results.append(_stop_with_escalation(
-                user_adapter,
-                entry["unit"],
-                immediate=False,
-                policy=config,
-                wait=wait,
+    for category in reversed(ACTIVITY_RESTORE_CATEGORIES):
+        for entry in config["lifecycle_catalog"]["user_units"][category]:
+            if entry["unit"] not in prior_active:
+                results.append(_stop_with_escalation(
+                    user_adapter,
+                    entry["unit"],
+                    immediate=False,
+                    policy=config,
+                    wait=wait,
+                ))
+    for category in ACTIVITY_RESTORE_CATEGORIES:
+        for entry in config["lifecycle_catalog"]["user_units"][category]:
+            if entry["unit"] not in prior_active:
+                continue
+            results.extend(_start_with_cleanup(
+                user_adapter, entry["unit"], config, wait,
             ))
-    return results
+
+    activity_restored = all(result.get("ok") is True for result in results)
+    if activity_restored and reopen_admission:
+        for identifier in runtime["interrupted_jobs"]:
+            path = Path(config["agent_state_path"]) / "jobs" / f"{identifier}.json"
+            if not path.exists():
+                continue
+            job = _agent_record(path)
+            if (
+                job.get("state") != "interrupted"
+                or job.get("interrupted_by") != effect["request_id"]
+            ):
+                continue
+            job["state"] = "ready" if job.get("resume_available") is True else "queued"
+            job["updated_at"] = datetime.now(timezone.utc).isoformat()
+            _write_agent_record(path, job)
+        paused.unlink(missing_ok=True)
+    admission_restored = not paused.exists() if reopen_admission else paused.exists()
+    return {
+        "ok": activity_restored and admission_restored,
+        "activity_results": results,
+        "reopen_admission": reopen_admission,
+    }
 
 
 def _resume_runtime(config, effect, user_adapter, wait):
-    runtime = _read_runtime(config, effect["request_id"])
-    for identifier in runtime["interrupted_jobs"]:
-        path = Path(config["agent_state_path"]) / "jobs" / f"{identifier}.json"
-        if not path.exists():
-            continue
-        job = _agent_record(path)
-        if job.get("state") != "interrupted" or job.get("interrupted_by") != effect["request_id"]:
-            continue
-        job["state"] = "ready" if job.get("resume_available") is True else "queued"
-        job["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _write_agent_record(path, job)
-    results = _restore_inference_state(config, effect, user_adapter, wait)
-    prior_active = set(runtime["previous_active_user_units"])
-    for entry in config["lifecycle_catalog"]["user_units"]["ordinary_services"]:
-        if entry["unit"] in prior_active:
-            results.append(_manager_result(user_adapter, "start", entry["unit"]))
-    for entry in config["lifecycle_catalog"]["user_units"]["activation_sources"]:
-        if entry["unit"] in prior_active:
-            results.append(_manager_result(user_adapter, "start", entry["unit"]))
-    paused = Path(config["agent_state_path"]) / "PAUSED"
-    paused.unlink(missing_ok=True)
-    return {
-        "ok": all(result.get("ok") is True for result in results) and not paused.exists(),
-        "activation_results": results,
-    }
+    return restore_runtime_activity(
+        config, effect, user_adapter, wait, reopen_admission=True,
+    )
 
 
 def _verify_runtime(config, effect, observe_system, observe_user, model_probe):
@@ -1566,7 +1864,10 @@ def _verify_runtime(config, effect, observe_system, observe_user, model_probe):
             config["timing_policy"], "inference", "health_verification_deadline_seconds",
         ),
     )
-    checks.append({"name": "fast_model_canary", "ok": canary.get("ok") is True})
+    checks.append({
+        "name": "fast_model_canary",
+        "ok": _model_probe_succeeded(catalogue, canary),
+    })
     return {"ok": all(check["ok"] for check in checks), "checks": checks, "canary": canary}
 
 
@@ -1795,11 +2096,26 @@ def production_adapters(
                 section, key = "inference", "model_stop_deadline_seconds"
             else:
                 section, key = "lifecycle", "service_stop_deadline_seconds"
-            deadline = time_policy.seconds(config["timing_policy"], section, key)
-            run = lambda argv: _subprocess_runner(
-                argv, timeout=deadline, heartbeat=heartbeat,
+            deadline_seconds = time_policy.seconds(config["timing_policy"], section, key)
+            poll_seconds = time_policy.seconds(
+                config["timing_policy"], "heartbeat", "guardian_poll_seconds",
             )
-            return system_unit(action, unit, runner=run, query=run)
+
+            def run(argv, *, timeout):
+                return _subprocess_runner(
+                    argv, timeout=timeout, heartbeat=heartbeat,
+                )
+
+            return system_unit(
+                action,
+                unit,
+                runner=run,
+                query=run,
+                deadline_seconds=deadline_seconds,
+                poll_seconds=poll_seconds,
+                wait=progress_wait,
+                monotonic=monotonic,
+            )
 
     if user_adapter is None:
         def user_adapter(action, unit):
@@ -1807,12 +2123,26 @@ def production_adapters(
                 section, key = "inference", "model_start_deadline_seconds"
             else:
                 section, key = "lifecycle", "service_stop_deadline_seconds"
-            deadline = time_policy.seconds(config["timing_policy"], section, key)
-            run = lambda argv: _subprocess_runner(
-                argv, timeout=deadline, heartbeat=heartbeat,
+            deadline_seconds = time_policy.seconds(config["timing_policy"], section, key)
+            poll_seconds = time_policy.seconds(
+                config["timing_policy"], "heartbeat", "guardian_poll_seconds",
             )
+
+            def run(argv, *, timeout):
+                return _subprocess_runner(
+                    argv, timeout=timeout, heartbeat=heartbeat,
+                )
+
             return user_unit(
-                action, unit, uid=user_manager_uid, runner=run, query=run,
+                action,
+                unit,
+                uid=user_manager_uid,
+                runner=run,
+                query=run,
+                deadline_seconds=deadline_seconds,
+                poll_seconds=poll_seconds,
+                wait=progress_wait,
+                monotonic=monotonic,
             )
 
     if observe_system is None:
@@ -1856,13 +2186,18 @@ def production_adapters(
         return _resume_runtime(config, effect, user_adapter, progress_wait)
 
     def finish(effect, _policy):
-        restoration = _restore_inference_state(
-            config, effect, user_adapter, progress_wait,
+        runtime = _read_runtime(config, effect["request_id"])
+        restoration = restore_runtime_activity(
+            config,
+            effect,
+            user_adapter,
+            progress_wait,
+            reopen_admission=not runtime["previous_pause"],
         )
-        if not all(result.get("ok") is True for result in restoration):
+        if restoration["ok"] is not True:
             return {
                 "ok": False,
-                "error": "prior inference state was not restored",
+                "error": "prior runtime activity was not restored",
                 "restoration": restoration,
             }
         records.atomic_json(

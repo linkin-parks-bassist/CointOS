@@ -1,5 +1,6 @@
 """Behavioral tests for the immutable survival system-control boundary."""
 
+import io
 import json
 import os
 import signal
@@ -27,6 +28,21 @@ def command_record(command="reset", update_id=1):
 
 def process_result(exit_code=0, stdout="", stderr=""):
     return {"exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+
+
+def successful_model_probe(catalog, _deadline):
+    expected = catalog["model_health"]["required_model"]
+    return {
+        "ok": True,
+        "required_model": expected,
+        "model_name": expected,
+        "loaded": True,
+        "status": "ready",
+        "backend_alive": True,
+        "inference_canary": True,
+        "health_status": 200,
+        "inference_status": 200,
+    }
 
 
 def read_request_state(path):
@@ -141,15 +157,20 @@ def test_system_unit_uses_exact_argv_and_requires_inactive_empty_postcondition()
     query_calls = []
     cgroup_calls = []
 
-    def runner(argv):
+    def runner(argv, *, timeout):
+        assert timeout > 0
         action_calls.append(argv)
         return process_result(0, stdout="stopped\n", stderr="x" * 5000)
 
-    def query(argv):
+    def query(argv, *, timeout):
+        assert timeout > 0
         query_calls.append(argv)
+        if "--property=Job" in argv:
+            return process_result(0, stdout="\n")
         return process_result(3, stdout="inactive\n")
 
-    def cgroup(manager, unit, uid):
+    def cgroup(manager, unit, uid, *, timeout):
+        assert timeout > 0
         cgroup_calls.append((manager, unit, uid))
         return {"empty": True, "path": "/system.slice/lemond.service"}
 
@@ -157,10 +178,16 @@ def test_system_unit_uses_exact_argv_and_requires_inactive_empty_postcondition()
         "stop", "lemond.service", runner=runner, query=query, cgroup=cgroup,
     )
 
-    assert action_calls == [["systemctl", "--system", "stop", "lemond.service"]]
-    assert query_calls == [[
-        "systemctl", "--system", "is-active", "lemond.service",
+    assert action_calls == [[
+        "systemctl", "--system", "--no-block", "stop", "lemond.service",
     ]]
+    assert query_calls == [
+        ["systemctl", "--system", "is-active", "lemond.service"],
+        [
+            "systemctl", "--system", "show", "--property=Job", "--value",
+            "lemond.service",
+        ],
+    ]
     assert cgroup_calls == [("system", "lemond.service", None)]
     assert result["ok"] is True
     assert result["state"] == "inactive"
@@ -173,15 +200,20 @@ def test_user_unit_uses_configured_uid_and_exact_machine_argv():
     query_calls = []
     cgroup_calls = []
 
-    def runner(argv):
+    def runner(argv, *, timeout):
+        assert timeout > 0
         action_calls.append(argv)
         return process_result(0)
 
-    def query(argv):
+    def query(argv, *, timeout):
+        assert timeout > 0
         query_calls.append(argv)
+        if "--property=Job" in argv:
+            return process_result(0, stdout="\n")
         return process_result(0, stdout="active\n")
 
-    def cgroup(manager, unit, uid):
+    def cgroup(manager, unit, uid, *, timeout):
+        assert timeout > 0
         cgroup_calls.append((manager, unit, uid))
         return {"empty": False, "path": "/user.slice/user-1000.slice"}
 
@@ -195,8 +227,15 @@ def test_user_unit_uses_configured_uid_and_exact_machine_argv():
     )
 
     prefix = ["systemctl", "--user", "--machine=david@.host"]
-    assert action_calls == [prefix + ["start", "agent-ecosystem.service"]]
-    assert query_calls == [prefix + ["is-active", "agent-ecosystem.service"]]
+    assert action_calls == [
+        prefix + ["--no-block", "start", "agent-ecosystem.service"],
+    ]
+    assert query_calls == [
+        prefix + ["is-active", "agent-ecosystem.service"],
+        prefix + [
+            "show", "--property=Job", "--value", "agent-ecosystem.service",
+        ],
+    ]
     assert cgroup_calls == [("user", "agent-ecosystem.service", 1000)]
     assert result["ok"] is True
     assert result["state"] == "active"
@@ -206,20 +245,27 @@ def test_zero_exit_and_state_without_cgroup_proof_is_failure():
     result = system_control.system_unit(
         "stop",
         "lemond.service",
-        runner=lambda _argv: process_result(0),
-        query=lambda _argv: process_result(3, stdout="inactive\n"),
-        cgroup=lambda _manager, _unit, _uid: {
+        runner=lambda _argv, *, timeout: process_result(0),
+        query=lambda argv, *, timeout: process_result(
+            0 if "--property=Job" in argv else 3,
+            stdout="\n" if "--property=Job" in argv else "inactive\n",
+        ),
+        cgroup=lambda _manager, _unit, _uid, *, timeout: {
             "empty": False,
             "error": "cgroup unreadable",
         },
+        deadline_seconds=0.01,
+        poll_seconds=0.01,
     )
     assert result["ok"] is False
     assert result["cgroup_empty"] is False
 
 
 def test_inactive_unit_with_no_realized_cgroup_is_verified_empty():
-    def query(argv):
+    def query(argv, *, timeout):
         if "--property=ControlGroup" in argv:
+            return process_result(0, stdout="\n")
+        if "--property=Job" in argv:
             return process_result(0, stdout="\n")
         return process_result(3, stdout="inactive\n")
 
@@ -227,7 +273,7 @@ def test_inactive_unit_with_no_realized_cgroup_is_verified_empty():
         "stop",
         "agent-telegram.service",
         uid=1000,
-        runner=lambda _argv: process_result(0),
+        runner=lambda _argv, *, timeout: process_result(0),
         query=query,
     )
 
@@ -237,19 +283,38 @@ def test_inactive_unit_with_no_realized_cgroup_is_verified_empty():
     assert result["cgroup"]["path"] == ""
 
 
+def test_missing_or_malformed_cgroup_population_is_indeterminate():
+    def query(_argv, *, timeout):
+        assert timeout > 0
+        return process_result(0, stdout="/system.slice/lemond.service\n")
+
+    for events in ("frozen 0\n", "populated maybe\n", "populated\n"):
+        with patch.object(Path, "open", return_value=io.StringIO(events)):
+            result = system_control._query_cgroup_empty(
+                "system", "lemond.service", None, query, timeout=1.0,
+            )
+        assert result["empty"] is False
+        assert result.get("error"), events
+
+
 def test_reset_failed_uses_exact_allowlisted_systemctl_argv():
     calls = []
 
-    def runner(argv):
+    def runner(argv, *, timeout):
         calls.append(argv)
         return process_result(0)
+
+    def query(argv, *, timeout):
+        if "--property=Job" in argv:
+            return process_result(0, stdout="\n")
+        return process_result(3, stdout="inactive\n")
 
     result = system_control.system_unit(
         "reset_failed",
         "lemond.service",
         runner=runner,
-        query=lambda _argv: process_result(3, stdout="inactive\n"),
-        cgroup=lambda *_args: {"empty": True},
+        query=query,
+        cgroup=lambda *_args, timeout: {"empty": True},
     )
 
     assert result["ok"] is True
@@ -281,20 +346,415 @@ def test_unit_adapters_reject_actions_and_units_before_calling_runner():
 def test_status_distinguishes_an_uninstalled_required_unit():
     calls = []
 
-    def query(argv):
+    def query(argv, *, timeout):
         calls.append(argv)
         if "--property=LoadState" in argv:
             return process_result(0, stdout="not-found\n")
-        return process_result(4, stdout="inactive\n")
+        if "--property=Job" in argv:
+            return process_result(0, stdout="\n")
+        return process_result(0, stdout="active\n")
 
     result = system_control.user_unit(
         "status", "agent-models.service", uid=1000,
         query=query,
-        cgroup=lambda *_args: {"empty": True},
+        cgroup=lambda *_args, timeout: {"empty": True},
     )
     assert result["installed"] is False
     assert result["state"] == "not-found"
     assert any("--property=LoadState" in call for call in calls)
+
+
+def test_semantic_unit_action_uses_one_deadline_for_action_and_all_probes():
+    clock = {"now": 100.0, "state_reads": 0}
+    calls = []
+
+    def monotonic():
+        return clock["now"]
+
+    def consume(kind, argv, timeout, duration):
+        assert timeout > 0
+        calls.append((kind, list(argv), timeout))
+        clock["now"] += duration
+
+    def runner(argv, *, timeout):
+        consume("action", argv, timeout, 2.0)
+        return process_result(0)
+
+    def query(argv, *, timeout):
+        if "is-active" in argv:
+            clock["state_reads"] += 1
+            consume("state", argv, timeout, 1.0 if clock["state_reads"] == 1 else 0.25)
+            state = "deactivating" if clock["state_reads"] == 1 else "inactive"
+            return process_result(3, stdout=f"{state}\n")
+        assert "--property=Job" in argv
+        consume("job", argv, timeout, 1.0 if clock["state_reads"] == 1 else 0.25)
+        job = "17 stop" if clock["state_reads"] == 1 else ""
+        return process_result(0, stdout=f"{job}\n")
+
+    def cgroup(_manager, _unit, _uid, *, timeout):
+        consume("cgroup", [], timeout, 1.0 if clock["state_reads"] == 1 else 0.25)
+        return {"empty": clock["state_reads"] > 1}
+
+    def wait(seconds):
+        calls.append(("wait", [], seconds))
+        clock["now"] += seconds
+
+    result = system_control.system_unit(
+        "stop",
+        "lemond.service",
+        runner=runner,
+        query=query,
+        cgroup=cgroup,
+        deadline_seconds=7.0,
+        poll_seconds=1.0,
+        wait=wait,
+        monotonic=monotonic,
+    )
+
+    assert result["ok"] is True
+    assert result["manager_job_pending"] is False
+    assert clock["now"] == 106.75
+    assert [call[2] for call in calls if call[0] != "wait"] == [
+        7.0, 5.0, 4.0, 3.0, 1.0, 0.75, 0.5,
+    ]
+    assert calls[0][1] == [
+        "systemctl", "--system", "--no-block", "stop", "lemond.service",
+    ]
+
+
+def test_postcondition_observed_at_the_deadline_is_too_late_for_success():
+    clock = {"now": 10.0}
+
+    def monotonic():
+        return clock["now"]
+
+    def query(argv, *, timeout):
+        clock["now"] += 0.5
+        if "is-active" in argv:
+            return process_result(3, stdout="inactive\n")
+        return process_result(0, stdout="\n")
+
+    def cgroup(_manager, _unit, _uid, *, timeout):
+        clock["now"] += timeout
+        return {"empty": True}
+
+    result = system_control.system_unit(
+        "stop",
+        "lemond.service",
+        runner=lambda _argv, *, timeout: process_result(0),
+        query=query,
+        cgroup=cgroup,
+        deadline_seconds=2.0,
+        poll_seconds=0.5,
+        wait=lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+        monotonic=monotonic,
+    )
+
+    assert clock["now"] == 12.0
+    assert result["safe_terminal"] is True
+    assert result["ok"] is False
+
+
+def test_pending_manager_job_prevents_a_safe_terminal_claim_at_deadline():
+    clock = {"now": 10.0}
+
+    def monotonic():
+        return clock["now"]
+
+    def runner(_argv, *, timeout):
+        assert timeout == 2.0
+        return process_result(0)
+
+    def query(argv, *, timeout):
+        assert 0 < timeout <= 2.0
+        if "is-active" in argv:
+            return process_result(3, stdout="inactive\n")
+        return process_result(0, stdout="81 stop\n")
+
+    def wait(seconds):
+        clock["now"] += seconds
+
+    result = system_control.system_unit(
+        "stop",
+        "lemond.service",
+        runner=runner,
+        query=query,
+        cgroup=lambda _manager, _unit, _uid, *, timeout: {"empty": timeout > 0},
+        deadline_seconds=2.0,
+        poll_seconds=0.5,
+        wait=wait,
+        monotonic=monotonic,
+    )
+
+    assert clock["now"] == 12.0
+    assert result["ok"] is False
+    assert result["safe_terminal"] is False
+    assert result["manager_job_pending"] is True
+
+
+def test_failed_start_is_cancelled_and_escalated_before_effect_failure_returns():
+    actions = []
+
+    def system_adapter(action, unit):
+        actions.append((action, unit))
+        if action == "start":
+            return {"ok": False, "safe_terminal": False, "state": "activating"}
+        if action == "stop" and actions.count(("stop", unit)) == 1:
+            return {"ok": False, "safe_terminal": False, "state": "deactivating"}
+        return {
+            "ok": True,
+            "safe_terminal": action in {"stop", "kill"},
+            "exit_code": 0,
+            "state": "inactive" if action in {"stop", "kill"} else "active",
+            "cgroup_empty": action in {"stop", "kill"},
+        }
+
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = lifecycle_policy(Path(temporary))
+        adapters = successful_adapters()
+        adapters["system"] = system_adapter
+        result = system_control.execute_effect({
+            "kind": "start_lemonade",
+            "request_id": "telegram-1",
+            "phase": "starting",
+            "idempotency_key": "telegram-1:starting:start_lemonade",
+        }, adapters, policy)
+
+    assert result["ok"] is False
+    assert actions == [
+        ("reset_failed", "lemond.service"),
+        ("start", "lemond.service"),
+        ("stop", "lemond.service"),
+        ("terminate", "lemond.service"),
+        ("kill", "lemond.service"),
+        ("stop", "lemond.service"),
+    ]
+    cleanup = result["results"][-1]
+    assert cleanup["ok"] is True
+    assert cleanup["safe_terminal"] is True
+
+
+def test_failed_reset_never_starts_and_is_made_safe_before_failure_returns():
+    actions = []
+
+    def system_adapter(action, unit):
+        actions.append((action, unit))
+        if action == "reset_failed":
+            return {"ok": False, "safe_terminal": False, "state": "unknown"}
+        return {
+            "ok": True,
+            "safe_terminal": action in {"stop", "kill"},
+            "exit_code": 0,
+            "state": "inactive",
+            "cgroup_empty": True,
+        }
+
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = lifecycle_policy(Path(temporary))
+        adapters = successful_adapters()
+        adapters["system"] = system_adapter
+        result = system_control.execute_effect({
+            "kind": "start_lemonade",
+            "request_id": "telegram-1",
+            "phase": "starting",
+            "idempotency_key": "telegram-1:starting:start_lemonade",
+        }, adapters, policy)
+
+    assert result["ok"] is False
+    assert actions == [
+        ("reset_failed", "lemond.service"),
+        ("stop", "lemond.service"),
+    ]
+    assert result["results"][-1]["safe_terminal"] is True
+
+
+def test_backend_gate_rejects_every_incomplete_or_malformed_live_model_fact():
+    with tempfile.TemporaryDirectory() as temporary:
+        policy = lifecycle_policy(Path(temporary))
+        expected = policy["lifecycle_catalog"]["model_health"]["required_model"]
+        valid = {
+            "ok": True,
+            "required_model": expected,
+            "model_name": expected,
+            "loaded": True,
+            "status": "ready",
+            "backend_alive": True,
+            "inference_canary": True,
+            "health_status": 200,
+            "inference_status": 200,
+        }
+
+        def observe_user(unit):
+            active = {
+                entry["unit"]
+                for category in ("inference_prerequisites", "control_services")
+                for entry in policy["lifecycle_catalog"]["user_units"][category]
+            }
+            return "active" if unit in active else "inactive"
+
+        cases = (
+            {**valid, "model_name": "wrong-model"},
+            {**valid, "required_model": "wrong-model"},
+            {key: value for key, value in valid.items() if key != "backend_alive"},
+            {**valid, "backend_alive": False},
+            {**valid, "backend_alive": "true"},
+            {**valid, "backend_alive": 1},
+            {**valid, "loaded": False},
+            {**valid, "loaded": "true"},
+            {**valid, "loaded": 1},
+            {key: value for key, value in valid.items() if key != "status"},
+            {**valid, "status": "warming"},
+            {**valid, "status": []},
+            {**valid, "inference_canary": False},
+            {**valid, "inference_canary": "true"},
+            {**valid, "health_status": True},
+            {**valid, "health_status": float("nan")},
+            {**valid, "inference_status": float("inf")},
+            {**valid, "ok": False},
+        )
+        for observation in cases:
+            result = system_control._verify_runtime(
+                policy,
+                {"request_id": "telegram-1"},
+                observe_system=lambda _unit: "active",
+                observe_user=observe_user,
+                model_probe=lambda _catalog, _deadline, value=observation: value,
+            )
+            assert result["ok"] is False, observation
+
+        accepted = system_control._verify_runtime(
+            policy,
+            {"request_id": "telegram-1"},
+            observe_system=lambda _unit: "active",
+            observe_user=observe_user,
+            model_probe=lambda _catalog, _deadline: valid,
+        )
+        assert accepted["ok"] is True
+
+
+def test_default_model_probe_requires_health_then_bounded_inference():
+    catalog = system_control.load_lifecycle_catalog(
+        Path("config/survival-lifecycle.json"),
+    )
+    expected = catalog["model_health"]["required_model"]
+    clock = {"now": 20.0}
+    calls = []
+
+    def request(host, port, method, path, payload, timeout):
+        calls.append((host, port, method, path, payload, timeout))
+        clock["now"] += 2.0
+        if method == "GET":
+            return {
+                "status": 200,
+                "value": {"all_models_loaded": [{
+                    "model_name": expected,
+                    "loaded": True,
+                    "backend_alive": True,
+                    "status": "in_use",
+                }]},
+            }
+        return {
+            "status": 200,
+            "value": {"choices": [{"message": {"content": "ok"}}]},
+        }
+
+    result = system_control._default_model_probe(
+        catalog,
+        5.0,
+        request=request,
+        monotonic=lambda: clock["now"],
+    )
+
+    assert result["ok"] is True
+    assert result["inference_canary"] is True
+    assert [call[2:4] for call in calls] == [
+        ("GET", catalog["model_health"]["path"]),
+        ("POST", "/v1/chat/completions"),
+    ]
+    assert [call[-1] for call in calls] == [5.0, 3.0]
+    assert calls[1][4]["model"] == expected
+
+
+def test_default_model_probe_rejects_an_inference_result_at_the_deadline():
+    catalog = system_control.load_lifecycle_catalog(
+        Path("config/survival-lifecycle.json"),
+    )
+    expected = catalog["model_health"]["required_model"]
+    clock = {"now": 10.0}
+
+    def request(_host, _port, method, _path, _payload, timeout):
+        if method == "GET":
+            clock["now"] += 0.5
+            return {
+                "status": 200,
+                "value": {"all_models_loaded": [{
+                    "model_name": expected,
+                    "loaded": True,
+                    "backend_alive": True,
+                    "status": "ready",
+                }]},
+            }
+        clock["now"] += timeout
+        return {
+            "status": 200,
+            "value": {"choices": [{"message": {"content": "late"}}]},
+        }
+
+    result = system_control._default_model_probe(
+        catalog,
+        2.0,
+        request=request,
+        monotonic=lambda: clock["now"],
+    )
+
+    assert clock["now"] == 12.0
+    assert result["ok"] is False
+
+
+def test_default_model_probe_rejects_a_health_list_with_only_the_wrong_model():
+    catalog = system_control.load_lifecycle_catalog(
+        Path("config/survival-lifecycle.json"),
+    )
+    calls = []
+
+    def request(_host, _port, method, _path, _payload, _timeout):
+        calls.append(method)
+        return {
+            "status": 200,
+            "value": {"all_models_loaded": [{
+                "model_name": "wrong-model",
+                "loaded": True,
+                "backend_alive": True,
+                "status": "ready",
+            }]},
+        }
+
+    result = system_control._default_model_probe(
+        catalog,
+        2.0,
+        request=request,
+    )
+
+    assert result["ok"] is False
+    assert calls == ["GET"]
+
+
+def test_default_model_probe_rejects_boolean_and_nonfinite_deadlines_before_io():
+    catalog = system_control.load_lifecycle_catalog(
+        Path("config/survival-lifecycle.json"),
+    )
+
+    def fail_if_called(*_arguments, **_keywords):
+        raise AssertionError("invalid deadline must fail before I/O")
+
+    for deadline in (True, float("nan"), float("inf"), float("-inf")):
+        with unittest.TestCase().assertRaisesRegex(ValueError, "deadline"):
+            system_control._default_model_probe(
+                catalog,
+                deadline,
+                request=fail_if_called,
+                monotonic=lambda: 1.0,
+            )
 
 
 def test_lifecycle_effects_map_only_to_legal_allowlisted_systemctl_calls():
@@ -1227,6 +1687,27 @@ def test_catalog_has_semantic_stages_and_excludes_survival_units():
     }
 
 
+def test_runtime_snapshot_excludes_units_declared_intentionally_inactive():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        policy = lifecycle_policy(root)
+        system_control.accept_request(
+            root, command_record("reset"), previous_pause=False,
+        )
+        inactive = {
+            entry["unit"]
+            for entry in policy["lifecycle_catalog"]["user_units"]["inactive_units"]
+        }
+
+        snapshot = system_control._runtime_snapshot(
+            policy,
+            "telegram-1",
+            observe_user=lambda unit: "active" if unit in inactive else "inactive",
+        )
+
+        assert snapshot["previous_active_user_units"] == []
+
+
 def test_production_constructor_is_complete_and_drives_both_commands():
     for command in ("restart", "reset"):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1282,7 +1763,7 @@ def test_production_constructor_is_complete_and_drives_both_commands():
                 user_adapter=manager("user"),
                 observe_system=lambda unit: state[("system", unit)],
                 observe_user=lambda unit: state[("user", unit)],
-                model_probe=lambda _catalog, _deadline: {"ok": True},
+                model_probe=successful_model_probe,
                 sleep=checkpoint_sleep,
                 sync=lambda: None,
                 monotonic=monotonic,
@@ -1333,6 +1814,10 @@ def test_production_route_restores_an_initially_inactive_inference_service():
         for entries in catalog["user_units"].values():
             for entry in entries:
                 state[("user", entry["unit"])] = "inactive"
+        ordinary = catalog["user_units"]["ordinary_services"][0]["unit"]
+        activation = catalog["user_units"]["activation_sources"][0]["unit"]
+        state[("user", ordinary)] = "active"
+        state[("user", activation)] = "active"
         trace = []
 
         def manager(kind):
@@ -1366,7 +1851,7 @@ def test_production_route_restores_an_initially_inactive_inference_service():
             user_adapter=manager("user"),
             observe_system=lambda unit: state[("system", unit)],
             observe_user=lambda unit: state[("user", unit)],
-            model_probe=lambda _catalog, _deadline: {"ok": True},
+            model_probe=successful_model_probe,
             sleep=checkpoint_sleep,
             sync=lambda: None,
             monotonic=monotonic,
@@ -1381,12 +1866,158 @@ def test_production_route_restores_an_initially_inactive_inference_service():
         model = catalog["user_units"]["inference_prerequisites"][0]["unit"]
         assert result["ok"] is True
         assert state[("user", model)] == "inactive"
+        assert state[("user", ordinary)] == "active"
+        assert state[("user", activation)] == "active"
         assert (agent_state / "PAUSED").exists()
         start_index = trace.index(("user", "start", model))
         assert any(
             index > start_index and event == ("user", "stop", model)
             for index, event in enumerate(trace)
         )
+
+
+def test_pause_and_prior_activity_are_restored_as_independent_facts():
+    for previous_pause in (False, True):
+        for ordinary_was_active in (False, True):
+            for activation_was_active in (False, True):
+                with tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    agent_state = root / "agent-state"
+                    jobs = agent_state / "jobs"
+                    jobs.mkdir(parents=True)
+                    (agent_state / "PAUSED").write_text("{}\n", encoding="utf-8")
+                    (jobs / "task-live.json").write_text(json.dumps({
+                        "id": "task-live",
+                        "kind": "agent-task",
+                        "state": "interrupted",
+                        "interrupted_by": "telegram-1",
+                        "resume_available": True,
+                        "opencode_session": "ses_live",
+                    }), encoding="utf-8")
+                    catalog = system_control.load_lifecycle_catalog(
+                        Path("config/survival-lifecycle.json"),
+                    )
+                    inference = catalog["user_units"]["inference_prerequisites"][0]["unit"]
+                    control = catalog["user_units"]["control_services"][0]["unit"]
+                    ordinary = catalog["user_units"]["ordinary_services"][0]["unit"]
+                    activation = catalog["user_units"]["activation_sources"][0]["unit"]
+                    previous_active = {inference, control}
+                    if ordinary_was_active:
+                        previous_active.add(ordinary)
+                    if activation_was_active:
+                        previous_active.add(activation)
+                    state = {
+                        entry["unit"]: "inactive"
+                        for entries in catalog["user_units"].values()
+                        for entry in entries
+                    }
+                    trace = []
+
+                    def user_adapter(action, unit):
+                        trace.append((action, unit))
+                        if action == "start":
+                            state[unit] = "active"
+                        elif action in {"stop", "terminate", "kill"}:
+                            state[unit] = "inactive"
+                        return {
+                            "ok": True,
+                            "exit_code": 0,
+                            "action": action,
+                            "unit": unit,
+                            "state": state[unit],
+                            "cgroup_empty": state[unit] == "inactive",
+                            "safe_terminal": state[unit] == "inactive",
+                        }
+
+                    config = {
+                        "store_path": root / "survival",
+                        "agent_state_path": agent_state,
+                        "lifecycle_catalog": catalog,
+                        "timing_policy": time_policy.load(Path("config/time.cfg")),
+                    }
+                    system_control._write_runtime(config, {
+                        "schema_version": 1,
+                        "request_id": "telegram-1",
+                        "previous_pause": previous_pause,
+                        "previous_active_user_units": sorted(previous_active),
+                        "interrupted_jobs": ["task-live"],
+                    })
+
+                    result = system_control.restore_runtime_activity(
+                        config,
+                        {"request_id": "telegram-1"},
+                        user_adapter,
+                        wait=lambda _seconds: None,
+                        reopen_admission=not previous_pause,
+                    )
+
+                    assert result["ok"] is True
+                    restorable = {
+                        entry["unit"]
+                        for category in (
+                            "inference_prerequisites", "control_services",
+                            "ordinary_services", "activation_sources",
+                        )
+                        for entry in catalog["user_units"][category]
+                    }
+                    assert {
+                        unit for unit in restorable if state[unit] == "active"
+                    } == previous_active
+                    started = {unit for action, unit in trace if action == "start"}
+                    assert started == previous_active
+                    assert not started & {
+                        entry["unit"]
+                        for entry in catalog["user_units"]["inactive_units"]
+                    }
+                    assert (agent_state / "PAUSED").exists() is previous_pause
+                    job = json.loads((jobs / "task-live.json").read_text(encoding="utf-8"))
+                    assert job["state"] == ("interrupted" if previous_pause else "ready")
+
+
+def test_activity_restoration_reasserts_admission_closure_before_unit_changes():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        agent_state = root / "agent-state"
+        agent_state.mkdir()
+        catalog = system_control.load_lifecycle_catalog(
+            Path("config/survival-lifecycle.json"),
+        )
+        config = {
+            "store_path": root / "survival",
+            "agent_state_path": agent_state,
+            "lifecycle_catalog": catalog,
+            "timing_policy": time_policy.load(Path("config/time.cfg")),
+        }
+        system_control._write_runtime(config, {
+            "schema_version": 1,
+            "request_id": "telegram-1",
+            "previous_pause": True,
+            "previous_active_user_units": [],
+            "interrupted_jobs": [],
+        })
+
+        def user_adapter(action, unit):
+            assert (agent_state / "PAUSED").exists()
+            return {
+                "ok": True,
+                "safe_terminal": True,
+                "exit_code": 0,
+                "action": action,
+                "unit": unit,
+                "state": "inactive",
+                "cgroup_empty": True,
+            }
+
+        result = system_control.restore_runtime_activity(
+            config,
+            {"request_id": "telegram-1"},
+            user_adapter,
+            wait=lambda _seconds: None,
+            reopen_admission=False,
+        )
+
+        assert result["ok"] is True
+        assert (agent_state / "PAUSED").exists()
 
 
 def test_production_route_turns_over_disposable_real_process_groups():
@@ -1428,7 +2059,10 @@ def test_production_route_turns_over_disposable_real_process_groups():
                         process.wait(timeout=2)
                 state = observed(kind, unit)
                 return {
-                    "ok": state == ("active" if action == "start" else "inactive"),
+                    "ok": (
+                        action == "reset_failed"
+                        or state == ("active" if action == "start" else "inactive")
+                    ),
                     "exit_code": 0,
                     "action": action,
                     "unit": unit,
@@ -1458,7 +2092,7 @@ def test_production_route_turns_over_disposable_real_process_groups():
                 user_adapter=manager("user"),
                 observe_system=lambda unit: observed("system", unit),
                 observe_user=lambda unit: observed("user", unit),
-                model_probe=lambda _catalog, _deadline: {"ok": True},
+                model_probe=successful_model_probe,
                 sleep=checkpoint_sleep,
                 sync=lambda: None,
                 monotonic=monotonic,
