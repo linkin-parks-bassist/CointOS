@@ -79,8 +79,10 @@ def load(path: Path = CONFIG_PATH,
     parser = configparser.ConfigParser(interpolation=None)
     parser.optionxform = str
     try:
-        with path.open(encoding="utf-8") as stream:
-            parser.read_file(stream)
+        source = path.read_text(encoding="utf-8")
+        if any(line == "[DEFAULT]" for line in source.splitlines()):
+            raise ValueError("unknown time policy section DEFAULT")
+        parser.read_string(source, source=str(path))
     except configparser.Error as error:
         raise ValueError(f"invalid time policy: {error}") from error
     if parser.defaults():
