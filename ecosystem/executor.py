@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from ecosystem import cli
+from ecosystem import continuation
 from ecosystem.inference_capacity import reserve_sequence
 from ecosystem.inference_proxy import (
     cancel as cancel_proxy,
@@ -988,15 +989,20 @@ Distinguish verified facts from assumptions. This artifact seeds the next attemp
                     "budget_checkpoint": outcome, "usage": usage,
                     "elapsed_seconds": round(time.monotonic() - started, 3)}
         elapsed = now - started
-        context_usage = opencode_context_usage(output_path, job.get("opencode_session"))
+        context_rollover = False
+        context_usage = None
+        observed = opencode_context_usage(output_path, job.get("opencode_session"))
         context_limit = int(job.get("context_tokens") or 0)
-        rollover_fraction = float(settings["context_rollover_fraction"])
-        context_rollover = bool(
-            not job.get("handoff_pending") and context_usage and context_limit
-            and context_usage["total_tokens"] >= context_limit * rollover_fraction
-        )
+        if observed and context_limit:
+            context_usage = continuation.observe_context_usage(
+                observed, {"context_tokens": context_limit})
+            transition = continuation.context_transition(
+                job, context_usage, float(settings["context_rollover_fraction"]))
+            context_rollover = (
+                transition["context_state"] == "handoff_requested"
+                and job.get("context_state") != "handoff_requested")
         reason = (f"context reached {context_usage['total_tokens']}/{context_limit} tokens "
-                  f"({rollover_fraction:.0%}); durable handoff required"
+                  f"({float(settings['context_rollover_fraction']):.0%}); durable handoff required"
                   if context_rollover else _preemption_reason(job, started, scheduling))
         if reason:
             session = job.get("opencode_session") or opencode_session_id(output_path)
@@ -1018,6 +1024,7 @@ Distinguish verified facts from assumptions. This artifact seeds the next attemp
 
 def execute_next(run=subprocess.run) -> bool:
     cli.initialize()
+    rollover_fraction = float(scheduling_policy()["workers"]["context_rollover_fraction"])
     if (cli.ROOT / "state/PAUSED").exists():
         print("ecosystem is paused")
         return False
@@ -1061,6 +1068,8 @@ def execute_next(run=subprocess.run) -> bool:
                 job.update(state="queued", model=None, model_reason=decision["reason"],
                            updated_at=cli.now())
                 job.pop("prompt", None)
+                if job.get("opencode_session") and job.get("context_state") in (None, "running"):
+                    job["context_state"] = "paused_for_resources"
                 cli.atomic_json(path, job)
                 cli.audit("task.routing_deferred", job_id=job["id"], reason=decision["reason"])
                 print(f"{job['id']} routing deferred: {decision['reason']}")
@@ -1069,7 +1078,7 @@ def execute_next(run=subprocess.run) -> bool:
             if model_changed:
                 from ecosystem.roles import render_context
                 job.update(model=decision["model"], model_reason=decision["reason"])
-                if not job.get("handoff_pending") and not job.get("fresh_context_after_handoff"):
+                if job.get("context_state") not in ("handoff_requested", "handoff_durable"):
                     prompt_path = cli.ROOT / "state/jobs" / f"{job['id']}.prompt.md"
                     cli.atomic_text(prompt_path, render_context(
                         job.get("role"), job["task"], job["id"], job["model"],
@@ -1091,6 +1100,48 @@ def execute_next(run=subprocess.run) -> bool:
             job["model_realization"] = {"at": cli.now(), **realization}
             job["context_tokens"] = int(decision["context_tokens"])
             job["scheduling_reason"] = scheduling_reason
+            if job.get("context_state") in ("handoff_requested", "handoff_durable") \
+                    and not job.get("opencode_session"):
+                resource_policy = json.loads(
+                    (cli.ROOT / "config/resource-policy.json").read_text(encoding="utf-8"))
+                reserves = resource_policy.get("context_reserves", {})
+                destination_lease = {
+                    "model_id": job["model"],
+                    "context_tokens": int(decision["context_tokens"]),
+                    "prompt_tokens": int(decision.get(
+                        "prompt_tokens", reserves.get("prompt_tokens"))),
+                    "handoff_tokens": int(decision.get(
+                        "handoff_tokens", reserves.get("handoff_tokens"))),
+                    "tool_tokens": int(decision.get(
+                        "tool_tokens", reserves.get("tool_tokens"))),
+                    "max_output_tokens": int(decision.get(
+                        "max_output_tokens", reserves.get("max_output_tokens"))),
+                }
+                continuation_record = continuation.prepare_continuation(
+                    job,
+                    job.get("handoff")
+                    if job.get("context_state") == "handoff_durable" else None,
+                    {"evidence_paths": list(job.get("context_logs", []))},
+                    destination_lease)
+                job.update(continuation_record)
+                degraded_note = (
+                    "The handoff is a mechanical degraded artifact: the agent did not "
+                    "emit a semantic summary.\n"
+                    if job.get("handoff_degraded") else "")
+                handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
+                rollover_prompt = cli.ROOT / "state/jobs" / f"{job['id']}.rollover.md"
+                cli.atomic_text(rollover_prompt, f"""Continue the exact assigned task in a fresh context.
+{degraded_note}
+Read the original prompt at `{cli.ROOT / job.get('original_prompt', job.get('prompt', ''))}`, the handoff at
+`{handoff_path}`, and the current filesystem state. Treat the handoff as a navigation
+aid, not authority: verify consequential claims before relying on them. Continue from
+the next incomplete boundary without repeating completed work.
+""")
+                job["prompt"] = str(rollover_prompt.relative_to(cli.ROOT))
+            if job.get("context_state") in ("continuation_ready", "paused_for_resources"):
+                job["context_state"] = "running"
+            job.setdefault("context_state", "running")
+            job.setdefault("context_generation", 1)
             prompt_path = cli.ROOT / job["prompt"]
             output_path = cli.ROOT / "logs/runs" / f"{job['id']}.opencode.log"
             job.update(attempts=job["attempts"] + 1,
@@ -1104,10 +1155,10 @@ def execute_next(run=subprocess.run) -> bool:
             resume_session = job.get("opencode_session")
             if resume_session:
                 command.extend(["--session", resume_session])
-                if job.get("handoff_pending"):
+                if job.get("context_state") == "handoff_requested":
                     handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
                     request_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff-request.md"
-                    cli.atomic_text(request_path, f"""The context reached the 75 percent rollover threshold.
+                    cli.atomic_text(request_path, f"""The context reached the {rollover_fraction:.0%} rollover threshold.
 Do not continue the main task. Write a concise, sufficient handoff to `{handoff_path}`.
 Record the objective, authoritative instructions, decisions and rationale, exact completed
 work, changed files, tests and evidence, unresolved risks, and the next concrete action.
@@ -1208,8 +1259,8 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                                        last_preemption_reason=outcome["reason"],
                                        preemption_count=int(job.get("preemption_count", 0)) + 1)
                             if outcome.get("context_rollover"):
-                                job["handoff_pending"] = True
-                                job["context_rollover_usage"] = outcome.get("context_usage")
+                                job["context_state"] = "handoff_requested"
+                                job["context_usage"] = outcome.get("context_usage")
                             cli.atomic_json(path, job)
                             cli.audit("task.preempted", job_id=job["id"],
                                       reason=outcome["reason"],
@@ -1224,6 +1275,15 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                 session = opencode_session_id(output_path)
                 if session:
                     job["opencode_session"] = session
+                if job.get("context_state") in (None, "running"):
+                    final_observed = opencode_context_usage(
+                        output_path, job.get("opencode_session"))
+                    final_limit = int(job.get("context_tokens") or 0)
+                    if final_observed and final_limit:
+                        final_usage = continuation.observe_context_usage(
+                            final_observed, {"context_tokens": final_limit})
+                        job.update(continuation.context_transition(
+                            job, final_usage, rollover_fraction))
                 job.pop("executor_pid", None)
             except subprocess.TimeoutExpired:
                 if 'context' in locals():
@@ -1237,9 +1297,26 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                     job.update(state="failed", updated_at=cli.now(),
                                error=f"{type(error).__name__}: {error}")
             job.pop("executor_pid", None)
-            if job.get("handoff_pending") and job.get("state") == "run_finished":
+            if job.get("state") == "run_finished" \
+                    and job.get("context_state") == "handoff_requested":
                 handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
-                if not handoff_path.exists():
+                handoff = None
+                try:
+                    text = handoff_path.read_text(encoding="utf-8")
+                    if text.strip():
+                        handoff = {
+                            "path": str(handoff_path.relative_to(cli.ROOT)),
+                            "summary": text.strip().splitlines()[0][:200],
+                            "token_count": max(1, (len(text) + 2) // 3),
+                            "job_id": job["id"],
+                            "agent_generation": int(job.get("agent_generation", 1)),
+                        }
+                except OSError:
+                    handoff = None
+                if handoff:
+                    job.update(continuation.attest_handoff(job, handoff))
+                    job.pop("handoff_degraded", None)
+                else:
                     cli.atomic_text(handoff_path, f"""# Mechanical context handoff
 
 The agent did not emit the requested semantic handoff. This explicit degraded
@@ -1263,26 +1340,17 @@ artifact preserves the recoverable boundaries without pretending to summarize wo
                     job.setdefault("previous_opencode_sessions", []).append(previous_session)
                 job.setdefault("context_logs", []).append(str(archived_log.relative_to(cli.ROOT)))
                 job.pop("opencode_session", None)
-                job.pop("handoff_pending", None)
-                rollover_prompt = cli.ROOT / "state/jobs" / f"{job['id']}.rollover.md"
-                cli.atomic_text(rollover_prompt, f"""Continue the exact assigned task in a fresh context.
-
-Read the original prompt at `{cli.ROOT / job.get('original_prompt', job.get('prompt', ''))}`, the handoff at
-`{handoff_path}`, and the current filesystem state. Treat the handoff as a navigation
-aid, not authority: verify consequential claims before relying on them. Continue from
-the next incomplete boundary without repeating completed work.
-""")
-                job.update(state="ready", prompt=str(rollover_prompt.relative_to(cli.ROOT)),
-                           fresh_context_after_handoff=True,
-                           context_rollover_count=rollover_index, updated_at=cli.now())
+                job.pop("context_usage", None)
+                job.update(state="ready", context_rollover_count=rollover_index,
+                           updated_at=cli.now())
                 cli.atomic_json(path, job)
                 cli.audit("task.context_rolled_over", job_id=job["id"],
                           handoff=str(handoff_path.relative_to(cli.ROOT)),
+                          durable=job.get("context_state") == "handoff_durable",
                           degraded=bool(job.get("handoff_degraded")))
-                print(f"{job['id']} context rolled over; fresh session ready")
+                print(f"{job['id']} context rolled over; handoff "
+                      f"{'attested' if handoff else 'missing, degraded artifact written'}")
                 return True
-            if job.get("state") == "run_finished":
-                job.pop("fresh_context_after_handoff", None)
             cli.atomic_json(path, job)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))
             if job.get("verifies"):
