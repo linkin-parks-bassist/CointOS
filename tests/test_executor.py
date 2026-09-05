@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -7,6 +8,12 @@ from pathlib import Path
 from unittest.mock import patch
 from tests.test_intake import IntakeTest
 from ecosystem import cli
+from ecosystem.inference_proxy import (
+    completed_run_termination,
+    issue_proxy_credential,
+    revoke_proxy_credential,
+)
+from ecosystem.workload_control import observe_workers, release_worker
 from ecosystem.executor import (
     execute_next,
     gated_child_cleanup,
@@ -686,3 +693,237 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
         self.assertIn("# Base Agent", prompt)
         self.assertNotIn("unknown role", prompt.lower())
+
+    def _close_fixture(self):
+        root = self.root
+        process = {"pid": os.getpid(),
+                   "process_start_ticks": int((Path("/proc") / str(os.getpid()) / "stat")
+                                              .read_text().rsplit(")", 1)[1].split()[19])}
+        binding = {
+            "lease_id": "inference-close", "allocation_generation": 1,
+            "request_id": "j-close:runner:1:sequence",
+            "worker_lease_id": "worker-close", "owner_identity": "worker:close",
+            "proxy_identity": "proxy:work", "backend_sequence": 1,
+        }
+        (root / "config/resource-policy.json").write_text(json.dumps({
+            "inference_capacity": {
+                "front_sequences": 1, "total_sequences": 4,
+                "protected_host_bytes": 1073741824,
+                "coin_reserved_bytes": 1073741824,
+                "load_transient_bytes": 1073741824,
+                "gtt_limit_bytes": 107374182400,
+                "maximum_work_models": 2,
+                "front_proxy_identity": "proxy:front",
+                "work_proxy_identity": "proxy:work",
+                "lease_seconds": 3600,
+                "release_observer_identity": "observer:inference-backend",
+                "release_observation_maximum_age_seconds": 5,
+                "clock_domain_id": "host-monotonic:boot-one",
+            },
+        }), encoding="utf-8")
+        values = {
+            "version": 1,
+            "priority_bands": {"sole_survivor": 1000, "coin": 900,
+                               "small_health": 800, "large_health": 700,
+                               "default": 600},
+            "authority_profiles": {"sole_survivor": "authority:sole",
+                                   "coin": "authority:coin"},
+            "execution_profiles": {"small_health": "execution:small",
+                                   "large_health": "execution:large"},
+            "role_priorities": {"default": 100},
+            "aging_seconds_per_point": 30.0,
+        }
+        canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+        (root / "state/scheduling-policy.json").write_text(json.dumps({
+            "schema_version": 1, "values": values,
+            "digest": hashlib.sha256(canonical).hexdigest(),
+            "activated_at": "2026-09-05T00:00:00+00:00",
+            "source_path": str(root / "state/scheduling-policy.json"),
+        }), encoding="utf-8")
+        (root / "state/workload-control.json").write_text(json.dumps({
+            "schema_version": 1, "mode": "open", "generation": 1, "owner": None,
+            "leases": {"worker-close": {
+                "lease_id": "worker-close", "generation": 1, "state": "active",
+                "request": {
+                    "workload_class": "work", "model_id": "model-a",
+                    "context_tokens": 4096, "max_output_tokens": 128,
+                    "deadline_monotonic": 100.0,
+                    "owner_identity": "worker:close", "job_id": "j-close",
+                    "agent_generation": 1, "caller_handle": "runner",
+                    "request_id": "j-close:runner:1:worker",
+                    "stop_method": "process_group",
+                },
+                "acquired_monotonic": 1.0, "process": process,
+                "observation": None, "checkpoint_required": False,
+            }},
+        }), encoding="utf-8")
+        sequence_lease = {
+            "lease_id": "inference-close", "generation": 1, "state": "starting",
+            "class": "work", "workload_class": "work",
+            "proxy_identity": "proxy:work", "model_id": "model-a",
+            "context_tokens": 4096, "max_output_tokens": 128,
+            "backend_sequence": 1, "expires_monotonic": 1000.0,
+            "preemption_method": "process_group",
+            "release_observer_identity": "observer:inference-backend",
+            "allocation_generation": 1, "expected_release_binding": binding,
+            "priority": 100, "enqueued_monotonic": 1.0,
+            "request": {"request_id": "j-close:runner:1:sequence",
+                        "worker_lease_id": "worker-close",
+                        "owner_identity": "worker:close"},
+            "acquired_monotonic": 1.0, "observed_release": None,
+        }
+        (root / "state/inference-capacity.json").write_text(json.dumps({
+            "version": 1, "generation": 1,
+            "leases": {"inference-close": sequence_lease},
+        }), encoding="utf-8")
+        issue_proxy_credential(root, sequence_lease, lambda _secret: None, lambda: 1.0)
+        proxy_path = root / "state/inference-proxy.json"
+        proxy = json.loads(proxy_path.read_text(encoding="utf-8"))
+        credential = proxy["credentials"]["inference-close"]
+        credential["binding"]["process"] = {"pid": 2 ** 30, "process_start_ticks": 1}
+        credential["last_backend_termination"] = {
+            "terminated": True, "binding": binding,
+            "observer_identity": "observer:inference-backend",
+            "observer_generation": 1, "observed_monotonic": 11.0,
+            "clock_domain_id": "host-monotonic:boot-one", "evidence_id": "end-close",
+        }
+        proxy_path.write_text(json.dumps(proxy), encoding="utf-8")
+        job_path = root / "state/jobs/j-close.json"
+        cli.atomic_json(job_path, {
+            "id": "j-close", "state": "running", "runner_generation": 1,
+            "worker_lease_id": "worker-close",
+            "inference_lease_id": "inference-close",
+        })
+        worker_state = json.loads(
+            (root / "state/workload-control.json").read_text(encoding="utf-8"))
+        sequence_state = json.loads(
+            (root / "state/inference-capacity.json").read_text(encoding="utf-8"))
+        return {
+            "process": process,
+            "job_path": job_path,
+            "child_outcome": {"state": "reaped", "returncode": 0,
+                              "process_group_alive": False},
+            "context": {
+                "launch": {"pid": process["pid"],
+                           "start_ticks": process["process_start_ticks"],
+                           "pgid": process["pid"], "process": object()},
+                "worker_lease": worker_state["leases"]["worker-close"],
+                "inference_lease": sequence_state["leases"]["inference-close"],
+            },
+        }
+
+    def _read_owner_state(self, name):
+        return (self.root / "state" / name).read_text(encoding="utf-8")
+
+    def test_real_owner_normal_close_reaches_quiescent_and_revoked(self):
+        value = self._close_fixture()
+        job = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        result = close_runner_round(job, value["job_path"], value["context"],
+                                    value["child_outcome"], clock=lambda: 12.0)
+        self.assertEqual(result["state"], "run_finished")
+        worker = json.loads(self._read_owner_state("workload-control.json"))[
+            "leases"]["worker-close"]
+        self.assertEqual(worker["state"], "quiescent")
+        sequence = json.loads(self._read_owner_state("inference-capacity.json"))[
+            "leases"]["inference-close"]
+        self.assertEqual(sequence["state"], "released")
+        self.assertEqual(sequence["observed_release"]["evidence_id"], "end-close")
+        credential = json.loads(self._read_owner_state("inference-proxy.json"))[
+            "credentials"]["inference-close"]
+        self.assertEqual(credential["state"], "revoked")
+        self.assertEqual(credential["digest"], "")
+        closed = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        self.assertEqual(closed["runner_closed_generation"], 1)
+        self.assertEqual(closed["runner_close_state"], "run_finished")
+
+    def test_close_replays_revoked_revoke_without_releasing_again(self):
+        value = self._close_fixture()
+        evidence = completed_run_termination(self.root, "inference-close")
+        self.assertIsNotNone(evidence)
+        manual = revoke_proxy_credential(self.root, "inference-close", evidence,
+                                         lambda: 12.0)
+        self.assertEqual(manual["state"], "revoked")
+        capacity_after_revoke = self._read_owner_state("inference-capacity.json")
+        proxy_after_revoke = self._read_owner_state("inference-proxy.json")
+        job = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        result = close_runner_round(job, value["job_path"], value["context"],
+                                    value["child_outcome"], clock=lambda: 12.0)
+        self.assertEqual(result["state"], "run_finished")
+        self.assertEqual(self._read_owner_state("inference-capacity.json"),
+                         capacity_after_revoke)
+        self.assertEqual(self._read_owner_state("inference-proxy.json"),
+                         proxy_after_revoke)
+        worker = json.loads(self._read_owner_state("workload-control.json"))[
+            "leases"]["worker-close"]
+        self.assertEqual(worker["state"], "quiescent")
+
+    def test_close_completes_after_releasing_crash_before_sequence_release(self):
+        value = self._close_fixture()
+        proxy_path = self.root / "state/inference-proxy.json"
+        proxy = json.loads(proxy_path.read_text(encoding="utf-8"))
+        credential = proxy["credentials"]["inference-close"]
+        credential["state"] = "releasing"
+        credential["release_requested_monotonic"] = 11.5
+        proxy_path.write_text(json.dumps(proxy), encoding="utf-8")
+        job = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        result = close_runner_round(job, value["job_path"], value["context"],
+                                    value["child_outcome"], clock=lambda: 12.0)
+        self.assertEqual(result["state"], "run_finished")
+        sequence = json.loads(self._read_owner_state("inference-capacity.json"))[
+            "leases"]["inference-close"]
+        self.assertEqual(sequence["state"], "released")
+        credential = json.loads(proxy_path.read_text(encoding="utf-8"))[
+            "credentials"]["inference-close"]
+        self.assertEqual(credential["state"], "revoked")
+        worker = json.loads(self._read_owner_state("workload-control.json"))[
+            "leases"]["worker-close"]
+        self.assertEqual(worker["state"], "quiescent")
+
+    def test_close_replay_after_marker_leaves_all_owner_state_unchanged(self):
+        value = self._close_fixture()
+        job = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        first = close_runner_round(job, value["job_path"], value["context"],
+                                   value["child_outcome"], clock=lambda: 12.0)
+        self.assertEqual(first["state"], "run_finished")
+        snapshots = {
+            "workload-control.json": self._read_owner_state("workload-control.json"),
+            "inference-capacity.json": self._read_owner_state("inference-capacity.json"),
+            "inference-proxy.json": self._read_owner_state("inference-proxy.json"),
+            "jobs/j-close.json": value["job_path"].read_text(encoding="utf-8"),
+        }
+        replay = close_runner_round(job, value["job_path"], value["context"],
+                                    value["child_outcome"], clock=lambda: 12.0)
+        self.assertEqual(replay, {"state": "run_finished"})
+        self.assertEqual(self._read_owner_state("workload-control.json"),
+                         snapshots["workload-control.json"])
+        self.assertEqual(self._read_owner_state("inference-capacity.json"),
+                         snapshots["inference-capacity.json"])
+        self.assertEqual(self._read_owner_state("inference-proxy.json"),
+                         snapshots["inference-proxy.json"])
+        self.assertEqual(value["job_path"].read_text(encoding="utf-8"),
+                         snapshots["jobs/j-close.json"])
+
+    def test_close_completes_after_r1_release_committed_without_job_marker(self):
+        value = self._close_fixture()
+        process = value["process"]
+        evidence = completed_run_termination(self.root, "inference-close")
+        self.assertIsNotNone(evidence)
+        revoke_proxy_credential(self.root, "inference-close", evidence, lambda: 11.5)
+        release_worker(self.root, "worker-close",
+                       {"state": "run_finished", "returncode": 0}, lambda: 11.6)
+        observe_workers(self.root, [{
+            "lease_id": "worker-close", "pid": process["pid"],
+            "process_start_ticks": process["process_start_ticks"],
+            "process_group_alive": False, "backend_request_active": False,
+            "inference_lease_active": False,
+        }], lambda: 11.7)
+        job = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        result = close_runner_round(job, value["job_path"], value["context"],
+                                    value["child_outcome"], clock=lambda: 12.0)
+        self.assertEqual(result["state"], "run_finished")
+        worker = json.loads(self._read_owner_state("workload-control.json"))[
+            "leases"]["worker-close"]
+        self.assertEqual(worker["state"], "quiescent")
+        closed = json.loads(value["job_path"].read_text(encoding="utf-8"))
+        self.assertEqual(closed["runner_closed_generation"], 1)
+        self.assertEqual(closed["runner_close_state"], "run_finished")
