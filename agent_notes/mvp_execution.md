@@ -12,16 +12,26 @@ topic is `docs/cointos-mvp-bringup`; the pre-snapshot parent is
 
 The coherent source snapshot consists of two explicit commits:
 
-1. the existing dirty runtime, resource-control infrastructure, configuration,
-   roles, service descriptions and their focused tests;
-2. the complete MVP plans/specification, decisions, maintained notes and status
-   documentation.
+1. `c7ba854152d6220b3f806b17c357aeb5708750f4` (root tree
+   `937f449a72034e2c1ab19cfdbac366c47105714f`): the existing dirty runtime,
+   resource-control infrastructure, configuration, roles, service descriptions
+   and their focused tests;
+2. `9f95ee0a7359bf9b0f16e480a9f36492cb733684` (root tree
+   `4983eb1ac6ca6cf94786dc87f45f33fd215ad031`): the complete MVP
+   plans/specification, decisions, maintained notes and status documentation.
 
 The Git commit and root-tree identifiers are the authoritative path/digest manifest;
 the ignored SDD ledger records assignments and review state. S0 used path-specific
 staging and never staged ignored runtime or credential trees. The unrelated
 `fix/snappy-initial-response` worktree at `/home/david/.worktrees/ecosystem-snappy`
 remains untouched.
+
+The live resource record was still latched in `emergency` during S0, with Coin's
+4B model and an idle 27B model resident. The coordinator therefore deferred Q1's
+optional local inference substep: running ordinary local work through the existing
+bypass would violate Sole Survivor exclusivity before R1 supplies the new admission
+owner. Q1 remains a Sol-medium TDD task; short Halo work begins only from an admitted
+state and remains required for later concrete substeps.
 
 Baseline evidence before the snapshot: `python3 -m unittest discover -s tests -v`
 ran 324 tests with zero failures in 13.154 seconds; `git diff --check` returned zero.
