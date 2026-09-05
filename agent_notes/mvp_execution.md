@@ -400,3 +400,59 @@ coordinator:
   `inference_capacity`, and `operator_session` at top level — verified
   cycle-safe (`survival/records.py` and `models.py` are stdlib-only) — and
   still does not import `executor`.
+
+## 2026-09-06: A2 — bounded environmental evidence (`9a02901`)
+
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
+
+- New `ecosystem/evidence.py` (no classes): `read_evidence(scope,
+  relative_path, cursor, limits)` serves one bounded page. `limits` holds the
+  CALLER's remaining `{maximum_bytes, maximum_items}`, counted across calls —
+  the caller decrements by the UTF-8 length of `text` and by `items_read`.
+  Result is exactly `{path (canonical), digest (whole-file sha256),
+  observed_at, text, next_cursor, truncated, items_read}`.
+- Containment is canonical and symlink-safe: `Path(workspace / relative_path)
+  .resolve()` must land inside a contracted root (`read_paths` for reads,
+  `write_paths` for writes). Empty root list, absolute paths, `..` escapes,
+  and symlink escapes are all `ValueError`. Note `resolve()` is what makes
+  symlinks honest — a link inside a root pointing outside resolves outside and
+  is rejected.
+- UTF-8: a page never splits a codepoint. `_page_boundary` walks back over
+  continuation bytes (`& 0xC0 == 0x80`) and, if the cut lands mid-lead, drops
+  the incomplete lead byte. A `cursor` that lands mid-sequence is an explicit
+  `ValueError`, not a silent re-align.
+- Event mode (`.jsonl` only): `_events` serves whole JSON lines up to
+  `maximum_items`; a cut tail line is NOT served and the cursor stays at its
+  start, so the next page re-reads it whole. A non-JSON non-empty line is
+  `ValueError` (events are validated records, not blobs).
+- Honest exhaustion (design ruling): when the budget is 0 but the file still
+  has data, the page is empty but `truncated` is `True`. A false `False`
+  here would let a caller mistake a budget stop for EOF — the exact
+  misleading-fallback the repo forbids. Empty file or past-EOF stays
+  `truncated=False`.
+- `record_contribution(root, job, relative_path, text)` validates the DURABLE
+  job at `state/jobs/<id>.json` (identity and contract are read from that
+  record, not the caller's dict — a drifted caller contract is rejected),
+  appends `## <stamp> job=<id> agent=<agent>\n\n<text>` under a contracted
+  write root, audits `evidence.contribution`, and returns `{path, digest,
+  observed_at}`.
+- `executor.discovery_evidence(job)` is the discovery-run adapter: contract
+  scope + remaining `maximum_evidence_items` + `evidence.DEFAULT_MAXIMUM_BYTES`
+  (65536) page envelope; contractless or budgetless jobs fail explicitly.
+  `execute_next` now passes `task_contract` into `render_context`, so prompts
+  stop claiming "No executable contract was supplied" when the job has one.
+- Design rulings: the byte envelope is `DEFAULT_MAXIMUM_BYTES` because A1's
+  budget schema has no evidence-bytes field and A2's file list forbids
+  touching `BUDGET_FIELDS` (editing it would break every contract producer).
+  The item budget comes from the contract. `task_contracts._validate_scope`
+  was promoted to public `validate_scope` so `evidence` reuses the canonical
+  scope contract — a disclosed modification outside A2's declared file list,
+  made for one harmonious scope representation.
+- Tests: `tests/test_mvp_evidence.py` (15, function-based + the hand-maintained
+  `load_tests` tuple — keep it in sync or tests are silently uncollected).
+  Full suite 501/501 (486 baseline + 15).
+- Boundary handed to A3: repo-side enforcement is contract scope + bounded
+  API + the `_base.md` Bounded-inspection profile. Mechanically locking the
+  opencode child's raw read/shell tools is opencode-configuration domain, NOT
+  A2 scope — do not pretend the profile alone is a mechanical lockout.
+- Next on the critical path: A3 (discovery jobs; needs A2+R7+H1).
