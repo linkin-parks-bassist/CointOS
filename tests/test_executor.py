@@ -479,7 +479,7 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
 
         child_program = "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text('ran')"
         with patch("ecosystem.executor.process_identity", side_effect=fail_first_identity):
-            with self.assertRaisesRegex(RuntimeError, "injected after spawn"):
+            with self.assertRaisesRegex(RuntimeError, "injected after spawn") as raised:
                 gated_child_launch(
                     config_fd,
                     [sys.executable, "-c", child_program, str(marker)],
@@ -492,7 +492,158 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         self.assertEqual(len(spawned), 1)
         self.assertIsNotNone(spawned[0].returncode)
         self.assertFalse(marker.exists())
+        failure = raised.exception.launch_failure
+        self.assertTrue(failure["spawned"])
+        self.assertEqual(failure["pid"], spawned[0].pid)
+        self.assertEqual(failure["cleanup"]["state"], "reaped")
+        self.assertEqual(failure["cleanup"]["pid"], spawned[0].pid)
         self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+
+    def test_gated_child_launch_pre_spawn_failure_reports_never_spawned(self):
+        baseline = set(os.listdir("/proc/self/fd"))
+        config_fd = os.memfd_create("gated-child-pre-spawn", os.MFD_CLOEXEC)
+        environment = os.environ.copy()
+        environment["OPENCODE_CONFIG"] = f"/proc/self/fd/{config_fd}"
+
+        def refusing_popen(*_args, **_kwargs):
+            raise OSError("popen refused")
+
+        with self.assertRaisesRegex(OSError, "popen refused") as raised:
+            gated_child_launch(
+                config_fd,
+                [sys.executable, "-c", "pass"],
+                environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                popen=refusing_popen,
+            )
+        self.assertEqual(raised.exception.launch_failure, {"spawned": False})
+        self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+
+    def test_pre_spawn_failure_attests_never_spawned_and_returns_job_to_ready(self):
+        from ecosystem import workload_control
+        job_path = self.root / "state/jobs/task-never-spawned.json"
+        job = {
+            "id": "task-never-spawned", "state": "ready", "agent_generation": 1,
+            "workload_class": "work", "owner_identity": "executor:never-spawned",
+            "caller_handle": "executor:local", "deadline_monotonic": time.monotonic() + 60,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        with patch("ecosystem.executor.opencode_environment",
+                   side_effect=OSError("memfd unavailable")):
+            with self.assertRaisesRegex(OSError, "memfd unavailable"):
+                launch_runner_round(
+                    job, job_path, route, {}, ["must-not-spawn"],
+                    stdin=None, stdout=None, stderr=None,
+                    acquire=lambda _root, request, _clock: (
+                        workload_control.acquire_worker(_root, request, _clock)),
+                    launch=lambda *_args, **_kwargs: (
+                        self.fail("pre-spawn failure must not spawn")),
+                    release=workload_control.release_worker,
+                    observe=workload_control.observe_workers,
+                )
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "ready")
+        self.assertEqual(saved["runner_deferred_reasons"], ["OSError: memfd unavailable"])
+        self.assertEqual(saved["runner_spawn_failure"]["spawned"], False)
+        self.assertEqual(saved["runner_spawn_failure"]["cleanup_state"], None)
+        self.assertEqual(saved["runner_spawn_failure"]["phase"], "r1_acquired")
+        self.assertIn("memfd unavailable", saved["runner_spawn_failure"]["error"])
+        control = json.loads(
+            (self.root / "state/workload-control.json").read_text(encoding="utf-8"))
+        lease = control["leases"][saved["worker_lease_id"]]
+        self.assertEqual(lease["state"], "quiescent")
+
+    def test_post_spawn_failure_attests_reaped_spawn_when_unregistered(self):
+        from ecosystem import workload_control
+        job_path = self.root / "state/jobs/task-reaped-crash.json"
+        job = {
+            "id": "task-reaped-crash", "state": "ready", "agent_generation": 1,
+            "workload_class": "work", "owner_identity": "executor:reaped-crash",
+            "caller_handle": "executor:local", "deadline_monotonic": time.monotonic() + 60,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+
+        def launch_after_spawn_crash(*_args, **_kwargs):
+            error = RuntimeError("injected identity failure after spawn")
+            error.launch_failure = {
+                "spawned": True, "pid": 555, "start_ticks": 666, "pgid": 555,
+                "cleanup": {"state": "reaped", "returncode": -15, "pid": 555,
+                            "start_ticks": 666, "pgid": 555,
+                            "process_group_alive": False},
+            }
+            raise error
+
+        with self.assertRaisesRegex(RuntimeError, "injected identity failure"):
+            launch_runner_round(
+                job, job_path, route, {}, ["must-not-spawn"],
+                stdin=None, stdout=None, stderr=None,
+                acquire=lambda _root, request, _clock: (
+                    workload_control.acquire_worker(_root, request, _clock)),
+                launch=launch_after_spawn_crash,
+                release=workload_control.release_worker,
+                observe=workload_control.observe_workers,
+            )
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "ready")
+        self.assertEqual(saved["runner_spawn_failure"]["spawned"], True)
+        self.assertEqual(saved["runner_spawn_failure"]["cleanup_state"], "reaped")
+        control = json.loads(
+            (self.root / "state/workload-control.json").read_text(encoding="utf-8"))
+        lease = control["leases"][saved["worker_lease_id"]]
+        self.assertEqual(lease["state"], "quiescent")
+        self.assertEqual(lease["observation"]["reaped_spawn"]["pid"], 555)
+        self.assertEqual(lease["observation"]["reaped_spawn"]["returncode"], -15)
+
+    def test_post_spawn_failure_retains_lease_when_cleanup_unresolved(self):
+        from ecosystem import workload_control
+        job_path = self.root / "state/jobs/task-unreaped-crash.json"
+        job = {
+            "id": "task-unreaped-crash", "state": "ready", "agent_generation": 1,
+            "workload_class": "work", "owner_identity": "executor:unreaped-crash",
+            "caller_handle": "executor:local", "deadline_monotonic": time.monotonic() + 60,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+
+        def launch_unreaped_crash(*_args, **_kwargs):
+            error = RuntimeError("injected unresolved spawn")
+            error.launch_failure = {
+                "spawned": True, "pid": 666, "start_ticks": None, "pgid": 666,
+                "cleanup": {"state": "reconciliation_required", "returncode": None,
+                            "pid": 666, "start_ticks": None, "pgid": 666,
+                            "process_group_alive": True},
+            }
+            raise error
+
+        with self.assertRaisesRegex(RuntimeError, "injected unresolved spawn"):
+            launch_runner_round(
+                job, job_path, route, {}, ["must-not-spawn"],
+                stdin=None, stdout=None, stderr=None,
+                acquire=lambda _root, request, _clock: (
+                    workload_control.acquire_worker(_root, request, _clock)),
+                launch=launch_unreaped_crash,
+                release=lambda *_args: (
+                    self.fail("unresolved spawn crash must not release R1")),
+                observe=lambda *_args: (
+                    self.fail("unresolved spawn crash must not quiesce R1")),
+            )
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "reconciliation_required")
+        self.assertEqual(saved["executor_pid"], 666)
+        self.assertEqual(saved["runner_spawn_failure"]["spawned"], True)
+        self.assertEqual(
+            saved["runner_spawn_failure"]["cleanup_state"], "reconciliation_required")
+        control = json.loads(
+            (self.root / "state/workload-control.json").read_text(encoding="utf-8"))
+        lease = control["leases"][saved["worker_lease_id"]]
+        self.assertEqual(lease["state"], "starting")
 
     def test_reaped_leader_does_not_claim_a_live_or_unknown_process_group_ended(self):
         config_fd = os.memfd_create("gated-child-group", os.MFD_CLOEXEC)

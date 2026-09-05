@@ -285,6 +285,173 @@ def test_release_and_end_smoke_are_idempotent_but_identity_mismatch_fails():
                 root, {"owner_identity": "smoke:two"}, smoke_outcome, clock)
 
 
+def test_owner_attested_never_spawned_quiesces_released_local_lease():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        owner = {"owner_identity": "smoke:one"}
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.begin_drain(root, owner, clock)
+        workload_control.release_worker(
+            root, lease["lease_id"], {"state": "failed", "error": "spawn failed"}, clock)
+        observed = workload_control.observe_workers(root, [{
+            "lease_id": lease["lease_id"],
+            "never_spawned": True,
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "quiescent"
+        admitted = workload_control.enter_smoke(root, owner, clock, [])
+        assert admitted["state"] == "admitted"
+
+
+def test_owner_attested_never_spawned_without_release_is_terminal_outcome_missing():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        owner = {"owner_identity": "smoke:one"}
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.begin_drain(root, owner, clock)
+        observed = workload_control.observe_workers(root, [{
+            "lease_id": lease["lease_id"],
+            "never_spawned": True,
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "observed_stopped"
+        blocked = workload_control.enter_smoke(root, owner, clock, [])
+        assert blocked["state"] == "deferred"
+        assert any("terminal_outcome_missing" in reason for reason in blocked["reasons"])
+        assert not any("checkpoint_missing" in reason for reason in blocked["reasons"])
+
+        workload_control.release_worker(
+            root, lease["lease_id"], {"state": "failed", "error": "spawn failed"}, clock)
+        admitted = workload_control.enter_smoke(root, owner, clock, [])
+        assert admitted["state"] == "admitted"
+
+
+def test_unattested_observation_keeps_processless_lease_unresolved():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.release_worker(
+            root, lease["lease_id"], {"state": "failed", "error": "spawn failed"}, clock)
+        observed = workload_control.observe_workers(root, [{
+            "lease_id": lease["lease_id"],
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "release_requested"
+
+        second = workload_control.acquire_worker(
+            root,
+            worker_request(request_id="request-two", job_id="task-two"),
+            clock,
+        )
+        assert second["state"] == "starting"
+        still = workload_control.observe_workers(root, [{
+            "lease_id": second["lease_id"],
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        assert still["leases"][second["lease_id"]]["state"] == "starting"
+
+
+def test_owner_attested_reaped_spawn_quiesces_released_local_lease():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        owner = {"owner_identity": "smoke:one"}
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.begin_drain(root, owner, clock)
+        workload_control.release_worker(
+            root, lease["lease_id"],
+            {"state": "failed", "error": "identity check failed"}, clock)
+        observed = workload_control.observe_workers(root, [{
+            "lease_id": lease["lease_id"],
+            "reaped_spawn": {
+                "pid": 777,
+                "process_start_ticks": 888,
+                "returncode": -15,
+                "process_group_alive": False,
+            },
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "quiescent"
+        admitted = workload_control.enter_smoke(root, owner, clock, [])
+        assert admitted["state"] == "admitted"
+
+
+def test_attested_observation_for_registered_lease_is_unreconciled():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.register_process(root, lease["lease_id"], 100, 200, clock)
+        observed = workload_control.observe_workers(root, [{
+            "lease_id": lease["lease_id"],
+            "never_spawned": True,
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "dead_unreconciled"
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.register_process(root, lease["lease_id"], 100, 200, clock)
+        observed = workload_control.observe_workers(root, [{
+            "lease_id": lease["lease_id"],
+            "reaped_spawn": {
+                "pid": 777,
+                "process_start_ticks": 888,
+                "returncode": -15,
+                "process_group_alive": False,
+            },
+        }], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "dead_unreconciled"
+
+
+def test_invalid_spawn_attestations_are_rejected():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        with unittest.TestCase().assertRaisesRegex(ValueError, "never_spawned"):
+            workload_control.observe_workers(root, [{
+                "lease_id": lease["lease_id"],
+                "never_spawned": "yes",
+            }], clock)
+        with unittest.TestCase().assertRaisesRegex(ValueError, "reaped_spawn"):
+            workload_control.observe_workers(root, [{
+                "lease_id": lease["lease_id"],
+                "reaped_spawn": {
+                    "pid": 777,
+                    "process_start_ticks": 888,
+                    "returncode": -15,
+                    "process_group_alive": True,
+                },
+            }], clock)
+        with unittest.TestCase().assertRaisesRegex(ValueError, "reaped_spawn"):
+            workload_control.observe_workers(root, [{
+                "lease_id": lease["lease_id"],
+                "reaped_spawn": {
+                    "process_start_ticks": 888,
+                    "returncode": -15,
+                    "process_group_alive": False,
+                },
+            }], clock)
+
+
 def test_workload_timing_policy_exposes_action_deadlines():
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(Path("config/time.cfg"), encoding="utf-8")
@@ -306,6 +473,12 @@ def load_tests(_loader, _tests, _pattern):
         test_hosted_writer_blocks_covered_smoke,
         test_failed_smoke_does_not_clear_pressure,
         test_release_and_end_smoke_are_idempotent_but_identity_mismatch_fails,
+        test_owner_attested_never_spawned_quiesces_released_local_lease,
+        test_owner_attested_never_spawned_without_release_is_terminal_outcome_missing,
+        test_unattested_observation_keeps_processless_lease_unresolved,
+        test_owner_attested_reaped_spawn_quiesces_released_local_lease,
+        test_attested_observation_for_registered_lease_is_unreconciled,
+        test_invalid_spawn_attestations_are_rejected,
         test_workload_timing_policy_exposes_action_deadlines,
     )
     return unittest.TestSuite(unittest.FunctionTestCase(item) for item in functions)

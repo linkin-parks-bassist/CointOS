@@ -398,6 +398,27 @@ def _validate_observations(observations: list[dict]) -> list[dict]:
         if type(lease_id) is not str or not lease_id or lease_id in seen:
             raise ValueError("invalid worker observation identity")
         seen.add(lease_id)
+        if "never_spawned" in item and type(item["never_spawned"]) is not bool:
+            raise ValueError("invalid worker never_spawned attestation")
+        if "reaped_spawn" in item:
+            reaped = item["reaped_spawn"]
+            if (
+                type(reaped) is not dict
+                or type(reaped.get("pid")) is not int or reaped["pid"] <= 0
+                or (
+                    reaped.get("process_start_ticks") is not None
+                    and (
+                        type(reaped["process_start_ticks"]) is not int
+                        or reaped["process_start_ticks"] < 0
+                    )
+                )
+                or (
+                    reaped.get("returncode") is not None
+                    and type(reaped["returncode"]) is not int
+                )
+                or reaped.get("process_group_alive") is not False
+            ):
+                raise ValueError("invalid worker reaped_spawn attestation")
         try:
             durable.append(json.loads(json.dumps(item, sort_keys=True)))
         except (TypeError, ValueError) as error:
@@ -424,8 +445,16 @@ def _apply_observations(state: dict, observations: list[dict], now: float) -> No
                 lease["state"] = "active"
             continue
         process = lease.get("process")
+        if _attested_stop(observation):
+            if process is not None:
+                lease["state"] = "dead_unreconciled"
+            elif "release_outcome" in lease:
+                lease["state"] = "quiescent"
+                lease["quiescent_monotonic"] = now
+            else:
+                lease["state"] = "observed_stopped"
+            continue
         if process is None:
-            lease["state"] = "starting"
             continue
         if (
             observation.get("pid") != process["pid"]
@@ -478,10 +507,18 @@ def _smoke_blockers(state: dict) -> list[str]:
             reasons.append(f"{prefix}:backend_request_active")
         if observation.get("inference_lease_active") is not False:
             reasons.append(f"{prefix}:inference_lease_active")
-        if lease.get("checkpoint_required") and observation.get(
-            "checkpoint_observed", observation.get("checkpoint")) is not True:
+        if (
+            lease.get("checkpoint_required")
+            and not _attested_stop(observation)
+            and observation.get(
+                "checkpoint_observed", observation.get("checkpoint")) is not True
+        ):
             reasons.append(f"{prefix}:checkpoint_missing")
     return reasons
+
+
+def _attested_stop(observation: dict) -> bool:
+    return observation.get("never_spawned") is True or "reaped_spawn" in observation
 
 
 def _hosted_writer_blocks(owner: dict | None, request: dict, observation: dict) -> bool:

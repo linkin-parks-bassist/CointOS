@@ -85,13 +85,17 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
         raise ValueError("config_fd must be an open file descriptor")
     if (type(child_argv) is not list or not child_argv
             or any(type(argument) is not str for argument in child_argv)):
+        error = ValueError("child_argv must be a non-empty list of strings")
+        error.launch_failure = {"spawned": False}
         os.close(config_fd)
-        raise ValueError("child_argv must be a non-empty list of strings")
+        raise error
     if (type(child_env) is not dict
             or any(type(key) is not str or type(value) is not str
                    for key, value in child_env.items())):
+        error = ValueError("child_env must contain string keys and values")
+        error.launch_failure = {"spawned": False}
         os.close(config_fd)
-        raise ValueError("child_env must contain string keys and values")
+        raise error
 
     gate_read_fd, gate_write_fd = os.pipe()
     process = None
@@ -122,7 +126,7 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
             "outcome": None,
         }
         return record
-    except Exception:
+    except Exception as error:
         if gate_read_fd >= 0:
             os.close(gate_read_fd)
         if record is None and process is not None:
@@ -137,10 +141,17 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
                 "outcome": None,
             }
         if record is not None:
-            gated_child_cleanup(record, 0.2)
+            error.launch_failure = {
+                "spawned": True,
+                "pid": record["pid"],
+                "start_ticks": record.get("start_ticks"),
+                "pgid": record["pgid"],
+                "cleanup": gated_child_cleanup(record, 0.2),
+            }
         else:
             os.close(gate_write_fd)
             os.close(config_fd)
+            error.launch_failure = {"spawned": False}
         raise
 
 
@@ -374,6 +385,7 @@ def launch_runner_round(
         job.pop("inference_lease_id", None)
         job.pop("runner_worker_request", None)
         job.pop("runner_sequence_request", None)
+        job.pop("runner_spawn_failure", None)
         cli.atomic_json(job_path, job)
     elif job.get("state") != "runner_starting":
         raise ValueError("runner round requires ready or runner_starting job")
@@ -390,6 +402,7 @@ def launch_runner_round(
     launch_record = None
     inference_lease = None
     credential_issued = False
+    process_registered = False
     try:
         worker_lease = acquire(root, worker_request, clock)
         if worker_lease.get("state") == "deferred":
@@ -428,6 +441,7 @@ def launch_runner_round(
             root, worker_lease["lease_id"], launch_record["pid"],
             launch_record["start_ticks"], clock,
         )
+        process_registered = True
         job["runner_phase"] = "process_registered"
         cli.atomic_json(job_path, job)
         sequence_request = _runner_sequence_request(
@@ -546,43 +560,68 @@ def launch_runner_round(
                     )
         else:
             cleanup_outcome = None
+            failure = getattr(error, "launch_failure", None)
             if launch_record is not None:
                 cleanup_outcome = gated_child_cleanup(launch_record)
+            elif failure is not None and failure.get("spawned") is True:
+                launch_record = {
+                    "pid": failure["pid"],
+                    "start_ticks": failure.get("start_ticks"),
+                    "pgid": failure.get("pgid"),
+                }
+                cleanup_outcome = failure["cleanup"]
+            job["runner_spawn_failure"] = {
+                "phase": job.get("runner_phase"),
+                "error": f"{type(error).__name__}: {error}",
+                "spawned": launch_record is not None,
+                "cleanup_state": (
+                    cleanup_outcome["state"] if cleanup_outcome is not None else None
+                ),
+            }
             if cleanup_outcome is not None and cleanup_outcome["state"] != "reaped":
                 job.update(
                     state="reconciliation_required", updated_at=cli.now(),
                     worker_lease_id=worker_lease["lease_id"],
                     executor_pid=launch_record["pid"],
-                    executor_start_ticks=launch_record["start_ticks"],
+                    executor_start_ticks=launch_record.get("start_ticks"),
                     executor_pgid=launch_record["pgid"],
                     reconciliation_reason="gated process group termination is unresolved",
                 )
                 cli.atomic_json(job_path, job)
                 raise
+            worker_outcome = {
+                "state": "failed",
+                "error": f"{type(error).__name__}: {error}",
+            }
             if worker_lease is not None:
-                if launch_record is not None:
+                if process_registered:
                     _observe_stopped_worker(
                         root, worker_lease, launch_record, cleanup_outcome,
-                        {"state": "failed",
-                         "error": f"{type(error).__name__}: {error}"},
-                        clock, release, observe,
+                        worker_outcome, clock, release, observe,
                     )
-                else:
-                    worker_outcome = {
-                        "state": "failed",
-                        "error": f"{type(error).__name__}: {error}",
-                    }
+                elif launch_record is not None:
                     release(root, worker_lease["lease_id"], worker_outcome, clock)
-                    job.update(
-                        state="reconciliation_required", updated_at=cli.now(),
-                        worker_lease_id=worker_lease["lease_id"],
-                        reconciliation_reason=(
-                            "R1 cannot quiesce a released lease without registered process "
-                            "or owner-supported never-spawned evidence"
-                        ),
-                    )
-                    cli.atomic_json(job_path, job)
-                    raise
+                    observe(root, [{
+                        "lease_id": worker_lease["lease_id"],
+                        "reaped_spawn": {
+                            "pid": launch_record["pid"],
+                            "process_start_ticks": launch_record.get("start_ticks"),
+                            "returncode": cleanup_outcome.get("returncode"),
+                            "process_group_alive": False,
+                        },
+                        "process_group_alive": False,
+                        "backend_request_active": False,
+                        "inference_lease_active": False,
+                    }], clock)
+                else:
+                    release(root, worker_lease["lease_id"], worker_outcome, clock)
+                    observe(root, [{
+                        "lease_id": worker_lease["lease_id"],
+                        "never_spawned": True,
+                        "process_group_alive": False,
+                        "backend_request_active": False,
+                        "inference_lease_active": False,
+                    }], clock)
             job.update(state="ready", updated_at=cli.now(),
                        runner_deferred_reasons=[f"{type(error).__name__}: {error}"])
         cli.atomic_json(job_path, job)
