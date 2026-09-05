@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -28,6 +29,10 @@ def contract(workspace, **changes):
             "write_paths": [str(workspace / "agent_notes")],
         },
         "authority_profile": "bounded_maintenance",
+        "requirements": {
+            "required_capabilities": ["coding", "tool-calling"],
+            "minimum_context_tokens": 16384,
+        },
         "acceptance": [{"kind": "command", "value": "python3 -m unittest"}],
         "budget": budget(),
         "source_key": "test:bounded-invariant",
@@ -36,6 +41,27 @@ def contract(workspace, **changes):
     }
     value.update(changes)
     return value
+
+
+def accepted_workspace_policy(root, profiles=("bounded_maintenance",)):
+    values = {
+        "version": 1,
+        "authority_profiles": [
+            {"id": profile, "workload_class": "work",
+             "effects": ["read_scoped_files", "write_scoped_files"]}
+            for profile in profiles
+        ],
+        "workspaces": [{"id": "test", "path": str(root), "provenance": "personal",
+                        "mode": "active"}],
+    }
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    snapshot = {"schema_version": 1, "values": values,
+                "digest": hashlib.sha256(canonical).hexdigest(),
+                "activated_at": "2026-09-05T00:00:00+00:00",
+                "source_path": str(root / "config/workspaces.json")}
+    policy_path = root / "state/workspaces-policy.json"
+    policy_path.parent.mkdir(parents=True, exist_ok=True)
+    policy_path.write_text(json.dumps(snapshot), encoding="utf-8")
 
 
 def test_budget_is_explicit_and_positive():
@@ -119,15 +145,21 @@ def test_enqueue_requires_contract_and_child_replay_debits_once():
         for relative in ("ecosystem", "agent_notes", "roles"):
             (root / relative).mkdir(exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
+        accepted_workspace_policy(root)
         try:
             cli.enqueue_task("worker", "unbounded")
         except ValueError:
             pass
         else:
             raise AssertionError("task without contract was enqueued")
-        parent_contract = contract(root)
+        parent_contract = contract(root, objective="bounded")
         parent_id = cli.enqueue_task("worker", "bounded", task_contract=parent_contract)
         parent = json.loads((root / f"state/jobs/{parent_id}.json").read_text())
+        assert parent["authority_profile"] == "bounded_maintenance"
+        assert parent["requirements"] == parent_contract["requirements"]
+        assert parent["scope"] == parent_contract["scope"]
+        assert parent["write_paths"] == parent_contract["scope"]["write_paths"]
+        assert parent["workload_class"] == "work"
         child_contract = contract(
             root,
             scope={"workspace": str(root), "read_paths": [str(root / "ecosystem")],
@@ -142,6 +174,38 @@ def test_enqueue_requires_contract_and_child_replay_debits_once():
         assert first == second
         assert saved_parent["remaining_budget"]["task_seconds"] == 600
         assert saved_parent["remaining_budget"]["maximum_children"] == 0
+
+
+def test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallback():
+    with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+        root = Path(temporary).resolve()
+        cli.initialize()
+        (root / "roles").mkdir()
+        (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
+        accepted_workspace_policy(root, profiles=("ordinary",))
+        invalid = contract(root, objective="bounded", authority_profile="forged_admin")
+        try:
+            cli.enqueue_task("sole_survivor", "bounded", source="resource-emergency:forged",
+                             task_contract=invalid)
+        except ValueError as error:
+            assert str(error) == "unknown authority profile"
+        else:
+            raise AssertionError("role or source spelling admitted unknown authority")
+
+
+def test_trusted_intake_rejects_task_objective_disagreement():
+    with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+        root = Path(temporary).resolve()
+        cli.initialize()
+        (root / "roles").mkdir()
+        (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
+        accepted_workspace_policy(root)
+        try:
+            cli.enqueue_task("worker", "different task", task_contract=contract(root))
+        except ValueError as error:
+            assert str(error) == "task differs from validated objective"
+        else:
+            raise AssertionError("task text diverged from validated objective")
 
 
 def test_temporary_role_loads_without_code_change():
@@ -160,6 +224,8 @@ def load_tests(_loader, _tests, _pattern):
         test_contract_rejects_unstructured_acceptance,
         test_child_cannot_widen_scope_authority_or_shared_budget,
         test_enqueue_requires_contract_and_child_replay_debits_once,
+        test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallback,
+        test_trusted_intake_rejects_task_objective_disagreement,
         test_temporary_role_loads_without_code_change,
     )
     return unittest.TestSuite(unittest.FunctionTestCase(item) for item in functions)

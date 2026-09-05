@@ -1,4 +1,5 @@
 import json
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -82,7 +83,36 @@ def initialize_survivor_context(root):
     (root / "roles/_base.md").write_text("Base context.\n", encoding="utf-8")
     (root / "roles/sole_survivor.md").write_text("Survivor context.\n", encoding="utf-8")
     (root / "AGENTS.md").write_text("Repository instructions.\n", encoding="utf-8")
-    (root / "config/workspaces.json").write_text("{}\n", encoding="utf-8")
+    values = {"version": 1,
+              "authority_profiles": [{"id": "sole_survivor", "workload_class": "repair", "effects": [
+                  "read_scoped_files", "write_scoped_files", "recover_resources"]}],
+              "workspaces": [{"id": "test", "path": str(root.resolve()),
+                              "provenance": "personal", "mode": "active"}]}
+    (root / "config/workspaces.json").write_text(json.dumps(values), encoding="utf-8")
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    snapshot = {"schema_version": 1, "values": values,
+                "digest": hashlib.sha256(canonical).hexdigest(),
+                "activated_at": "2026-09-05T00:00:00+00:00",
+                "source_path": str((root / "config/workspaces.json").resolve())}
+    (root / "state/workspaces-policy.json").write_text(json.dumps(snapshot), encoding="utf-8")
+
+
+def survivor_contract(root, objective, source_key):
+    resolved = root.resolve()
+    return {
+        "objective": objective,
+        "scope": {"workspace": str(resolved), "read_paths": [str(resolved)],
+                  "write_paths": [str(resolved)]},
+        "authority_profile": "sole_survivor",
+        "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
+                         "minimum_context_tokens": 32768},
+        "acceptance": [],
+        "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
+                   "maximum_output_bytes": 65536, "maximum_evidence_items": 20,
+                   "maximum_children": 0},
+        "source_key": source_key, "parent_job_id": "task-failed",
+        "stop_condition": "Stop after bounded recovery evidence.",
+    }
 
 
 def emergency_health(status="ready", ctx_size=65536, parallel_requests=2):
@@ -1204,6 +1234,7 @@ def test_survivor_collision_with_unintended_task_is_not_promoted(root):
         model_reason="The dedicated bounded emergency model is the only model admitted after OOM.",
         agent_name="Sole Survivor",
         idempotency_key=idempotency_key,
+        task_contract=survivor_contract(root, "UNINTENDED TASK", idempotency_key),
     )
     before = read_job(root, identifier)
 
@@ -1238,7 +1269,9 @@ def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
         "id", "kind", "state", "attempts", "created_at", "updated_at", "role",
         "task", "source", "model", "model_reason", "requested_model",
         "requested_model_reason", "prefer_models_other_than", "agent_name",
-        "idempotency_key", "context_tokens", "prompt", "original_prompt",
+        "idempotency_key", "task_contract", "remaining_budget", "context_tokens",
+        "authority_profile", "requirements", "scope", "write_paths",
+        "workload_class", "prompt", "original_prompt",
     }
     assert canonical["kind"] == "agent-task"
     assert canonical["state"] == "ready"

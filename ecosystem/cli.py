@@ -73,12 +73,15 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
                  task_contract: dict | None = None) -> str:
     from ecosystem.identity import validate, generate
     from ecosystem.roles import resolve_role
-    from ecosystem.task_contracts import validate_task_contract
+    from ecosystem.task_contracts import resolve_task_intake
 
     initialize()
     if task_contract is None:
         raise ValueError("executable work requires an explicit task contract")
-    validated_contract = validate_task_contract(task_contract)
+    intake = resolve_task_intake(task_contract, ROOT)
+    validated_contract = intake["task_contract"]
+    if type(task) is not str or task.strip() != validated_contract["objective"]:
+        raise ValueError("task differs from validated objective")
     job_id = (f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
               if idempotency_key else f"task-{uuid.uuid4().hex[:16]}")
     job_path = ROOT / "state/jobs" / f"{job_id}.json"
@@ -108,6 +111,11 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
             "agent_name": agent_name,
             "task_contract": validated_contract,
             "remaining_budget": dict(validated_contract["budget"]),
+            "authority_profile": intake["authority_profile"],
+            "requirements": intake["requirements"],
+            "scope": intake["scope"],
+            "write_paths": intake["write_paths"],
+            "workload_class": intake["workload_class"],
         }
         if idempotency_key:
             job["idempotency_key"] = idempotency_key
@@ -120,7 +128,8 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
 
 def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) -> str:
     from ecosystem.identity import generate
-    from ecosystem.task_contracts import BUDGET_FIELDS, narrow_contract, validate_task_contract
+    from ecosystem.task_contracts import (BUDGET_FIELDS, narrow_contract,
+                                          resolve_task_intake)
 
     if type(idempotency_key) is not str or not idempotency_key:
         raise ValueError("child enqueue requires an idempotency key")
@@ -142,7 +151,7 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
         if reservation is None:
             validated = narrow_contract(current_parent, child_contract)
         else:
-            validated = validate_task_contract(child_contract)
+            validated = resolve_task_intake(child_contract, ROOT)["task_contract"]
             if reservation != {"child_job_id": child_id, "task_contract": validated}:
                 raise ValueError("child reservation replay changed contract")
         if child_path.exists():
@@ -154,6 +163,7 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
             return child_id
         if validated["parent_job_id"] != parent_id:
             raise ValueError("child names a different parent")
+        intake = resolve_task_intake(validated, ROOT)
         if reservation is None:
             remaining = dict(current_parent.get(
                 "remaining_budget", current_parent["task_contract"]["budget"]))
@@ -185,6 +195,11 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
             "agent_name": generate("agent", validated["objective"]),
             "task_contract": validated,
             "remaining_budget": dict(validated["budget"]),
+            "authority_profile": intake["authority_profile"],
+            "requirements": intake["requirements"],
+            "scope": intake["scope"],
+            "write_paths": intake["write_paths"],
+            "workload_class": intake["workload_class"],
             "idempotency_key": idempotency_key,
         }
         atomic_json(child_path, child_job)
@@ -196,11 +211,14 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
 def amend_latest_task(source: str, role: str | None, task: str, model: str | None = None,
                       model_reason: str = "", idempotency_key: str | None = None,
                       task_contract: dict | None = None) -> str | None:
-    from ecosystem.task_contracts import validate_task_contract
+    from ecosystem.task_contracts import resolve_task_intake
 
     if task_contract is None:
         raise ValueError("amended executable work requires an explicit task contract")
-    validated_contract = validate_task_contract(task_contract)
+    intake = resolve_task_intake(task_contract, ROOT)
+    validated_contract = intake["task_contract"]
+    if type(task) is not str or task.strip() != validated_contract["objective"]:
+        raise ValueError("task differs from validated objective")
     candidates = []
     for path in (ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
@@ -216,6 +234,9 @@ def amend_latest_task(source: str, role: str | None, task: str, model: str | Non
         prompt.unlink(missing_ok=True)
     job.update(role=role, task=task.strip(), task_contract=validated_contract,
                remaining_budget=dict(validated_contract["budget"]),
+               authority_profile=intake["authority_profile"],
+               requirements=intake["requirements"], scope=intake["scope"],
+               write_paths=intake["write_paths"], workload_class=intake["workload_class"],
                state="queued", updated_at=now())
     if model is not None:
         job.update(requested_model=model,

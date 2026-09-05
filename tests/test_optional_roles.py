@@ -1,10 +1,44 @@
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from ecosystem import cli, control_agent, control_runtime, control_turns, roles
+
+
+def task_contract(root: Path, objective: str) -> dict:
+    return {
+        "objective": objective,
+        "scope": {"workspace": str(root.resolve()), "read_paths": [str(root.resolve())],
+                  "write_paths": []},
+        "authority_profile": "ordinary",
+        "requirements": {"required_capabilities": ["tool-calling"],
+                         "minimum_context_tokens": 16384},
+        "acceptance": [],
+        "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
+                   "maximum_output_bytes": 65536, "maximum_evidence_items": 20,
+                   "maximum_children": 0},
+        "source_key": f"test:{objective}", "parent_job_id": None,
+        "stop_condition": "Stop after the bounded test task.",
+    }
+
+
+def write_workspace_policy(root: Path) -> None:
+    values = {"version": 1,
+              "authority_profiles": [{"id": "ordinary", "workload_class": "work",
+                                      "effects": ["read_scoped_files"]}],
+              "workspaces": [{"id": "test", "path": str(root.resolve()),
+                              "provenance": "personal", "mode": "active"}]}
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
+    snapshot = {"schema_version": 1, "values": values,
+                "digest": hashlib.sha256(canonical).hexdigest(),
+                "activated_at": "2026-09-05T00:00:00+00:00",
+                "source_path": str((root / "config/workspaces.json").resolve())}
+    (root / "config").mkdir(exist_ok=True)
+    (root / "config/workspaces.json").write_text(json.dumps(values), encoding="utf-8")
+    (root / "state/workspaces-policy.json").write_text(json.dumps(snapshot), encoding="utf-8")
 
 
 def with_root(function):
@@ -17,6 +51,7 @@ def with_root(function):
                 "# Base Agent\n\n## Mission\nComplete the assigned task safely.\n",
                 encoding="utf-8",
             )
+            write_workspace_policy(root)
             function(root)
     run.__name__ = function.__name__
     return run
@@ -68,14 +103,16 @@ def test_control_plane_role_file_is_not_spawnable_context(root):
 @with_root
 def test_enqueue_unknown_role_does_not_fail(root):
     job_id = cli.enqueue_task(
-        "mathematical_mongoose", "inspect the invariant", agent_name="Noether"
+        "mathematical_mongoose", "inspect the invariant", agent_name="Noether",
+        task_contract=task_contract(root, "inspect the invariant"),
     )
     assert read_job(root, job_id)["role"] == "mathematical_mongoose"
 
 
 @with_root
 def test_enqueue_without_role_uses_a_safe_identity_fallback(root):
-    job_id = cli.enqueue_task(None, "inspect the invariant")
+    job_id = cli.enqueue_task(None, "inspect the invariant",
+                              task_contract=task_contract(root, "inspect the invariant"))
     job = read_job(root, job_id)
     assert job["role"] is None
     assert job["agent_name"].startswith("agent-")
@@ -90,35 +127,36 @@ def test_unsafe_role_label_does_not_reach_identity_generation(root):
         return "Noether"
 
     with patch("ecosystem.identity.generate", side_effect=generate):
-        job_id = cli.enqueue_task("../../etc/passwd", "inspect the invariant")
+        job_id = cli.enqueue_task("../../etc/passwd", "inspect the invariant",
+                                  task_contract=task_contract(root, "inspect the invariant"))
     assert generated_for == ["agent"]
     assert read_job(root, job_id)["role"] == "../../etc/passwd"
 
 
 @with_root
-def test_deep_control_preserves_unknown_role_label(root):
+def test_deep_control_cannot_mint_authority_for_unknown_role(root):
     control_turns.accept(7, 42, 42, "inspect the invariant")
     arguments = {
         "role": "mathematical_mongoose",
         "task": "inspect the invariant",
         "agent_name": "Noether",
+        "task_contract": task_contract(root, "inspect the invariant"),
     }
-    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}):
-        result = control_runtime.execute_tool("telegram-7", "queue_task", arguments)
-    assert result["ok"] is True
-    job_path = next((root / "state/jobs").glob("task-*.json"))
-    assert json.loads(job_path.read_text(encoding="utf-8"))["role"] == "mathematical_mongoose"
+    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}), \
+            unittest.TestCase().assertRaisesRegex(ValueError, "trusted contact conversion"):
+        control_runtime.execute_tool("telegram-7", "queue_task", arguments)
+    assert list((root / "state/jobs").glob("task-*.json")) == []
 
 
 @with_root
-def test_deep_control_accepts_omitted_role(root):
+def test_deep_control_without_role_still_needs_trusted_contact_conversion(root):
     control_turns.accept(8, 42, 42, "inspect the invariant")
-    arguments = {"task": "inspect the invariant", "agent_name": "Noether"}
-    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}):
-        result = control_runtime.execute_tool("telegram-8", "queue_task", arguments)
-    assert result["ok"] is True
-    job_path = next((root / "state/jobs").glob("task-*.json"))
-    assert json.loads(job_path.read_text(encoding="utf-8"))["role"] is None
+    arguments = {"task": "inspect the invariant", "agent_name": "Noether",
+                 "task_contract": task_contract(root, "inspect the invariant")}
+    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}), \
+            unittest.TestCase().assertRaisesRegex(ValueError, "trusted contact conversion"):
+        control_runtime.execute_tool("telegram-8", "queue_task", arguments)
+    assert list((root / "state/jobs").glob("task-*.json")) == []
 
 
 @with_root
