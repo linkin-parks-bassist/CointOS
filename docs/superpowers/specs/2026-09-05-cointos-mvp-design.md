@@ -148,15 +148,17 @@ front lane has one exclusive physical sequence. Proxy/session credentials or
 process configuration identify the admitted owner; client-supplied priority alone
 cannot steal that lane. Root emergency mechanics do not depend on this arbiter.
 
-David's independently launched local inference is represented by an explicit
-operator-session lease rather than inferred from backend busy state. The launcher
-binds the selected model/context to its exact PID and start time; explicit release
+David's independently launched user-driven agents, including sessions started with
+`lemonade opencode launch`, are represented by explicit operator-session leases
+rather than inferred from backend busy state. The launcher binds the selected
+model/context and agent session to its exact PID and start time; explicit release
 or verified process exit ends the lease. While admitted, ordinary scheduling,
 repair and pressure management may not evict, unload, replace or resize that model.
 Coin may preempt the operator lease only when Coin's reserved physical capacity
 cannot otherwise be realized. Survival authority may still terminate it to prevent
-OOM or loss of host responsiveness. Operator sessions remain outside agent budgets,
-generations and handoff state.
+OOM or loss of host responsiveness. User-driven operator sessions remain outside
+CointOS-managed agent budgets, generations, dispatch ownership and handoff state;
+CointOS observes their resource ownership without taking over their task lifecycle.
 
 David's required scheduling order is Sole Survivor, Coin, active operator session,
 small health inspectors, large health inspectors, then all other roles. Scheduling rank and protected

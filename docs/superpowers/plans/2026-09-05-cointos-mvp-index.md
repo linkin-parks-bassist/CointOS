@@ -17,7 +17,7 @@ deployment evidence is still pending. Merge and publication remain separately co
 ## Global constraints
 
 - Coin stays available; no OOM; seamless handovers across dynamically chosen model/context allocations, including smaller destinations.
-- Sole Survivor > Coin > active operator session > small health inspectors > large health inspectors > other roles. Scheduling rank never steals Coin's physical reserve. An admitted operator session prevents ordinary eviction, unload and context resizing; Coin may preempt it only when Coin's reserved capacity cannot otherwise be realized.
+- Sole Survivor > Coin > active user-driven agent session > small health inspectors > large health inspectors > other roles. Scheduling rank never steals Coin's physical reserve. An admitted user-driven session prevents ordinary eviction, unload and context resizing; Coin may preempt it only when Coin's reserved capacity cannot otherwise be realized. This covers independently launched tools such as `lemonade opencode launch`, not only bare inference clients.
 - Functions and plain data only; lowercase snake_case; no new class-based framework, database or configuration language.
 - Personal CointOS scope only. Preserve dirty work, credentials, professional/customer boundaries and append-only runtime records.
 - Registered local tasks use the largest safely feasible qualified model, then its largest safe context. Local model runs have no wall-time limit. Interrupt them only when a GPU-involving smoke test is ready and competing for the GPU; first obtain a completion/checkpoint handoff and observe process/request exit. Resource guardians may still terminate a run to prevent OOM or loss of host responsiveness. Codex waits for completion/checkpoint **and process/request exit** before smoke tests.
@@ -53,7 +53,7 @@ Dependencies below refer to accepted task outputs, not merely agent completion. 
 | R2 | Measured model/context selection without resident bypass | R1 | Resources |
 | R3 | Trusted role priority and actual sequence reservations | R2 | Resources |
 | R4 | Every inference caller, including OpenCode, passes admitted boundary | R3 | Resources |
-| R8 | David's independently launched inference holds an explicit operator lease that ordinary management cannot evict | R4 | Resources |
+| R8 | David's independently launched user-driven agents hold explicit operator leases that ordinary management cannot evict | R4 | Resources |
 | R5 | Enforced execution/output/attempt budgets and real partial handoff | R4, R8, A1 | Resources |
 | R6 | Destination-sized durable continuation across contexts/models | R5 | Resources |
 | R7 | Pressure prevention, independent gates and exclusive OOM recovery | R6 | Resources |
@@ -101,7 +101,7 @@ Only one integrator writes shared `cli.py`, `executor.py`, `models.py`, `inferen
 | --- | --- | --- |
 | Validated configuration snapshots | Q1 parsing/adoption helpers; each family validates its semantics | All policy consumers receive records, not raw strings |
 | Task identity, authority and cumulative budget | A1 task contract + existing job transitions | Contact, autonomy, repair, messaging, executor |
-| Physical model/context capacity | R2 measured routes, R3 leases, R4 sole backend request path, R8 operator leases | Every local model invocation, including David's independent tools/OpenCode |
+| Physical model/context capacity | R2 measured routes, R3 leases, R4 sole backend request path, R8 user-driven operator leases | Every local model invocation, including David's independently launched agent tools/OpenCode |
 | Work/smoke admission | R1 workload control | Hosted coordinator, local workers, inference, release and smoke |
 | Runtime budget and continuing logical run | R5/R6 | H3 repair, B2/B3 messages, autonomous and requested jobs |
 | Telegram receipt/delivery | Existing protected gateway + C1/C3 | P2 approval and all ordinary/reporting consumers |

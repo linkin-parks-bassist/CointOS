@@ -39,7 +39,7 @@
 | R2 | modify `ecosystem/models.py`, `config/model-policy.json`, `config/resource-policy.json`; create `tests/test_model_admission.py` | Verified task-qualified model/context routes | R1 request schema |
 | R3 | create `ecosystem/inference_capacity.py`, `tests/test_inference_capacity.py`, `config/scheduling.json`; modify `config/resource-policy.json` | Physical capacity and trusted priority policy | R1, R2 only |
 | R4 | create `ecosystem/inference_proxy.py`, proxy script/unit, `tests/test_inference_enforcement.py`; modify consumers, model policy and lifecycle allowlist | Sole authenticated backend HTTP/SSE authority | R1–R3 |
-| R8 | create `ecosystem/operator_session.py`, `scripts/cointos-opencode`, `tests/test_operator_session.py`; modify R1/R3/resource policy | Explicit operator lease, protected model/context ownership and Coin-only preemption | R1–R4 |
+| R8 | create `ecosystem/operator_session.py`, `scripts/cointos-opencode`, `tests/test_operator_session.py`; modify R1/R3/resource policy | Explicit lease for user-driven agent sessions, protected model/context ownership and Coin-only preemption | R1–R4 |
 | R5 | create `ecosystem/execution_budget.py`, `tests/test_execution_budget.py`; modify `ecosystem/executor.py`, `ecosystem/scheduler.py`, `config/time.cfg` | Budgets, priority consumption, stoppability, fairness | A1 task contracts, R4, R8 |
 | R6 | create `ecosystem/continuation.py`, `tests/test_continuation.py`; modify `ecosystem/executor.py` | Destination-sized, backend-neutral context continuation | R2–R5 |
 | R7 | modify `ecosystem/resource_control.py`, `tests/test_resource_control.py` | Pressure/OOM/recovery composition | R1–R6 |
