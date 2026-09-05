@@ -40,6 +40,86 @@ def test_gate_cannot_clear_pressure_or_lifecycle_pause():
     assert reasons == ["resource:pressure", "lifecycle:paused"]
 
 
+def test_starting_and_dead_unreconciled_leases_defer_new_acquisition():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        first = workload_control.acquire_worker(root, worker_request(), clock)
+        starting_blocked = workload_control.acquire_worker(
+            root,
+            worker_request(request_id="request-two", job_id="task-two"),
+            clock,
+        )
+        assert starting_blocked["state"] == "deferred"
+        assert "lease:starting" in starting_blocked["reasons"]
+
+        workload_control.register_process(root, first["lease_id"], 100, 200, clock)
+        workload_control.observe_workers(root, [{
+            "lease_id": first["lease_id"],
+            "pid": 100,
+            "process_start_ticks": 201,
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+        }], clock)
+        dead_blocked = workload_control.acquire_worker(
+            root,
+            worker_request(request_id="request-three", job_id="task-three"),
+            clock,
+        )
+        assert dead_blocked["state"] == "deferred"
+        assert "lease:dead_unreconciled" in dead_blocked["reasons"]
+
+
+def test_observed_exit_without_recorded_outcome_cannot_admit_smoke():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        clock = lambda: 10.0
+        owner = {"owner_identity": "smoke:one"}
+        lease = workload_control.acquire_worker(root, worker_request(), clock)
+        workload_control.register_process(root, lease["lease_id"], 100, 200, clock)
+        workload_control.begin_drain(root, owner, clock)
+        observation = {
+            "lease_id": lease["lease_id"],
+            "pid": 100,
+            "process_start_ticks": 200,
+            "process_group_alive": False,
+            "backend_request_active": False,
+            "inference_lease_active": False,
+            "checkpoint_observed": True,
+        }
+        observed = workload_control.observe_workers(root, [observation], clock)
+        assert observed["leases"][lease["lease_id"]]["state"] == "observed_stopped"
+        blocked = workload_control.enter_smoke(root, owner, clock, [])
+        assert blocked["state"] == "deferred"
+        assert any("terminal_outcome_missing" in reason for reason in blocked["reasons"])
+
+        workload_control.release_worker(
+            root, lease["lease_id"], {"state": "completed"}, clock)
+        admitted = workload_control.enter_smoke(root, owner, clock, [])
+        assert admitted["state"] == "admitted"
+
+
+def test_admission_preserves_lifecycle_operator_and_deployment_restrictions():
+    restrictive_phases = (
+        "accepted", "acknowledged", "admission_closed", "checkpointing",
+        "stopping", "backend_stopped", "starting", "reconciling", "verifying",
+        "resumed", "blocked", "failed",
+    )
+    for phase in restrictive_phases:
+        reasons = workload_control.admission_reasons(
+            {"mode": "normal"}, {"paused": False, "phase": phase}, {"mode": "open"})
+        assert reasons == [f"lifecycle:{phase}"]
+    assert workload_control.admission_reasons(
+        {"mode": "normal", "operator_mode": "paused"},
+        {
+            "paused": False,
+            "phase": "completed",
+        },
+        {"mode": "open", "deployment_mode": "activating"},
+    ) == ["operator:paused", "deployment:activating"]
+
+
 def test_starting_lease_blocks_smoke_and_inference_until_pid_registration():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
@@ -217,6 +297,9 @@ def load_tests(_loader, _tests, _pattern):
     functions = (
         test_drain_closes_acquisition_before_snapshot,
         test_gate_cannot_clear_pressure_or_lifecycle_pause,
+        test_starting_and_dead_unreconciled_leases_defer_new_acquisition,
+        test_observed_exit_without_recorded_outcome_cannot_admit_smoke,
+        test_admission_preserves_lifecycle_operator_and_deployment_restrictions,
         test_starting_lease_blocks_smoke_and_inference_until_pid_registration,
         test_pid_reuse_is_not_completion,
         test_checkpoint_without_process_and_request_exit_blocks_smoke,

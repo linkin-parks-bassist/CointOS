@@ -35,6 +35,19 @@ def acquire_worker(root: Path, request: dict, clock: Callable[[], float]) -> dic
         if state["mode"] != "open":
             reason = "drain" if state["mode"] == "draining" else state["mode"]
             return {"state": "deferred", "reasons": [reason]}
+        unresolved_states = {
+            lease["state"] for lease in state["leases"].values()
+            if lease["state"] in {"starting", "dead_unreconciled"}
+        }
+        if unresolved_states:
+            return {
+                "state": "deferred",
+                "reasons": [
+                    f"lease:{lease_state}"
+                    for lease_state in ("starting", "dead_unreconciled")
+                    if lease_state in unresolved_states
+                ],
+            }
         lease_id = _lease_id(validated["request_id"], state["generation"])
         lease = {
             "lease_id": lease_id,
@@ -197,7 +210,10 @@ def release_worker(
             return lease.copy()
         lease["release_outcome"] = validated_outcome
         lease["release_requested_monotonic"] = now
-        if lease["state"] != "quiescent":
+        if lease["state"] == "observed_stopped":
+            lease["state"] = "quiescent"
+            lease["quiescent_monotonic"] = now
+        elif lease["state"] != "quiescent":
             lease["state"] = "release_requested"
         save()
         return lease.copy()
@@ -208,15 +224,71 @@ def admission_reasons(
     lifecycle_state: dict,
     work_state: dict,
 ) -> list[str]:
+    if any(type(state) is not dict for state in (
+        resource_state, lifecycle_state, work_state,
+    )):
+        raise ValueError("invalid admission state")
     reasons = []
     resource_mode = resource_state.get("mode", "unknown")
     if resource_mode != "normal":
         reasons.append(f"resource:{resource_mode}")
-    if lifecycle_state.get("paused"):
+    paused = lifecycle_state.get("paused")
+    if paused is not None and type(paused) is not bool:
+        raise ValueError("invalid lifecycle pause")
+    if paused:
         reasons.append("lifecycle:paused")
+    lifecycle_mode = lifecycle_state.get("phase", lifecycle_state.get("mode"))
+    if lifecycle_mode is not None:
+        if type(lifecycle_mode) is not str or not lifecycle_mode:
+            raise ValueError("invalid lifecycle mode")
+        if lifecycle_mode not in {"normal", "completed"}:
+            reason = f"lifecycle:{lifecycle_mode}"
+            if reason not in reasons:
+                reasons.append(reason)
+    elif paused is None:
+        reasons.append("lifecycle:unknown")
+    for restriction in ("operator", "deployment"):
+        reason = _restriction_reason(
+            restriction, resource_state, lifecycle_state, work_state)
+        if reason is not None:
+            reasons.append(reason)
     if work_state.get("mode") in {"draining", "smoke"}:
         reasons.append(f"work:{work_state['mode']}")
     return reasons
+
+
+def _restriction_reason(name: str, *states: dict) -> str | None:
+    for state in states:
+        for key in (f"{name}_paused", f"{name}_pause"):
+            if key in state:
+                value = state[key]
+                if type(value) is not bool:
+                    raise ValueError(f"invalid {name} pause")
+                if value:
+                    return f"{name}:paused"
+        mode_key = f"{name}_mode"
+        if mode_key in state:
+            mode = state[mode_key]
+            if type(mode) is not str or not mode:
+                raise ValueError(f"invalid {name} mode")
+            if mode != "normal":
+                return f"{name}:{mode}"
+        nested = state.get(name)
+        if nested is not None:
+            if type(nested) is not dict:
+                raise ValueError(f"invalid {name} state")
+            paused = nested.get("paused")
+            if paused is not None and type(paused) is not bool:
+                raise ValueError(f"invalid {name} pause")
+            if paused:
+                return f"{name}:paused"
+            mode = nested.get("mode")
+            if mode is not None:
+                if type(mode) is not str or not mode:
+                    raise ValueError(f"invalid {name} mode")
+                if mode != "normal":
+                    return f"{name}:{mode}"
+    return None
 
 
 @contextmanager
@@ -343,8 +415,11 @@ def _apply_observations(state: dict, observations: list[dict], now: float) -> No
                 lease["state"] = "dead_unreconciled"
             elif observation.get(
                 "writer_active", observation.get("writer")) is False:
-                lease["state"] = "quiescent"
-                lease["quiescent_monotonic"] = now
+                if "release_outcome" in lease:
+                    lease["state"] = "quiescent"
+                    lease["quiescent_monotonic"] = now
+                else:
+                    lease["state"] = "observed_stopped"
             else:
                 lease["state"] = "active"
             continue
@@ -369,8 +444,11 @@ def _apply_observations(state: dict, observations: list[dict], now: float) -> No
                 "checkpoint_observed", observation.get("checkpoint")) is not True
         )
         if not process_active and not backend_active and not inference_active and not checkpoint_missing:
-            lease["state"] = "quiescent"
-            lease["quiescent_monotonic"] = now
+            if "release_outcome" in lease:
+                lease["state"] = "quiescent"
+                lease["quiescent_monotonic"] = now
+            else:
+                lease["state"] = "observed_stopped"
         elif not process_active:
             lease["state"] = "dead_unreconciled"
         else:
@@ -386,6 +464,8 @@ def _smoke_blockers(state: dict) -> list[str]:
         prefix = f"lease:{lease_id}"
         if lease["state"] in {"starting", "dead_unreconciled", "release_requested"}:
             reasons.append(f"{prefix}:{lease['state']}")
+        if lease["state"] == "observed_stopped":
+            reasons.append(f"{prefix}:terminal_outcome_missing")
         if lease["request"]["stop_method"] == "hosted":
             if _hosted_writer_blocks(state["owner"], lease["request"], observation):
                 reasons.append(f"{prefix}:hosted_writer_active")
