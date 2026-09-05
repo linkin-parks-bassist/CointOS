@@ -116,3 +116,49 @@ Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
   operator concern); hosted independent review of `7c36d88` pending GPT quota;
   the live normal-close smoke still needs the real backend observer
   (Lemonade-side, sequence/request correlation).
+
+R8 (operator session leases) complete.
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
+
+- R8 is a separate owner: `ecosystem/operator_session.py` with its own
+  `state/operator-sessions.json` (schema v1). Lifecycle: acquire (→ starting;
+  idempotent for an identical request; refuses without the `user_driven` band)
+  → register (pid + /proc-stat field-19 start ticks, → active; idempotent for
+  the same identity on an active session; refused on any other state) →
+  release (outcome; idempotent for the same one, raises on mismatch; raises
+  "dead session requires reconciliation, not release" on dead_unreconciled) →
+  observe (release_requested + dead → quiescent; active dead without release →
+  dead_unreconciled) → reconcile (only exit, evidence required). There is no
+  observed_stopped state in this lifecycle. Only *active* sessions are
+  preemptable, and only Coin preempts, with evidence.
+- Scheduling: new `user_driven` band (850) strictly between coin (900) and
+  small_health (800); `effective_priority(..., operator_session=True)` resolves
+  it; ceilings user_driven→coin−1, small_health→user_driven−1 (aging cap now
+  849). The validator fails with explicit band errors, not the generic
+  snapshot error. Snapshot docs are digested: tests that mutate values must
+  rebuild the digest (see `_snapshot_for` in tests/test_inference_capacity.py).
+- `run` CLI: acquire fresh lease, spawn with start_new_session, register the
+  kernel identity, wait, release with the child outcome
+  (run_finished/spawn_failed, returncode); the exit code propagates. Only a
+  fresh starting session may spawn (pre-spawn freshness check — the old
+  "preempted between acquire and spawn" window is gone because preemption
+  targets active sessions only). scripts/cointos-opencode is the bash wrapper
+  (set -euo pipefail; exec python3 -m ecosystem.operator_session).
+- Pressure integration: unload_dynamic_models skips models leased by an active
+  session (record {model, skipped: True, reason, owner_session});
+  enter_pressure preempts the leased session only when no unprotected dynamic
+  model remained to be unloaded (a skip record exists and no other unload
+  failed), with evidence {kind: coin_reserve, required_bytes, incident_id};
+  outcome {state: preempted, returncode: None}; audited as
+  pressure_operator_preemptions, cleared with the other emergency fields.
+- Import graph: resource_control → operator_session → (function-local)
+  executor. operator_session must import executor inside run_command, because
+  executor imports resource_control; a top-level import is a load-order-
+  dependent cycle.
+- David's trust check on the test suite (were failures removed?) resolved by
+  git diff: fixture additions and new tests only, one line deleted (the old
+  minimal scheduling_values); David approved.
+- Follow-ups: a live wrapper smoke against a real model load is a manual
+  operator procedure (no state/scheduling-policy.json is published on this
+  machine and no code writes it); the Lemonade-side backend observer still
+  gates the R4 live normal-close smoke.
