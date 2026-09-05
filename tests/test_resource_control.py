@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ecosystem import cli, resource_control, time_policy
+from ecosystem import cli, operator_session, resource_control, time_policy
 from ecosystem.models import (
     admission,
     choose_route,
@@ -1780,6 +1780,145 @@ def test_pressure_release_restart_failure_keeps_dispatch_halted(root):
     assert "live process" in result["pressure_error"]
     assert read_job(root, interrupted)["state"] == "interrupted"
     assert sleeps == [0.75]
+
+
+def _leased_operator_setup(root):
+    (root / "config").mkdir(exist_ok=True)
+    cli.atomic_json(root / "config/resource-policy.json", {
+        "emergency": {"chat_model": "chat-model"},
+        "physical_capacity": {"coin_reserved_bytes": 8 * 1024 ** 3},
+    })
+    values = {
+        "version": 1,
+        "priority_bands": {"sole_survivor": 1000, "coin": 900,
+                           "user_driven": 850, "small_health": 800,
+                           "large_health": 700, "default": 500},
+        "authority_profiles": {"sole_survivor": "sole_survivor",
+                               "coin": "coin"},
+        "execution_profiles": {"small_health": "small_health",
+                               "large_health": "large_health"},
+        "role_priorities": {"default": 250},
+        "aging_seconds_per_point": 60,
+    }
+    canonical = json.dumps(values, sort_keys=True,
+                           separators=(",", ":")).encode()
+    cli.atomic_json(root / "state/scheduling-policy.json", {
+        "schema_version": 1,
+        "values": values,
+        "digest": hashlib.sha256(canonical).hexdigest(),
+        "activated_at": "2026-09-05T00:00:00+00:00",
+        "source_path": "config/scheduling.json",
+    })
+    clock = lambda: 10.0
+    request = {
+        "session_id": "opencode:load",
+        "owner_identity": "operator:opencode:load",
+        "tool": "opencode",
+        "model_id": "leased-model",
+        "request_id": "opencode:load:opencode",
+    }
+    operator_session.acquire_operator_session(root, request, clock)
+    operator_session.register_operator_process(
+        root, "opencode:load", 4242, 999, clock)
+
+
+def _two_model_health():
+    return {"all_models_loaded": [
+        {"model_name": "leased-model", "loaded": True,
+         "backend_alive": True, "status": "ready"},
+        {"model_name": "plain-model", "loaded": True,
+         "backend_alive": True, "status": "ready"},
+    ]}
+
+
+def _central_policy():
+    return {
+        "inference": {"model_stop_deadline_seconds": 11.0},
+        "resource": {"poll_seconds": 0.01},
+    }
+
+
+@with_root
+def test_unload_skips_models_owned_by_active_sessions(_root):
+    _leased_operator_setup(_root)
+    unloaded = []
+
+    def lemonade(path, payload=None, method=None, timeout=None):
+        unloaded.append(payload.get("model_name") if payload else None)
+        return {"ok": True}
+
+    with patch("ecosystem.resource_control.lemonade_health",
+               return_value=_two_model_health()), \
+            patch("ecosystem.resource_control._lemonade_request",
+                  side_effect=lemonade), \
+            patch.object(time_policy, "load", return_value=_central_policy()):
+        results = resource_control.unload_dynamic_models()
+    assert unloaded == ["plain-model"]
+    assert [record for record in results if record.get("ok")] == [
+        {"model": "plain-model", "ok": True, "response": {"ok": True}}]
+    assert [record for record in results if record.get("skipped")] == [
+        {"model": "leased-model", "skipped": True,
+         "reason": "active operator session lease",
+         "owner_session": "opencode:load"}]
+
+
+@with_root
+def test_pressure_preempts_lease_only_when_nothing_unprotected_remained(_root):
+    _leased_operator_setup(_root)
+    with patch("ecosystem.resource_control.lemonade_health",
+               return_value=_two_model_health()), \
+            patch("ecosystem.resource_control._lemonade_request",
+                  return_value={"ok": True}), \
+            patch("ecosystem.resource_control.checkpoint_running_jobs",
+                  return_value=[]), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()), \
+            patch.object(time_policy, "load", return_value=_central_policy()):
+        state = resource_control.enter_pressure(
+            normal_resource_state(), pressure_snapshot())
+    assert any(record.get("skipped")
+               and record["owner_session"] == "opencode:load"
+               for record in state["pressure_dynamic_unloads"])
+    preemptions = state["pressure_operator_preemptions"]
+    assert [session["session_id"] for session in preemptions] \
+        == ["opencode:load"]
+    assert preemptions[0]["preemption"]["kind"] == "coin_reserve"
+    assert preemptions[0]["preemption"]["required_bytes"] == 8 * 1024 ** 3
+    assert preemptions[0]["preemption"]["incident_id"] \
+        == state["pressure_incident_id"]
+    stored = json.loads((_root / "state/operator-sessions.json")
+                        .read_text(encoding="utf-8"))["sessions"][
+        "opencode:load"]
+    assert stored["state"] == "release_requested"
+    assert stored["release_outcome"] == {
+        "state": "preempted", "returncode": None}
+
+
+@with_root
+def test_pressure_does_not_preempt_while_an_unprotected_unload_failed(_root):
+    _leased_operator_setup(_root)
+
+    def lemonade(path, payload=None, method=None, timeout=None):
+        if payload and payload.get("model_name") == "plain-model":
+            raise RuntimeError("unload refused")
+        return {"ok": True}
+
+    with patch("ecosystem.resource_control.lemonade_health",
+               return_value=_two_model_health()), \
+            patch("ecosystem.resource_control._lemonade_request",
+                  side_effect=lemonade), \
+            patch("ecosystem.resource_control.checkpoint_running_jobs",
+                  return_value=[]), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()), \
+            patch.object(time_policy, "load", return_value=_central_policy()):
+        state = resource_control.enter_pressure(
+            normal_resource_state(), pressure_snapshot())
+    assert "pressure_operator_preemptions" not in state
+    stored = json.loads((_root / "state/operator-sessions.json")
+                        .read_text(encoding="utf-8"))["sessions"][
+        "opencode:load"]
+    assert stored["state"] == "active"
 
 
 def load_tests(_loader, _tests, _pattern):

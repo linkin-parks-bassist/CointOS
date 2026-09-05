@@ -19,7 +19,7 @@ from pathlib import Path
 
 from survival import records
 
-from ecosystem import executor, inference_capacity
+from ecosystem import inference_capacity
 
 
 STATE_VERSION = 1
@@ -225,6 +225,9 @@ def run_command(
         raise ValueError(
             f"operator session {session['session_id']} is not fresh "
             f"(state: {session['state']}); release or reconcile it first")
+    # Local import: executor imports resource_control, which imports this
+    # module; the kernel-identity reader is only needed at spawn time.
+    from ecosystem import executor
     child = subprocess.Popen(command, start_new_session=True)
     try:
         identity = executor.process_identity(child.pid)

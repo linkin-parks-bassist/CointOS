@@ -15,7 +15,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ecosystem import cli, time_policy
+from ecosystem import cli, operator_session, time_policy
 
 
 POLICY_PATH = cli.ROOT / "config/resource-policy.json"
@@ -94,6 +94,7 @@ ACTIVE_EMERGENCY_FIELDS = (
     "pressure_released_at",
     "pressure_interrupted_jobs",
     "pressure_dynamic_unloads",
+    "pressure_operator_preemptions",
     "pressure_client_stop_result",
     "pressure_client_start_result",
     "pressure_error",
@@ -580,6 +581,15 @@ def unload_dynamic_models() -> list[dict]:
         model_name = item.get("model_name")
         if not model_name or model_name == preserved:
             continue
+        owner = operator_session.operator_session_owns_model(cli.ROOT, model_name)
+        if owner:
+            results.append({
+                "model": model_name,
+                "skipped": True,
+                "reason": "active operator session lease",
+                "owner_session": owner,
+            })
+            continue
         try:
             response = _lemonade_request(
                 "/v1/unload", {"model_name": model_name},
@@ -632,13 +642,37 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
                   error=state["pressure_error"])
         return state
     unloads = unload_dynamic_models()
+    preemptions = _preempt_leased_models_if_unprotected(unloads, incident_id)
     state.update(pressure_dynamic_unloads=unloads)
+    if preemptions:
+        state["pressure_operator_preemptions"] = preemptions
     state.pop("pressure_error", None)
     state.pop("pressure_error_at", None)
     save_state(state)
     cli.audit("resource.pressure_entered", resources=snapshot,
-              interrupted_jobs=interrupted, dynamic_unloads=unloads)
+              interrupted_jobs=interrupted, dynamic_unloads=unloads,
+              operator_preemptions=preemptions)
     return state
+
+
+def _preempt_leased_models_if_unprotected(unloads: list[dict],
+                                          incident_id: str) -> list[dict]:
+    """Coin may take leased capacity only when no unprotected dynamic model
+    remained to be unloaded: every leased model was skipped and every other
+    unload succeeded (or there was nothing else to unload)."""
+    leased = [record for record in unloads if record.get("skipped")]
+    if not leased:
+        return []
+    failures = [record for record in unloads
+                if record.get("skipped") is not True and record.get("ok") is False]
+    if failures:
+        return []
+    return operator_session.preempt_operator_sessions(
+        cli.ROOT,
+        {"kind": "coin_reserve",
+         "required_bytes": policy()["physical_capacity"]["coin_reserved_bytes"],
+         "incident_id": incident_id},
+        time.monotonic)
 
 
 def load_emergency_model() -> dict:
