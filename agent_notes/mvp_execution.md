@@ -203,3 +203,82 @@ Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
   path and consumes these claim fields plus the budget validators.
   Incrementing `agent_generation` on a genuinely new attempt belongs to R5's
   retry/new-attempt path, not to the claim.
+
+## 2026-09-06: R5 — mechanical budgets, stoppability, fairness (`6f119e7`)
+
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
+
+- New `ecosystem/execution_budget.py`, the only module that knows budget
+  arithmetic. `account_usage` is a pure accumulator (input unchanged) over
+  A1's validated budget: `run_started`/`run_stopped` and
+  `task_started`/`task_stopped` markers charge only the *observed* running
+  intervals; `wait` events (`approval`, `queue`, `drain`, `pause`) are
+  explicit zero-cost no-ops; `attempt`/`child`/`output`/`evidence` are
+  counters/deltas. Markers are detected by `in`-presence, not truthiness —
+  the plan's fixture uses `0.0`. Overlapping intervals, unstarted stops,
+  and unknown kinds are ValueError. `budget_outcome` checks in fixed field
+  order (task_seconds, run_seconds, attempts, output, evidence, children)
+  and returns `checkpoint_required` with the exhausted field; an active
+  started-marker interval is counted to `now`. A timer never proves
+  completion. `record_budget_handoff` is the only path to
+  `partial_handoff_ready` and requires a durable nonempty artifact bound to
+  job id and agent generation. `stop_process_group` does SIGINT (wrapup)
+  -> SIGTERM (grace) -> SIGKILL; `observe()` returns the process-group
+  identity only while the pid matches launch identity, and `None` (gone OR
+  reused) is never signalled — the pid-reuse check lives in the caller
+  closure, so the module stays dependency-free.
+- Executor: the fixed 1800s job timeout is gone (and `max_job_seconds`,
+  `queue_age_points_per_minute`, `maximum_starvation_minutes` were removed
+  from `config/model-policy.json` as orphans). `_run_preemptibly` accounts
+  output-file growth and the running interval against
+  `job["remaining_budget"]` (explicit ValueError if absent) each tick.
+  On exhaustion it writes `<id>.handoff-request.md` if no handoff exists,
+  stops through `stop_process_group` (wrapup 30s / grace 15s from
+  `time.cfg [workload]`), and returns the checkpoint outcome + usage.
+  `execute_next` persists `checkpoint_required` with
+  `logical_run_state="terminal"` FIRST, then attests the on-disk handoff
+  (`state/jobs/<id>.handoff.md`, nonempty) into
+  `partial_handoff_ready` via `checkpoint_job_state`; there is no
+  executor-fabricated degraded handoff — that would be timer-proven
+  completion. Audit event: `task.budget_checkpoint`.
+- Scope ruling (supersedes the A1 note's forward pointer above): R5 does
+  NOT increment `agent_generation`. The plan puts "a genuinely new attempt
+  increments agent generation" in R6 (context continuity). Budget
+  exhaustion leaves the job terminal at its current generation;
+  re-attempt happens through a new task/enqueue, which is a control
+  decision, not executor behavior.
+- Scheduler: the static role map, raw age-minutes points, and the
+  starvation term are deleted. `priority(job, scheduling, now)` calls
+  `inference_capacity.effective_priority` with the accepted snapshot
+  DOCUMENT (digest re-validated on every use) — role may be None
+  (defaults to the role_priorities default), jobs without
+  `execution_profile` land in the default band (ceiling 699, so unknown
+  work can never cross into large_health). Score =
+  priority*100000 + resident bonus − dispatch_count*10000. Within-band
+  fairness is entirely the band-bounded aging (1 point/60s), which gives
+  oldest-first rotation without starvation.
+- Operator dependency (live): `executor.execute_next` admission and
+  `cli.prepare_next` now require a published
+  `state/scheduling-policy.json` (same document the R8 wrapper smoke
+  needs). It is not published on the live root — until an operator runs
+  the snapshot procedure, the live scheduler fails explicitly (audit
+  `scheduler.admission_deferred`, admission deferred). No code writes that
+  file.
+- Cautionary tale: a dead process that has not been reaped is a zombie —
+  `/proc/<pid>` still exists, so an `observe()` closure that only checks
+  `/proc` reports "alive" and `stop_process_group` waits out the full
+  wrapup+grace (the preemption tests stalled 90s). The executor closure
+  calls `process.poll()` first, which both reaps the zombie and rules out
+  pid reuse before any identity read.
+- Tests: `tests/test_execution_budget.py` (8, function-based +
+  load_tests), `tests/test_scheduler.py` rewritten function-based (4
+  fairness tests; the old class-based test was migration debt, converted
+  in place), `tests/test_preemption.py` updated for the new
+  `_run_preemptibly(process, command, job, output_path, before_stop,
+  scheduling)` signature (jobs now need `remaining_budget`,
+  `created_at`, `authority_profile`), and `test_intake.py` setUp publishes
+  the scheduling snapshot from the repo's `config/scheduling.json` (the
+  values source of truth; digest computed canonically). Full suite
+  468/468 (457 baseline + 11).
+- Next on the critical path: R6 (context continuity; consumes R5's
+  checkpoint states and A1's generation semantics).
