@@ -31,7 +31,6 @@
     "initial_concurrency": 1,
     "schedule_boundary": "job",
     "batch_same_model_jobs": true,
-    "max_job_seconds": 1800,
     "time_slice_seconds": 300,
     "preemption_grace_seconds": 15,
     "context_rollover_fraction": 0.75,
@@ -40,9 +39,7 @@
       "6_to_12_gb": 600,
       "over_12_gb": 1200
     },
-    "switch_penalty_points_per_gb": 4,
-    "queue_age_points_per_minute": 1,
-    "maximum_starvation_minutes": 30
+    "switch_penalty_points_per_gb": 4
   },
   "principles": [
     "Keep remote control responsive through a reserved foreground lane or background preemption.",

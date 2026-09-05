@@ -22,6 +22,7 @@ from ecosystem.inference_proxy import (
     revoke_proxy_credential,
 )
 from ecosystem.models import realize, route, snapshot
+from ecosystem import scheduler
 from ecosystem.scheduler import choose, policy as scheduling_policy, priority
 from ecosystem.resource_control import job_admitted_in_current_mode, mode as resource_mode, opencode_session_id
 from ecosystem.workload_control import (
@@ -915,57 +916,78 @@ def _waiting_jobs(running_id: str) -> list[dict]:
     return waiting
 
 
-def _preemption_reason(job: dict, started: float) -> str | None:
+def _preemption_reason(job: dict, started: float, scheduling: dict) -> str | None:
     waiting = _waiting_jobs(job["id"])
     if not waiting:
         return None
-    strongest = max(waiting, key=priority)
-    if priority(strongest) > priority(job):
+    strongest = max(waiting, key=lambda item: priority(item, scheduling))
+    if priority(strongest, scheduling) > priority(job, scheduling):
         return (f"higher-priority job {strongest['id']} is waiting "
-                f"({priority(strongest)} > {priority(job)})")
+                f"({priority(strongest, scheduling)} > {priority(job, scheduling)})")
     quantum = float(scheduling_policy()["workers"]["time_slice_seconds"])
     if time.monotonic() - started >= quantum:
         return f"{quantum:.0f}-second time slice expired while other work is waiting"
     return None
 
 
-def _stop_process(process: subprocess.Popen, grace_seconds: float) -> None:
-    try:
-        os.killpg(process.pid, signal.SIGINT)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=grace_seconds)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    try:
-        process.wait(timeout=5)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
-    process.wait(timeout=5)
-
-
 def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
-                     output_path: Path, before_stop) -> dict:
+                     output_path: Path, before_stop, scheduling: dict) -> dict:
+    from ecosystem import execution_budget
+    from ecosystem.time_policy import load as load_time_policy
+
     settings = scheduling_policy()["workers"]
+    budget = job.get("remaining_budget")
+    if type(budget) is not dict:
+        raise ValueError(f"job {job['id']} lacks a remaining budget for execution")
+    times = load_time_policy()["workload"]
+    wrapup_seconds = float(times["wrapup_seconds"])
+    grace_seconds = float(times["termination_grace_seconds"])
     started = time.monotonic()
-    timeout = float(settings["max_job_seconds"])
+    identity = process_identity(process.pid)
+
+    def observe():
+        # A zombie is gone: it can no longer act on signals, and poll()
+        # reaps it so the pid cannot be mistaken for a live or reused one.
+        if process.poll() is not None:
+            return None
+        try:
+            current = process_identity(process.pid)
+        except (OSError, ValueError):
+            return None
+        return current if current["start_ticks"] == identity["start_ticks"] else None
+
+    usage = execution_budget.account_usage(
+        budget, {"attempts": int(job.get("attempts", 0))},
+        {"kind": "run_started", "at": started})
+    usage = execution_budget.account_usage(
+        budget, usage, {"kind": "task_started", "at": started})
+    last_output_bytes = output_path.stat().st_size if output_path.exists() else 0
     while process.poll() is None:
-        elapsed = time.monotonic() - started
-        if elapsed >= timeout:
+        now = time.monotonic()
+        if output_path.exists():
+            size = output_path.stat().st_size
+            if size > last_output_bytes:
+                usage = execution_budget.account_usage(
+                    budget, usage, {"kind": "output", "bytes": size - last_output_bytes})
+                last_output_bytes = size
+        outcome = execution_budget.budget_outcome(budget, usage, now)
+        if outcome["state"] == "checkpoint_required":
+            handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
+            request_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff-request.md"
+            if not handoff_path.exists():
+                cli.atomic_text(request_path, f"""The task budget is exhausted. Do not continue
+the main task. Write a concise, sufficient handoff to `{handoff_path}`.
+Record the objective, authoritative instructions, decisions and rationale, exact completed
+work, changed files, tests and evidence, unresolved risks, and the next concrete action.
+Distinguish verified facts from assumptions. This artifact seeds the next attempt.
+""")
             before_stop()
-            _stop_process(process, float(settings["preemption_grace_seconds"]))
-            raise subprocess.TimeoutExpired(command, timeout)
+            execution_budget.stop_process_group(
+                process.pid, wrapup_seconds, grace_seconds, observe)
+            return {"returncode": process.wait(), "preempted": False,
+                    "budget_checkpoint": outcome, "usage": usage,
+                    "elapsed_seconds": round(time.monotonic() - started, 3)}
+        elapsed = now - started
         context_usage = opencode_context_usage(output_path, job.get("opencode_session"))
         context_limit = int(job.get("context_tokens") or 0)
         rollover_fraction = float(settings["context_rollover_fraction"])
@@ -975,13 +997,14 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
         )
         reason = (f"context reached {context_usage['total_tokens']}/{context_limit} tokens "
                   f"({rollover_fraction:.0%}); durable handoff required"
-                  if context_rollover else _preemption_reason(job, started))
+                  if context_rollover else _preemption_reason(job, started, scheduling))
         if reason:
             session = job.get("opencode_session") or opencode_session_id(output_path)
             # Give OpenCode a short initial window to publish its durable session id.
             if session or elapsed >= float(settings["preemption_grace_seconds"]):
                 before_stop()
-                _stop_process(process, float(settings["preemption_grace_seconds"]))
+                execution_budget.stop_process_group(
+                    process.pid, wrapup_seconds, grace_seconds, observe)
                 session = session or opencode_session_id(output_path)
                 return {"returncode": process.returncode, "preempted": True,
                         "reason": reason, "session": session,
@@ -1015,9 +1038,10 @@ def execute_next(run=subprocess.run) -> bool:
                 ready.append((path, job))
         if ready:
             try:
+                scheduling = scheduler.scheduling_document(cli.ROOT)
                 inventory = snapshot()
-                path, job, scheduling_reason = choose(ready, inventory)
-            except RuntimeError as error:
+                path, job, scheduling_reason = choose(ready, inventory, scheduling)
+            except (OSError, ValueError, json.JSONDecodeError, RuntimeError) as error:
                 cli.audit("scheduler.admission_deferred", reason=str(error))
                 print(str(error))
                 return False
@@ -1127,12 +1151,47 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
 
                     outcome = _run_preemptibly(
                         context["launch"]["process"], command, job, output_path,
-                        cancel_before_stop,
+                        cancel_before_stop, scheduling,
                     )
                     child_outcome = gated_child_wait(context["launch"], 0)
                     closed = close_runner_round(job, path, context, child_outcome)
                     if closed["state"] == "reconciliation_required":
                         print(f"{job['id']} requires inference reconciliation")
+                        return True
+                    if outcome.get("budget_checkpoint"):
+                        from ecosystem import execution_budget
+
+                        checkpoint = outcome["budget_checkpoint"]
+                        handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
+                        handoff = None
+                        try:
+                            if handoff_path.stat().st_size > 0:
+                                handoff = {
+                                    "path": str(handoff_path.relative_to(cli.ROOT)),
+                                    "bytes": handoff_path.stat().st_size,
+                                    "job_id": job["id"],
+                                    "agent_generation": int(job.get("agent_generation", 1)),
+                                }
+                        except OSError:
+                            handoff = None
+                        state_record = execution_budget.checkpoint_job_state(
+                            checkpoint, handoff)
+                        # checkpoint_required is persisted first; only
+                        # record_budget_handoff may produce partial_handoff_ready.
+                        job.update(state=state_record["state"],
+                                   logical_run_state="terminal",
+                                   budget_outcome=checkpoint,
+                                   budget_usage=outcome["usage"],
+                                   updated_at=cli.now())
+                        if handoff:
+                            job["budget_handoff"] = state_record["artifact"]
+                        job.pop("executor_pid", None)
+                        cli.atomic_json(path, job)
+                        cli.audit("task.budget_checkpoint", job_id=job["id"],
+                                  reason=checkpoint["reason"],
+                                  state=state_record["state"])
+                        print(f"{job['id']} budget exhausted "
+                              f"({checkpoint['reason']}): {state_record['state']}")
                         return True
                     if outcome["preempted"]:
                             current = json.loads(path.read_text(encoding="utf-8"))
@@ -1172,7 +1231,7 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                     close_runner_round(job, path, context, cleanup_outcome)
                 if job.get("state") != "reconciliation_required":
                     job.update(state="failed", updated_at=cli.now(),
-                               error="executor timed out after 1800 seconds")
+                               error="executor timed out before a clean runner stop")
             except Exception as error:
                 if job.get("state") not in {"ready", "reconciliation_required"}:
                     job.update(state="failed", updated_at=cli.now(),

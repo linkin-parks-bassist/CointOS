@@ -257,7 +257,7 @@ def prepare_next() -> None:
     from ecosystem.roles import render_context
     from ecosystem.models import route, snapshot
     from ecosystem.resource_control import job_admitted_in_current_mode
-    from ecosystem.scheduler import priority
+    from ecosystem.scheduler import priority, scheduling_document
 
     if (ROOT / "state/PAUSED").exists():
         raise SystemExit("ecosystem is paused")
@@ -267,7 +267,8 @@ def prepare_next() -> None:
         if (job.get("kind") == "agent-task" and job["state"] == "queued"
                 and job_admitted_in_current_mode(job)):
             queued.append((path, job))
-    for path, job in sorted(queued, key=lambda item: (-priority(item[1]), item[1]["created_at"])):
+    scheduling = scheduling_document(ROOT)
+    for path, job in sorted(queued, key=lambda item: (-priority(item[1], scheduling), item[1]["created_at"])):
         inventory = snapshot()
         decision = route(job, inventory)
         job.setdefault("routing_decisions", []).append({"at": now(), **decision})

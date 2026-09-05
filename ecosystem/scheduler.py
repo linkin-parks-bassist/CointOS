@@ -1,8 +1,10 @@
-"""Job-boundary time-sharing policy for model-resident workers."""
+"""Job-boundary time-sharing policy over the trusted scheduling bands."""
 from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+
+from ecosystem.inference_capacity import effective_priority
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "config/model-policy.json"
 
@@ -10,22 +12,25 @@ def policy() -> dict:
     return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
 
 
-def priority(job: dict) -> int:
-    """Explicit scheduling importance; larger values preempt smaller ones."""
-    if job.get("role") == "sole_survivor":
-        return 10000
-    source = str(job.get("source", ""))
-    if source.startswith("telegram:"):
-        return 800
-    if source == "local-cli":
-        return 600
-    if source.startswith("verification:"):
-        return 400
-    if job.get("role") == "steward" or source.startswith("watchdog"):
-        return 100
-    return 500
+def scheduling_document(root: Path) -> dict:
+    """The accepted scheduling snapshot document; its digest is re-validated
+    by the trusted priority helper on every use."""
+    return json.loads((Path(root) / "state" / "scheduling-policy.json")
+                      .read_text(encoding="utf-8"))
 
-def choose(jobs: list[tuple[Path, dict]], inventory: dict, now: datetime | None = None) -> tuple[Path, dict, str]:
+
+def priority(job: dict, scheduling: dict, now: datetime | None = None) -> int:
+    """Trusted band priority for a job; age rises only within its band, so
+    unknown roles stay below the large_health floor and cannot cross bands."""
+    now = now or datetime.now(timezone.utc)
+    created = datetime.fromisoformat(job["created_at"])
+    age_seconds = max(0.0, (now - created).total_seconds())
+    return effective_priority(
+        scheduling, job.get("role"), job.get("execution_profile"),
+        str(job.get("authority_profile") or ""), age_seconds)
+
+def choose(jobs: list[tuple[Path, dict]], inventory: dict,
+           scheduling: dict, now: datetime | None = None) -> tuple[Path, dict, str]:
     if not jobs: raise ValueError("no jobs to schedule")
     now = now or datetime.now(timezone.utc)
     settings = policy()["workers"]
@@ -35,13 +40,11 @@ def choose(jobs: list[tuple[Path, dict]], inventory: dict, now: datetime | None 
         if not job.get("model"):
             continue
         created = datetime.fromisoformat(job["created_at"])
-        age_minutes = max(0.0, (now - created).total_seconds() / 60)
         size = next((item.get("size_gb") or 0 for item in inventory["models"] if item["id"] == job.get("model")), 0)
         resident_bonus = size * settings["switch_penalty_points_per_gb"] if job.get("model") in loaded else 0
-        starvation = 10000 if age_minutes >= settings["maximum_starvation_minutes"] else 0
         dispatch_penalty = int(job.get("dispatch_count", 0)) * 10000
-        score = (priority(job) * 100000 + age_minutes * settings["queue_age_points_per_minute"]
-                 + resident_bonus + starvation - dispatch_penalty)
+        score = (priority(job, scheduling, now) * 100000 + resident_bonus
+                 - dispatch_penalty)
         scored.append((score, created, path, job, resident_bonus))
     if not scored:
         raise RuntimeError("no model-routed ready job is eligible")

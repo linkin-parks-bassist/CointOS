@@ -30,6 +30,18 @@ class IntakeTest(unittest.TestCase):
                     "source_path": str((self.root / "config/workspaces.json").resolve())}
         (self.root / "state/workspaces-policy.json").write_text(
             json.dumps(snapshot), encoding="utf-8")
+        scheduling_values = json.loads(
+            (Path(__file__).resolve().parents[1] / "config/scheduling.json")
+            .read_text(encoding="utf-8"))
+        scheduling_canonical = json.dumps(
+            scheduling_values, sort_keys=True, separators=(",", ":")).encode()
+        scheduling_snapshot = {
+            "schema_version": 1, "values": scheduling_values,
+            "digest": hashlib.sha256(scheduling_canonical).hexdigest(),
+            "activated_at": "2026-09-05T00:00:00+00:00",
+            "source_path": "config/scheduling.json"}
+        (self.root / "state/scheduling-policy.json").write_text(
+            json.dumps(scheduling_snapshot), encoding="utf-8")
 
     def tearDown(self):
         self.root_patch.stop()

@@ -2,11 +2,17 @@ import json
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
 from ecosystem import cli
 from ecosystem.executor import _run_preemptibly, recover_abandoned_jobs
+from tests.test_scheduler import scheduling_policy as scheduling_document
+
+LARGE_BUDGET = {"run_seconds": 300, "task_seconds": 900,
+                "maximum_attempts": 3, "maximum_output_bytes": 10_000_000,
+                "maximum_evidence_items": 100, "maximum_children": 5}
 
 
 def test_higher_priority_work_preempts_and_preserves_session():
@@ -16,10 +22,16 @@ def test_higher_priority_work_preempts_and_preserves_session():
         running = {
             "id": "task-background", "kind": "agent-task", "state": "running",
             "role": "steward", "source": "watchdog:review", "dispatch_count": 0,
+            "created_at": (datetime.now(timezone.utc)
+                           .replace(microsecond=0)).isoformat(),
+            "authority_profile": "worker", "remaining_budget": LARGE_BUDGET,
         }
         waiting = {
             "id": "task-user", "kind": "agent-task", "state": "queued",
             "role": "worker", "source": "telegram:42",
+            "created_at": (datetime.now(timezone.utc)
+                           .replace(microsecond=0)).isoformat(),
+            "authority_profile": "worker",
         }
         cli.atomic_json(running_path, running)
         cli.atomic_json(cli.ROOT / "state/jobs/task-user.json", waiting)
@@ -36,6 +48,7 @@ def test_higher_priority_work_preempts_and_preserves_session():
             outcome = _run_preemptibly(
                 process, ["bash", "-c", "sleep 60"], running, output_path,
                 lambda: cancellations.append(process.poll()),
+                scheduling_document(),
             )
         finally:
             if process.poll() is None:
@@ -70,6 +83,9 @@ def test_context_rollover_preempts_at_seventy_five_percent():
         running = {
             "id": "task-context", "kind": "agent-task", "state": "running",
             "role": "worker", "source": "local-cli", "context_tokens": 100,
+            "created_at": (datetime.now(timezone.utc)
+                           .replace(microsecond=0)).isoformat(),
+            "authority_profile": "worker", "remaining_budget": LARGE_BUDGET,
         }
         cli.atomic_json(path, running)
         output_path = cli.ROOT / "logs/runs/task-context.opencode.log"
@@ -89,6 +105,7 @@ def test_context_rollover_preempts_at_seventy_five_percent():
             outcome = _run_preemptibly(
                 process, ["bash", "-c", "sleep 60"], running, output_path,
                 lambda: cancellations.append(process.poll()),
+                scheduling_document(),
             )
         finally:
             if process.poll() is None:
