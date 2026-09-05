@@ -4,10 +4,9 @@ from __future__ import annotations
 import json
 import os
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 
+from ecosystem.inference import request as inference_request
 from ecosystem.resource_control import active_chat_model
 
 
@@ -15,7 +14,8 @@ CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
 WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
 
 
-def humanize_notification(raw: str, history: list[dict[str, str]] | None = None) -> str:
+def humanize_notification(raw: str, history: list[dict[str, str]] | None = None,
+                          inference_context: dict | None = None) -> str:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF"))
     system = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
 
@@ -29,17 +29,12 @@ only when the source explicitly requires David's decision. Never add a generic
 follow-up invitation. Output only the message."""
     messages = [{"role": "system", "content": system}, *((history or [])[-8:]),
                 {"role": "user", "content": raw}]
-    body = json.dumps({"model": model, "messages": messages, "temperature": 0.4,
-                       "chat_template_kwargs": {"enable_thinking": False},
-                       "max_tokens": 700}).encode()
-    request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",
-                                     data=body, headers={"Content-Type": "application/json", "Authorization": "Bearer lemonade"})
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            return sanitize_notification(json.load(response)["choices"][0]["message"]["content"])
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", errors="replace")[:2000]
-        raise RuntimeError(f"notification model HTTP {error.code}: {detail}") from error
+    if not inference_context:
+        raise RuntimeError("notification inference requires an admitted proxy context")
+    assistant = inference_request({
+        **inference_context, "messages": messages, "temperature": 0.4, "timeout": 180,
+    }, Path(__file__).resolve().parents[1], __import__("time").monotonic)
+    return sanitize_notification(assistant["content"])
 
 
 def sanitize_notification(message: str) -> str:

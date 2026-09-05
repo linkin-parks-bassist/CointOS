@@ -1,0 +1,625 @@
+"""Authenticated, bounded fingertip for ordinary local inference."""
+from __future__ import annotations
+
+import concurrent.futures
+import fcntl
+import hashlib
+import http.client
+import ipaddress
+import json
+import math
+import os
+import secrets
+import select
+import socket
+import threading
+import urllib.parse
+from contextlib import contextmanager
+from email.parser import BytesHeaderParser
+from pathlib import Path
+
+from ecosystem.inference_capacity import release_sequence
+from survival.records import atomic_json
+
+
+STATE_VERSION = 1
+_active_upstreams = {}
+_active_upstreams_lock = threading.Lock()
+DEFAULT_LIMITS = {
+    "header_bytes": 65536,
+    "body_bytes": 16777216,
+    "stream_chunk_bytes": 65536,
+}
+
+
+def opencode_environment(root: Path, inference_lease: dict, credential: bytes) -> dict:
+    """Create one anonymous OpenCode configuration; the caller owns the returned fd."""
+    if type(credential) is not bytes or len(credential) != 32:
+        raise ValueError("proxy credential must contain exactly 32 bytes")
+    if (type(inference_lease) is not dict or type(inference_lease.get("model_id")) is not str
+            or type(inference_lease.get("context_tokens")) is not int
+            or type(inference_lease.get("max_output_tokens")) is not int):
+        raise ValueError("invalid inference lease")
+    root = Path(root)
+    source = root / "config/executor-opencode.json"
+    config = json.loads(source.read_text(encoding="utf-8")) if source.exists() else {
+        "provider": {"Lemonade": {"name": "local admitted inference",
+                                   "npm": "@ai-sdk/openai-compatible", "models": {}}}}
+    provider = config.setdefault("provider", {}).setdefault("Lemonade", {})
+    policy_path = root / "config/model-policy.json"
+    proxy_base = "http://127.0.0.1:13306/v1"
+    if policy_path.exists():
+        proxy_base = json.loads(policy_path.read_text(encoding="utf-8")).get(
+            "inference_proxy", {}).get("proxy_base", proxy_base)
+    validate_loopback_base(proxy_base)
+    provider["options"] = {
+        "apiKey": credential.hex(),
+        "baseURL": proxy_base,
+    }
+    model = provider.setdefault("models", {}).setdefault(inference_lease["model_id"], {})
+    model["limit"] = {
+        "context": inference_lease["context_tokens"],
+        "output": inference_lease["max_output_tokens"],
+    }
+    descriptor = os.memfd_create("cointos-opencode", os.MFD_CLOEXEC)
+    try:
+        payload = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        written = 0
+        while written < len(payload):
+            written += os.write(descriptor, payload[written:])
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return {
+            "environment": {"OPENCODE_CONFIG": f"/proc/self/fd/{descriptor}"},
+            "pass_fds": (descriptor,),
+            "fd": descriptor,
+        }
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def validate_loopback_base(value: str) -> dict:
+    if type(value) is not str:
+        raise ValueError("invalid inference endpoint")
+    parsed = urllib.parse.urlsplit(value)
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError("invalid inference endpoint") from error
+    if (parsed.scheme != "http" or not address.is_loopback or parsed.path != "/v1"
+            or parsed.username is not None or parsed.password is not None
+            or parsed.query or parsed.fragment or port is None):
+        raise ValueError("inference endpoint must be an exact loopback http /v1 base")
+    return {"host": parsed.hostname, "port": port, "path": parsed.path}
+
+
+def issue_proxy_credential(root: Path, lease: dict, credential_sink, clock) -> dict:
+    """Bind one raw credential to authoritative R1/R3 state and deliver it once."""
+    root = Path(root)
+    now = _clock(clock)
+    secret = secrets.token_bytes(32)
+    digest = hashlib.sha256(secret).hexdigest()
+    lease_id = lease.get("lease_id") if type(lease) is dict else None
+    try:
+        with _locked_states(root) as (worker_state, capacity_state, proxy_state, save):
+            authoritative = _starting_lease(worker_state, capacity_state, lease_id)
+            if _public_binding(authoritative) != _public_binding(lease):
+                raise ValueError("inference lease does not match authoritative state")
+            worker = worker_state["leases"][authoritative["request"]["worker_lease_id"]]
+            _validate_registered_process(worker)
+            prior = proxy_state["credentials"].get(lease_id)
+            binding = _credential_binding(authoritative, worker)
+            if prior is not None:
+                if prior["binding"] != binding:
+                    raise ValueError("credential lease binding mismatch")
+                raise ValueError("credential already issued")
+            proxy_state["credentials"][lease_id] = {
+                "digest": digest,
+                "binding": binding,
+                "state": "open",
+                "issued_monotonic": now,
+                "in_flight": {},
+                "completed_requests": 0,
+                "last_backend_termination": None,
+            }
+            save()
+        credential_sink(secret)
+    except Exception:
+        _discard_credential(root, lease_id, digest)
+        raise
+    finally:
+        secret = b"\0" * len(secret)
+    return {"state": "issued", "lease_id": lease_id, "credential_digest": digest}
+
+
+def authorize_proxy_request(root: Path, metadata: dict, body: dict, clock) -> dict:
+    """Atomically authenticate and claim one request before upstream I/O."""
+    root = Path(root)
+    now = _clock(clock)
+    if type(metadata) is not dict or type(body) is not dict:
+        return {"status": 400, "error": "invalid request"}
+    token = _bearer(metadata.get("authorization"))
+    if token is None:
+        return {"status": 401, "error": "missing bearer credential"}
+    digest = hashlib.sha256(token).hexdigest()
+    with _locked_states(root) as (worker_state, capacity_state, proxy_state, save):
+        matches = [(lease_id, record) for lease_id, record in proxy_state["credentials"].items()
+                   if secrets.compare_digest(record.get("digest", ""), digest)]
+        if len(matches) != 1:
+            return {"status": 401, "error": "invalid bearer credential"}
+        lease_id, credential = matches[0]
+        if credential.get("state") != "open":
+            return {"status": 409, "error": "credential is closing or revoked"}
+        try:
+            lease = _starting_lease(worker_state, capacity_state, lease_id)
+            worker = worker_state["leases"][lease["request"]["worker_lease_id"]]
+            _validate_registered_process(worker)
+            if credential["binding"] != _credential_binding(lease, worker):
+                raise ValueError("credential binding changed")
+            _validate_request_binding(metadata, body, lease, credential["binding"])
+        except ValueError as error:
+            return {"status": 403, "error": str(error)}
+        request_key = metadata.get("request_id") or body.get("request_id")
+        if request_key is not None and (type(request_key) is not str or not request_key):
+            return {"status": 400, "error": "invalid request identity"}
+        if credential["in_flight"]:
+            return {"status": 409, "error": "run already has a request in flight"}
+        if request_key and any(item.get("request_id") == request_key
+                               for item in credential["in_flight"].values()):
+            return {"status": 409, "error": "request is already in flight"}
+        proxy_state["generation"] += 1
+        claim_id = f"claim-{proxy_state['generation']}-{secrets.token_hex(8)}"
+        credential["in_flight"][claim_id] = {
+            "request_id": request_key,
+            "claimed_monotonic": now,
+            "backend": None,
+        }
+        save()
+        return {"status": 200, "claim_id": claim_id, "lease": _durable(lease),
+                "credential_binding": _durable(credential["binding"])}
+
+
+def handle_proxy_request(root: Path, metadata: dict, body: dict, backend_request, clock) -> dict:
+    admission = authorize_proxy_request(root, metadata, body, clock)
+    if admission["status"] != 200:
+        return admission
+    claim_id = admission["claim_id"]
+    lease = admission["lease"]
+    try:
+        result = backend_request({
+            "body": _durable(body),
+            "lease": lease,
+            "backend_sequence": lease["backend_sequence"],
+            "claim_id": claim_id,
+        })
+        if result is None:
+            result = {"status": 502, "error": "backend returned no response"}
+        if type(result) is not dict:
+            raise ValueError("backend response must be a dictionary")
+        terminated = result.get("terminated", "upstream" not in result) is True
+        _finish_claim(Path(root), lease["lease_id"], claim_id, terminated, result, clock)
+        return result
+    except Exception:
+        _finish_claim(Path(root), lease["lease_id"], claim_id, False, {}, clock)
+        raise
+
+
+def cancel(root: Path, lease_id: str, clock) -> dict:
+    """Request cancellation without claiming that an upstream sequence ended."""
+    with _active_upstreams_lock:
+        upstreams = list(_active_upstreams.get((str(Path(root)), lease_id), ()))
+    for upstream in upstreams:
+        upstream.close()
+    now = _clock(clock)
+    with _proxy_lock(Path(root)) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None:
+            raise ValueError("unknown proxy credential")
+        credential["state"] = "closing"
+        credential["cancel_requested_monotonic"] = now
+        save()
+        return {"state": "cancellation_requested", "lease_id": lease_id,
+                "in_flight": len(credential["in_flight"])}
+
+
+def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock) -> dict:
+    """Close a run only after a persisted, verified backend termination."""
+    root = Path(root)
+    now = _clock(clock)
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None:
+            raise ValueError("unknown proxy credential")
+        if credential.get("state") == "revoked":
+            return {"state": "revoked", "lease_id": lease_id}
+        if credential["in_flight"]:
+            raise ValueError("requests remain in flight")
+        termination = credential.get("last_backend_termination")
+        if (type(observed_end) is not dict or observed_end.get("terminated") is not True
+                or termination is None
+                or observed_end.get("evidence_id") != termination.get("evidence_id")):
+            raise ValueError("backend termination is not verified")
+        credential["state"] = "releasing"
+        credential["release_requested_monotonic"] = now
+        save()
+    lease = _capacity_lease(root, lease_id)
+    policy = json.loads((root / "config/resource-policy.json").read_text(encoding="utf-8"))[
+        "inference_capacity"]
+    attestation = {
+        "schema_version": 1,
+        "binding": _durable(lease["expected_release_binding"]),
+        "kind": "sequence_end",
+        "observer_identity": policy["release_observer_identity"],
+        "observer_generation": int(observed_end.get("observer_generation", 1)),
+        "observed_monotonic": float(observed_end.get("observed_monotonic", now)),
+        "clock_domain_id": policy["clock_domain_id"],
+        "evidence_id": observed_end["evidence_id"],
+    }
+    released = release_sequence(root, lease_id, attestation, clock)
+    if released.get("state") != "released":
+        raise RuntimeError("R3 did not accept sequence termination")
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"][lease_id]
+        credential["state"] = "revoked"
+        credential["digest"] = ""
+        credential["revoked_monotonic"] = _clock(clock)
+        save()
+    return {"state": "revoked", "lease_id": lease_id, "sequence": released}
+
+
+def read_proxy_request(connection, limits: dict) -> tuple[dict, dict]:
+    limits = {**DEFAULT_LIMITS, **(limits or {})}
+    received = bytearray()
+    while b"\r\n\r\n" not in received:
+        if len(received) >= limits["header_bytes"]:
+            raise ValueError("request headers exceed limit")
+        chunk = connection.recv(min(4096, limits["header_bytes"] - len(received)))
+        if not chunk:
+            raise ValueError("incomplete request headers")
+        received.extend(chunk)
+    header_end = received.index(b"\r\n\r\n") + 4
+    if header_end > limits["header_bytes"]:
+        raise ValueError("request headers exceed limit")
+    header_block = bytes(received[:header_end])
+    request_line, raw_headers = header_block.split(b"\r\n", 1)
+    try:
+        method, target, version = request_line.decode("ascii").split(" ")
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("invalid HTTP request line") from error
+    if (method, target, version) != ("POST", "/v1/chat/completions", "HTTP/1.1"):
+        raise ValueError("unsupported proxy request")
+    headers = BytesHeaderParser().parsebytes(raw_headers)
+    lengths = headers.get_all("Content-Length", [])
+    if len(lengths) != 1 or not lengths[0].isdigit():
+        raise ValueError("exactly one numeric Content-Length is required")
+    if headers.get_all("Transfer-Encoding"):
+        raise ValueError("chunked uploads are forbidden")
+    length = int(lengths[0])
+    if length > limits["body_bytes"]:
+        raise ValueError("request body exceeds limit")
+    body_bytes = bytearray(received[header_end:])
+    while len(body_bytes) < length:
+        chunk = connection.recv(min(65536, length - len(body_bytes)))
+        if not chunk:
+            raise ValueError("incomplete request body")
+        body_bytes.extend(chunk)
+    if len(body_bytes) != length:
+        raise ValueError("request contains trailing bytes")
+    try:
+        body = json.loads(body_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("invalid JSON request body") from error
+    if type(body) is not dict:
+        raise ValueError("request body must be an object")
+    metadata = {name.lower(): value for name, value in headers.items()}
+    return metadata, body
+
+
+def forward_proxy_response(connection, upstream, lease: dict, observe, clock) -> dict:
+    """Forward one response with bounded reads and an explicit termination record."""
+    chunk_size = min(int(lease.get("stream_chunk_bytes", 65536)), 65536)
+    status = int(getattr(upstream, "status", 200))
+    content_type = upstream.getheader("Content-Type", "application/json")
+    connection.sendall((f"HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\n"
+                        "Connection: close\r\n\r\n").encode("ascii"))
+    total = 0
+    while True:
+        chunk = upstream.read1(chunk_size)
+        if not chunk:
+            break
+        if len(chunk) > chunk_size:
+            raise ValueError("upstream exceeded bounded read")
+        connection.sendall(chunk)
+        total += len(chunk)
+    evidence = observe({"kind": "backend_terminated", "backend_sequence":
+                        lease.get("backend_sequence"), "observed_monotonic": _clock(clock)})
+    if type(evidence) is not dict or evidence.get("terminated") is not True:
+        raise RuntimeError("backend termination was not verified")
+    return {"status": status, "bytes_forwarded": total, **evidence}
+
+
+def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
+    try:
+        connection.settimeout(float(config.get("read_timeout_seconds", 5)))
+        metadata, body = read_proxy_request(connection, config)
+        admission = authorize_proxy_request(root, metadata, body, clock)
+        if admission["status"] != 200:
+            _send_json(connection, admission["status"], admission)
+            return
+        lease = admission["lease"]
+        endpoint = validate_loopback_base(config["backend_base"])
+        upstream_connection = http.client.HTTPConnection(
+            endpoint["host"], endpoint["port"], timeout=float(config.get("backend_timeout_seconds", 180)))
+        try:
+            _register_upstream(Path(root), lease["lease_id"], upstream_connection)
+            _record_backend_identity(Path(root), lease["lease_id"], admission["claim_id"],
+                                     lease["backend_sequence"], clock)
+            upstream_connection.request("POST", "/v1/chat/completions",
+                                        body=json.dumps(body, separators=(",", ":")),
+                                        headers={"Content-Type": "application/json",
+                                                 "Connection": "close"})
+            upstream = upstream_connection.getresponse()
+            result = forward_proxy_response(connection, upstream,
+                                            {**lease, "stream_chunk_bytes": config.get(
+                                                "stream_chunk_bytes", 65536)},
+                                            lambda record: {**record, "terminated": True,
+                                                "evidence_id": secrets.token_hex(16)}, clock)
+            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], True,
+                          result, clock)
+        except Exception:
+            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], False,
+                          {}, clock)
+            raise
+        finally:
+            _unregister_upstream(Path(root), lease["lease_id"], upstream_connection)
+            upstream_connection.close()
+    except Exception as error:
+        try:
+            _send_json(connection, 400, {"status": 400, "error": str(error)})
+        except OSError:
+            pass
+    finally:
+        connection.close()
+
+
+def serve_proxy(root: Path, config: dict, clock) -> None:
+    validate_loopback_base(config["proxy_base"])
+    endpoint = validate_loopback_base(config["proxy_base"])
+    connections = int(config.get("connections", 4))
+    if connections != 4:
+        raise ValueError("proxy requires exactly four handlers")
+    with socket.create_server((endpoint["host"], endpoint["port"]), backlog=connections) as listener, \
+            concurrent.futures.ThreadPoolExecutor(max_workers=connections) as pool:
+        listener.settimeout(float(config.get("accept_timeout_seconds", 1)))
+        while True:
+            try:
+                connection, _address = listener.accept()
+            except socket.timeout:
+                continue
+            pool.submit(serve_one_connection, connection, Path(root), config, clock)
+
+
+def _validate_request_binding(metadata: dict, body: dict, lease: dict, binding: dict) -> None:
+    request = lease["request"]
+    expected = {
+        "lease_id": lease["lease_id"],
+        "owner_identity": request["owner_identity"],
+        "run_id": binding["run_id"],
+    }
+    for name, value in expected.items():
+        supplied = metadata.get(name) or metadata.get(f"x-inference-{name.replace('_', '-')}")
+        if supplied is not None and supplied != str(value):
+            raise ValueError(f"{name} mismatch")
+    if body.get("model") != lease["model_id"]:
+        raise ValueError("model does not match lease")
+    context = body.get("context_tokens", body.get("ctx_size"))
+    if context is not None and context != lease["context_tokens"]:
+        raise ValueError("context does not match lease")
+    if body.get("max_tokens") != lease["max_output_tokens"]:
+        raise ValueError("output does not match lease")
+    if type(body.get("stream", False)) is not bool:
+        raise ValueError("invalid stream mode")
+
+
+def _starting_lease(worker_state: dict, capacity_state: dict, lease_id: str | None) -> dict:
+    lease = capacity_state.get("leases", {}).get(lease_id)
+    if lease is None or lease.get("state") not in {"starting", "active"}:
+        raise ValueError("inference lease is not starting or active")
+    worker = worker_state.get("leases", {}).get(lease.get("request", {}).get("worker_lease_id"))
+    if worker is None or worker.get("state") != "active":
+        raise ValueError("worker lease is not active")
+    return lease
+
+
+def _validate_registered_process(worker: dict) -> None:
+    process = worker.get("process")
+    if type(process) is not dict or type(process.get("pid")) is not int \
+            or type(process.get("process_start_ticks")) is not int:
+        raise ValueError("worker process is not registered")
+    try:
+        stat = (Path("/proc") / str(process["pid"]) / "stat").read_text(encoding="utf-8")
+        start_ticks = int(stat.rsplit(")", 1)[1].split()[19])
+    except (OSError, ValueError, IndexError) as error:
+        raise ValueError("registered worker process is absent") from error
+    if start_ticks != process["process_start_ticks"]:
+        raise ValueError("registered worker process identity changed")
+
+
+def _credential_binding(lease: dict, worker: dict) -> dict:
+    request = lease["request"]
+    worker_request = worker["request"]
+    return {
+        "lease_id": lease["lease_id"],
+        "request_id": request["request_id"],
+        "worker_lease_id": request["worker_lease_id"],
+        "owner_identity": request["owner_identity"],
+        "run_id": worker_request.get("job_id"),
+        "run_generation": worker_request.get("agent_generation"),
+        "process": _durable(worker["process"]),
+        "model_id": lease["model_id"],
+        "context_tokens": lease["context_tokens"],
+        "max_output_tokens": lease["max_output_tokens"],
+        "backend_sequence": lease["backend_sequence"],
+    }
+
+
+def _public_binding(lease: dict) -> dict:
+    if type(lease) is not dict:
+        return {}
+    return {name: lease.get(name) for name in (
+        "lease_id", "state", "model_id", "context_tokens", "max_output_tokens",
+        "backend_sequence", "expected_release_binding")}
+
+
+def _finish_claim(root: Path, lease_id: str, claim_id: str, terminated: bool,
+                  result: dict, clock) -> None:
+    now = _clock(clock)
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None:
+            return
+        claim = credential["in_flight"].pop(claim_id, None)
+        if claim is None:
+            return
+        credential["completed_requests"] += 1
+        if terminated:
+            evidence_id = result.get("evidence_id") or secrets.token_hex(16)
+            credential["last_backend_termination"] = {
+                "terminated": True, "evidence_id": evidence_id,
+                "backend_sequence": credential["binding"]["backend_sequence"],
+                "observed_monotonic": now,
+                "observer_generation": state["generation"],
+            }
+        save()
+
+
+def _record_backend_identity(root: Path, lease_id: str, claim_id: str,
+                             backend_sequence: int, clock) -> None:
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        claim = None if credential is None else credential["in_flight"].get(claim_id)
+        if claim is None:
+            raise ValueError("request claim disappeared before backend start")
+        claim["backend"] = {
+            "observer": "configured-backend",
+            "backend_sequence": backend_sequence,
+            "started_monotonic": _clock(clock),
+        }
+        save()
+
+
+def _discard_credential(root: Path, lease_id: str | None, digest: str) -> None:
+    if lease_id is None:
+        return
+    with _proxy_lock(root) as (state, save):
+        record = state["credentials"].get(lease_id)
+        if record is not None and record.get("digest") == digest:
+            del state["credentials"][lease_id]
+            save()
+
+
+def _capacity_lease(root: Path, lease_id: str) -> dict:
+    value = json.loads((root / "state/inference-capacity.json").read_text(encoding="utf-8"))
+    lease = value.get("leases", {}).get(lease_id)
+    if lease is None:
+        raise ValueError("unknown inference lease")
+    return lease
+
+
+def _bearer(value) -> bytes | None:
+    if type(value) is not str or not value.startswith("Bearer "):
+        return None
+    raw = value[7:]
+    try:
+        return bytes.fromhex(raw)
+    except ValueError:
+        return raw.encode("utf-8") if raw else None
+
+
+def _clock(clock) -> float:
+    value = clock()
+    if type(value) not in (int, float) or not math.isfinite(value):
+        raise ValueError("invalid proxy clock")
+    return float(value)
+
+
+def _durable(value):
+    return json.loads(json.dumps(value, sort_keys=True, allow_nan=False))
+
+
+def _load_state(path: Path) -> dict:
+    if not path.exists():
+        return {"version": STATE_VERSION, "generation": 1, "credentials": {}}
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if (type(value) is not dict or value.get("version") != STATE_VERSION
+            or type(value.get("generation")) is not int
+            or type(value.get("credentials")) is not dict):
+        raise ValueError("invalid inference proxy state")
+    return value
+
+
+@contextmanager
+def _proxy_lock(root: Path):
+    state_dir = root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / "inference-proxy.lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        path = state_dir / "inference-proxy.json"
+        state = _load_state(path)
+        dirty = False
+        def save():
+            nonlocal dirty
+            dirty = True
+        yield state, save
+        if dirty:
+            atomic_json(path, state)
+
+
+@contextmanager
+def _locked_states(root: Path):
+    state_dir = root / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    paths = [state_dir / name for name in (
+        "workload-control.lock", "inference-capacity.lock", "inference-proxy.lock")]
+    streams = [path.open("a+b") for path in paths]
+    try:
+        for stream in streams:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        worker = json.loads((state_dir / "workload-control.json").read_text(encoding="utf-8"))
+        capacity = json.loads((state_dir / "inference-capacity.json").read_text(encoding="utf-8"))
+        proxy_path = state_dir / "inference-proxy.json"
+        proxy = _load_state(proxy_path)
+        dirty = False
+        def save():
+            nonlocal dirty
+            dirty = True
+        yield worker, capacity, proxy, save
+        if dirty:
+            atomic_json(proxy_path, proxy)
+    finally:
+        for stream in reversed(streams):
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            stream.close()
+
+
+def _send_json(connection, status: int, value: dict) -> None:
+    body = json.dumps(value, separators=(",", ":")).encode("utf-8")
+    connection.sendall((f"HTTP/1.1 {status} Error\r\nContent-Type: application/json\r\n"
+                        f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode("ascii") + body)
+
+
+def _register_upstream(root: Path, lease_id: str, upstream) -> None:
+    with _active_upstreams_lock:
+        _active_upstreams.setdefault((str(root), lease_id), set()).add(upstream)
+
+
+def _unregister_upstream(root: Path, lease_id: str, upstream) -> None:
+    with _active_upstreams_lock:
+        key = (str(root), lease_id)
+        values = _active_upstreams.get(key)
+        if values is None:
+            return
+        values.discard(upstream)
+        if not values:
+            _active_upstreams.pop(key, None)

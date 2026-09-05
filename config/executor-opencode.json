@@ -4,7 +4,6 @@
     "Lemonade": {
       "name": "Lemonade Server (local)",
       "npm": "@ai-sdk/openai-compatible",
-      "options": {"apiKey": "lemonade", "baseURL": "http://127.0.0.1:13305/v1"},
       "models": {
         "DeepSeek-Qwen3-8B-GGUF": {"name": "DeepSeek Qwen3 8B (local)", "limit": {"context": 16384, "output": 4096}},
         "GLM-4.7-Flash-GGUF": {"name": "GLM-4.7-Flash-GGUF (local)", "limit": {"context": 16384, "output": 2048}},

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Run the admitted local inference proxy."""
+import json
+import time
+from pathlib import Path
+
+from ecosystem.inference_proxy import serve_proxy
+
+
+root = Path(__file__).resolve().parents[1]
+policy = json.loads((root / "config/model-policy.json").read_text(encoding="utf-8"))
+serve_proxy(root, policy["inference_proxy"], time.monotonic)

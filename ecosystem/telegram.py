@@ -11,7 +11,7 @@ from pathlib import Path
 
 from ecosystem import cli, conversation, control_turns
 from ecosystem.control_runtime import friendly_status, recent_errors_text, status_text
-from ecosystem.inference import chat
+from ecosystem.inference import request as inference_request
 from ecosystem.presentation import sanitize_notification
 from ecosystem.resource_control import active_chat_model
 
@@ -54,10 +54,16 @@ def reply(token: str, chat_id: int, message: str) -> None:
     api(token, "sendMessage", {"chat_id": chat_id, "text": message[:4000]})
 
 
-def generate_first_response(history: list[dict[str, str]], infer: Callable[..., dict] = chat) -> str:
+def generate_first_response(history: list[dict[str, str]], infer: Callable[..., dict] | None = None,
+                            inference_context: dict | None = None) -> str:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_FIRST_RESPONSE_MODEL", "Qwen3.5-4B-GGUF"))
-    assistant = infer(model=model, messages=[{"role": "system", "content": FAST_SYSTEM}, *history[-6:]],
-                      max_tokens=96, timeout=20, temperature=0.45)
+    messages = [{"role": "system", "content": FAST_SYSTEM}, *history[-6:]]
+    assistant = (infer(model=model, messages=messages, max_tokens=96,
+                       timeout=20, temperature=0.45)
+                 if infer is not None else inference_request({
+                     **(inference_context or {}), "messages": messages,
+                     "timeout": 20, "temperature": 0.45,
+                 }, Path(__file__).resolve().parents[1], time.monotonic))
     content = sanitize_notification(assistant.get("content") or "")
     if not content:
         raise RuntimeError("fast model returned no visible response")
@@ -66,7 +72,8 @@ def generate_first_response(history: list[dict[str, str]], infer: Callable[..., 
 
 def accept_update(token: str, update: dict, allowed: set[int],
                   send: Callable[[str, int, str], None] = reply,
-                  infer: Callable[..., dict] = chat) -> bool:
+                  infer: Callable[..., dict] | None = None,
+                  inference_context: dict | None = None) -> bool:
     message = update.get("message", {})
     sender = message.get("from", {}).get("id")
     chat_id = message.get("chat", {}).get("id")
@@ -97,7 +104,8 @@ def accept_update(token: str, update: dict, allowed: set[int],
         try:
             history = [entry for entry in conversation.recent(sender, max_messages=6, max_characters=2500)
                        if entry.get("content") != DISASTER_FALLBACK]
-            initial = generate_first_response(history, infer=infer)
+            initial = generate_first_response(
+                history, infer=infer, inference_context=inference_context)
             control_turns.mark_front_ready(identifier, initial)
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
