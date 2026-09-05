@@ -20,7 +20,7 @@ deployment evidence is still pending. Merge and publication remain separately co
 - Sole Survivor > Coin > small health inspectors > large health inspectors > other roles. Scheduling rank never steals Coin's physical reserve.
 - Functions and plain data only; lowercase snake_case; no new class-based framework, database or configuration language.
 - Personal CointOS scope only. Preserve dirty work, credentials, professional/customer boundaries and append-only runtime records.
-- Short registered local tasks use the largest safely feasible qualified model, then its largest safe context. Codex waits for completion/checkpoint **and process/request exit** before smoke tests.
+- Registered local tasks use the largest safely feasible qualified model, then its largest safe context. Local model runs have no wall-time limit. Interrupt them only when a GPU-involving smoke test is ready and competing for the GPU; first obtain a completion/checkpoint handoff and observe process/request exit. Resource guardians may still terminate a run to prevent OOM or loss of host responsiveness. Codex waits for completion/checkpoint **and process/request exit** before smoke tests.
 - Agent changes activate only after tests, independent verification and authenticated approval through Cointelprofessional. Installed emergency containment does not wait for a new approval.
 - No installation, service change, credential access, Telegram transmission, publication or merge is authorized by writing this plan. S0 starts after David approves the execution scope.
 - Read the [worker contract](2026-09-05-cointos-mvp-swarm.md) for budgets, test collection, handoffs and exclusive smoke ownership.

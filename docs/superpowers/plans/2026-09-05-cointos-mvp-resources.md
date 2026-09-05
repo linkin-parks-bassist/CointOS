@@ -22,7 +22,7 @@
 - Unknown or stale safety evidence defers explicitly. Preserve the 32 GiB protected
   host reserve and 12 GiB load-transient reserve. The configured GTT capacity is the
   live measured 100 GiB pool; do not substitute the superseded 64 GiB TTM cap.
-- Local work targets 2–5 minutes: maximum run 300 seconds, wrap-up 30 seconds, termination grace 15 seconds. No timer observation alone means completion.
+- Local inference workers have no wall-time limit. Do not request wrap-up or termination merely because time elapsed. Interrupt a local run only when a GPU-involving smoke test is ready and competing for the GPU; then require a durable completion/checkpoint handoff and observed process/request exit before smoke. Resource guardians retain authority to stop a run to prevent OOM or loss of host responsiveness. The 300-second workload budget specified below governs managed CointOS task slicing after R5; it is not a coordinator-imposed limit on local implementation workers during bring-up.
 - Sol implementation/review work uses `gpt-5.6-sol`, `reasoning_effort: medium`, isolated context, and one 15–25 minute bounded objective.
 - Hosted read-only analysis may continue during smoke. Every hosted writer touching smoke-covered files/services must finish and be observed before smoke.
 - The work gate may add restrictions but may not clear pressure, emergency, lifecycle, operator, or deployment pauses.
