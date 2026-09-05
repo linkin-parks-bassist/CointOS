@@ -88,3 +88,31 @@ Recorded by the local opencode agent (Qwen3.8-27B-GGUF):
   Unaffected: the scheduler/executor budget machinery (R5 budgets, H3 repair
   dispatch budgets, spec budget fields) governs agents managed by the running
   system, and single-point step estimates in plan steps were left as-is.
+
+## 2026-09-05: R4 repair item 2 — owner-attested spawn failures (`7c36d88`)
+
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
+
+- Ada/GPT-6 R4 repair-packet item 2 is complete. The R1 prerequisite is gone:
+  `workload_control._apply_observations` no longer forces a processless local
+  lease back to `starting`, so a released lease can no longer be un-quiesced by
+  a bare observation. Owner-attested `never_spawned` / `reaped_spawn`
+  observations (strictly validated) give such leases a truthful terminal
+  transition: `observed_stopped`, then `quiescent` once the release outcome is
+  recorded; an attestation contradicting a registered process is
+  `dead_unreconciled`; attested leases do not owe checkpoint evidence.
+- `gated_child_launch` now attaches `launch_failure` to every raised error:
+  `{"spawned": False}` when no process exists, or spawned facts plus the actual
+  bounded `gated_child_cleanup` outcome when one did. `launch_runner_round`
+  journals `runner_spawn_failure` (phase, error, spawned, cleanup_state),
+  quarantines non-reaped cleanups as `reconciliation_required` with the lease
+  and pid/start/pgid persisted, and for unregistered crashes attests
+  `reaped_spawn` with the exact reaped identity instead of releasing into
+  limbo.
+- Contract and rationale: `docs/decisions/0008-owner-attested-spawn-failures.md`.
+  10 new tests (6 R1, 4 executor) assert actual lease states and smoke
+  refusal; full suite 426/426.
+- Follow-ups: no self-healing path for `dead_unreconciled` leases (deliberate;
+  operator concern); hosted independent review of `7c36d88` pending GPT quota;
+  the live normal-close smoke still needs the real backend observer
+  (Lemonade-side, sequence/request correlation).
