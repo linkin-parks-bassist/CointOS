@@ -277,6 +277,26 @@ def _required_job_field(job: dict, name: str):
     return value
 
 
+def _claim_execution(job: dict, clock) -> None:
+    """Initialize a job's durable execution claim. Values already present on
+    the record are authoritative and are never rewritten; replay reuses them."""
+    if "agent_generation" not in job:
+        job["agent_generation"] = 1
+    if "logical_run_state" not in job:
+        job["logical_run_state"] = "active"
+    if "owner_identity" not in job:
+        job["owner_identity"] = f"executor:{job['id']}"
+    if "caller_handle" not in job:
+        job["caller_handle"] = "executor:local"
+    if "deadline_monotonic" not in job:
+        budget = job.get("remaining_budget")
+        if type(budget) is not dict or type(budget.get("task_seconds")) is not int:
+            raise ValueError(
+                f"job {job['id']} lacks a remaining task budget for its "
+                f"execution deadline")
+        job["deadline_monotonic"] = clock() + budget["task_seconds"]
+
+
 def _runner_worker_request(job: dict, route_record: dict) -> dict:
     request = {
         "workload_class": _required_job_field(job, "workload_class"),
@@ -373,6 +393,7 @@ def launch_runner_round(
     root = cli.ROOT
     if job.get("state") == "ready":
         generation = int(job.get("runner_generation", 0)) + 1
+        _claim_execution(job, clock)
         job.update(
             state="runner_starting",
             runner_generation=generation,
@@ -392,6 +413,7 @@ def launch_runner_round(
 
     worker_request = job.get("runner_worker_request")
     if worker_request is None:
+        _claim_execution(job, clock)
         worker_request = _runner_worker_request(job, route_record)
         job["runner_worker_request"] = worker_request
     elif type(worker_request) is not dict:

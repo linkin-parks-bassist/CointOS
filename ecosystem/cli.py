@@ -102,6 +102,7 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
         job = {
             "id": job_id, "kind": "agent-task", "state": "queued",
             "attempts": 0, "created_at": now(), "updated_at": now(),
+            "agent_generation": 1, "logical_run_state": "active",
             "role": role, "task": task, "source": source, "model": None,
             "model_reason": "Pending model-mediated routing.",
             "requested_model": model,
@@ -184,6 +185,8 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
             "attempts": 0,
             "created_at": now(),
             "updated_at": now(),
+            "agent_generation": 1,
+            "logical_run_state": "active",
             "role": None,
             "task": validated["objective"],
             "source": f"child:{parent_id}",

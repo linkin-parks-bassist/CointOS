@@ -42,6 +42,7 @@ SURVIVOR_QUEUED_FIELDS = frozenset({
     "requested_model_reason", "prefer_models_other_than", "agent_name",
     "idempotency_key", "task_contract", "remaining_budget", "authority_profile",
     "requirements", "scope", "write_paths", "workload_class",
+    "agent_generation", "logical_run_state",
 })
 SURVIVOR_READY_FIELDS = SURVIVOR_QUEUED_FIELDS | {
     "context_tokens", "prompt", "original_prompt",
@@ -833,6 +834,8 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
         "scope": contract["scope"],
         "write_paths": contract["scope"]["write_paths"],
         "workload_class": "repair",
+        "agent_generation": 1,
+        "logical_run_state": "active",
     }
     prompt_path = cli.ROOT / "state/jobs" / f"{job_id}.prompt.md"
     relative_prompt = str(prompt_path.relative_to(cli.ROOT))

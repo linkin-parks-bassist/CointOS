@@ -1272,7 +1272,10 @@ def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
         "idempotency_key", "task_contract", "remaining_budget", "context_tokens",
         "authority_profile", "requirements", "scope", "write_paths",
         "workload_class", "prompt", "original_prompt",
+        "agent_generation", "logical_run_state",
     }
+    assert canonical["agent_generation"] == 1
+    assert canonical["logical_run_state"] == "active"
     assert canonical["kind"] == "agent-task"
     assert canonical["state"] == "ready"
     assert canonical["attempts"] == 0

@@ -176,6 +176,34 @@ def test_enqueue_requires_contract_and_child_replay_debits_once():
         assert saved_parent["remaining_budget"]["maximum_children"] == 0
 
 
+def test_enqueue_initializes_execution_claim_identity():
+    with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+        root = Path(temporary).resolve()
+        cli.initialize()
+        for relative in ("ecosystem", "agent_notes", "roles"):
+            (root / relative).mkdir(exist_ok=True)
+        (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
+        accepted_workspace_policy(root)
+        job_id = cli.enqueue_task(
+            "worker", "bounded", task_contract=contract(root, objective="bounded"))
+        job = json.loads((root / f"state/jobs/{job_id}.json").read_text())
+        assert job["agent_generation"] == 1
+        assert job["logical_run_state"] == "active"
+        child_id = cli.enqueue_child(
+            job,
+            contract(root,
+                     scope={"workspace": str(root),
+                            "read_paths": [str(root / "ecosystem")],
+                            "write_paths": [str(root / "agent_notes" / "child.md")]},
+                     budget={**budget(0), "task_seconds": 300},
+                     source_key="test:claim-child",
+                     parent_job_id=job_id),
+            "test:claim:child")
+        child = json.loads((root / f"state/jobs/{child_id}.json").read_text())
+        assert child["agent_generation"] == 1
+        assert child["logical_run_state"] == "active"
+
+
 def test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallback():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         root = Path(temporary).resolve()
@@ -224,6 +252,7 @@ def load_tests(_loader, _tests, _pattern):
         test_contract_rejects_unstructured_acceptance,
         test_child_cannot_widen_scope_authority_or_shared_budget,
         test_enqueue_requires_contract_and_child_replay_debits_once,
+        test_enqueue_initializes_execution_claim_identity,
         test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallback,
         test_trusted_intake_rejects_task_objective_disagreement,
         test_temporary_role_loads_without_code_change,

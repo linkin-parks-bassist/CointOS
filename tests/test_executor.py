@@ -198,6 +198,56 @@ class ExecutorTest(IntakeTest):
         self.assertEqual(saved["runner_generation"], 1)
         self.assertEqual(saved["runner_deferred_reasons"], ["drain"])
 
+    def test_execution_claim_initializes_authoritative_identity(self):
+        job_path = self.root / "state/jobs/task-claim.json"
+        job = {
+            "id": "task-claim", "state": "ready",
+            "workload_class": "work",
+            "remaining_budget": {"run_seconds": 300, "task_seconds": 900,
+                                 "maximum_attempts": 2,
+                                 "maximum_output_bytes": 65536,
+                                 "maximum_evidence_items": 20,
+                                 "maximum_children": 1},
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        result = launch_runner_round(
+            job, job_path, route, {}, ["must-not-spawn"],
+            stdin=None, stdout=None, stderr=None,
+            acquire=lambda *_args: {"state": "deferred", "reasons": ["drain"]},
+            launch=lambda *_args, **_kwargs: self.fail(
+                "claim must precede spawn"),
+            issue=lambda *_args: self.fail("claim must precede credential"),
+            clock=lambda: 100.0,
+        )
+        self.assertEqual(result["state"], "deferred")
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["agent_generation"], 1)
+        self.assertEqual(saved["logical_run_state"], "active")
+        self.assertEqual(saved["owner_identity"], "executor:task-claim")
+        self.assertEqual(saved["caller_handle"], "executor:local")
+        self.assertEqual(saved["deadline_monotonic"], 1000.0)
+        self.assertEqual(
+            saved["runner_worker_request"]["deadline_monotonic"], 1000.0)
+
+    def test_execution_claim_requires_remaining_budget(self):
+        job_path = self.root / "state/jobs/task-nobudget.json"
+        job = {
+            "id": "task-nobudget", "state": "ready",
+            "workload_class": "work",
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        with self.assertRaisesRegex(ValueError, "remaining task budget"):
+            launch_runner_round(
+                job, job_path, route, {}, ["must-not-spawn"],
+                stdin=None, stdout=None, stderr=None,
+                acquire=lambda *_args: self.fail("claim must precede acquire"),
+                clock=lambda: 100.0,
+            )
+
     def test_resume_rotates_runner_requests_but_preserves_logical_identity(self):
         (self.root / "config").mkdir(exist_ok=True)
         (self.root / "config/resource-policy.json").write_text(json.dumps({
