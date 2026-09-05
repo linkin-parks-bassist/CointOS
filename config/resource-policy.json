@@ -32,16 +32,17 @@
   },
   "physical_capacity": {
     "protected_host_bytes": 34359738368,
+    "coin_reserved_bytes": 8589934592,
     "load_transient_bytes": 12884901888,
     "gtt_limit_bytes": 68719476736
   },
   "dynamic_models": {
     "estimated_kv_bytes_per_token": 131072,
     "context_reserves": {
-      "prompt_tokens": 0,
-      "tool_tokens": 0,
-      "max_output_tokens": 0,
-      "handoff_tokens": 0
+      "prompt_tokens": 4096,
+      "tool_tokens": 8192,
+      "max_output_tokens": 4096,
+      "handoff_tokens": 8192
     },
     "rollover_fraction": 0.75,
     "parallel_requests": 1,

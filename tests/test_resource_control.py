@@ -237,19 +237,31 @@ def test_oversized_vllm_is_refused_before_load():
 def test_model_selection_uses_explicit_requirements():
     inventory = {
         "verified": True,
+        "fresh": True,
+        "provenance": "resource-observer:test",
         "resource_envelope": {
+            "verified": True,
+            "fresh": True,
             "safe": True,
+            "provenance": "resource-observer:test",
             "maximum_model_bytes": 20_000_000_000,
             "maximum_context_tokens": 65_536,
+            "maximum_kv_bytes": 20_000_000_000,
+            "available_host_bytes": 100_000_000_000,
+            "gtt_used_bytes": 1_000_000_000,
+            "gtt_limit_bytes": 64_000_000_000,
         },
         "models": [
             {"id": "chat-only", "parameter_count": 4_000_000_000,
-             "size_bytes": 3_000_000_000, "loaded": True, "labels": ["chat"],
-             "context": 65_536, "supported_context_quantum": 1_024},
+             "size_bytes": 3_000_000_000, "loaded": True,
+             "capabilities": ["chat"], "context": 65_536,
+             "supported_context_quantum": 1_024, "metadata_verified": True,
+             "fresh": True, "provenance": "registry:test"},
             {"id": "resident-coder", "parameter_count": 27_000_000_000,
              "size_bytes": 18_000_000_000, "loaded": True,
-             "labels": ["coding", "tool-calling"], "context": 65_536,
-             "supported_context_quantum": 1_024},
+             "capabilities": ["coding", "tool-calling"], "context": 65_536,
+             "supported_context_quantum": 1_024, "metadata_verified": True,
+             "fresh": True, "provenance": "registry:test"},
         ],
     }
     request = {
@@ -258,7 +270,18 @@ def test_model_selection_uses_explicit_requirements():
                          "minimum_context_tokens": 32_768},
         "max_output_tokens": 4_096,
     }
-    selected = choose_route(safe_routes(inventory, {}, request), request)
+    policy = {
+        "protected_host_bytes": 32_000_000_000,
+        "coin_reserved_bytes": 4_000_000_000,
+        "load_transient_bytes": 12_000_000_000,
+        "gtt_limit_bytes": 64_000_000_000,
+        "estimated_kv_bytes_per_token": 1_024,
+        "context_reserves": {
+            "prompt_tokens": 1, "tool_tokens": 1,
+            "max_output_tokens": 1, "handoff_tokens": 1,
+        },
+    }
+    selected = choose_route(safe_routes(inventory, policy, request), request)
     assert selected["model_id"] == "resident-coder"
 
 
