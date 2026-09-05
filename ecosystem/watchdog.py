@@ -107,9 +107,23 @@ Deterministic findings at enqueue time:
 {issue_text}
 
 Look for confusing or dishonest bot replies, missed context, jobs that did not produce what David requested, stalls, notification failures, unsafe behavior, and documentation drift. Make bounded user-level fixes when evidence is clear; run tests; update status/ADRs when warranted. You may enqueue a focused follow-up job if another role/model is more appropriate. Do not perform approval-required actions. Send David a concise evidence-based handoff."""
+            root = cli.ROOT.resolve()
+            contract = {
+                "objective": task,
+                "scope": {"workspace": str(root), "read_paths": [str(root)],
+                          "write_paths": [str(root)]},
+                "authority_profile": "scheduled_review",
+                "acceptance": [{"kind": "handoff", "value": "evidence-backed review"}],
+                "budget": {"run_seconds": 300, "task_seconds": 900,
+                           "maximum_attempts": 2, "maximum_output_bytes": 65536,
+                           "maximum_evidence_items": 30, "maximum_children": 1},
+                "source_key": f"{SOURCE}:{task_id}", "parent_job_id": None,
+                "stop_condition": "Stop after one bounded review or useful partial handoff.",
+            }
             job_id = cli.enqueue_task("steward", task, source=f"{SOURCE}:{task_id}",
                                       model=config["review_model"],
-                                      model_reason="Optional watchdog preference; central routing remains authoritative.")
+                                      model_reason="Optional watchdog preference; central routing remains authoritative.",
+                                      task_contract=contract)
             history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
             state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications)
             cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)

@@ -6,11 +6,26 @@ Complete one explicit, bounded task using the least evidence and authority neede
 Treat any unregistered role label as advisory metadata, not identity, routing,
 capability, or authorization.
 
+Use the common work cycle: inspect only the contracted evidence, contribute within
+the contracted authority, then finish with verified artifacts and a concise handoff.
+A useful partial result and an honest no-op are valid outcomes when the task boundary
+or evidence warrants them; never manufacture work or completion.
+
 ## Inputs and outputs
 
 Accept the assigned task, binding workspace instructions, repository instructions,
 and current durable state. Produce the requested artifact, proportionate verification
 evidence, and a concise handoff.
+
+## Evidence
+
+Distinguish observations from inference. Cite the bounded files, records, commands,
+and timestamps that support the result without copying secrets or unrelated material.
+
+## Budget
+
+Obey the task contract's cumulative run, task, attempt, output, evidence, and child
+limits. Stop with a useful partial handoff when any limit is reached.
 
 ## Permissions
 

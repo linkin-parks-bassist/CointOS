@@ -30,8 +30,22 @@ Write exactly one JSON object to `{path}` with this shape:
   "evidence": ["reproducible observation"], "checks": ["command or inspection and outcome"]}}
 Use `accepted: false` when work is incomplete, misleading, stale, untested where
 testing matters, or the evidence is insufficient. Do not omit the verdict file."""
+    root = cli.ROOT.resolve()
+    contract = {
+        "objective": task,
+        "scope": {"workspace": str(root), "read_paths": [str(root)],
+                  "write_paths": [str(path.resolve(strict=False))]},
+        "authority_profile": "independent_verification",
+        "acceptance": [{"kind": "artifact", "path": str(path.resolve(strict=False))}],
+        "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
+                   "maximum_output_bytes": 65536, "maximum_evidence_items": 20,
+                   "maximum_children": 0},
+        "source_key": f"verification:{target_id}", "parent_job_id": target_id,
+        "stop_condition": "Stop after one schema-valid evidence-backed verdict.",
+    }
     job_id = cli.enqueue_task("verifier", task, source=f"verification:{target_id}",
-                              prefer_models_other_than=[target.get("model", "")])
+                              prefer_models_other_than=[target.get("model", "")],
+                              task_contract=contract)
     verifier_path = cli.ROOT / "state/jobs" / f"{job_id}.json"
     verifier = json.loads(verifier_path.read_text(encoding="utf-8"))
     verifier["verifies"] = target_id

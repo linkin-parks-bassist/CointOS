@@ -147,11 +147,15 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
             raise ValueError("unavailable model")
         if not isinstance(task, str) or not task.strip():
             raise ValueError("empty task")
+        task_contract = arguments.get("task_contract")
+        if not isinstance(task_contract, dict):
+            raise ValueError("queue or amendment requires an explicit task contract")
         if name == "queue_task":
             job_id = cli.enqueue_task(role, task, source=f"telegram:{user_id}", model=model,
                                       model_reason=arguments.get("model_reason", ""),
                                       agent_name=arguments.get("agent_name"),
-                                      idempotency_key=f"{identifier}:{key}")
+                                      idempotency_key=f"{identifier}:{key}",
+                                      task_contract=task_contract)
             job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
             result = {"ok": True, "agent_name": job["agent_name"],
                       "role": safe_role_label(role),
@@ -159,7 +163,8 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
         else:
             job_id = cli.amend_latest_task(f"telegram:{user_id}", role, task, model,
                                            arguments.get("model_reason", ""),
-                                           idempotency_key=f"{identifier}:{key}")
+                                           idempotency_key=f"{identifier}:{key}",
+                                           task_contract=task_contract)
             result = {"ok": bool(job_id), "amended": bool(job_id), "task": task}
     elif name == "pause_dispatch":
         (cli.ROOT / "state/PAUSED").touch()

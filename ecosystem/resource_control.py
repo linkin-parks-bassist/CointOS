@@ -40,7 +40,7 @@ SURVIVOR_QUEUED_FIELDS = frozenset({
     "id", "kind", "state", "attempts", "created_at", "updated_at", "role",
     "task", "source", "model", "model_reason", "requested_model",
     "requested_model_reason", "prefer_models_other_than", "agent_name",
-    "idempotency_key",
+    "idempotency_key", "task_contract", "remaining_budget",
 })
 SURVIVOR_READY_FIELDS = SURVIVOR_QUEUED_FIELDS | {
     "context_tokens", "prompt", "original_prompt",
@@ -747,6 +747,20 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
     task = _survivor_task(incident_path, incident_id, replacement_for)
     idempotency_key = (f"resource-emergency:{incident_id}:replace:{replacement_for}"
                        if replacement_for else f"resource-emergency:{incident_id}")
+    root = cli.ROOT.resolve()
+    conclusion = (root / "state/resource-incidents" / f"{incident_id}-conclusion.md").resolve(strict=False)
+    contract = {
+        "objective": task,
+        "scope": {"workspace": str(root), "read_paths": [str(root)],
+                  "write_paths": [str(root)]},
+        "authority_profile": "resource_emergency",
+        "acceptance": [{"kind": "artifact", "path": str(conclusion)}],
+        "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
+                   "maximum_output_bytes": 65536, "maximum_evidence_items": 20,
+                   "maximum_children": 0},
+        "source_key": idempotency_key, "parent_job_id": replacement_for,
+        "stop_condition": "Stop after safe recovery or an evidence-backed blocked handoff.",
+    }
     try:
         job_id = cli.enqueue_task(
             SURVIVOR_ROLE, task, source=f"resource-emergency:{incident_id}",
@@ -754,6 +768,7 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
             model_reason=SURVIVOR_REQUESTED_MODEL_REASON,
             agent_name=SURVIVOR_AGENT_NAME,
             idempotency_key=idempotency_key,
+            task_contract=contract,
         )
     except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise RuntimeError(
@@ -774,12 +789,14 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
         "prefer_models_other_than": [],
         "agent_name": SURVIVOR_AGENT_NAME,
         "idempotency_key": idempotency_key,
+        "task_contract": contract,
+        "remaining_budget": contract["budget"],
     }
     prompt_path = cli.ROOT / "state/jobs" / f"{job_id}.prompt.md"
     relative_prompt = str(prompt_path.relative_to(cli.ROOT))
     expected_prompt = render_context(
         SURVIVOR_ROLE, task, job_id, emergency_model,
-        SURVIVOR_MODEL_REASON, SURVIVOR_AGENT_NAME,
+        SURVIVOR_MODEL_REASON, SURVIVOR_AGENT_NAME, contract,
     )
     if job.get("state") == "ready":
         _require_canonical_survivor_job(job, {

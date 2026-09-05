@@ -6,14 +6,6 @@ from ecosystem import cli
 
 
 SAFE_ROLE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-ROLE_CAPABILITIES = {
-    "auditor": ["reasoning", "tool-calling"],
-    "coder": ["coding", "tool-calling"],
-    "refactorer": ["coding", "tool-calling"],
-    "sole_survivor": ["reasoning", "tool-calling"],
-    "steward": ["reasoning", "tool-calling"],
-    "verifier": ["reasoning", "tool-calling"],
-}
 
 
 def list_roles() -> list[str]:
@@ -21,7 +13,8 @@ def list_roles() -> list[str]:
 
 
 def role_capabilities(role: str | None) -> list[str]:
-    return list(ROLE_CAPABILITIES.get(role, ["tool-calling"]))
+    """Return the neutral advisory baseline; task requirements select capability."""
+    return ["tool-calling"]
 
 
 def safe_role_label(role: str | None) -> str | None:
@@ -51,7 +44,8 @@ def load_role(role: str | None) -> str:
 
 
 def render_context(role: str | None, task: str, job_id: str, model: str = "unspecified",
-                   model_reason: str = "", agent_name: str = "Agent") -> str:
+                   model_reason: str = "", agent_name: str = "Agent",
+                   task_contract: dict | None = None) -> str:
     resolved = resolve_role(role)
     definition = resolved["context"]
     role_context = (
@@ -84,6 +78,10 @@ be human. Bring a little personality, but never trade correctness or clarity for
 Job ID: `{job_id}`
 Selected model: `{model}`
 Selection rationale: {model_reason or "Not recorded (legacy job)."}
+
+## Executable task contract
+
+{json.dumps(task_contract, indent=2, sort_keys=True) if task_contract is not None else "No executable contract was supplied; do not begin executable work."}
 
 {role_context}
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -68,44 +69,138 @@ def initialize() -> None:
 def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: str | None = None,
                  model_reason: str = "", agent_name: str | None = None,
                  idempotency_key: str | None = None,
-                 prefer_models_other_than: list[str] | None = None) -> str:
+                 prefer_models_other_than: list[str] | None = None,
+                 task_contract: dict | None = None) -> str:
     from ecosystem.identity import validate, generate
     from ecosystem.roles import resolve_role
+    from ecosystem.task_contracts import validate_task_contract
 
     initialize()
+    if task_contract is None:
+        raise ValueError("executable work requires an explicit task contract")
+    validated_contract = validate_task_contract(task_contract)
     job_id = (f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
               if idempotency_key else f"task-{uuid.uuid4().hex[:16]}")
     job_path = ROOT / "state/jobs" / f"{job_id}.json"
-    if job_path.exists():
-        saved = json.loads(job_path.read_text(encoding="utf-8"))
-        if not idempotency_key or saved.get("idempotency_key") != idempotency_key:
-            raise ValueError("task identifier collision")
-        return job_id
-    resolved_role = resolve_role(role) if not agent_name else None
-    identity_role = resolved_role["label"] if resolved_role and resolved_role["known"] else "agent"
-    agent_name = validate(agent_name) if agent_name else generate(identity_role, task)
-    job = {
-        "id": job_id, "kind": "agent-task", "state": "queued",
-        "attempts": 0, "created_at": now(), "updated_at": now(),
-        "role": role, "task": task, "source": source, "model": None,
-        "model_reason": "Pending model-mediated routing.",
-        "requested_model": model,
-        "requested_model_reason": model_reason or ("Caller supplied no model preference."
-                                                     if model is None else "Caller supplied a model hint."),
-        "prefer_models_other_than": prefer_models_other_than or [],
-        "agent_name": agent_name,
-    }
-    if idempotency_key:
-        job["idempotency_key"] = idempotency_key
-    atomic_json(job_path, job)
+    lock_path = ROOT / "state/task-enqueue.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if job_path.exists():
+            saved = json.loads(job_path.read_text(encoding="utf-8"))
+            if not idempotency_key or saved.get("idempotency_key") != idempotency_key:
+                raise ValueError("task identifier collision")
+            if saved.get("task_contract") != validated_contract:
+                raise ValueError("idempotency key reused with a different task contract")
+            return job_id
+        resolved_role = resolve_role(role) if not agent_name else None
+        identity_role = resolved_role["label"] if resolved_role and resolved_role["known"] else "agent"
+        agent_name = validate(agent_name) if agent_name else generate(identity_role, task)
+        job = {
+            "id": job_id, "kind": "agent-task", "state": "queued",
+            "attempts": 0, "created_at": now(), "updated_at": now(),
+            "role": role, "task": task, "source": source, "model": None,
+            "model_reason": "Pending model-mediated routing.",
+            "requested_model": model,
+            "requested_model_reason": model_reason or ("Caller supplied no model preference."
+                                                         if model is None else "Caller supplied a model hint."),
+            "prefer_models_other_than": prefer_models_other_than or [],
+            "agent_name": agent_name,
+            "task_contract": validated_contract,
+            "remaining_budget": dict(validated_contract["budget"]),
+        }
+        if idempotency_key:
+            job["idempotency_key"] = idempotency_key
+        atomic_json(job_path, job)
     audit("task.queued", job_id=job_id, role=role, source=source,
           requested_model=model, requested_model_reason=job["requested_model_reason"],
           agent_name=agent_name)
     return job_id
 
 
+def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) -> str:
+    from ecosystem.identity import generate
+    from ecosystem.task_contracts import BUDGET_FIELDS, narrow_contract, validate_task_contract
+
+    if type(idempotency_key) is not str or not idempotency_key:
+        raise ValueError("child enqueue requires an idempotency key")
+    parent_id = parent_job.get("id")
+    if type(parent_id) is not str or not parent_id:
+        raise ValueError("child enqueue requires a parent job identity")
+    initialize()
+    child_id = f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
+    child_path = ROOT / "state/jobs" / f"{child_id}.json"
+    parent_path = ROOT / "state/jobs" / f"{parent_id}.json"
+    lock_path = ROOT / "state/task-enqueue.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if not parent_path.exists():
+            raise ValueError("parent job does not exist")
+        current_parent = json.loads(parent_path.read_text(encoding="utf-8"))
+        reservations = current_parent.setdefault("child_reservations", {})
+        reservation = reservations.get(idempotency_key)
+        if reservation is None:
+            validated = narrow_contract(current_parent, child_contract)
+        else:
+            validated = validate_task_contract(child_contract)
+            if reservation != {"child_job_id": child_id, "task_contract": validated}:
+                raise ValueError("child reservation replay changed contract")
+        if child_path.exists():
+            saved = json.loads(child_path.read_text(encoding="utf-8"))
+            if saved.get("idempotency_key") != idempotency_key:
+                raise ValueError("child task identifier collision")
+            if saved.get("task_contract") != validated:
+                raise ValueError("idempotency key reused with a different child contract")
+            return child_id
+        if validated["parent_job_id"] != parent_id:
+            raise ValueError("child names a different parent")
+        if reservation is None:
+            remaining = dict(current_parent.get(
+                "remaining_budget", current_parent["task_contract"]["budget"]))
+            for field in BUDGET_FIELDS[:-1]:
+                remaining[field] -= validated["budget"][field]
+            remaining["maximum_children"] -= 1 + validated["budget"]["maximum_children"]
+            current_parent["remaining_budget"] = remaining
+            current_parent["updated_at"] = now()
+            reservations[idempotency_key] = {
+                "child_job_id": child_id,
+                "task_contract": validated,
+            }
+            atomic_json(parent_path, current_parent)
+        child_job = {
+            "id": child_id,
+            "kind": "agent-task",
+            "state": "queued",
+            "attempts": 0,
+            "created_at": now(),
+            "updated_at": now(),
+            "role": None,
+            "task": validated["objective"],
+            "source": f"child:{parent_id}",
+            "model": None,
+            "model_reason": "Pending model-mediated routing.",
+            "requested_model": None,
+            "requested_model_reason": "Caller supplied no model preference.",
+            "prefer_models_other_than": [],
+            "agent_name": generate("agent", validated["objective"]),
+            "task_contract": validated,
+            "remaining_budget": dict(validated["budget"]),
+            "idempotency_key": idempotency_key,
+        }
+        atomic_json(child_path, child_job)
+    audit("task.child_queued", job_id=child_id, parent_job_id=parent_id,
+          source_key=validated["source_key"])
+    return child_id
+
+
 def amend_latest_task(source: str, role: str | None, task: str, model: str | None = None,
-                      model_reason: str = "", idempotency_key: str | None = None) -> str | None:
+                      model_reason: str = "", idempotency_key: str | None = None,
+                      task_contract: dict | None = None) -> str | None:
+    from ecosystem.task_contracts import validate_task_contract
+
+    if task_contract is None:
+        raise ValueError("amended executable work requires an explicit task contract")
+    validated_contract = validate_task_contract(task_contract)
     candidates = []
     for path in (ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
@@ -119,7 +214,9 @@ def amend_latest_task(source: str, role: str | None, task: str, model: str | Non
     prompt = ROOT / job.get("prompt", "") if job.get("prompt") else None
     if prompt:
         prompt.unlink(missing_ok=True)
-    job.update(role=role, task=task.strip(), state="queued", updated_at=now())
+    job.update(role=role, task=task.strip(), task_contract=validated_contract,
+               remaining_budget=dict(validated_contract["budget"]),
+               state="queued", updated_at=now())
     if model is not None:
         job.update(requested_model=model,
                    requested_model_reason=model_reason or "Caller supplied an amended model hint.")
@@ -159,7 +256,7 @@ def prepare_next() -> None:
             return
         job.update(model=decision["model"], model_reason=decision["reason"],
                    context_tokens=decision["context_tokens"])
-        prompt = render_context(job.get("role"), job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"))
+        prompt = render_context(job.get("role"), job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"), job.get("task_contract"))
         prompt_path = ROOT / "state/jobs" / f"{job['id']}.prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         job.update(state="ready", updated_at=now(), prompt=str(prompt_path.relative_to(ROOT)))
@@ -295,6 +392,7 @@ def main() -> None:
     parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "enqueue", "prepare-next", "roles", "tell-david"))
     parser.add_argument("--role", default="worker")
     parser.add_argument("--task")
+    parser.add_argument("--task-contract")
     parser.add_argument("--model")
     parser.add_argument("--model-reason", default="")
     parser.add_argument("--agent-name")
@@ -313,8 +411,12 @@ def main() -> None:
     elif args.command == "enqueue":
         if not args.task:
             parser.error("enqueue requires --task")
+        if not args.task_contract:
+            parser.error("enqueue requires --task-contract")
+        task_contract = json.loads(Path(args.task_contract).read_text(encoding="utf-8"))
         print(enqueue_task(args.role, args.task, model=args.model,
-                           model_reason=args.model_reason, agent_name=args.agent_name))
+                           model_reason=args.model_reason, agent_name=args.agent_name,
+                           task_contract=task_contract))
     elif args.command == "prepare-next": prepare_next()
     elif args.command == "roles":
         from ecosystem.roles import list_roles
