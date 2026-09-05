@@ -60,6 +60,8 @@
     "front_proxy_identity": "proxy:coin-front",
     "work_proxy_identity": "proxy:work",
     "lease_seconds": 300,
+    "release_observer_identity": "observer:inference-backend",
+    "release_observation_maximum_age_seconds": 5,
     "non_kv_bytes_per_token": 4
   }
 }
