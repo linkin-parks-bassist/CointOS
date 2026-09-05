@@ -1,6 +1,6 @@
 """Live inventory, model-mediated routing, and deterministic safety validation."""
 from __future__ import annotations
-import glob, json, os, re, subprocess, urllib.request
+import glob, json, os, re, shlex, subprocess, time, urllib.request
 from pathlib import Path
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
@@ -22,61 +22,309 @@ def _post(path: str, payload: dict, timeout: float) -> dict:
     return json.loads(raw) if raw else {}
 
 def gpu_memory() -> dict:
-    result = {"firmware_carveout_gb": None, "gtt_total_gb": None, "gtt_used_gb": None}
-    for device in glob.glob("/sys/class/drm/card*/device"):
+    result = {
+        "firmware_carveout_bytes": None,
+        "gtt_total_bytes": None,
+        "gtt_used_bytes": None,
+        "provenance": "amdgpu:sysfs",
+        "fresh": False,
+    }
+    for device in sorted(glob.glob("/sys/class/drm/card*/device")):
         uma = Path(device) / "uma"
         try:
             index = (uma / "carveout").read_text(encoding="utf-8").strip()
             options = (uma / "carveout_options").read_text(encoding="utf-8")
             match = re.search(rf"^{re.escape(index)}:.*\((\d+) (MB|GB)\)$", options, re.MULTILINE)
             if match:
-                value = float(match.group(1)) / (1024 if match.group(2) == "MB" else 1)
-                result["firmware_carveout_gb"] = round(value, 3)
+                scale = 1024 ** (2 if match.group(2) == "MB" else 3)
+                result["firmware_carveout_bytes"] = int(match.group(1)) * scale
             for name in ("gtt_total", "gtt_used"):
                 raw = int((Path(device) / f"mem_info_{name}").read_text(encoding="utf-8"))
-                result[f"{name}_gb"] = round(raw / 1024 ** 3, 1)
+                result[f"{name}_bytes"] = raw
+            result["fresh"] = (
+                _positive_integer(result["gtt_total_bytes"])
+                and isinstance(result["gtt_used_bytes"], int)
+                and not isinstance(result["gtt_used_bytes"], bool)
+                and result["gtt_used_bytes"] >= 0
+            )
             return result
         except (FileNotFoundError, PermissionError, ValueError):
             continue
     return result
 
-def snapshot() -> dict:
-    registry = _get("/v1/models").get("data", [])
-    try:
-        health = _get("/api/v1/health").get("all_models_loaded", [])
-    except Exception:
-        health = []
-    loaded = {item["model_name"]: item for item in health}
+
+def _host_memory() -> dict:
     memory = {}
     with open("/proc/meminfo", encoding="utf-8") as stream:
         for line in stream:
             key, value = line.split(":", 1)
-            memory[key] = int(value.strip().split()[0])
-    models = [{
-        "id": item["id"], "size_gb": item.get("size"), "labels": item.get("labels", []),
-        "recipe": item.get("recipe"),
-        "context": item.get("context_length"), "loaded": item["id"] in loaded,
-        "loaded_context": loaded.get(item["id"], {}).get("recipe_options", {}).get("ctx_size"),
-        "busy": loaded.get(item["id"], {}).get("is_busy", False),
-        "pinned": loaded.get(item["id"], {}).get("pinned", False),
-    } for item in registry if item.get("downloaded") and "chat" in item.get("labels", [])]
-    policy_path = Path(__file__).resolve().parents[1] / "config/model-policy.json"
-    machine_path = Path(__file__).resolve().parents[1] / "config/machine-profile.json"
-    machine = json.loads(machine_path.read_text(encoding="utf-8"))
-    linux_total = round(memory.get("MemTotal", 0) / 1024 / 1024, 1)
-    linux_available = round(memory.get("MemAvailable", 0) / 1024 / 1024, 1)
-    gpu = gpu_memory()
+            memory[key] = int(value.strip().split()[0]) * 1024
+    total = memory.get("MemTotal")
+    available = memory.get("MemAvailable")
     return {
-        "memory_available_gb": linux_available,
+        "total_bytes": total,
+        "available_bytes": available,
+        "provenance": "linux:/proc/meminfo",
+        "fresh": (
+            _positive_integer(total)
+            and isinstance(available, int)
+            and not isinstance(available, bool)
+            and available >= 0
+        ),
+    }
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, PermissionError, json.JSONDecodeError):
+        return None
+
+
+def _nonnegative_integer(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _positive_integer_value(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _health_parallel_sequences(resident: dict):
+    explicit = _positive_integer_value(resident.get("parallel_sequences"))
+    if explicit is not None:
+        return explicit
+    options = resident.get("recipe_options")
+    arguments = options.get("llamacpp_args") if isinstance(options, dict) else None
+    if not isinstance(arguments, str):
+        return None
+    try:
+        tokens = shlex.split(arguments)
+    except ValueError:
+        return None
+    values = []
+    for index, token in enumerate(tokens):
+        if token == "--parallel" and index + 1 < len(tokens):
+            values.append(tokens[index + 1])
+        elif token.startswith("--parallel="):
+            values.append(token.partition("=")[2])
+    if len(values) != 1:
+        return None
+    try:
+        return _positive_integer_value(int(values[0]))
+    except ValueError:
+        return None
+
+
+def _verified_model_record(
+    item: dict, resident: dict | None, health_fresh: bool, observed_at: float,
+) -> dict:
+    model_id = item.get("id")
+    parameter_count = item.get("parameter_count")
+    size_bytes = item.get("size_bytes")
+    capabilities = item.get("capabilities")
+    advertised = item.get("context_length")
+    quantum = item.get("supported_context_quantum")
+    registry_parallel = item.get("parallel_sequences")
+    metadata_verified = (
+        isinstance(model_id, str) and bool(model_id)
+        and _positive_integer(parameter_count)
+        and _positive_integer(size_bytes)
+        and isinstance(capabilities, list)
+        and all(isinstance(value, str) and value for value in capabilities)
+        and _positive_integer(advertised)
+        and _positive_integer(quantum)
+        and _positive_integer(registry_parallel)
+    )
+    loaded = resident is not None if health_fresh else None
+    loaded_context = None
+    parallel = registry_parallel
+    residency_verified = health_fresh
+    if resident is not None:
+        options = resident.get("recipe_options")
+        loaded_context = options.get("ctx_size") if isinstance(options, dict) else None
+        parallel = _health_parallel_sequences(resident)
+        residency_verified = (
+            _positive_integer(loaded_context)
+            and _positive_integer(parallel)
+            and loaded_context % parallel == 0
+        )
+    return {
+        "id": model_id,
+        "parameter_count": parameter_count if _positive_integer(parameter_count) else None,
+        "size_bytes": size_bytes if _positive_integer(size_bytes) else None,
+        "size_gb": size_bytes / 1024 ** 3 if _positive_integer(size_bytes) else None,
+        "capabilities": capabilities if isinstance(capabilities, list) else None,
+        "context": advertised if _positive_integer(advertised) else None,
+        "supported_context_quantum": quantum if _positive_integer(quantum) else None,
+        "parallel_sequences": parallel if _positive_integer(parallel) else None,
+        "loaded": loaded,
+        "loaded_context": loaded_context if _positive_integer(loaded_context) else None,
+        "busy": resident.get("is_busy") if resident is not None else False,
+        "pinned": resident.get("pinned") if resident is not None else False,
+        "recipe": item.get("recipe"),
+        "metadata_verified": bool(metadata_verified),
+        "residency_verified": bool(residency_verified),
+        "fresh": bool(health_fresh and residency_verified),
+        "stale": not bool(health_fresh and residency_verified),
+        "observed_at": observed_at,
+        "provenance": "lemonade:/v1/models;lemonade:/api/v1/health",
+    }
+
+
+def snapshot(root: Path | None = None, clock=None) -> dict:
+    """Sample literal registry, residency, host and accepted scheduling facts."""
+    root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    now = (clock or time.time)()
+    registry_document = _get("/v1/models")
+    registry = registry_document.get("data") if isinstance(registry_document, dict) else None
+    registry_fresh = isinstance(registry, list) and all(isinstance(item, dict) for item in registry)
+    registry = registry if registry_fresh else []
+    try:
+        health_document = _get("/api/v1/health")
+        health = health_document.get("all_models_loaded") \
+            if isinstance(health_document, dict) else None
+        health_fresh = isinstance(health, list) and all(isinstance(item, dict) for item in health)
+    except Exception:
+        health = []
+        health_fresh = False
+    health = health if health_fresh else []
+    loaded = {
+        item["model_name"]: item for item in health
+        if isinstance(item.get("model_name"), str) and item["model_name"]
+    }
+    downloaded = [item for item in registry if item.get("downloaded") is True]
+    models = [_verified_model_record(item, loaded.get(item.get("id")), health_fresh, now)
+              for item in downloaded]
+
+    host_memory = _host_memory()
+    gpu = gpu_memory()
+    host_fresh = host_memory.get("fresh") is True and gpu.get("fresh") is True
+    host_provenance = f"{host_memory.get('provenance')};{gpu.get('provenance')}"
+    available = _nonnegative_integer(host_memory.get("available_bytes"))
+    total = _positive_integer_value(host_memory.get("total_bytes"))
+    gtt_used = _nonnegative_integer(gpu.get("gtt_used_bytes"))
+    measured_gtt_total = _positive_integer_value(gpu.get("gtt_total_bytes"))
+    host = {
+        "available_host_bytes": available,
+        "total_host_bytes": total,
+        "gtt_used_bytes": gtt_used,
+        "gtt_total_bytes": measured_gtt_total,
+        "gtt_total_fresh": bool(gpu.get("fresh") is True and measured_gtt_total),
+        "fresh": bool(host_fresh),
+        "stale": not bool(host_fresh),
+        "observed_at": now,
+        "provenance": host_provenance,
+    }
+
+    policy_document = _read_json(root / "config" / "resource-policy.json")
+    model_policy = _read_json(root / "config" / "model-policy.json")
+    control_plane = model_policy.get("control_plane", {}) \
+        if isinstance(model_policy, dict) else {}
+    control_model = control_plane.get("model") \
+        if isinstance(control_plane, dict) else None
+    physical = policy_document.get("physical_capacity", {}) \
+        if isinstance(policy_document, dict) else {}
+    dynamic = policy_document.get("dynamic_models", {}) \
+        if isinstance(policy_document, dict) else {}
+    protected = _nonnegative_integer(physical.get("protected_host_bytes"))
+    coin_reserved = _nonnegative_integer(physical.get("coin_reserved_bytes"))
+    transient = _nonnegative_integer(physical.get("load_transient_bytes"))
+    configured_gtt_limit = _positive_integer_value(physical.get("gtt_limit_bytes"))
+    gtt_limit = min(measured_gtt_total, configured_gtt_limit) \
+        if measured_gtt_total and configured_gtt_limit else None
+    host_model_headroom = available - protected - coin_reserved - transient \
+        if None not in (available, protected, coin_reserved, transient) else None
+    gtt_model_headroom = gtt_limit - gtt_used - transient \
+        if None not in (gtt_limit, gtt_used, transient) else None
+    maximum_model_bytes = min(host_model_headroom, gtt_model_headroom) \
+        if None not in (host_model_headroom, gtt_model_headroom) else None
+    host_kv_headroom = available - protected - coin_reserved \
+        if None not in (available, protected, coin_reserved) else None
+    gtt_kv_headroom = gtt_limit - gtt_used \
+        if None not in (gtt_limit, gtt_used) else None
+    maximum_kv_bytes = min(host_kv_headroom, gtt_kv_headroom) \
+        if None not in (host_kv_headroom, gtt_kv_headroom) else None
+    contexts = [item["context"] for item in models if _positive_integer(item.get("context"))]
+    envelope_safe = (
+        host_fresh and registry_fresh
+        and _positive_integer(maximum_model_bytes)
+        and _positive_integer(maximum_kv_bytes)
+        and bool(contexts)
+    )
+    resource_envelope = {
+        "verified": bool(envelope_safe),
+        "fresh": bool(host_fresh and registry_fresh),
+        "stale": not bool(host_fresh and registry_fresh),
+        "safe": bool(envelope_safe),
+        "observed_at": now,
+        "provenance": f"{host_provenance};policy:config/resource-policy.json",
+        "maximum_model_bytes": max(0, maximum_model_bytes) \
+            if isinstance(maximum_model_bytes, int) else None,
+        "maximum_context_tokens": max(contexts) if contexts else None,
+        "available_host_bytes": available,
+        "gtt_used_bytes": gtt_used,
+        "gtt_limit_bytes": gtt_limit,
+        "maximum_kv_bytes": max(0, maximum_kv_bytes) \
+            if isinstance(maximum_kv_bytes, int) else None,
+        "protected_host_bytes": protected,
+        "coin_reserved_bytes": coin_reserved,
+        "load_transient_bytes": transient,
+        "estimated_kv_bytes_per_token": dynamic.get("estimated_kv_bytes_per_token"),
+    }
+    resident_models = []
+    model_by_id = {item.get("id"): item for item in models}
+    resident_facts_complete = True
+    for model_id, resident in loaded.items():
+        model = model_by_id.get(model_id)
+        options = resident.get("recipe_options")
+        total_context = options.get("ctx_size") if isinstance(options, dict) else None
+        parallel = _health_parallel_sequences(resident)
+        work_model = resident.get("work_model")
+        if not isinstance(work_model, bool) and isinstance(control_model, str) and control_model:
+            work_model = model_id != control_model
+        complete = (
+            isinstance(model, dict) and _positive_integer(model.get("size_bytes"))
+            and _positive_integer(total_context) and _positive_integer(parallel)
+            and total_context % parallel == 0 and isinstance(work_model, bool)
+        )
+        if not complete:
+            resident_facts_complete = False
+            continue
+        resident_models.append({
+            "model_id": model_id,
+            "model_bytes": model["size_bytes"],
+            "work_model": work_model,
+            "backend_context_tokens": total_context,
+            "parallel_sequences": parallel,
+            "context_tokens_per_sequence": total_context // parallel,
+            "fresh": True,
+            "observed_at": now,
+            "provenance": "lemonade:/api/v1/health;policy:config/model-policy.json",
+        })
+    scheduling = _read_json(root / "state" / "scheduling-policy.json")
+    verified = (
+        registry_fresh and health_fresh and host_fresh and resident_facts_complete
+        and resource_envelope["verified"] is True and isinstance(scheduling, dict)
+    )
+    return {
+        "verified": bool(verified),
+        "fresh": bool(verified),
+        "stale": not bool(verified),
+        "observed_at": now,
+        "provenance": "lemonade:/v1/models;/api/v1/health;linux:/proc/meminfo;amdgpu:sysfs",
+        "memory_available_gb": available / 1024 ** 3 if available is not None else None,
         "memory": {
-            "physical_unified_gb": machine["physical_unified_memory_gb"],
-            **gpu,
-            "linux_total_gb": linux_total,
-            "linux_available_gb": linux_available,
-            "meaning": machine["memory_note"],
+            "gtt_total_gb": measured_gtt_total / 1024 ** 3 if measured_gtt_total else None,
+            "gtt_used_gb": gtt_used / 1024 ** 3 if gtt_used is not None else None,
+            "linux_total_gb": total / 1024 ** 3 if total else None,
+            "linux_available_gb": available / 1024 ** 3 if available is not None else None,
         },
-        "load_average": list(os.getloadavg()), "models": models,
-        "scheduling_policy": json.loads(policy_path.read_text(encoding="utf-8")),
+        "load_average": list(os.getloadavg()),
+        "models": models,
+        "host": host,
+        "resident_models": resident_models,
+        "resource_envelope": resource_envelope,
+        "scheduling_policy": scheduling,
     }
 
 def ids(inventory: dict) -> list[str]:

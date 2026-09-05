@@ -1,7 +1,15 @@
+import hashlib
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from ecosystem.models import choose_route, realize, safe_routes, validate_route
+from ecosystem.inference_capacity import resource_envelope
+from ecosystem.models import choose_route, realize, safe_routes, snapshot, validate_route
+
+
+GIB = 1024 ** 3
 
 
 def admission_policy():
@@ -71,6 +79,205 @@ def request(**changes):
         "handoff_tokens": 2_048,
         **changes,
     }
+
+
+def _write_snapshot_policy(root):
+    (root / "config").mkdir()
+    (root / "state").mkdir()
+    resource_policy = {
+        "physical_capacity": {
+            "protected_host_bytes": 32 * GIB,
+            "coin_reserved_bytes": 8 * GIB,
+            "load_transient_bytes": 12 * GIB,
+            "gtt_limit_bytes": 100 * GIB,
+        },
+        "dynamic_models": {
+            "estimated_kv_bytes_per_token": 131_072,
+            "context_reserves": admission_policy()["context_reserves"],
+        },
+    }
+    scheduling_values = {"version": 1, "priority_bands": {"default": 500}}
+    canonical = json.dumps(
+        scheduling_values, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    accepted = {
+        "schema_version": 1,
+        "values": scheduling_values,
+        "digest": hashlib.sha256(canonical).hexdigest(),
+        "activated_at": "2026-09-05T00:00:00+00:00",
+        "source_path": "config/scheduling.json",
+    }
+    (root / "config" / "resource-policy.json").write_text(
+        json.dumps(resource_policy), encoding="utf-8",
+    )
+    (root / "config" / "model-policy.json").write_text(
+        json.dumps({
+            "priority_bands": {"default": -1},
+            "control_plane": {"model": "model-a"},
+        }), encoding="utf-8",
+    )
+    (root / "state" / "scheduling-policy.json").write_text(
+        json.dumps(accepted), encoding="utf-8",
+    )
+    return accepted
+
+
+def test_snapshot_produces_verified_r2_and_r3_capacity_records():
+    registry = {"data": [{
+        "id": "model-a",
+        "downloaded": True,
+        "parameter_count": 10_000_000_000,
+        "size_bytes": 30 * GIB,
+        "capabilities": ["coding", "tool-calling"],
+        "context_length": 131_072,
+        "supported_context_quantum": 32_768,
+        "parallel_sequences": 2,
+        "recipe": "llamacpp",
+    }]}
+    health = {"all_models_loaded": [{
+        "model_name": "model-a",
+        "recipe_options": {
+            "ctx_size": 65_536,
+            "llamacpp_args": "--parallel 2 --batch-size 512",
+        },
+        "is_busy": False,
+        "pinned": False,
+    }]}
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        accepted = _write_snapshot_policy(root)
+        with patch("ecosystem.models._get", side_effect=(registry, health)), \
+                patch("ecosystem.models._host_memory", return_value={
+                    "total_bytes": 128 * GIB,
+                    "available_bytes": 92 * GIB,
+                    "provenance": "linux:/proc/meminfo",
+                    "fresh": True,
+                }), patch("ecosystem.models.gpu_memory", return_value={
+                    "firmware_carveout_bytes": 512 * 1024 ** 2,
+                    "gtt_total_bytes": 100 * GIB,
+                    "gtt_used_bytes": 20 * GIB,
+                    "provenance": "amdgpu:sysfs",
+                    "fresh": True,
+                }), patch("ecosystem.models.os.getloadavg", return_value=(1.0, 2.0, 3.0)):
+            current = snapshot(root=root, clock=lambda: 1000.0)
+
+    assert current["verified"] is True
+    assert current["fresh"] is True
+    assert current["observed_at"] == 1000.0
+    assert current["scheduling_policy"] == accepted
+    assert current["host"] == {
+        "available_host_bytes": 92 * GIB,
+        "total_host_bytes": 128 * GIB,
+        "gtt_used_bytes": 20 * GIB,
+        "gtt_total_bytes": 100 * GIB,
+        "gtt_total_fresh": True,
+        "fresh": True,
+        "stale": False,
+        "observed_at": 1000.0,
+        "provenance": "linux:/proc/meminfo;amdgpu:sysfs",
+    }
+    assert current["resident_models"] == [{
+        "model_id": "model-a", "model_bytes": 30 * GIB,
+        "work_model": False, "backend_context_tokens": 65_536,
+        "parallel_sequences": 2, "context_tokens_per_sequence": 32_768,
+        "fresh": True, "observed_at": 1000.0,
+        "provenance": "lemonade:/api/v1/health;policy:config/model-policy.json",
+    }]
+    produced = current["models"][0]
+    assert produced["parameter_count"] == 10_000_000_000
+    assert produced["size_bytes"] == 30 * GIB
+    assert produced["capabilities"] == ["coding", "tool-calling"]
+    assert produced["context"] == 131_072
+    assert produced["supported_context_quantum"] == 32_768
+    assert produced["loaded_context"] == 65_536
+    assert produced["parallel_sequences"] == 2
+    assert produced["metadata_verified"] is True
+    envelope = current["resource_envelope"]
+    assert envelope["gtt_limit_bytes"] == 100 * GIB
+    assert envelope["available_host_bytes"] == 92 * GIB
+    assert envelope["protected_host_bytes"] == 32 * GIB
+    assert envelope["coin_reserved_bytes"] == 8 * GIB
+    assert envelope["load_transient_bytes"] == 12 * GIB
+    assert envelope["maximum_model_bytes"] == 40 * GIB
+    assert envelope["maximum_kv_bytes"] == 52 * GIB
+    assert envelope["maximum_context_tokens"] == 131_072
+    modest_request = request(
+        requirements={"required_capabilities": ["coding"],
+                      "minimum_context_tokens": 16_384},
+        prompt_tokens=1, tool_tokens=1, max_output_tokens=1, handoff_tokens=1,
+    )
+    selected = choose_route(
+        safe_routes(current, admission_policy(), modest_request), modest_request,
+    )
+    assert selected["state"] == "admitted", selected
+    physical = resource_envelope(
+        current["host"], current["resident_models"], [], {
+            "front_sequences": 1,
+            "total_sequences": 2,
+            "protected_host_bytes": 32 * GIB,
+            "coin_reserved_bytes": 8 * GIB,
+            "load_transient_bytes": 12 * GIB,
+            "gtt_limit_bytes": 100 * GIB,
+            "maximum_work_models": 1,
+        },
+    )
+    assert physical["safe"] is True
+    assert physical["resident_work_models"] == 0
+    assert physical["gtt_capacity_bytes"] == 100 * GIB
+
+
+def test_snapshot_never_derives_missing_metadata_from_model_name():
+    registry = {"data": [{
+        "id": "Qwen3-Coder-30B-131K-GGUF", "downloaded": True,
+        "size_bytes": 18 * GIB, "capabilities": ["coding"],
+    }]}
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        with patch("ecosystem.models._get", side_effect=(registry, {"all_models_loaded": []})), \
+                patch("ecosystem.models._host_memory", return_value={
+                    "total_bytes": 128 * GIB, "available_bytes": 92 * GIB,
+                    "provenance": "linux:/proc/meminfo", "fresh": True,
+                }), patch("ecosystem.models.gpu_memory", return_value={
+                    "firmware_carveout_bytes": 512 * 1024 ** 2,
+                    "gtt_total_bytes": 100 * GIB, "gtt_used_bytes": 1 * GIB,
+                    "provenance": "amdgpu:sysfs", "fresh": True,
+                }):
+            produced = snapshot(root=root, clock=lambda: 1000.0)["models"][0]
+
+    assert produced["parameter_count"] is None
+    assert produced["context"] is None
+    assert produced["supported_context_quantum"] is None
+    assert produced["metadata_verified"] is False
+    assert produced["fresh"] is True
+
+
+def test_snapshot_marks_failed_residency_observation_unknown_and_stale():
+    registry = {"data": [{
+        "id": "model-a", "downloaded": True,
+        "parameter_count": 1, "size_bytes": GIB,
+        "capabilities": ["coding"], "context_length": 32_768,
+        "supported_context_quantum": 1_024, "parallel_sequences": 1,
+    }]}
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        with patch("ecosystem.models._get", side_effect=(registry, OSError("health unavailable"))), \
+                patch("ecosystem.models._host_memory", return_value={
+                    "total_bytes": 128 * GIB, "available_bytes": 92 * GIB,
+                    "provenance": "linux:/proc/meminfo", "fresh": True,
+                }), patch("ecosystem.models.gpu_memory", return_value={
+                    "firmware_carveout_bytes": 512 * 1024 ** 2,
+                    "gtt_total_bytes": 100 * GIB, "gtt_used_bytes": GIB,
+                    "provenance": "amdgpu:sysfs", "fresh": True,
+                }):
+            current = snapshot(root=root, clock=lambda: 1000.0)
+
+    assert current["verified"] is False
+    assert current["fresh"] is False
+    assert current["resident_models"] == []
+    assert current["models"][0]["loaded"] is None
+    assert current["models"][0]["fresh"] is False
 
 
 def test_new_role_uses_explicit_requirements_without_code_change():
@@ -253,7 +460,7 @@ def test_legacy_labels_do_not_satisfy_explicit_capabilities():
     assert "capabilities" in selected["exclusion_reasons"]
 
 
-def test_realize_loads_validated_total_context_without_double_division():
+def test_realize_requires_privileged_owner_for_nonresident_loading():
     current = inventory([
         model(parallel_sequences=2, size_gb=18.0, recipe="llamacpp")
     ], maximum_context_tokens=65_536)
@@ -268,14 +475,9 @@ def test_realize_loads_validated_total_context_without_double_division():
     decision = {**selected, "valid": True, "action": "load",
                 "model": selected["model_id"],
                 "context_tokens": selected["context_tokens_per_sequence"]}
-    with patch("ecosystem.models._post", return_value={"loaded": True}) as post:
-        result = realize(decision, current)
-    payload = post.call_args.args[1]
-    assert payload["ctx_size"] == 65_536
-    assert "--parallel 2" in payload["llamacpp_args"]
-    assert result["context_tokens"] == 32_768
-    assert result["backend_context_tokens"] == 65_536
-    assert result["parallel_sequences"] == 2
+    with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "requires privileged resource-control loading"):
+        realize(decision, current)
 
 
 def load_tests(_loader, _tests, _pattern):
