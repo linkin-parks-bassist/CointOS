@@ -1,7 +1,6 @@
 import hashlib
 import inspect
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +8,6 @@ from pathlib import Path
 from ecosystem.inference_capacity import (
     effective_priority,
     realize_context_tokens,
-    register_proxy_observer_adapter,
     release_sequence,
     reserve_sequence,
     resource_envelope,
@@ -83,6 +81,7 @@ def capacity_policy():
         "lease_seconds": 300,
         "release_observer_identity": "observer:inference-backend",
         "release_observation_maximum_age_seconds": 5,
+        "clock_domain_id": "host-monotonic:boot-one",
     }
 
 
@@ -306,41 +305,21 @@ def sequence_request(request_id="request-one", authority_profile="ordinary",
     }
 
 
-def proxy_process_identity(generation=1):
-    pid = os.getpid()
-    stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(
-        ")", 1,
-    )[1].split()
-    return {
-        "pid": pid,
-        "proc_start_ticks": int(stat_fields[19]),
-        "generation": generation,
-    }
-
-
-def reserve(root, request, current_inventory, clock, capabilities=None):
-    def observer_sink(capability, binding):
-        if capabilities is not None:
-            capabilities[binding["lease_id"]] = capability
-
-    register_proxy_observer_adapter(
-        root, request["proxy_identity"], proxy_process_identity(), observer_sink,
-    )
+def reserve(root, request, current_inventory, clock):
     return reserve_sequence(root, request, current_inventory, clock)
 
 
-def ended_observation(lease, observed_monotonic, capability):
+def ended_observation(lease, observed_monotonic, generation=1,
+                      kind="sequence_end"):
     return {
-        "lease_id": lease["lease_id"],
-        "request_id": lease["request"]["request_id"],
-        "proxy_identity": lease["proxy_identity"],
-        "proxy_process_identity": lease["proxy_process_identity"],
+        "schema_version": 1,
+        "binding": lease["expected_release_binding"],
+        "kind": kind,
         "observer_identity": "observer:inference-backend",
-        "backend_sequence": lease["backend_sequence"],
-        "backend_sequence_state": "ended",
-        "sequence_active": False,
+        "observer_generation": generation,
         "observed_monotonic": observed_monotonic,
-        "observer_capability": capability,
+        "clock_domain_id": "host-monotonic:boot-one",
+        "evidence_id": f"evidence:{lease['lease_id']}:{generation}:{kind}",
     }
 
 
@@ -497,11 +476,10 @@ def test_front_release_never_assigns_a_work_waiter():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        capabilities = {}
         coin = reserve(
             root,
             sequence_request("coin-request", "coin", "front", "proxy:coin-front"),
-            inventory(), lambda: 10.0, capabilities,
+            inventory(), lambda: 10.0,
         )
         reserve(root, sequence_request(), inventory(), lambda: 11.0)
         waiter = reserve(
@@ -509,7 +487,7 @@ def test_front_release_never_assigns_a_work_waiter():
             inventory(), lambda: 12.0,
         )
         release_sequence(root, coin["lease_id"],
-                         ended_observation(coin, 13.0, capabilities[coin["lease_id"]]),
+                         ended_observation(coin, 13.0),
                          lambda: 13.0)
         state = json.loads(
             (root / "state" / "inference-capacity.json").read_text(encoding="utf-8")
@@ -539,9 +517,7 @@ def test_waiter_selection_recomputes_trusted_age_within_band():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        capabilities = {}
-        active = reserve(root, sequence_request(), inventory(), lambda: 10.0,
-                         capabilities)
+        active = reserve(root, sequence_request(), inventory(), lambda: 10.0)
         state_path = root / "state" / "inference-capacity.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         template = state["leases"][active["lease_id"]]
@@ -560,8 +536,7 @@ def test_waiter_selection_recomputes_trusted_age_within_band():
             state["leases"][lease_id] = waiting
         state_path.write_text(json.dumps(state), encoding="utf-8")
         release_sequence(root, active["lease_id"],
-                         ended_observation(active, 21_000.0,
-                                           capabilities[active["lease_id"]]),
+                         ended_observation(active, 21_000.0),
                          lambda: 21_000.0)
         state = json.loads(state_path.read_text(encoding="utf-8"))
         assert state["leases"]["old-gardener"]["state"] == "ready_for_revalidation"
@@ -573,16 +548,14 @@ def test_waiter_requires_fresh_reservation_after_release():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        capabilities = {}
-        active = reserve(root, sequence_request(), inventory(), lambda: 10.0,
-                         capabilities)
+        active = reserve(root, sequence_request(), inventory(), lambda: 10.0)
         waiter_request = sequence_request(
             "request-survivor", authority_profile="sole_survivor",
         )
         waiter = reserve(root, waiter_request, inventory(), lambda: 20.0)
         release_sequence(
             root, active["lease_id"],
-            ended_observation(active, 30.0, capabilities[active["lease_id"]]),
+            ended_observation(active, 30.0),
             lambda: 30.0,
         )
         state_path = root / "state" / "inference-capacity.json"
@@ -603,16 +576,14 @@ def test_ready_waiter_accepts_fresh_normalized_realization():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        capabilities = {}
-        active = reserve(root, sequence_request(), inventory(), lambda: 10.0,
-                         capabilities)
+        active = reserve(root, sequence_request(), inventory(), lambda: 10.0)
         waiter_request = sequence_request(
             "request-survivor", authority_profile="sole_survivor",
         )
         waiter = reserve(root, waiter_request, inventory(), lambda: 20.0)
         release_sequence(
             root, active["lease_id"],
-            ended_observation(active, 30.0, capabilities[active["lease_id"]]),
+            ended_observation(active, 30.0),
             lambda: 30.0,
         )
         fresh = inventory()
@@ -625,78 +596,126 @@ def test_ready_waiter_accepts_fresh_normalized_realization():
         assert resumed["request"]["route"]["loaded"] is False
 
 
-def test_reservation_caller_cannot_choose_observer_capability_sink():
+def test_recovery_attestation_from_replacement_generation_releases_coin():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        trusted_capabilities = {}
-        captured_by_caller = []
-
-        def trusted_sink(capability, binding):
-            trusted_capabilities[binding["lease_id"]] = capability
-
-        forged_process = proxy_process_identity(7)
-        forged_process["proc_start_ticks"] += 1
-        with unittest.TestCase().assertRaisesRegex(
-                ValueError, "proxy process identity"):
-            register_proxy_observer_adapter(
-                root, "proxy:work", forged_process, trusted_sink,
-            )
-        register_proxy_observer_adapter(
-            root, "proxy:work", proxy_process_identity(7), trusted_sink,
+        coin = reserve(
+            root,
+            sequence_request("coin-request", "coin", "front", "proxy:coin-front"),
+            inventory(), lambda: 10.0,
         )
-        request = sequence_request()
-        request["observer_capability_sink"] = captured_by_caller.append
-        with unittest.TestCase().assertRaisesRegex(
-                ValueError, "observer capability adapter"):
-            reserve_sequence(root, request, inventory(), lambda: 10.0)
-        request.pop("observer_capability_sink")
-        lease = reserve_sequence(root, request, inventory(), lambda: 10.0)
-        assert len(trusted_capabilities[lease["lease_id"]]) == 32
-        assert captured_by_caller == []
-        assert "observer_capability" not in lease
-        assert lease["proxy_process_identity"] == proxy_process_identity(7)
+        recovered = release_sequence(
+            root, coin["lease_id"],
+            ended_observation(
+                coin, 20.0, generation=9,
+                kind="reconciled_absent",
+            ),
+            lambda: 20.0,
+        )
+        assert recovered["state"] == "released"
+        assert recovered["observed_release"]["observer_generation"] == 9
+        assert recovered["observed_release"]["kind"] == "reconciled_absent"
+
+
+def test_replacement_observer_can_attest_original_sequence_end():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        lease = reserve(root, sequence_request(), inventory(), lambda: 10.0)
+        binding = lease["expected_release_binding"]
+        assert set(binding) == {
+            "lease_id", "allocation_generation", "request_id", "worker_lease_id",
+            "owner_identity", "proxy_identity", "backend_sequence",
+        }
+        released = release_sequence(
+            root, lease["lease_id"], ended_observation(lease, 20.0, generation=12),
+            lambda: 20.0,
+        )
+        assert released["state"] == "released"
+        assert released["observed_release"]["observer_generation"] == 12
+
+
+def test_proxy_death_alone_is_not_release_evidence():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        lease = reserve(root, sequence_request(), inventory(), lambda: 10.0)
+        proxy_death = ended_observation(lease, 20.0)
+        proxy_death["kind"] = "proxy_dead"
+        result = release_sequence(root, lease["lease_id"], proxy_death, lambda: 20.0)
+        assert result["state"] == "release_requested"
+
+
+def test_release_attestation_requires_same_clock_domain():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        lease = reserve(root, sequence_request(), inventory(), lambda: 10.0)
+        foreign_clock = ended_observation(lease, 20.0)
+        foreign_clock["clock_domain_id"] = "host-monotonic:other-boot"
+        result = release_sequence(
+            root, lease["lease_id"], foreign_clock, lambda: 20.0,
+        )
+        assert result["state"] == "release_requested"
+
+
+def test_every_front_request_requires_coin_authority_and_front_proxy():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        invalid = (
+            sequence_request("ordinary-front", "ordinary", "front", "proxy:work"),
+            sequence_request(
+                "survivor-front", "sole_survivor", "front", "proxy:coin-front",
+            ),
+            sequence_request("coin-work-proxy", "coin", "front", "proxy:work"),
+        )
+        for request in invalid:
+            with unittest.TestCase().assertRaises(ValueError):
+                reserve(root, request, inventory(), lambda: 10.0)
+        coin = reserve(
+            root,
+            sequence_request("coin-front", "coin", "front", "proxy:coin-front"),
+            inventory(), lambda: 10.0,
+        )
+        assert coin["backend_sequence"] == 0
 
 
 def test_release_requires_observed_sequence_end():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        capabilities = {}
-        lease = reserve(root, sequence_request(), inventory(), lambda: 10.0,
-                        capabilities)
+        lease = reserve(root, sequence_request(), inventory(), lambda: 10.0)
         assert lease["release_observer_identity"] == "observer:inference-backend"
-        assert "observer_capability" not in lease
-        assert "observer_capability_digest" not in lease
-        assert len(capabilities[lease["lease_id"]]) == 32
         durable = json.loads(
             (root / "state" / "inference-capacity.json").read_text(encoding="utf-8")
         )["leases"][lease["lease_id"]]
-        assert len(durable["observer_capability_digest"]) == 64
-        assert "observer_capability" not in durable
+        mismatched = ended_observation(lease, 20.0)
+        mismatched["binding"] = {
+            **mismatched["binding"], "request_id": "request-forged",
+        }
         adversarial = (
             {"backend_sequence": lease["backend_sequence"], "sequence_active": False},
-            ended_observation(lease, 20.0, b"x" * 32),
-            {**ended_observation(lease, 20.0, b"forged"),
+            mismatched,
+            {**ended_observation(lease, 20.0),
              "observer_identity": "caller:forged"},
-            ended_observation(lease, 10.0, capabilities[lease["lease_id"]]),
+            ended_observation(lease, 10.0),
         )
         for observed in adversarial:
             incomplete = release_sequence(root, lease["lease_id"], observed,
                                           lambda: 20.0)
             assert incomplete["state"] == "release_requested"
         released = release_sequence(
-            root, lease["lease_id"],
-            ended_observation(lease, 30.0, capabilities[lease["lease_id"]]),
-            lambda: 30.0,
+            root, lease["lease_id"], ended_observation(lease, 30.0), lambda: 30.0,
         )
         assert released["state"] == "released"
         assert released["observed_release"]["observed_monotonic"] == 30.0
-        assert "observer_capability" not in released["observed_release"]
         durable = json.loads(
             (root / "state" / "inference-capacity.json").read_text(encoding="utf-8")
         )["leases"][lease["lease_id"]]
-        assert "observer_capability" not in durable["observed_release"]
+        assert durable["observed_release"]["binding"] \
+            == lease["expected_release_binding"]
 
 
 def load_tests(_loader, _tests, _pattern):

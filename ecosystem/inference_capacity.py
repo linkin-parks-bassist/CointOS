@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
-import hmac
 import json
 import math
 import os
-import secrets
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -23,30 +21,6 @@ LEASE_STATES = frozenset((
     "starting", "active", "preemption_requested", "waiting_for_preemption",
     "ready_for_revalidation", "release_requested", "released",
 ))
-_proxy_observer_adapters = {}
-
-
-def register_proxy_observer_adapter(
-    root: Path,
-    proxy_identity: str,
-    proxy_process_identity: dict,
-    capability_sink,
-) -> None:
-    """Register R4's trusted capability endpoint for one live proxy process."""
-    root = Path(root).resolve()
-    policy = _load_capacity_policy(root)
-    if proxy_identity not in {
-            policy["front_proxy_identity"], policy["work_proxy_identity"]}:
-        raise ValueError("invalid proxy observer identity")
-    process_identity = _validated_proxy_process_identity(proxy_process_identity)
-    if not callable(capability_sink):
-        raise ValueError("invalid proxy observer capability sink")
-    _proxy_observer_adapters[(str(root), proxy_identity)] = {
-        "proxy_process_identity": process_identity,
-        "capability_sink": capability_sink,
-    }
-
-
 def resource_envelope(
     host: dict,
     resident_models: list[dict],
@@ -256,7 +230,7 @@ def reserve_sequence(
     inventory: dict,
     clock,
 ) -> dict:
-    """Reserve after fresh R2 validation and notify R4's registered observer."""
+    """Reserve after fresh R2 validation and persist the release binding."""
     root = Path(root)
     now = _clock_value(clock)
     if type(inventory) is not dict:
@@ -354,12 +328,8 @@ def reserve_sequence(
             "expires_monotonic": now + capacity_policy["lease_seconds"],
             "preemption_method": validated["preemption_method"],
             "release_observer_identity": capacity_policy["release_observer_identity"],
-            "proxy_process_identity": (
-                prior["proxy_process_identity"] if retrying else None
-            ),
-            "observer_capability_digest": (
-                prior["observer_capability_digest"] if retrying else None
-            ),
+            "allocation_generation": state["generation"],
+            "expected_release_binding": None,
             "priority": priority,
             "enqueued_monotonic": enqueued_monotonic,
             "request": validated,
@@ -378,33 +348,19 @@ def reserve_sequence(
             return {"state": "deferred", "reasons": envelope["unknown_facts"] or [
                 "physical_capacity",
             ]}
-        if not retrying:
-            adapter = _registered_proxy_observer_adapter(
-                root, validated["proxy_identity"],
-            )
-            observer_capability = secrets.token_bytes(32)
-            lease["proxy_process_identity"] = adapter["proxy_process_identity"]
-            lease["observer_capability_digest"] = hashlib.sha256(
-                observer_capability,
-            ).hexdigest()
-            adapter["capability_sink"](observer_capability, {
-                "lease_id": lease_id,
-                "request_id": validated["request_id"],
-                "proxy_identity": validated["proxy_identity"],
-                "proxy_process_identity": lease["proxy_process_identity"],
-                "observer_identity": lease["release_observer_identity"],
-            })
         if preempted is not None:
             victim["state"] = "preemption_requested"
             victim["preemption_requested_monotonic"] = now
             lease["backend_sequence"] = None
+        if lease["backend_sequence"] is not None:
+            lease["expected_release_binding"] = _release_binding(lease)
         state["leases"][lease_id] = lease
         save()
         return _public_lease(lease)
 
 
 def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
-    """Release only after the matching backend sequence is observed ended."""
+    """Apply an R4/R7-trusted, fresh attestation to the matching allocation."""
     root = Path(root)
     now = _clock_value(clock)
     if type(observed) is not dict:
@@ -419,7 +375,7 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
         if lease["state"] == "released":
             return _public_lease(lease)
         expected = lease["backend_sequence"]
-        matching = _trusted_release_observation(
+        matching = _valid_release_attestation(
             lease, observed, expected, now, capacity_policy,
         )
         if not matching:
@@ -429,9 +385,7 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
             return _public_lease(lease)
         lease["state"] = "released"
         lease["observed_release"] = {
-            **_durable_copy({key: value for key, value in observed.items()
-                             if key != "observer_capability"}),
-            "observer_capability_verified": True,
+            **_durable_copy(observed),
             "accepted_monotonic": now,
         }
         lease["released_monotonic"] = now
@@ -507,9 +461,6 @@ def _validate_sequence_request(request: object, policy: dict, scheduling: dict) 
     }
     if type(request) is not dict or not required <= request.keys():
         raise ValueError("invalid inference sequence request")
-    if any(field in request for field in (
-            "observer_capability", "observer_capability_sink", "observer_adapter")):
-        raise ValueError("observer capability adapter is a trusted R4 dependency")
     durable = _durable_copy(request)
     for field in ("request_id", "worker_lease_id", "worker_request_id",
                   "owner_identity", "proxy_identity", "authority_profile",
@@ -522,6 +473,8 @@ def _validate_sequence_request(request: object, policy: dict, scheduling: dict) 
         durable["workload_class"] == "front"
         and durable["authority_profile"] == scheduling["authority_profiles"]["coin"]
     )
+    if durable["workload_class"] == "front" and not is_coin_front:
+        raise ValueError("front inference is reserved for Coin authority")
     if durable["proxy_identity"] == policy["front_proxy_identity"] and not is_coin_front:
         raise ValueError("front proxy is reserved for Coin")
     expected_proxy = (policy["front_proxy_identity"] if is_coin_front
@@ -654,104 +607,82 @@ def _validated_capacity_policy(document: dict) -> dict:
         "maximum_work_models",
         "front_proxy_identity", "work_proxy_identity", "lease_seconds",
         "release_observer_identity", "release_observation_maximum_age_seconds",
+        "clock_domain_id",
     }
     if type(policy) is not dict or not required <= policy.keys():
         raise ValueError("invalid inference capacity policy")
     numeric = required - {
         "front_proxy_identity", "work_proxy_identity", "release_observer_identity",
+        "clock_domain_id",
     }
     if any(_positive_integer(policy[field]) is None for field in numeric):
         raise ValueError("invalid inference capacity policy")
     if (policy["front_sequences"] >= policy["total_sequences"]
             or any(type(policy[field]) is not str or not policy[field]
                    for field in ("front_proxy_identity", "work_proxy_identity",
-                                 "release_observer_identity"))
+                                 "release_observer_identity", "clock_domain_id"))
             or policy["front_proxy_identity"] == policy["work_proxy_identity"]):
         raise ValueError("invalid inference capacity policy")
     return policy
 
 
-def _trusted_release_observation(
+def _valid_release_attestation(
     lease: dict,
     observed: dict,
     backend_sequence: int | None,
     now: float,
     policy: dict,
 ) -> bool:
+    required = {
+        "schema_version", "binding", "kind", "observer_identity",
+        "observer_generation", "observed_monotonic", "clock_domain_id",
+        "evidence_id",
+    }
+    if type(observed) is not dict or set(observed) != required:
+        return False
     try:
         observed_at = _finite_number(
             observed.get("observed_monotonic"), "release observation time",
         )
     except ValueError:
         return False
-    capability = observed.get("observer_capability")
-    capability_digest = lease.get("observer_capability_digest")
+    kind = observed.get("kind")
+    sequence_state_is_valid = kind in {"sequence_end", "reconciled_absent"}
     return (
         backend_sequence is not None
-        and type(capability) is bytes
-        and len(capability) == 32
-        and type(capability_digest) is str
-        and hmac.compare_digest(hashlib.sha256(capability).hexdigest(), capability_digest)
-        and observed.get("lease_id") == lease["lease_id"]
-        and observed.get("request_id") == lease["request"]["request_id"]
-        and observed.get("proxy_identity") == lease["proxy_identity"]
-        and observed.get("proxy_process_identity") == lease["proxy_process_identity"]
-        and _proxy_process_identity_is_current(lease["proxy_process_identity"])
+        and observed.get("schema_version") == 1
+        and observed.get("binding") == lease.get("expected_release_binding")
+        and sequence_state_is_valid
         and lease.get("release_observer_identity") == policy["release_observer_identity"]
         and observed.get("observer_identity") == lease["release_observer_identity"]
-        and observed.get("backend_sequence") == backend_sequence
-        and observed.get("backend_sequence_state") == "ended"
+        and _positive_integer(observed.get("observer_generation")) is not None
+        and observed.get("clock_domain_id") == policy["clock_domain_id"]
+        and type(observed.get("evidence_id")) is str
+        and bool(observed["evidence_id"])
         and observed_at <= now
         and now - observed_at <= policy["release_observation_maximum_age_seconds"]
     )
 
 
 def _public_lease(lease: dict) -> dict:
-    public = _durable_copy(lease)
-    public.pop("observer_capability_digest", None)
-    return public
+    return _durable_copy(lease)
 
 
 def _stable_sequence_request(request: dict) -> dict:
     return {key: value for key, value in request.items() if key != "route"}
 
 
-def _validated_proxy_process_identity(identity: object) -> dict:
-    if (type(identity) is not dict
-            or set(identity) != {"pid", "proc_start_ticks", "generation"}
-            or _positive_integer(identity.get("pid")) is None
-            or _positive_integer(identity.get("proc_start_ticks")) is None
-            or _positive_integer(identity.get("generation")) is None
-            or not _proxy_process_identity_is_current(identity)):
-        raise ValueError("invalid proxy process identity")
-    return _durable_copy(identity)
-
-
-def _proxy_process_identity_is_current(identity: object) -> bool:
-    if type(identity) is not dict:
-        return False
-    pid = identity.get("pid")
-    start_ticks = identity.get("proc_start_ticks")
-    if (_positive_integer(pid) is None
-            or _positive_integer(start_ticks) is None):
-        return False
-    try:
-        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(
-            ")", 1,
-        )[1].split()
-        return int(fields[19]) == start_ticks
-    except (FileNotFoundError, IndexError, OSError, ValueError):
-        return False
-
-
-def _registered_proxy_observer_adapter(root: Path, proxy_identity: str) -> dict:
-    adapter = _proxy_observer_adapters.get((str(Path(root).resolve()), proxy_identity))
-    if (type(adapter) is not dict
-            or not callable(adapter.get("capability_sink"))
-            or not _proxy_process_identity_is_current(
-                adapter.get("proxy_process_identity"))):
-        raise ValueError("trusted proxy observer adapter is not registered")
-    return adapter
+def _release_binding(lease: dict) -> dict:
+    request = lease["request"]
+    return {
+        "lease_id": lease["lease_id"],
+        "allocation_generation": lease["allocation_generation"],
+        "request_id": request["request_id"],
+        "worker_lease_id": request["worker_lease_id"],
+        "owner_identity": request["owner_identity"],
+        "proxy_identity": lease["proxy_identity"],
+        "backend_sequence": lease["backend_sequence"],
+    }
 
 
 @contextmanager
