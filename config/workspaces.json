@@ -1,5 +1,43 @@
 {
+  "authority_profiles": [
+    {
+      "id": "bounded_maintenance",
+      "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks", "enqueue_narrower_child"]
+    },
+    {
+      "id": "contact_requested",
+      "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks"]
+    },
+    {
+      "id": "independent_verification",
+      "effects": ["read_scoped_files", "write_verdict", "run_scoped_checks"]
+    },
+    {
+      "id": "resource_emergency",
+      "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks", "recover_resources"]
+    },
+    {
+      "id": "scheduled_review",
+      "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks"]
+    }
+  ],
   "workspaces": [
+    {
+      "id": "cointos",
+      "path": "/home/david/agent-ecosystem",
+      "provenance": "personal",
+      "mode": "active",
+      "ambient_read_paths": [
+        "/home/david/agent-ecosystem/agent_notes",
+        "/home/david/agent-ecosystem/docs",
+        "/home/david/agent-ecosystem/ecosystem",
+        "/home/david/agent-ecosystem/roles",
+        "/home/david/agent-ecosystem/tests"
+      ],
+      "ambient_write_paths": [
+        "/home/david/agent-ecosystem/agent_notes"
+      ]
+    },
     {
       "id": "pigen",
       "path": "/home/david/personal_projects/pigen",
