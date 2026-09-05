@@ -31,15 +31,24 @@ def resource_envelope(
     unknown = []
     available_host = _nonnegative_integer(host.get("available_host_bytes"))
     gtt_used = _nonnegative_integer(host.get("gtt_used_bytes"))
+    measured_gtt_total = _positive_integer(host.get("gtt_total_bytes"))
+    if "gtt_total_fresh" in host:
+        gtt_total_fresh = host.get("gtt_total_fresh") is True
+    else:
+        gtt_total_fresh = host.get("fresh") is True and host.get("stale") is not True
     protected = _nonnegative_integer(policy.get("protected_host_bytes"))
     coin_reserved = _nonnegative_integer(policy.get("coin_reserved_bytes"))
     transient = _nonnegative_integer(policy.get("load_transient_bytes"))
     gtt_limit = _positive_integer(policy.get("gtt_limit_bytes"))
+    gtt_capacity = (min(measured_gtt_total, gtt_limit)
+                    if measured_gtt_total is not None and gtt_total_fresh
+                    and gtt_limit is not None else None)
     total_sequences = _positive_integer(policy.get("total_sequences"))
     front_sequences = _positive_integer(policy.get("front_sequences"))
     for name, value in (
         ("available_host_bytes", available_host),
         ("gtt_used_bytes", gtt_used),
+        ("gtt_total_bytes", measured_gtt_total if gtt_total_fresh else None),
         ("protected_host_bytes", protected),
         ("coin_reserved_bytes", coin_reserved),
         ("load_transient_bytes", transient),
@@ -109,8 +118,8 @@ def resource_envelope(
         host_headroom = (
             available_host - protected - coin_reserved - transient - active_bytes
         )
-    if None not in (gtt_used, gtt_limit, transient):
-        gtt_headroom = gtt_limit - gtt_used - transient
+    if None not in (gtt_used, gtt_capacity, transient):
+        gtt_headroom = gtt_capacity - gtt_used - transient
     maximum_work_models = _positive_integer(policy.get("maximum_work_models"))
     if maximum_work_models is None:
         unknown.append("maximum_work_models")
@@ -130,6 +139,7 @@ def resource_envelope(
         "resident_model_bytes": resident_bytes,
         "active_allocation_bytes": active_bytes,
         "host_headroom_bytes": host_headroom,
+        "gtt_capacity_bytes": gtt_capacity,
         "gtt_headroom_bytes": gtt_headroom,
         "resident_work_models": len(work_models),
     }

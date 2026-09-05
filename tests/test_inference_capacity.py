@@ -74,7 +74,7 @@ def capacity_policy():
         "protected_host_bytes": 32 * GIB,
         "coin_reserved_bytes": 8 * GIB,
         "load_transient_bytes": 12 * GIB,
-        "gtt_limit_bytes": 64 * GIB,
+        "gtt_limit_bytes": 100 * GIB,
         "maximum_work_models": 1,
         "front_proxy_identity": "proxy:coin-front",
         "work_proxy_identity": "proxy:work",
@@ -102,6 +102,8 @@ def inventory():
         "host": {
             "available_host_bytes": 100 * GIB,
             "gtt_used_bytes": 20 * GIB,
+            "gtt_total_bytes": 100 * GIB,
+            "gtt_total_fresh": True,
         },
         "resident_models": [],
     }
@@ -178,12 +180,32 @@ def sequence_request(request_id="request-one", authority_profile="ordinary",
 
 def test_work_cannot_consume_reserved_front_sequence():
     result = resource_envelope(
-        {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB},
+        {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB,
+         "gtt_total_bytes": 100 * GIB, "gtt_total_fresh": True},
         [], [{"workload_class": "work", "backend_sequence": 1}],
         capacity_policy(),
     )
     assert result["available_work_sequences"] == 0
     assert result["reserved_front_sequences"] == 1
+    assert result["gtt_capacity_bytes"] == 100 * GIB
+    assert result["gtt_headroom_bytes"] == 68 * GIB
+    for host in (
+        {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB},
+        {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB,
+         "gtt_total_bytes": 100 * GIB, "gtt_total_fresh": False},
+    ):
+        failed = resource_envelope(host, [], [], capacity_policy())
+        assert failed["safe"] is False
+        assert "gtt_total_bytes" in failed["unknown_facts"]
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        stale_inventory = inventory()
+        stale_inventory["host"]["gtt_total_fresh"] = False
+        deferred = reserve_sequence(
+            root, sequence_request(), stale_inventory, lambda: 10.0,
+        )
+        assert deferred == {"state": "deferred", "reasons": ["gtt_total_bytes"]}
 
 
 def test_realized_context_maps_per_sequence_to_backend_total():
