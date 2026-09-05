@@ -3,9 +3,6 @@ from __future__ import annotations
 import glob, json, os, re, subprocess, urllib.request
 from pathlib import Path
 
-from ecosystem.inference import chat
-from ecosystem.roles import safe_role_label
-
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 RESOURCE_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/resource-policy.json"
 
@@ -116,207 +113,255 @@ def admission(model_id: str, inventory: dict) -> tuple[bool, str]:
                   "remaining beyond model and transient demand")
 
 
-def required_labels(role: str | None) -> set[str]:
-    if role in {"coder", "refactorer"}:
-        return {"coding", "tool-calling"}
-    return {"tool-calling"}
+def _positive_integer(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def role_compatible(role: str | None, labels: set[str]) -> bool:
-    if role in {"coder", "refactorer"}:
-        return {"coding", "tool-calling"}.issubset(labels)
-    if role in {"verifier", "auditor", "steward", "sole_survivor"}:
-        return "tool-calling" in labels and bool(labels & {"reasoning", "coding"})
-    return "tool-calling" in labels
-
-
-def context_options(model: dict, inventory: dict) -> list[int]:
-    """Return generous context choices that remain inside current host/GTT reserves."""
-    settings = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))
-    dynamic = settings["dynamic_models"]
-    supported = int(model.get("context") or dynamic["context_candidates"][1])
-    if model.get("loaded"):
-        loaded = int(model.get("loaded_context") or supported)
-        return [min(supported, loaded)]
-    available = float(inventory.get("memory_available_gb") or 0)
-    gtt_used = float(inventory.get("memory", {}).get("gtt_used_gb") or 0)
-    model_size = float(model.get("size_gb") or settings["admission"]["unknown_model_reserve_gb"])
-    desktop = float(settings["admission"]["desktop_and_control_reserve_gb"])
-    transient = float(settings["admission"]["model_load_transient_reserve_gb"])
-    gtt_target = float(settings["normal"]["maximum_gtt_used_gb"])
-    choices = []
-    candidates = sorted(set(int(value) for value in dynamic["context_candidates"]
-                            if int(value) <= supported))
-    if supported not in candidates:
-        candidates.append(supported)
-    for tokens in sorted(candidates):
-        context_gb = tokens * float(dynamic["estimated_kv_bytes_per_token"]) / 1024 ** 3
-        if available < desktop + model_size + max(transient, context_gb):
-            continue
-        if gtt_used + model_size + context_gb > gtt_target:
-            continue
-        choices.append(tokens)
-    return choices
-
-
-def _json_object(text: str) -> dict:
-    """Extract one routing object without accepting prose as a decision."""
-    stripped = text.strip()
-    if stripped.startswith("```"):
-        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
-        stripped = re.sub(r"\s*```$", "", stripped)
-    try:
-        value = json.loads(stripped)
-    except json.JSONDecodeError:
-        start = stripped.find("{")
-        end = stripped.rfind("}")
-        if start < 0 or end <= start:
-            raise ValueError("router returned no JSON object")
-        value = json.loads(stripped[start:end + 1])
-    if not isinstance(value, dict):
-        raise ValueError("router decision is not a JSON object")
-    return value
-
-
-def _routing_prompt(job: dict, inventory: dict) -> str:
-    policy = inventory.get("scheduling_policy", {})
-    control_model = policy.get("control_plane", {}).get("model")
-    advisory_role = safe_role_label(job.get("role"))
-    maximum_loaded = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))["normal"]["maximum_loaded_models"]
-    models = []
-    safe_routes = []
-    loaded_count = sum(1 for item in inventory.get("models", []) if item.get("loaded"))
-    for item in inventory.get("models", []):
-        load_admitted, load_reason = admission(item.get("id", ""), inventory)
-        compatible = role_compatible(advisory_role, set(item.get("labels", [])))
-        contexts = context_options(item, inventory)
-        models.append({
-            "id": item.get("id"),
-            "size_gb": item.get("size_gb"),
-            "recipe": item.get("recipe"),
-            "labels": item.get("labels", []),
-            "loaded": bool(item.get("loaded")),
-            "busy": bool(item.get("busy")),
-            "role_compatible": compatible,
-            "load_admitted": load_admitted,
-            "load_reason": load_reason,
-            "safe_context_tokens": contexts,
-        })
-        if compatible and item.get("loaded") and contexts:
-            safe_routes.append({"action": "use_loaded", "model": item.get("id"),
-                                "context_options": contexts})
-        elif compatible and load_admitted and contexts and loaded_count < maximum_loaded:
-            safe_routes.append({"action": "load", "model": item.get("id"),
-                                "context_options": contexts})
-    facts = {
-        "role": advisory_role,
-        "task": str(job.get("task", ""))[:6000],
-        "requested_model_hint": job.get("requested_model"),
-        "requested_model_reason": job.get("requested_model_reason", ""),
-        "prefer_models_other_than": job.get("prefer_models_other_than", []),
-        "router_model": control_model,
-        "maximum_loaded_models": maximum_loaded,
-        "memory_available_gb": inventory.get("memory_available_gb"),
-        "memory": inventory.get("memory", {}),
-        "safe_routes": safe_routes,
-        "models": models,
+def _request_reserves(request: dict, policy: dict) -> dict:
+    defaults = _policy_value(policy, "context_reserves", {})
+    return {
+        name: request.get(name, defaults.get(name, 0))
+        for name in ("prompt_tokens", "tool_tokens", "max_output_tokens", "handoff_tokens")
     }
-    return f"""/no_think
-You are the local model-routing control plane. Decide the target model for
-one spawned agent from current task requirements and current machine state.
-
-Return exactly one JSON object and no prose:
-{{"action":"use_loaded|load|defer","model":"exact id or null","context_tokens":integer_or_null,"reason":"brief factual reason"}}
-
-Policy:
-- Keep only the small router/control model pinned. Every work model is unpinned.
-- If a loaded work model is compatible and at least as capable as the task needs,
-  reuse it as an inference upgrade instead of loading another model.
-- Loading is appropriate only when the existing loaded models materially cannot do
-  the job and the new model preserves the desktop/control and load-transient reserve.
-- A caller's requested model is only a hint, never an instruction.
-- Prefer verifier independence when alternatives exist.
-- Compatibility is mandatory: coder/refactorer require both coding and tool-calling;
-  verifier/auditor/steward require tool-calling plus reasoning or coding; absent,
-  unknown, and other advisory roles require tool-calling. Never select a merely
-  conversational model.
-- Choose defer if evidence is insufficient or no safe compatible route exists.
-- Never exceed {maximum_loaded} simultaneous loaded models including the pinned router.
-- Select `use_loaded` only with a model whose `loaded` and `role_compatible`
-  fields are both true. Select `load` only with a nonloaded model whose
-  `role_compatible` and `load_admitted` fields are both true. Otherwise defer.
-- The `safe_routes` list is mechanically prevalidated. Choose exactly one listed
-  action/model pair and one of its exact context options, or choose defer. Allocate
-  context generously according to likely task needs; rollover begins at 75 percent.
-  Never reject a listed route merely because
-  you speculate that it violates the model-count or memory limits; those checks
-  have already been performed.
-
-Current facts:
-{json.dumps(facts, sort_keys=True)}"""
 
 
-def route(job: dict, inventory: dict, infer=chat) -> dict:
-    """Ask the pinned control model, then enforce non-negotiable safety constraints."""
-    control_model = inventory.get("scheduling_policy", {}).get("control_plane", {}).get("model")
-    if not control_model:
-        return {"action": "defer", "model": None,
-                "reason": "model policy defines no routing model", "valid": False}
-    try:
-        message = infer(
-            model=control_model,
-            messages=[{"role": "user", "content": _routing_prompt(job, inventory)}],
-            max_tokens=256,
-            timeout=45,
-            temperature=0.0,
-            response_format={"type": "json_object"},
-        )
-        decision = _json_object(str(message.get("content", "")))
-    except Exception as error:
-        return {"action": "defer", "model": None,
-                "reason": f"routing model unavailable or invalid: {type(error).__name__}: {error}",
-                "valid": False}
+def _policy_value(policy: dict, name: str, default=0):
+    if name in policy:
+        return policy[name]
+    for section in ("physical_capacity", "dynamic_models"):
+        nested = policy.get(section, {})
+        if isinstance(nested, dict) and name in nested:
+            return nested[name]
+    return default
 
-    action = decision.get("action")
-    model_id = decision.get("model")
-    selected_context = decision.get("context_tokens")
-    reason = str(decision.get("reason", "")).strip()[:1000]
-    if action == "defer":
-        return {"action": "defer", "model": None,
-                "reason": reason or "routing model deferred the task", "valid": True}
-    if (action not in {"use_loaded", "load"} or not isinstance(model_id, str)
-            or not isinstance(selected_context, int)):
-        return {"action": "defer", "model": None,
-                "reason": "routing model returned an invalid action or model id", "valid": False}
-    candidate = next((item for item in inventory.get("models", []) if item.get("id") == model_id), None)
-    if candidate is None:
-        return {"action": "defer", "model": None,
-                "reason": f"routing model selected unavailable model {model_id!r}", "valid": False}
-    if not role_compatible(safe_role_label(job.get("role")), set(candidate.get("labels", []))):
-        return {"action": "defer", "model": None,
-                "reason": f"routing model selected role-incompatible model {model_id!r}", "valid": False}
-    if action == "use_loaded" and not candidate.get("loaded"):
-        return {"action": "defer", "model": None,
-                "reason": f"routing model claimed nonresident model {model_id!r} was loaded", "valid": False}
-    admitted, admission_reason = admission(model_id, inventory)
-    if not admitted:
-        return {"action": "defer", "model": None,
-                "reason": f"routing choice rejected by safety validator: {admission_reason}", "valid": False}
-    if action == "load":
-        loaded = [item for item in inventory.get("models", []) if item.get("loaded")]
-        maximum = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))["normal"]["maximum_loaded_models"]
-        if not candidate.get("loaded") and len(loaded) >= maximum:
-            return {"action": "defer", "model": None,
-                    "reason": (f"routing choice would exceed the {maximum}-model residency boundary; "
-                               "reuse the loaded work model or wait for a safe eviction boundary"),
-                    "valid": False}
-    options = context_options(candidate, inventory)
-    if selected_context not in options:
-        return {"action": "defer", "model": None,
-                "reason": (f"routing model selected unvalidated context {selected_context} for "
-                           f"{model_id!r}; safe choices are {options}"), "valid": False}
-    return {"action": action, "model": model_id, "context_tokens": selected_context,
-            "reason": f"{reason or 'model-mediated route'}; {admission_reason}", "valid": True}
+
+def _inventory_reasons(inventory: dict) -> list[str]:
+    reasons = []
+    if inventory.get("verified") is False:
+        reasons.append("inventory:unverified")
+    if inventory.get("stale") is True or inventory.get("fresh") is False:
+        reasons.append("inventory:stale")
+    envelope = inventory.get("resource_envelope")
+    if not isinstance(envelope, dict):
+        reasons.append("resource_envelope:missing")
+    elif envelope.get("safe") is False:
+        reasons.append("resource_envelope:unsafe")
+    return reasons
+
+
+def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> dict:
+    reasons = _inventory_reasons(inventory)
+    model_id = model.get("id")
+    parameter_count = model.get("parameter_count")
+    model_bytes = model.get("size_bytes", model.get("model_bytes"))
+    advertised = model.get("context", model.get("advertised_context_tokens"))
+    quantum = model.get("supported_context_quantum")
+    parallel = model.get("parallel_sequences", _policy_value(policy, "parallel_sequences", 1))
+    capabilities = model.get("capabilities", model.get("labels"))
+    requirements = request.get("requirements", {})
+    if not isinstance(requirements, dict):
+        requirements = {}
+    required = requirements.get("required_capabilities", [])
+    minimum = requirements.get("minimum_context_tokens", 0)
+    reserves = _request_reserves(request, policy)
+
+    if not isinstance(model_id, str) or not model_id:
+        reasons.append("model_id")
+    if model.get("metadata_verified") is False:
+        reasons.append("metadata:unverified")
+    if not _positive_integer(parameter_count):
+        reasons.append("parameter_count")
+    if not _positive_integer(model_bytes):
+        reasons.append("model_bytes")
+    if not _positive_integer(advertised):
+        reasons.append("advertised_context_tokens")
+    if not _positive_integer(quantum):
+        reasons.append("supported_context_quantum")
+    if not _positive_integer(parallel):
+        reasons.append("parallel_sequences")
+    if not isinstance(capabilities, list) or any(not isinstance(item, str) for item in capabilities):
+        reasons.append("capabilities")
+        capabilities = []
+    if "required_capabilities" not in requirements:
+        reasons.append("requirements:required_capabilities")
+    elif not isinstance(required, list) or any(not isinstance(item, str) for item in required):
+        reasons.append("requirements:required_capabilities")
+        required = []
+    missing = sorted(set(required) - set(capabilities))
+    reasons.extend(f"capability:{item}" for item in missing)
+    if "minimum_context_tokens" not in requirements:
+        reasons.append("requirements:minimum_context_tokens")
+    elif not isinstance(minimum, int) or isinstance(minimum, bool) or minimum < 0:
+        reasons.append("requirements:minimum_context_tokens")
+        minimum = 0
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+           for value in reserves.values()):
+        reasons.append("context_reserve")
+
+    envelope = inventory.get("resource_envelope", {})
+    maximum_model_bytes = envelope.get("maximum_model_bytes")
+    maximum_backend_context = envelope.get("maximum_context_tokens")
+    if not _positive_integer(maximum_model_bytes) or (
+            _positive_integer(model_bytes) and model_bytes > maximum_model_bytes):
+        reasons.append("model_bytes")
+    if not _positive_integer(maximum_backend_context):
+        reasons.append("resource_envelope:maximum_context_tokens")
+
+    per_sequence = 0
+    backend_context = 0
+    context_exclusion_reasons = []
+    if (_positive_integer(advertised) and _positive_integer(quantum)
+            and _positive_integer(parallel) and _positive_integer(maximum_backend_context)):
+        envelope_per_sequence = maximum_backend_context // parallel
+        upper = min(advertised, envelope_per_sequence)
+        if envelope_per_sequence < advertised:
+            context_exclusion_reasons.append("context:resource_envelope")
+        if model.get("loaded"):
+            loaded_total = model.get("loaded_context", model.get("backend_context_tokens"))
+            if loaded_total is not None:
+                if not _positive_integer(loaded_total):
+                    reasons.append("loaded_context")
+                else:
+                    if loaded_total // parallel < upper:
+                        context_exclusion_reasons.append("context:loaded_allocation")
+                    upper = min(upper, loaded_total // parallel)
+        per_sequence = upper - upper % quantum
+        if per_sequence != upper:
+            context_exclusion_reasons.append("context:backend_quantum")
+        if per_sequence == 0:
+            reasons.append("context:unsupported")
+        backend_context = per_sequence * parallel
+        reserve_total = minimum + sum(value for value in reserves.values()
+                                      if isinstance(value, int) and not isinstance(value, bool))
+        if per_sequence < reserve_total:
+            reasons.append("context_reserve")
+
+    kv_bytes_per_token = _policy_value(policy, "estimated_kv_bytes_per_token", 0)
+    if not isinstance(kv_bytes_per_token, int) or isinstance(kv_bytes_per_token, bool) \
+            or kv_bytes_per_token < 0:
+        reasons.append("estimated_kv_bytes_per_token")
+        kv_bytes_per_token = 0
+    kv_estimate = backend_context * kv_bytes_per_token
+    maximum_kv_bytes = envelope.get("maximum_kv_bytes")
+    if maximum_kv_bytes is not None and (
+            not _positive_integer(maximum_kv_bytes) or kv_estimate > maximum_kv_bytes):
+        reasons.append("kv_estimate_bytes")
+
+    protected_host = _policy_value(policy, "protected_host_bytes", 0)
+    coin_reserved = _policy_value(policy, "coin_reserved_bytes", 0)
+    load_transient = _policy_value(policy, "load_transient_bytes", 0)
+    physical_values = (protected_host, coin_reserved, load_transient)
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+           for value in physical_values):
+        reasons.append("physical_policy")
+    elif _positive_integer(model_bytes):
+        load_demand = 0 if model.get("loaded") else model_bytes + load_transient
+        host_available = envelope.get("available_host_bytes")
+        if host_available is not None and (
+                not _positive_integer(host_available)
+                or protected_host + coin_reserved + load_demand + kv_estimate > host_available):
+            reasons.append("host_capacity")
+        gtt_used = envelope.get("gtt_used_bytes")
+        gtt_limit = envelope.get("gtt_limit_bytes")
+        if gtt_used is not None or gtt_limit is not None:
+            if (not isinstance(gtt_used, int) or isinstance(gtt_used, bool) or gtt_used < 0
+                    or not _positive_integer(gtt_limit)
+                    or gtt_used + load_demand + kv_estimate > gtt_limit):
+                reasons.append("gtt_capacity")
+
+    return {
+        "state": "admitted" if not reasons else "deferred",
+        "model_id": model_id,
+        "parameter_count": parameter_count,
+        "model_bytes": model_bytes,
+        "advertised_context_tokens": advertised,
+        "backend_context_tokens": backend_context,
+        "parallel_sequences": parallel,
+        "context_tokens_per_sequence": per_sequence,
+        "context_exclusion_reasons": context_exclusion_reasons,
+        **reserves,
+        "kv_estimate_bytes": kv_estimate,
+        "load_transient_bytes": load_transient,
+        "protected_host_bytes": protected_host,
+        "coin_reserved_bytes": coin_reserved,
+        "gtt_limit_bytes": envelope.get("gtt_limit_bytes"),
+        "loaded": bool(model.get("loaded")),
+        "provenance": model.get("provenance", inventory.get("provenance")),
+        "exclusion_reasons": list(dict.fromkeys(reasons)),
+    }
+
+
+def safe_routes(inventory: dict, policy: dict, request: dict) -> list[dict]:
+    """Interpret verified model facts into admitted or explicitly excluded routes."""
+    if not isinstance(inventory, dict) or not isinstance(policy, dict) or not isinstance(request, dict):
+        raise TypeError("inventory, policy, and request must be dictionaries")
+    models = inventory.get("models", [])
+    if not isinstance(models, list):
+        return [{"state": "deferred", "model_id": None,
+                 "exclusion_reasons": ["inventory:models"]}]
+    return [_model_route(item, inventory, policy, request) if isinstance(item, dict)
+            else {"state": "deferred", "model_id": None,
+                  "exclusion_reasons": ["inventory:model_record"]}
+            for item in models]
+
+
+def choose_route(routes: list[dict], request: dict) -> dict:
+    """Choose the largest verified qualified model, with preference only as a tie break."""
+    admitted = [route for route in routes if route.get("state") == "admitted"]
+    requirements = request.get("requirements", {})
+    requirements = requirements if isinstance(requirements, dict) else {}
+    preferences = requirements.get("preferred_model_ids", [])
+    preference_rank = {model_id: len(preferences) - index
+                       for index, model_id in enumerate(preferences)
+                       if isinstance(model_id, str)} if isinstance(preferences, list) else {}
+    if admitted:
+        selected = max(admitted, key=lambda route: (
+            route["parameter_count"],
+            route["context_tokens_per_sequence"],
+            preference_rank.get(route["model_id"], 0),
+            route["model_id"],
+        ))
+        excluded = [{"model_id": route.get("model_id"),
+                     "exclusion_reasons": route.get("exclusion_reasons", [])}
+                    for route in routes if route.get("state") != "admitted"]
+        return {**selected, "excluded_routes": excluded}
+    reasons = [reason for route in routes for reason in route.get("exclusion_reasons", [])]
+    return {"state": "deferred", "model_id": None,
+            "exclusion_reasons": list(dict.fromkeys(reasons or ["no_models"]))}
+
+
+def validate_route(route: dict, fresh_inventory: dict, policy: dict, request: dict) -> dict:
+    """Recompute a route from fresh facts and reject any changed physical allocation."""
+    routes = safe_routes(fresh_inventory, policy, request)
+    fresh = next((item for item in routes if item.get("model_id") == route.get("model_id")), None)
+    if fresh is None:
+        return {"state": "deferred", "model_id": route.get("model_id"),
+                "exclusion_reasons": ["model:disappeared"]}
+    if fresh.get("state") != "admitted":
+        return fresh
+    allocation_fields = ("parameter_count", "model_bytes", "backend_context_tokens",
+                         "parallel_sequences", "context_tokens_per_sequence")
+    changed = [field for field in allocation_fields if fresh.get(field) != route.get(field)]
+    if changed:
+        return {**fresh, "state": "deferred",
+                "exclusion_reasons": [f"route_changed:{field}" for field in changed]}
+    return fresh
+
+
+def route(job: dict, inventory: dict, infer=None) -> dict:
+    """Compatibility entry point for consumers awaiting the R4 lease migration."""
+    resource_policy = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))
+    selected = choose_route(safe_routes(inventory, resource_policy, job), job)
+    if selected.get("state") != "admitted":
+        reasons = selected.get("exclusion_reasons", ["no_safe_route"])
+        return {"action": "defer", "model": None, "context_tokens": None,
+                "reason": "; ".join(reasons), "valid": False,
+                "exclusion_reasons": reasons}
+    return {**selected,
+            "action": "use_loaded" if selected["loaded"] else "load",
+            "model": selected["model_id"],
+            "context_tokens": selected["context_tokens_per_sequence"],
+            "reason": "largest verified task-qualified route", "valid": True}
 
 
 def realize(decision: dict, inventory: dict) -> dict:
@@ -359,32 +404,3 @@ def realize(decision: dict, inventory: dict) -> dict:
     response = _post("/v1/load", payload, timeout=180.0)
     return {"action": "loaded", "model": model_id, "context_tokens": context,
             "pinned": False, "admission_reason": reason, "response": response}
-
-
-def admitted_or_substitute(model_id: str, role: str | None, inventory: dict) -> tuple[str | None, str]:
-    admitted, reason = admission(model_id, inventory)
-    if admitted:
-        return model_id, reason
-    desired = next((item for item in inventory.get("models", []) if item["id"] == model_id), {})
-    required = required_labels(role)
-    desired_labels = set(desired.get("labels", []))
-    candidates = []
-    for item in inventory.get("models", []):
-        labels = set(item.get("labels", []))
-        if not item.get("loaded") or not role_compatible(role, labels):
-            continue
-        overlap = len(labels & desired_labels)
-        candidates.append((overlap, float(item.get("size_gb") or 0), item["id"]))
-    if not candidates:
-        return None, f"{reason}; no resident model satisfies required labels {sorted(required)}"
-    _, _, chosen = max(candidates)
-    return chosen, (f"{reason}; substituted resident {chosen!r}, which is "
-                    f"role-compatible (baseline labels {sorted(required)})")
-
-def fallback(role: str | None, inventory: dict) -> tuple[str, str]:
-    available = ids(inventory)
-    preferences = (["Qwen3-Coder-30B-A3B-Instruct-GGUF", "Qwen3.8-27B-GGUF", "GLM-4.7-Flash-GGUF"]
-                   if role in {"worker", "refactorer"} else
-                   ["Qwen3.8-27B-GGUF", "GLM-4.7-Flash-GGUF", "Qwen3-Coder-30B-A3B-Instruct-GGUF"])
-    chosen = next((model for model in preferences if model in available), available[0])
-    return chosen, "Deterministic fallback based on role capability; live router choice unavailable."

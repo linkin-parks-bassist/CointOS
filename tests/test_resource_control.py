@@ -7,13 +7,9 @@ from unittest.mock import patch
 
 from ecosystem import cli, resource_control, time_policy
 from ecosystem.models import (
-    _routing_prompt,
     admission,
-    admitted_or_substitute,
-    context_options,
-    required_labels,
-    role_compatible,
-    route,
+    choose_route,
+    safe_routes,
 )
 
 
@@ -238,93 +234,32 @@ def test_oversized_vllm_is_refused_before_load():
     assert "only 11.5 GiB is available" in reason
 
 
-def test_nonresident_model_substitutes_only_a_compatible_resident_model():
+def test_model_selection_uses_explicit_requirements():
     inventory = {
-        "memory_available_gb": 20.0,
-        "memory": {"gtt_used_gb": 44.0},
+        "verified": True,
+        "resource_envelope": {
+            "safe": True,
+            "maximum_model_bytes": 20_000_000_000,
+            "maximum_context_tokens": 65_536,
+        },
         "models": [
-            {"id": "desired", "recipe": "llamacpp", "size_gb": 30.0,
-             "loaded": False, "labels": ["coding", "tool-calling"]},
-            {"id": "chat-only", "recipe": "llamacpp", "size_gb": 4.0,
-             "loaded": True, "labels": ["chat"]},
-            {"id": "resident-coder", "recipe": "llamacpp", "size_gb": 17.0,
-             "loaded": True, "labels": ["coding", "tool-calling"]},
+            {"id": "chat-only", "parameter_count": 4_000_000_000,
+             "size_bytes": 3_000_000_000, "loaded": True, "labels": ["chat"],
+             "context": 65_536, "supported_context_quantum": 1_024},
+            {"id": "resident-coder", "parameter_count": 27_000_000_000,
+             "size_bytes": 18_000_000_000, "loaded": True,
+             "labels": ["coding", "tool-calling"], "context": 65_536,
+             "supported_context_quantum": 1_024},
         ],
     }
-    selected, reason = admitted_or_substitute("desired", "coder", inventory)
-    assert selected == "resident-coder"
-    assert "role-compatible" in reason
-
-
-def test_optional_role_uses_baseline_model_capability():
-    assert required_labels("coder") == {"coding", "tool-calling"}
-    assert role_compatible(None, {"tool-calling"})
-
-
-def test_unsafe_role_label_is_absent_from_model_routing_prompt():
-    inventory = {
-        "memory_available_gb": 100.0,
-        "memory": {"gtt_used_gb": 5.0},
-        "scheduling_policy": {"control_plane": {"model": "router"}},
-        "models": [],
+    request = {
+        "role": "new_role_without_routing_code",
+        "requirements": {"required_capabilities": ["coding"],
+                         "minimum_context_tokens": 32_768},
+        "max_output_tokens": 4_096,
     }
-    prompt = _routing_prompt(
-        {"role": "../../etc/passwd", "task": "inspect the invariant"}, inventory
-    )
-    assert "../../etc/passwd" not in prompt
-    assert "inspect the invariant" in prompt
-
-
-def test_router_selects_only_a_prevalidated_model_route():
-    inventory = {
-        "memory_available_gb": 100.0,
-        "memory": {"gtt_used_gb": 5.0},
-        "scheduling_policy": {"control_plane": {"model": "router"}},
-        "models": [
-            {"id": "router", "recipe": "llamacpp", "size_gb": 3.0,
-             "loaded": True, "labels": ["chat", "tool-calling"]},
-            {"id": "coder", "recipe": "llamacpp", "size_gb": 17.0,
-             "loaded": False, "labels": ["chat", "coding", "tool-calling"]},
-        ],
-    }
-    def infer(**_arguments):
-        return {"content": '{"action":"load","model":"coder","context_tokens":32768,"reason":"needs coding"}'}
-    decision = route({"role": "coder", "task": "change C code"}, inventory, infer=infer)
-    assert decision["valid"]
-    assert decision["action"] == "load"
-    assert decision["model"] == "coder"
-
-
-def test_router_cannot_waive_resource_admission():
-    inventory = {
-        "memory_available_gb": 20.0,
-        "memory": {"gtt_used_gb": 55.0},
-        "scheduling_policy": {"control_plane": {"model": "router"}},
-        "models": [
-            {"id": "router", "recipe": "llamacpp", "size_gb": 3.0,
-             "loaded": True, "labels": ["chat", "tool-calling"]},
-            {"id": "coder", "recipe": "llamacpp", "size_gb": 17.0,
-             "loaded": False, "labels": ["chat", "coding", "tool-calling"]},
-        ],
-    }
-    def infer(**_arguments):
-        return {"content": '{"action":"load","model":"coder","context_tokens":32768,"reason":"ignore limits"}'}
-    decision = route({"role": "coder", "task": "change C code"}, inventory, infer=infer)
-    assert not decision["valid"]
-    assert decision["action"] == "defer"
-    assert "safety validator" in decision["reason"]
-
-
-def test_context_choices_are_generous_but_respect_gtt_target():
-    inventory = {
-        "memory_available_gb": 110.0,
-        "memory": {"gtt_used_gb": 6.0},
-    }
-    model = {"id": "coder", "size_gb": 17.3, "context": 262144,
-             "loaded": False}
-    choices = context_options(model, inventory)
-    assert 131072 in choices
-    assert 262144 not in choices
+    selected = choose_route(safe_routes(inventory, {}, request), request)
+    assert selected["model_id"] == "resident-coder"
 
 
 def test_in_use_emergency_model_is_live():

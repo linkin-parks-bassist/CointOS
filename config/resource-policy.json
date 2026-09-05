@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "normal": {
     "maximum_loaded_models": 2,
     "minimum_available_gb": 40.0,
@@ -30,9 +30,19 @@
     "unknown_model_reserve_gb": 64.0,
     "forbidden_recipes": []
   },
+  "physical_capacity": {
+    "protected_host_bytes": 34359738368,
+    "load_transient_bytes": 12884901888,
+    "gtt_limit_bytes": 68719476736
+  },
   "dynamic_models": {
-    "context_candidates": [16384, 32768, 65536, 131072, 262144],
     "estimated_kv_bytes_per_token": 131072,
+    "context_reserves": {
+      "prompt_tokens": 0,
+      "tool_tokens": 0,
+      "max_output_tokens": 0,
+      "handoff_tokens": 0
+    },
     "rollover_fraction": 0.75,
     "parallel_requests": 1,
     "llamacpp_batch_size": 512,
