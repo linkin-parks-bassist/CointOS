@@ -40,6 +40,9 @@ REQUIRED_KEYS = {
     },
     "control_turn": {"run_deadline_seconds"},
     "executor": {"run_deadline_seconds", "time_slice_seconds"},
+    "workload": {
+        "maximum_run_seconds", "wrapup_seconds", "termination_grace_seconds",
+    },
     "verification": {"run_deadline_seconds"},
     "outbox": {"poll_seconds", "retry_initial_seconds", "retry_maximum_seconds"},
 }

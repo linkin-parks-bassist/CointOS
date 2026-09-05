@@ -56,6 +56,11 @@ DEFAULT_POLICY = {
     },
     "control_turn": {"run_deadline_seconds": 600},
     "executor": {"run_deadline_seconds": 1800, "time_slice_seconds": 300},
+    "workload": {
+        "maximum_run_seconds": 300,
+        "wrapup_seconds": 30,
+        "termination_grace_seconds": 15,
+    },
     "verification": {"run_deadline_seconds": 900},
     "outbox": {
         "poll_seconds": 2,
@@ -89,6 +94,15 @@ def test_loads_explicit_seconds():
             "probe_deadline_seconds", "maximum_age_seconds"}})
         time_policy.validate(time_policy.load(write_complete_policy(Path(temporary))))
         assert time_policy.seconds(policy, "heartbeat", "maximum_age_seconds") == 60.0
+
+
+def test_checked_in_policy_loads_workload_action_deadlines():
+    policy = time_policy.load(Path("config/time.cfg"))
+    assert policy["workload"] == {
+        "maximum_run_seconds": 300.0,
+        "wrapup_seconds": 30.0,
+        "termination_grace_seconds": 15.0,
+    }
 
 
 def test_probe_deadline_must_be_shorter_than_lease():
@@ -175,6 +189,7 @@ def test_seconds_rejects_missing_or_invalid_values():
 def load_tests(_loader, _tests, _pattern):
     return unittest.TestSuite(unittest.FunctionTestCase(function) for function in (
         test_loads_explicit_seconds,
+        test_checked_in_policy_loads_workload_action_deadlines,
         test_probe_deadline_must_be_shorter_than_lease,
         test_invalid_reload_keeps_last_known_good,
         test_survival_owner_atomically_retains_last_known_good_after_invalid_edit,
