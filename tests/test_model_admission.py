@@ -1,5 +1,4 @@
 import unittest
-from unittest.mock import patch
 
 from ecosystem.models import choose_route, realize, safe_routes, validate_route
 
@@ -253,7 +252,7 @@ def test_legacy_labels_do_not_satisfy_explicit_capabilities():
     assert "capabilities" in selected["exclusion_reasons"]
 
 
-def test_realize_loads_validated_total_context_without_double_division():
+def test_realize_refuses_nonresident_load_outside_resource_control():
     current = inventory([
         model(parallel_sequences=2, size_gb=18.0, recipe="llamacpp")
     ], maximum_context_tokens=65_536)
@@ -268,14 +267,9 @@ def test_realize_loads_validated_total_context_without_double_division():
     decision = {**selected, "valid": True, "action": "load",
                 "model": selected["model_id"],
                 "context_tokens": selected["context_tokens_per_sequence"]}
-    with patch("ecosystem.models._post", return_value={"loaded": True}) as post:
-        result = realize(decision, current)
-    payload = post.call_args.args[1]
-    assert payload["ctx_size"] == 65_536
-    assert "--parallel 2" in payload["llamacpp_args"]
-    assert result["context_tokens"] == 32_768
-    assert result["backend_context_tokens"] == 65_536
-    assert result["parallel_sequences"] == 2
+    with unittest.TestCase().assertRaisesRegex(
+            RuntimeError, "requires privileged resource-control loading"):
+        realize(decision, current)
 
 
 def load_tests(_loader, _tests, _pattern):

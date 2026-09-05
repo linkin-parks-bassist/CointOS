@@ -1,5 +1,5 @@
 import json
-import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -26,12 +26,22 @@ def test_higher_priority_work_preempts_and_preserves_session():
         output_path = cli.ROOT / "logs/runs/task-background.opencode.log"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text('{"sessionID":"ses_preemption_test"}\n', encoding="utf-8")
-        with open(os.devnull, "rb") as prompt, output_path.open("ab") as output:
+        process = subprocess.Popen(
+            ["bash", "-c", "sleep 60"], start_new_session=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        cancellations = []
+        try:
             outcome = _run_preemptibly(
-                ["bash", "-c", "sleep 60"], prompt, output, os.environ.copy(),
-                running, running_path, output_path,
+                process, ["bash", "-c", "sleep 60"], running, output_path,
+                lambda: cancellations.append(process.poll()),
             )
+        finally:
+            if process.poll() is None:
+                process.kill(); process.wait()
         assert outcome["preempted"]
+        assert cancellations == [None]
         assert outcome["session"] == "ses_preemption_test"
         assert "higher-priority job task-user" in outcome["reason"]
 
@@ -69,12 +79,22 @@ def test_context_rollover_preempts_at_seventy_five_percent():
             "part": {"tokens": {"total": 75, "input": 70, "output": 5}},
         }
         output_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
-        with open(os.devnull, "rb") as prompt, output_path.open("ab") as output:
+        process = subprocess.Popen(
+            ["bash", "-c", "sleep 60"], start_new_session=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        cancellations = []
+        try:
             outcome = _run_preemptibly(
-                ["bash", "-c", "sleep 60"], prompt, output, os.environ.copy(),
-                running, path, output_path,
+                process, ["bash", "-c", "sleep 60"], running, output_path,
+                lambda: cancellations.append(process.poll()),
             )
+        finally:
+            if process.poll() is None:
+                process.kill(); process.wait()
         assert outcome["preempted"]
+        assert cancellations == [None]
         assert outcome["context_rollover"]
         assert outcome["session"] == "ses_context_test"
         assert "75/100" in outcome["reason"]

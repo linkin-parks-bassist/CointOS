@@ -6,11 +6,12 @@ import types
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from ecosystem.inference_proxy import (
     completed_run_termination, forward_proxy_response, handle_proxy_request,
     issue_proxy_credential, opencode_environment, populate_opencode_credential,
-    read_proxy_request,
+    read_proxy_request, revoke_proxy_credential, serve_one_connection,
 )
 
 
@@ -38,6 +39,13 @@ def fixture():
                  "expected_release_binding": {"lease_id": lease_id}}
         (root / "state/inference-capacity.json").write_text(json.dumps({
             "version": 1, "generation": 1, "leases": {lease_id: lease}}))
+        (root / "config/resource-policy.json").write_text(json.dumps({
+            "inference_capacity": {
+                "release_observer_identity": "observer:inference-backend",
+                "release_observation_maximum_age_seconds": 5,
+                "clock_domain_id": "host-monotonic:boot-one",
+            },
+        }))
         yield {"root": root, "worker_lease_id": worker_lease_id,
                "lease_id": lease_id, "lease": lease}
 
@@ -52,6 +60,23 @@ def issue(value):
     issue_proxy_credential(value["root"], value["lease"], delivered.append, lambda: 10.0)
     assert len(delivered) == 1
     return delivered[0]
+
+
+def trusted_result(request, now, evidence_id):
+    return {
+        "status": 200,
+        "termination_observation": {
+            "terminated": True,
+            "binding": request["lease"]["expected_release_binding"],
+            "claim_id": request["claim_id"],
+            "request_id": request["body"]["request_id"],
+            "observer_identity": "observer:inference-backend",
+            "observer_generation": 1,
+            "observed_monotonic": now,
+            "clock_domain_id": "host-monotonic:boot-one",
+            "evidence_id": evidence_id,
+        },
+    }
 
 
 def test_unauthenticated_request_never_reaches_backend():
@@ -103,9 +128,9 @@ def test_later_crash_invalidates_prior_round_termination():
         secret = issue(value)
         metadata = {"authorization": "Bearer " + secret.hex()}
         handle_proxy_request(
-            value["root"], metadata, body(),
-            lambda _request: {"status": 200, "terminated": True,
-                              "evidence_id": "ended-first"},
+            value["root"], {**metadata, "request_id": "first"},
+            body(request_id="first"),
+            lambda request: trusted_result(request, 11.0, "ended-first"),
             lambda: 11.0,
         )
 
@@ -183,9 +208,10 @@ def test_completed_run_termination_requires_ended_bound_process():
         metadata = {"authorization": "Bearer " + secret.hex()}
         for now in (11.0, 12.0):
             handle_proxy_request(
-                value["root"], metadata, body(),
-                lambda _request: {"status": 200, "terminated": True,
-                                  "evidence_id": f"end-{now}"},
+                value["root"], {**metadata, "request_id": f"request-{now}"},
+                body(request_id=f"request-{now}"),
+                lambda request, now=now: trusted_result(
+                    request, now, f"end-{now}"),
                 lambda now=now: now,
             )
         assert completed_run_termination(value["root"], value["lease_id"]) is None
@@ -197,6 +223,28 @@ def test_completed_run_termination_requires_ended_bound_process():
         path.write_text(json.dumps(state))
         evidence = completed_run_termination(value["root"], value["lease_id"])
         assert evidence["evidence_id"] == "end-12.0"
+
+
+def test_unreadable_process_identity_remains_unknown():
+    with fixture() as value:
+        issue(value)
+        with patch("ecosystem.inference_proxy._bound_process_ended", return_value=None):
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+
+
+def test_revoked_credential_replay_returns_authoritative_sequence():
+    with fixture() as value:
+        issue(value)
+        path = value["root"] / "state/inference-proxy.json"
+        state = json.loads(path.read_text())
+        credential = state["credentials"][value["lease_id"]]
+        released = {**value["lease"], "state": "released"}
+        credential.update(state="revoked", digest="", released_sequence=released)
+        path.write_text(json.dumps(state))
+        replay = revoke_proxy_credential(
+            value["root"], value["lease_id"], {}, lambda: 20.0)
+        assert replay["state"] == "revoked"
+        assert replay["sequence"] == released
 
 
 def test_fragmented_request_preserves_buffered_body_bytes():
@@ -235,6 +283,68 @@ def test_sse_chunks_are_forwarded_without_a_false_end():
         lambda: 12.0)
     assert b"data: one\n\n" in sent and result["evidence_id"] == "end-1"
     assert len(observed) == 1
+
+
+def test_production_http_eof_does_not_create_sequence_end_evidence():
+    with fixture() as value:
+        secret = issue(value)
+        encoded = json.dumps(body()).encode()
+        raw = (b"POST /v1/chat/completions HTTP/1.1\r\n"
+               + f"Authorization: Bearer {secret.hex()}\r\n".encode()
+               + f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded)
+        reads = [raw, b""]
+        sent = []
+        connection = types.SimpleNamespace(
+            recv=lambda _maximum: reads.pop(0), sendall=sent.append,
+            settimeout=lambda _timeout: None, close=lambda: None,
+        )
+        upstream = types.SimpleNamespace(
+            status=200, getheader=lambda _name, default: "application/json",
+            read1=lambda _maximum: b"",
+        )
+        backend = types.SimpleNamespace(
+            request=lambda *_args, **_kwargs: None,
+            getresponse=lambda: upstream, close=lambda: None,
+        )
+        with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
+                   return_value=backend):
+            serve_one_connection(connection, value["root"], {
+                "backend_base": "http://127.0.0.1:13305/v1",
+            }, lambda: 11.0)
+        state = json.loads(
+            (value["root"] / "state/inference-proxy.json").read_text())
+        credential = state["credentials"][value["lease_id"]]
+        assert credential["completed_requests"] == 1
+        assert credential["last_backend_termination"] is None
+
+
+def test_only_exact_fresh_trusted_backend_observation_is_retained():
+    mutations = (
+        lambda observation: observation.update(binding={"lease_id": "wrong"}),
+        lambda observation: observation.update(request_id="wrong"),
+        lambda observation: observation.update(observed_monotonic=1.0),
+        lambda observation: observation.update(clock_domain_id="wrong-clock"),
+        lambda observation: observation.update(observer_identity="wrong-observer"),
+    )
+    for mutate in mutations:
+        with fixture() as value:
+            secret = issue(value)
+            metadata = {"authorization": "Bearer " + secret.hex(),
+                        "request_id": "request-exact"}
+
+            def backend(request):
+                result = trusted_result(request, 11.0, "candidate-end")
+                mutate(result["termination_observation"])
+                return result
+
+            handle_proxy_request(
+                value["root"], metadata, body(request_id="request-exact"),
+                backend, lambda: 11.0,
+            )
+            state = json.loads(
+                (value["root"] / "state/inference-proxy.json").read_text())
+            assert state["credentials"][value["lease_id"]][
+                "last_backend_termination"] is None
 
 
 def load_tests(_loader, _tests, _pattern):

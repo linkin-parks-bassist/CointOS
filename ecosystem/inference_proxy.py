@@ -220,7 +220,7 @@ def handle_proxy_request(root: Path, metadata: dict, body: dict, backend_request
             result = {"status": 502, "error": "backend returned no response"}
         if type(result) is not dict:
             raise ValueError("backend response must be a dictionary")
-        terminated = result.get("terminated") is True
+        terminated = type(result.get("termination_observation")) is dict
         _finish_claim(Path(root), lease["lease_id"], claim_id, terminated, result, clock)
         return result
     except Exception:
@@ -239,6 +239,11 @@ def cancel(root: Path, lease_id: str, clock) -> dict:
         credential = state["credentials"].get(lease_id)
         if credential is None:
             raise ValueError("unknown proxy credential")
+        if credential.get("state") == "revoked":
+            return {"state": "revoked", "lease_id": lease_id, "in_flight": 0}
+        if credential.get("state") == "closing":
+            return {"state": "cancellation_requested", "lease_id": lease_id,
+                    "in_flight": len(credential["in_flight"])}
         credential["state"] = "closing"
         credential["cancel_requested_monotonic"] = now
         save()
@@ -255,28 +260,31 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
         if credential is None:
             raise ValueError("unknown proxy credential")
         if credential.get("state") == "revoked":
-            return {"state": "revoked", "lease_id": lease_id}
+            released = credential.get("released_sequence")
+            if (type(released) is not dict or released.get("lease_id") != lease_id
+                    or released.get("expected_release_binding")
+                    != credential.get("binding", {}).get("release_binding")):
+                raise ValueError("revoked credential lacks authoritative sequence result")
+            return {"state": "revoked", "lease_id": lease_id,
+                    "sequence": _durable(released)}
         if credential["in_flight"]:
             raise ValueError("requests remain in flight")
         termination = credential.get("last_backend_termination")
         if (type(observed_end) is not dict or observed_end.get("terminated") is not True
-                or termination is None
-                or observed_end.get("evidence_id") != termination.get("evidence_id")):
+                or termination is None or observed_end != termination):
             raise ValueError("backend termination is not verified")
         credential["state"] = "releasing"
         credential["release_requested_monotonic"] = now
         save()
     lease = _capacity_lease(root, lease_id)
-    policy = json.loads((root / "config/resource-policy.json").read_text(encoding="utf-8"))[
-        "inference_capacity"]
     attestation = {
         "schema_version": 1,
-        "binding": _durable(lease["expected_release_binding"]),
+        "binding": _durable(observed_end["binding"]),
         "kind": "sequence_end",
-        "observer_identity": policy["release_observer_identity"],
-        "observer_generation": int(observed_end.get("observer_generation", 1)),
-        "observed_monotonic": float(observed_end.get("observed_monotonic", now)),
-        "clock_domain_id": policy["clock_domain_id"],
+        "observer_identity": observed_end["observer_identity"],
+        "observer_generation": observed_end["observer_generation"],
+        "observed_monotonic": observed_end["observed_monotonic"],
+        "clock_domain_id": observed_end["clock_domain_id"],
         "evidence_id": observed_end["evidence_id"],
     }
     released = release_sequence(root, lease_id, attestation, clock)
@@ -286,6 +294,7 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
         credential = state["credentials"][lease_id]
         credential["state"] = "revoked"
         credential["digest"] = ""
+        credential["released_sequence"] = _durable(released)
         credential["revoked_monotonic"] = _clock(clock)
         save()
     return {"state": "revoked", "lease_id": lease_id, "sequence": released}
@@ -302,17 +311,23 @@ def completed_run_termination(root: Path, lease_id: str) -> dict | None:
         process = credential.get("binding", {}).get("process")
         if type(process) is not dict:
             raise ValueError("proxy credential lacks a bound process")
-        pid = process.get("pid")
-        expected_ticks = process.get("process_start_ticks")
-        try:
-            stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
-            observed_ticks = int(stat.rsplit(")", 1)[1].split()[19])
-        except (OSError, ValueError, IndexError):
-            observed_ticks = None
-        if observed_ticks == expected_ticks:
+        ended = _bound_process_ended(process)
+        if ended is not True:
             return None
         termination = credential.get("last_backend_termination")
         return _durable(termination) if termination is not None else None
+
+
+def _bound_process_ended(process: dict) -> bool | None:
+    try:
+        stat = (Path("/proc") / str(process["pid"]) / "stat").read_text(
+            encoding="utf-8")
+        observed_ticks = int(stat.rsplit(")", 1)[1].split()[19])
+    except FileNotFoundError:
+        return True
+    except (KeyError, OSError, ValueError, IndexError):
+        return None
+    return observed_ticks != process.get("process_start_ticks")
 
 
 def read_proxy_request(connection, limits: dict) -> tuple[dict, dict]:
@@ -379,6 +394,8 @@ def forward_proxy_response(connection, upstream, lease: dict, observe, clock) ->
             raise ValueError("upstream exceeded bounded read")
         connection.sendall(chunk)
         total += len(chunk)
+    if observe is None:
+        return {"status": status, "bytes_forwarded": total, "terminated": False}
     evidence = observe({"kind": "backend_terminated", "backend_sequence":
                         lease.get("backend_sequence"), "observed_monotonic": _clock(clock)})
     if type(evidence) is not dict or evidence.get("terminated") is not True:
@@ -410,9 +427,8 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             result = forward_proxy_response(connection, upstream,
                                             {**lease, "stream_chunk_bytes": config.get(
                                                 "stream_chunk_bytes", 65536)},
-                                            lambda record: {**record, "terminated": True,
-                                                "evidence_id": secrets.token_hex(16)}, clock)
-            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], True,
+                                            None, clock)
+            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], False,
                           result, clock)
         except Exception:
             _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], False,
@@ -508,6 +524,7 @@ def _credential_binding(lease: dict, worker: dict) -> dict:
         "context_tokens": lease["context_tokens"],
         "max_output_tokens": lease["max_output_tokens"],
         "backend_sequence": lease["backend_sequence"],
+        "release_binding": _durable(lease["expected_release_binding"]),
     }
 
 
@@ -531,14 +548,41 @@ def _finish_claim(root: Path, lease_id: str, claim_id: str, terminated: bool,
             return
         credential["completed_requests"] += 1
         if terminated:
-            evidence_id = result.get("evidence_id") or secrets.token_hex(16)
-            credential["last_backend_termination"] = {
-                "terminated": True, "evidence_id": evidence_id,
-                "backend_sequence": credential["binding"]["backend_sequence"],
-                "observed_monotonic": now,
-                "observer_generation": state["generation"],
-            }
+            observation = _validated_backend_termination(
+                root, credential, claim_id, claim, result, now,
+            )
+            credential["last_backend_termination"] = observation
         save()
+
+
+def _validated_backend_termination(root: Path, credential: dict, claim_id: str,
+                                   claim: dict, result: dict, now: float) -> dict | None:
+    observation = result.get("termination_observation")
+    if type(observation) is not dict:
+        return None
+    try:
+        policy = json.loads((root / "config/resource-policy.json").read_text(
+            encoding="utf-8"))["inference_capacity"]
+        observed_at = float(observation["observed_monotonic"])
+        maximum_age = float(policy["release_observation_maximum_age_seconds"])
+        valid = (
+            observation.get("terminated") is True
+            and observation.get("binding") == credential["binding"]["release_binding"]
+            and observation.get("claim_id") == claim_id
+            and observation.get("request_id") == claim.get("request_id")
+            and type(observation.get("request_id")) is str
+            and bool(observation["request_id"])
+            and observation.get("observer_identity") == policy["release_observer_identity"]
+            and type(observation.get("observer_generation")) is int
+            and observation["observer_generation"] > 0
+            and observation.get("clock_domain_id") == policy["clock_domain_id"]
+            and type(observation.get("evidence_id")) is str
+            and bool(observation["evidence_id"])
+            and observed_at <= now and now - observed_at <= maximum_age
+        )
+    except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+        return None
+    return _durable(observation) if valid else None
 
 
 def _record_backend_identity(root: Path, lease_id: str, claim_id: str,
