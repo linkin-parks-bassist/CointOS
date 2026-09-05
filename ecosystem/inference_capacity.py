@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import json
 import math
 import os
+import secrets
 from contextlib import contextmanager
 from pathlib import Path
+
+from ecosystem import models
 
 
 STATE_VERSION = 1
@@ -17,7 +21,7 @@ SNAPSHOT_FIELDS = frozenset((
 ))
 LEASE_STATES = frozenset((
     "starting", "active", "preemption_requested", "waiting_for_preemption",
-    "release_requested", "released",
+    "ready_for_revalidation", "release_requested", "released",
 ))
 
 
@@ -224,21 +228,45 @@ def realize_context_tokens(route: dict, parallel_sequences: int) -> dict:
     return {"context_tokens": context, "ctx_size": backend_total}
 
 
-def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
-    """Atomically reserve a front/work sequence or request safe preemption."""
+def reserve_sequence(
+    root: Path,
+    request: dict,
+    inventory: dict,
+    clock,
+    observer_capability_sink=None,
+) -> dict:
+    """Reserve after fresh R2 validation and issue observer capability via the sink."""
     root = Path(root)
     now = _clock_value(clock)
     if type(inventory) is not dict:
         raise ValueError("invalid inference inventory")
-    capacity_policy = _load_capacity_policy(root)
+    resource_policy = _load_json(root / "config" / "resource-policy.json")
+    capacity_policy = _validated_capacity_policy(resource_policy)
     scheduling_policy = _load_json(root / "state" / "scheduling-policy.json")
     scheduling_values = _validated_scheduling_snapshot(scheduling_policy)
     validated = _validate_sequence_request(request, capacity_policy, scheduling_values)
-    realized = realize_context_tokens(
-        validated["route"], validated["route"]["parallel_sequences"],
-    )
     with _locked_states(root) as (worker_state, state, save):
         worker_lease = _validate_worker_lease(worker_state, validated)
+        worker_request = worker_lease["request"]
+        for field in (
+            "requirements", "prompt_tokens", "tool_tokens", "max_output_tokens",
+            "handoff_tokens",
+        ):
+            if field in worker_request:
+                validated[field] = _durable_copy(worker_request[field])
+        normalized_route = models.validate_route(
+            validated["route"], inventory, resource_policy, worker_request,
+        )
+        if normalized_route.get("state") != "admitted":
+            return {
+                "state": "deferred",
+                "reasons": normalized_route.get("exclusion_reasons", ["route:invalid"]),
+            }
+        validated["route"] = _durable_copy(normalized_route)
+        _validate_worker_allocation(worker_request, normalized_route)
+        realized = realize_context_tokens(
+            normalized_route, normalized_route["parallel_sequences"],
+        )
         enqueued_monotonic = _finite_number(
             worker_lease.get("acquired_monotonic"), "worker enqueue time",
         )
@@ -252,13 +280,16 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
         if prior is not None:
             if prior["request"] != validated:
                 raise ValueError("inference request identity mismatch")
-            return _durable_copy(prior)
+            if prior["state"] != "ready_for_revalidation":
+                return _public_lease(prior)
+        retrying = prior is not None
         active = [
             lease for lease in state["leases"].values()
             if lease["state"] in {"starting", "active", "preemption_requested",
                                   "release_requested"}
         ]
-        lease_id = _lease_id(validated["request_id"], state["generation"])
+        lease_id = (prior["lease_id"] if retrying
+                    else _lease_id(validated["request_id"], state["generation"]))
         workload_class = validated["workload_class"]
         if workload_class == "front":
             available = _available_sequences(active, 0, capacity_policy["front_sequences"])
@@ -301,10 +332,13 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
             "expires_monotonic": now + capacity_policy["lease_seconds"],
             "preemption_method": validated["preemption_method"],
             "release_observer_identity": capacity_policy["release_observer_identity"],
+            "observer_capability_digest": (
+                prior["observer_capability_digest"] if retrying else None
+            ),
             "priority": priority,
             "enqueued_monotonic": enqueued_monotonic,
             "request": validated,
-            "acquired_monotonic": now,
+            "acquired_monotonic": prior["acquired_monotonic"] if retrying else now,
             "observed_release": None,
         }
         if preempted is not None:
@@ -319,13 +353,26 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
             return {"state": "deferred", "reasons": envelope["unknown_facts"] or [
                 "physical_capacity",
             ]}
+        if not retrying:
+            if not callable(observer_capability_sink):
+                raise ValueError("trusted observer capability sink is required")
+            observer_capability = secrets.token_bytes(32)
+            lease["observer_capability_digest"] = hashlib.sha256(
+                observer_capability,
+            ).hexdigest()
+            observer_capability_sink(observer_capability, {
+                "lease_id": lease_id,
+                "request_id": validated["request_id"],
+                "proxy_identity": validated["proxy_identity"],
+                "observer_identity": lease["release_observer_identity"],
+            })
         if preempted is not None:
             victim["state"] = "preemption_requested"
             victim["preemption_requested_monotonic"] = now
             lease["backend_sequence"] = None
         state["leases"][lease_id] = lease
         save()
-        return _durable_copy(lease)
+        return _public_lease(lease)
 
 
 def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
@@ -342,9 +389,7 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
         if lease is None:
             raise ValueError("unknown inference lease")
         if lease["state"] == "released":
-            if lease["observed_release"] != {**observed, "observed_monotonic": now}:
-                return _durable_copy(lease)
-            return _durable_copy(lease)
+            return _public_lease(lease)
         expected = lease["backend_sequence"]
         matching = _trusted_release_observation(
             lease, observed, expected, now, capacity_policy,
@@ -353,17 +398,20 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
             lease["state"] = "release_requested"
             lease["release_requested_monotonic"] = now
             save()
-            return _durable_copy(lease)
+            return _public_lease(lease)
         lease["state"] = "released"
         lease["observed_release"] = {
-            **_durable_copy(observed), "accepted_monotonic": now,
+            **_durable_copy({key: value for key, value in observed.items()
+                             if key != "observer_capability"}),
+            "observer_capability_verified": True,
+            "accepted_monotonic": now,
         }
         lease["released_monotonic"] = now
         _activate_waiter(
             state, expected, now, scheduling_policy, capacity_policy,
         )
         save()
-        return _durable_copy(lease)
+        return _public_lease(lease)
 
 
 def _validated_scheduling_snapshot(snapshot: dict) -> dict:
@@ -471,16 +519,18 @@ def _validate_worker_lease(worker_state: dict, request: dict) -> dict:
         raise ValueError("worker and inference authority profiles differ")
     if worker_request.get("execution_profile") != request.get("execution_profile"):
         raise ValueError("worker and inference execution profiles differ")
-    route = request["route"]
+    if worker_request.get("stop_method") != request["preemption_method"]:
+        raise ValueError("worker and inference preemption methods differ")
+    return lease
+
+
+def _validate_worker_allocation(worker_request: dict, route: dict) -> None:
     if worker_request.get("model_id") != route.get("model_id"):
         raise ValueError("worker and inference model identities differ")
     if worker_request.get("context_tokens") != route.get("context_tokens_per_sequence"):
         raise ValueError("worker and inference context allocations differ")
     if worker_request.get("max_output_tokens") != route.get("max_output_tokens"):
         raise ValueError("worker and inference output allocations differ")
-    if worker_request.get("stop_method") != request["preemption_method"]:
-        raise ValueError("worker and inference preemption methods differ")
-    return lease
 
 
 def _lease_allocation_bytes(lease: dict, policy: dict) -> int | None:
@@ -555,13 +605,17 @@ def _activate_waiter(
         ),
     )
     selected["priority"] = _lease_priority(scheduling_policy, selected, now)
-    selected["backend_sequence"] = backend_sequence
-    selected["state"] = "starting"
-    selected["sequence_assigned_monotonic"] = now
+    selected["backend_sequence"] = None
+    selected["state"] = "ready_for_revalidation"
+    selected["revalidation_requested_monotonic"] = now
 
 
 def _load_capacity_policy(root: Path) -> dict:
     document = _load_json(root / "config" / "resource-policy.json")
+    return _validated_capacity_policy(document)
+
+
+def _validated_capacity_policy(document: dict) -> dict:
     policy = document.get("inference_capacity")
     required = {
         "front_sequences", "total_sequences", "protected_host_bytes",
@@ -599,8 +653,14 @@ def _trusted_release_observation(
         )
     except ValueError:
         return False
+    capability = observed.get("observer_capability")
+    capability_digest = lease.get("observer_capability_digest")
     return (
         backend_sequence is not None
+        and type(capability) is bytes
+        and len(capability) == 32
+        and type(capability_digest) is str
+        and hmac.compare_digest(hashlib.sha256(capability).hexdigest(), capability_digest)
         and observed.get("lease_id") == lease["lease_id"]
         and observed.get("request_id") == lease["request"]["request_id"]
         and observed.get("proxy_identity") == lease["proxy_identity"]
@@ -611,6 +671,12 @@ def _trusted_release_observation(
         and observed_at <= now
         and now - observed_at <= policy["release_observation_maximum_age_seconds"]
     )
+
+
+def _public_lease(lease: dict) -> dict:
+    public = _durable_copy(lease)
+    public.pop("observer_capability_digest", None)
+    return public
 
 
 @contextmanager
