@@ -86,7 +86,8 @@ def _contained(path: str, root: str) -> bool:
         return False
 
 
-def _validate_scope(raw: object) -> dict:
+def validate_scope(raw: object) -> dict:
+    """Canonical scope contract: absolute workspace, contained read/write roots."""
     if type(raw) is not dict or set(raw) != {"workspace", "read_paths", "write_paths"}:
         raise ValueError("invalid task scope")
     workspace = _canonical_absolute_path(raw["workspace"], "scope workspace")
@@ -122,7 +123,7 @@ def validate_task_contract(raw: dict) -> dict:
         raise ValueError("acceptance must be a list of structured checks")
     result = {
         "objective": objective,
-        "scope": _validate_scope(raw["scope"]),
+        "scope": validate_scope(raw["scope"]),
         "authority_profile": authority,
         "requirements": validate_requirements(raw["requirements"]),
         "acceptance": acceptance,

@@ -13,6 +13,8 @@ from pathlib import Path
 
 from ecosystem import cli
 from ecosystem import continuation
+from ecosystem import evidence
+from ecosystem import task_contracts
 from ecosystem.inference_capacity import reserve_sequence
 from ecosystem.inference_proxy import (
     cancel as cancel_proxy,
@@ -1022,6 +1024,38 @@ Distinguish verified facts from assumptions. This artifact seeds the next attemp
             "elapsed_seconds": round(time.monotonic() - started, 3)}
 
 
+def discovery_evidence(job: dict) -> dict:
+    """A2: bounded evidence authority for one discovery run.
+
+    The scope comes from the job's executable contract; the item budget from
+    its remaining shared budget; the byte budget from the evidence tool's page
+    envelope. Both limits are remaining budgets counted across read_evidence
+    calls, not per-call allowances. A discovery run inspects the environment
+    only through the bounded evidence reader and records output only through
+    record_contribution; it holds no unrestricted read or shell authority.
+    """
+    contract = job.get("task_contract")
+    if type(contract) is not dict:
+        raise ValueError("discovery evidence requires an executable task contract")
+    validated = task_contracts.validate_task_contract(contract)
+    remaining = job.get("remaining_budget")
+    if type(remaining) is not dict or type(remaining.get("maximum_evidence_items")) is not int \
+            or remaining["maximum_evidence_items"] < 0:
+        raise ValueError("discovery evidence requires the remaining evidence budget")
+    scope = validated["scope"]
+    return {
+        "scope": {
+            "workspace": scope["workspace"],
+            "read_paths": list(scope["read_paths"]),
+            "write_paths": list(scope["write_paths"]),
+        },
+        "limits": {
+            "maximum_bytes": evidence.DEFAULT_MAXIMUM_BYTES,
+            "maximum_items": remaining["maximum_evidence_items"],
+        },
+    }
+
+
 def execute_next(run=subprocess.run) -> bool:
     cli.initialize()
     rollover_fraction = float(scheduling_policy()["workers"]["context_rollover_fraction"])
@@ -1082,7 +1116,8 @@ def execute_next(run=subprocess.run) -> bool:
                     prompt_path = cli.ROOT / "state/jobs" / f"{job['id']}.prompt.md"
                     cli.atomic_text(prompt_path, render_context(
                         job.get("role"), job["task"], job["id"], job["model"],
-                        job["model_reason"], job.get("agent_name", "Agent")))
+                        job["model_reason"], job.get("agent_name", "Agent"),
+                        task_contract=job.get("task_contract")))
                     job["prompt"] = str(prompt_path.relative_to(cli.ROOT))
                     job.setdefault("original_prompt", job["prompt"])
             else:

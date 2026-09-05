@@ -22,6 +22,16 @@ evidence, and a concise handoff.
 Distinguish observations from inference. Cite the bounded files, records, commands,
 and timestamps that support the result without copying secrets or unrelated material.
 
+## Bounded inspection
+
+Discovery and inspection runs use only the bounded evidence reader exposed by the
+task contract's scope: the contracted read roots and the remaining byte and item
+limits, counted across calls, not per call. Never widen an inspection with
+unrestricted shell or read access, and never expand a bounded inspection into a
+repository-wide audit. Record output under the assigned candidate note path with
+your job and agent identity. When the evidence budget is exhausted, stop with a
+useful partial contribution.
+
 ## Budget
 
 Obey the task contract's cumulative run, task, attempt, output, evidence, and child
