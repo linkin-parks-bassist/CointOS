@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ecosystem import cli, operator_session, resource_control, time_policy
+from ecosystem import cli, operator_session, resource_control, time_policy, workload_control
 from ecosystem.models import (
     admission,
     choose_route,
@@ -214,6 +214,67 @@ def in_memory_systemctl(calls=None, failed_action=None, ambiguous_unit=None,
         raise AssertionError(f"unexpected systemctl action: {arguments!r}")
 
     return invoke
+
+
+def dead_process_identity():
+    """Spawn a real session leader, reap it, and return the now-gone
+    (pid, start_ticks, pgid) so reconciliation observes a real empty group."""
+    handle = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        raw = Path(f"/proc/{handle.pid}/stat").read_text(encoding="utf-8")
+        fields = raw.rsplit(")", 1)[1].split()
+        identity = (handle.pid, int(fields[19]), int(fields[2]))
+    finally:
+        handle.kill()
+        handle.wait()
+    return identity
+
+
+def write_running_job(root, job_id, lease_id=None, identity=None, **extra):
+    jobs = root / "state" / "jobs"
+    jobs.mkdir(parents=True, exist_ok=True)
+    job = {
+        "id": job_id,
+        "kind": "task",
+        "state": "running",
+        "attempts": 1,
+        "created_at": "2026-09-05T00:00:00+00:00",
+        "updated_at": "2026-09-05T00:00:00+00:00",
+        "task": "R7 reconciliation work",
+        "output": f"runs/{job_id}",
+        "opencode_session": None,
+    }
+    if lease_id is not None:
+        job["worker_lease_id"] = lease_id
+    if identity is not None:
+        job.update(executor_pid=identity[0], executor_start_ticks=identity[1],
+                   executor_pgid=identity[2])
+    job.update(extra)
+    cli.atomic_json(jobs / f"{job_id}.json", job)
+    return job
+
+
+def acquire_registered_lease(root, job_id, identity, request_id=None):
+    request = {
+        "workload_class": "work",
+        "model_id": "local-model",
+        "owner_identity": "job-executor",
+        "job_id": job_id,
+        "caller_handle": f"caller-{job_id}",
+        "request_id": request_id or f"req-{job_id}",
+        "context_tokens": 4096,
+        "max_output_tokens": 1024,
+        "agent_generation": 0,
+        "deadline_monotonic": 1e9,
+        "stop_method": "process_group",
+    }
+    clock = lambda: 1000.0
+    lease = workload_control.acquire_worker(root, request, clock)
+    assert lease.get("state") == "starting", lease
+    registered = workload_control.register_process(
+        root, lease["lease_id"], identity[0], identity[1], clock)
+    assert registered["state"] == "active"
+    return lease
 
 
 def in_memory_lemonade(calls=None, initially_loaded=True, initial_health=None,
@@ -1922,6 +1983,245 @@ def test_pressure_does_not_preempt_while_an_unprotected_unload_failed(_root):
                         .read_text(encoding="utf-8"))["sessions"][
         "opencode:load"]
     assert stored["state"] == "active"
+
+
+@with_root
+def test_pressure_closes_gate_before_checkpoint(_root):
+    events = []
+    with patch("ecosystem.resource_control.workload_control.begin_drain",
+               side_effect=lambda *args: events.append("gate") or {"mode": "draining"}), \
+          patch("ecosystem.resource_control.checkpoint_running_jobs",
+                side_effect=lambda *args: events.append("checkpoint") or []), \
+          patch("ecosystem.resource_control._stop_user_units", return_value={"ok": True}), \
+          patch("ecosystem.resource_control.unload_dynamic_models", return_value=[]), \
+          patch("ecosystem.resource_control.save_state"):
+        resource_control.enter_pressure({"mode": "normal"}, {"at": "now"})
+    assert events == ["gate", "checkpoint"]
+
+
+@with_root
+def test_pressure_is_not_oom(_root):
+    systemctl_calls = []
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=pressure_snapshot(oom_kills=0)), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(systemctl_calls)), \
+            patch("ecosystem.resource_control.unload_dynamic_models", return_value=[]):
+        with patch("ecosystem.resource_control.time.monotonic", return_value=100.0):
+            first = resource_control.tick()
+        with patch("ecosystem.resource_control.time.monotonic", return_value=105.0):
+            result = resource_control.tick()
+    assert first["mode"] == "normal"
+    assert result["mode"] == "pressure"
+    assert result["last_oom_kills"] == 0
+    assert "emergency_phase" not in result
+    assert "incident_id" not in result
+    assert "sole_survivor_job" not in result
+    assert result["pressure_incident_id"].startswith("pressure-")
+    gate = json.loads((_root / "state" / "workload-control.json").read_text(encoding="utf-8"))
+    assert gate["mode"] == "draining"
+    assert gate["owner"]["owner_identity"] == "resource-control"
+
+
+@with_root
+def test_one_new_oom_latches_exactly_one_survivor(root):
+    initialize_survivor_context(root)
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=healthy_snapshot(oom_kills=5)), \
+            patch("ecosystem.resource_control.lemonade_health", return_value=emergency_health()), \
+            patch("ecosystem.resource_control.unload_all_models",
+                  return_value={"ok": True, "health": {"all_models_loaded": []}}), \
+            patch("ecosystem.resource_control.load_emergency_model",
+                  return_value={"ok": True, "health": emergency_health()}), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()), \
+            patch("ecosystem.resource_control.os.sync"):
+        result = resource_control.tick()
+    assert result["mode"] == "emergency"
+    assert result["emergency_phase"] == "active"
+    jobs = {path.stem: read_job(root, path.stem)
+            for path in (root / "state" / "jobs").glob("*.json")}
+    survivors = {identifier for identifier, job in jobs.items()
+                 if job.get("role") == "sole_survivor"}
+    assert survivors == {result["sole_survivor_job"]}
+
+
+@with_root
+def test_survivor_preempts_work_but_not_coin_front(root):
+    initialize_survivor_context(root)
+    identity = dead_process_identity()
+    lease = acquire_registered_lease(root, "task-work", identity)
+    write_running_job(root, "task-work", lease_id=lease["lease_id"], identity=identity)
+    with patch("ecosystem.resource_control.lemonade_health", return_value=emergency_health()), \
+            patch("ecosystem.resource_control.unload_all_models",
+                  return_value={"ok": True, "health": {"all_models_loaded": []}}), \
+            patch("ecosystem.resource_control.load_emergency_model",
+                  return_value={"ok": True, "health": emergency_health()}), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()), \
+            patch("ecosystem.resource_control.os.sync"):
+        result = resource_control.advance_emergency(
+            normal_resource_state(), healthy_snapshot(), "test oom")
+    assert result["emergency_phase"] == "active"
+    assert result["emergency_model_ready"] is True
+    job = read_job(root, "task-work")
+    assert job["state"] == "interrupted"
+    gate = json.loads((root / "state" / "workload-control.json").read_text(encoding="utf-8"))
+    assert gate["leases"][lease["lease_id"]]["state"] == "quiescent"
+    assert result["emergency_lease_reconciliation"]["quiescent"] == ["task-work"]
+    assert result["emergency_lease_reconciliation"]["quarantined"] == []
+
+
+@with_root
+def test_recovery_reconciles_leases_before_reopen(root):
+    central_policy = {
+        "resource": {"poll_seconds": 0.75, "healthy_release_seconds": 2.0},
+        "lifecycle": {"reconciliation_deadline_seconds": 19.0},
+    }
+    dead = dead_process_identity()
+    lease_dead = acquire_registered_lease(root, "task-dead", dead)
+    write_running_job(root, "task-dead", lease_id=lease_dead["lease_id"], identity=dead)
+    live = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    try:
+        raw = Path(f"/proc/{live.pid}/stat").read_text(encoding="utf-8")
+        fields = raw.rsplit(")", 1)[1].split()
+        live_identity = (live.pid, int(fields[19]), int(fields[2]))
+        lease_live = acquire_registered_lease(root, "task-live", live_identity)
+        write_running_job(root, "task-live", lease_id=lease_live["lease_id"],
+                          identity=live_identity)
+        systemctl_calls = []
+        with patch("ecosystem.resource_control._user_systemctl",
+                   side_effect=in_memory_systemctl(systemctl_calls)), \
+                patch("ecosystem.resource_control.unload_dynamic_models", return_value=[]):
+            state = resource_control.enter_pressure(
+                normal_resource_state(), pressure_snapshot())
+        assert state["mode"] == "pressure"
+        assert state["pressure_interrupted_jobs"] == ["task-dead", "task-live"]
+        with patch("ecosystem.resource_control.resource_snapshot",
+                   return_value=healthy_snapshot()), \
+                patch.object(time_policy, "load", return_value=central_policy), \
+                patch("ecosystem.resource_control._user_systemctl",
+                      side_effect=in_memory_systemctl(systemctl_calls)):
+            with patch("ecosystem.resource_control.time.monotonic", return_value=300.0):
+                resource_control.tick()
+            with patch("ecosystem.resource_control.time.monotonic", return_value=302.0):
+                result = resource_control.tick()
+        assert result["mode"] == "pressure"
+        assert any(lease_live["lease_id"] in reason
+                   for reason in result["pressure_reopen_deferred"]["reasons"])
+        gate = json.loads((root / "state" / "workload-control.json").read_text(encoding="utf-8"))
+        assert gate["mode"] == "draining"
+        assert gate["leases"][lease_dead["lease_id"]]["state"] == "quiescent"
+        assert gate["leases"][lease_live["lease_id"]]["state"] == "active"
+        assert not any(call[0] == "start" for call in systemctl_calls)
+    finally:
+        live.kill()
+        live.wait()
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=healthy_snapshot()), \
+            patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(systemctl_calls)):
+        with patch("ecosystem.resource_control.time.monotonic", return_value=304.0):
+            result = resource_control.tick()
+    assert result["mode"] == "normal"
+    gate = json.loads((root / "state" / "workload-control.json").read_text(encoding="utf-8"))
+    assert gate["mode"] == "open"
+    assert gate["leases"][lease_live["lease_id"]]["state"] == "quiescent"
+    assert read_job(root, "task-live")["state"] == "queued"
+
+
+@with_root
+def test_reopen_cannot_clear_lifecycle_pause(root):
+    central_policy = {
+        "resource": {"poll_seconds": 0.75, "healthy_release_seconds": 2.0},
+        "lifecycle": {"reconciliation_deadline_seconds": 19.0},
+    }
+    state = {**normal_resource_state(), "mode": "pressure", "pressure_interrupted_jobs": []}
+    (root / "state").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "PAUSED").touch()
+    systemctl_calls = []
+    with patch("ecosystem.resource_control.resource_snapshot", return_value=healthy_snapshot()), \
+            patch("ecosystem.resource_control.load_state", return_value=state), \
+            patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(systemctl_calls)):
+        with patch("ecosystem.resource_control.time.monotonic", return_value=300.0):
+            resource_control.tick()
+        with patch("ecosystem.resource_control.time.monotonic", return_value=302.0):
+            result = resource_control.tick()
+    assert result["mode"] == "pressure"
+    assert result["pressure_reopen_deferred"]["reasons"] == ["lifecycle:paused"]
+    assert (root / "state" / "PAUSED").exists()
+    assert systemctl_calls == []
+    (root / "state" / "PAUSED").unlink()
+    with patch("ecosystem.resource_control.resource_snapshot", return_value=healthy_snapshot()), \
+            patch("ecosystem.resource_control.load_state", return_value=state), \
+            patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl(systemctl_calls)):
+        with patch("ecosystem.resource_control.time.monotonic", return_value=304.0):
+            result = resource_control.tick()
+    assert result["mode"] == "normal"
+
+
+@with_root
+def test_survivor_claim_cannot_replace_observed_health(root):
+    initialize_survivor_context(root)
+    state = transition_state(phase="active", sole_survivor_job="survivor-job")
+    resource_control.save_state(state)
+    write_running_job(root, "survivor-job", state="ready", role="sole_survivor")
+    with patch("ecosystem.resource_control.resource_snapshot",
+               return_value=pressure_snapshot()), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=unexpected_external_call):
+        with unittest.TestCase().assertRaisesRegex(
+                RuntimeError, "recovery health gate refused"):
+            resource_control.request_recovery("survivor-job")
+    stored = json.loads((root / "state" / "resource-control.json").read_text(encoding="utf-8"))
+    assert stored["mode"] == "emergency"
+    assert not (root / "state" / "workload-control.json").exists()
+
+
+@with_root
+def test_pending_context_continues_after_pressure(root):
+    central_policy = {
+        "resource": {"poll_seconds": 0.75, "healthy_release_seconds": 2.0},
+        "lifecycle": {"reconciliation_deadline_seconds": 19.0},
+    }
+    identity = dead_process_identity()
+    lease = acquire_registered_lease(root, "task-ctx", identity)
+    write_running_job(root, "task-ctx", lease_id=lease["lease_id"], identity=identity,
+                      opencode_session="ses_test_1",
+                      context_state="handoff_requested",
+                      context_generation=2)
+    with patch("ecosystem.resource_control._user_systemctl",
+               side_effect=in_memory_systemctl()), \
+            patch("ecosystem.resource_control.unload_dynamic_models", return_value=[]):
+        state = resource_control.enter_pressure(normal_resource_state(), pressure_snapshot())
+    assert state["mode"] == "pressure"
+    job = read_job(root, "task-ctx")
+    assert job["state"] == "interrupted"
+    assert job["opencode_session"] == "ses_test_1"
+    assert job["context_state"] == "handoff_requested"
+    assert job["context_generation"] == 2
+    assert job["resume_available"] is True
+    with patch("ecosystem.resource_control.resource_snapshot", return_value=healthy_snapshot()), \
+            patch.object(time_policy, "load", return_value=central_policy), \
+            patch("ecosystem.resource_control._user_systemctl",
+                  side_effect=in_memory_systemctl()), \
+            patch("ecosystem.resource_control.unload_dynamic_models", return_value=[]):
+        with patch("ecosystem.resource_control.time.monotonic", return_value=400.0):
+            resource_control.tick()
+        with patch("ecosystem.resource_control.time.monotonic", return_value=402.0):
+            result = resource_control.tick()
+    assert result["mode"] == "normal"
+    job = read_job(root, "task-ctx")
+    assert job["state"] == "ready"
+    assert job["opencode_session"] == "ses_test_1"
+    assert job["context_state"] == "handoff_requested"
+    assert job["context_generation"] == 2
+    assert job["resume_available"] is True
 
 
 def load_tests(_loader, _tests, _pattern):

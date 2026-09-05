@@ -15,13 +15,14 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ecosystem import cli, operator_session, time_policy
+from ecosystem import cli, inference_capacity, operator_session, time_policy, workload_control
 
 
 POLICY_PATH = cli.ROOT / "config/resource-policy.json"
 RUNNING_STATES = {"running"}
 HALTED_MODES = {"pressure", "emergency"}
 MODEL_CLIENT_UNITS = ("agent-ecosystem.service", "agent-control-worker.service")
+WORK_GATE_OWNER = {"owner_identity": "resource-control", "covered_paths": []}
 LIVE_MODEL_STATUSES = {"ready", "in_use", "busy"}
 SURVIVOR_ACTIVE_STATES = {"ready", "running"}
 SURVIVOR_INCOMPLETE_STATES = {"awaiting_verification"}
@@ -626,10 +627,245 @@ def _release_interrupted_jobs(identifiers: list[str], released_by: str) -> list[
     return released
 
 
+def _process_group_observed_gone(pgid: object) -> bool | None:
+    """Observe /proc directly: True when no live process belongs to the group,
+    False when a member is alive, None when the observation is unavailable.
+    The survival side never infers death from its own records."""
+    if type(pgid) is not int or pgid <= 0:
+        return None
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            raw = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        fields = raw.rsplit(")", 1)[1].split()
+        if len(fields) <= 2:
+            continue
+        try:
+            member_pgid = int(fields[2])
+        except ValueError:
+            continue
+        if member_pgid == pgid:
+            return False
+    return True
+
+
+def _root_release_request(lease_id: str, incident_id: str) -> dict:
+    """The root's honest release request. Attesting a sequence end is the
+    R4 backend observer's authority alone, so this record can only ever
+    yield release_requested, never released."""
+    return {
+        "schema_version": 1,
+        "binding": {},
+        "kind": "reconciled_absent",
+        "observer_identity": "resource-control",
+        "observer_generation": 1,
+        "observed_monotonic": time.monotonic(),
+        "clock_domain_id": "root",
+        "evidence_id": f"{incident_id}:{lease_id}",
+    }
+
+
+def _work_gate_observation(root: Path) -> tuple[str, dict | None]:
+    """Read-only observation of the workload gate's durable record:
+    ("absent", None) when no drain was ever recorded, ("open" | "draining" |
+    "smoke", document) when readable, ("unreadable", None) when the record
+    exists but is corrupt."""
+    path = root / "state" / "workload-control.json"
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return "absent", None
+    except OSError:
+        return "unreadable", None
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError:
+        return "unreadable", None
+    if (type(document) is not dict
+            or document.get("mode") not in {"open", "draining", "smoke"}
+            or type(document.get("leases")) is not dict):
+        return "unreadable", None
+    return document["mode"], document
+
+
+def _gate_lease(root: Path, lease_id: str) -> tuple[dict | None, str | None]:
+    mode, document = _work_gate_observation(root)
+    if mode == "absent":
+        return None, "work gate has no durable record"
+    if document is None:
+        return None, "work gate state unreadable"
+    lease = document["leases"].get(lease_id)
+    if type(lease) is not dict:
+        return None, f"unknown worker lease {lease_id}"
+    return lease, None
+
+
+def _reconcile_job_leases(job: object, identifier: str, incident_id: str,
+                          clock) -> dict:
+    record = {"at": cli.now(), "incident_id": incident_id,
+              "worker": None, "sequence": None, "quarantined_reason": None}
+    if type(job) is not dict:
+        record["quarantined_reason"] = "job record unreadable"
+        return record
+    worker_lease = job.get("worker_lease_id")
+    sequence_lease = job.get("inference_lease_id")
+    has_worker = type(worker_lease) is str and bool(worker_lease)
+    has_sequence = type(sequence_lease) is str and bool(sequence_lease)
+    if not has_worker and not has_sequence:
+        return record
+    gone = _process_group_observed_gone(job.get("executor_pgid"))
+    if gone is None:
+        record["quarantined_reason"] = (
+            f"process group observation unavailable (pgid={job.get('executor_pgid')!r})")
+        return record
+    if gone is not True:
+        record["quarantined_reason"] = "executor process group still alive"
+        return record
+    if has_sequence:
+        try:
+            released = inference_capacity.release_sequence(
+                cli.ROOT, sequence_lease,
+                _root_release_request(sequence_lease, incident_id), clock)
+        except ValueError as error:
+            record["quarantined_reason"] = f"sequence lease release refused: {error}"
+            return record
+        record["sequence"] = released.get("state")
+    if has_worker:
+        lease, error = _gate_lease(cli.ROOT, worker_lease)
+        if lease is None:
+            record["quarantined_reason"] = error
+            return record
+        record["worker"] = lease.get("state")
+        if lease["state"] == "quiescent":
+            return record
+        registered = lease.get("process")
+        pid = job.get("executor_pid")
+        ticks = job.get("executor_start_ticks")
+        if (registered != {"pid": pid, "process_start_ticks": ticks}
+                or type(pid) is not int or pid <= 0
+                or type(ticks) is not int or ticks < 0):
+            record["quarantined_reason"] = (
+                "worker lease process identity is not corroborated by the job record")
+            return record
+        try:
+            workload_control.release_worker(
+                cli.ROOT, worker_lease,
+                {"state": "preempted", "returncode": None}, clock)
+            workload_control.observe_workers(cli.ROOT, [{
+                "lease_id": worker_lease,
+                "pid": pid,
+                "process_start_ticks": ticks,
+                "process_group_alive": False,
+                "backend_request_active": False,
+                "inference_lease_active": (
+                    record["sequence"] is not None and record["sequence"] != "released"),
+                "checkpoint_observed": True,
+            }], clock)
+        except ValueError as error:
+            record["quarantined_reason"] = f"worker lease release refused: {error}"
+            return record
+        lease, _error = _gate_lease(cli.ROOT, worker_lease)
+        record["worker"] = lease.get("state") if lease is not None else None
+        if record["worker"] != "quiescent":
+            record["quarantined_reason"] = (
+                f"worker lease ended in {record['worker']!r}, not quiescent")
+    return record
+
+
+def _reconcile_interrupted_leases(identifiers: list[str], incident_id: str) -> dict:
+    """Reconcile the durable worker/sequence leases of interrupted jobs
+    against direct /proc observation. A lease is quiescent only when its
+    process group was observed gone and the terminal outcome was recorded;
+    everything else is quarantined and keeps admission closed."""
+    result = {"quiescent": [], "quarantined": []}
+    for identifier in identifiers:
+        path = cli.ROOT / "state/jobs" / f"{identifier}.json"
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            job = None
+        record = _reconcile_job_leases(job, identifier, incident_id, time.monotonic)
+        if record["quarantined_reason"] is None:
+            result["quiescent"].append(identifier)
+        else:
+            result["quarantined"].append(
+                {"job_id": identifier, "reason": record["quarantined_reason"]})
+        if type(job) is dict:
+            if job.get("lease_reconciliation") != record:
+                job["lease_reconciliation"] = record
+                try:
+                    cli.atomic_json(path, job)
+                except OSError:
+                    pass
+    return result
+
+
+def _reopen_restrictions(root: Path) -> list[str]:
+    """Independently observed restrictions that keep admission closed even
+    when resources are healthy. Reopen never clears any of them."""
+    reasons = []
+    if (root / "state" / "PAUSED").exists():
+        reasons.append("lifecycle:paused")
+    for session in operator_session.active_operator_sessions(root):
+        reasons.append(f"operator:{session.get('session_id', 'unknown')}")
+    return reasons
+
+
+def _reopen_work_gate(root: Path, clock) -> dict:
+    """Reopen the R1 gate after a resource-driven drain. The only drain-to-open
+    path is a passed smoke window; any lease or owner that cannot be proven
+    resolved keeps the gate closed and reports why."""
+    mode, gate = _work_gate_observation(root)
+    if mode in {"absent", "open"}:
+        return {"ok": True, "reasons": []}
+    if mode == "smoke":
+        return {"ok": False, "reasons": ["work gate smoke window is active"]}
+    owner = gate.get("owner")
+    if owner != WORK_GATE_OWNER:
+        identity = owner.get("owner_identity") if type(owner) is dict else owner
+        return {"ok": False, "reasons": [f"work gate is held by {identity!r}"]}
+    try:
+        admitted = workload_control.enter_smoke(root, WORK_GATE_OWNER, clock, [])
+    except ValueError as error:
+        return {"ok": False, "reasons": [f"work gate smoke admission refused: {error}"]}
+    if admitted.get("state") != "admitted":
+        reasons = admitted.get("reasons")
+        if type(reasons) is list and reasons:
+            return {"ok": False,
+                    "reasons": [f"work gate lease unresolved: {reason}"
+                                for reason in reasons]}
+        return {"ok": False, "reasons": ["work gate lease unresolved"]}
+    try:
+        opened = workload_control.end_smoke(
+            root, WORK_GATE_OWNER,
+            {"state": "passed", "reason": "resource drain reconciled"}, clock)
+    except ValueError as error:
+        return {"ok": False, "reasons": [f"work gate smoke end refused: {error}"]}
+    if opened.get("mode") != "open":
+        return {"ok": False, "reasons": [f"work gate ended in {opened.get('mode')!r}"]}
+    return {"ok": True, "reasons": []}
+
+
 def enter_pressure(state: dict, snapshot: dict) -> dict:
     incident_id = f"pressure-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}"
     state.update(mode="pressure", pressure_entered_at=cli.now(),
                  pressure_incident_id=incident_id)
+    try:
+        workload_control.begin_drain(cli.ROOT, WORK_GATE_OWNER, time.monotonic)
+    except ValueError as error:
+        state.update(pressure_error=f"work gate close failed: {error}",
+                     pressure_error_at=cli.now())
+        save_state(state)
+        cli.audit("resource.pressure_error", incident_id=incident_id,
+                  error=state["pressure_error"])
+        return state
     save_state(state)
     interrupted = checkpoint_running_jobs(incident_id, "resource pressure")
     stop = _stop_user_units(("agent-ecosystem.service",))
@@ -642,6 +878,8 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
         cli.audit("resource.pressure_error", incident_id=incident_id,
                   error=state["pressure_error"])
         return state
+    reconciliation = _reconcile_interrupted_leases(interrupted, incident_id)
+    state["pressure_lease_reconciliation"] = reconciliation
     unloads = unload_dynamic_models()
     preemptions = _preempt_leased_models_if_unprotected(unloads, incident_id)
     state.update(pressure_dynamic_unloads=unloads)
@@ -651,8 +889,8 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
     state.pop("pressure_error_at", None)
     save_state(state)
     cli.audit("resource.pressure_entered", resources=snapshot,
-              interrupted_jobs=interrupted, dynamic_unloads=unloads,
-              operator_preemptions=preemptions)
+              interrupted_jobs=interrupted, lease_reconciliation=reconciliation,
+              dynamic_unloads=unloads, operator_preemptions=preemptions)
     return state
 
 
@@ -1103,6 +1341,13 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
 
     if phase == "recorded":
         try:
+            workload_control.begin_drain(cli.ROOT, WORK_GATE_OWNER, time.monotonic)
+            state["emergency_work_gate"] = {
+                "mode": "draining", "owner": WORK_GATE_OWNER}
+        except ValueError as error:
+            state["emergency_work_gate"] = {
+                "mode": "conflict", "owner": None, "error": str(error)}
+        try:
             checkpoint_running_jobs(state["incident_id"])
             state["interrupted_jobs"] = _interrupted_job_ids(state)
             save_state(state)
@@ -1116,7 +1361,11 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
             return _record_emergency_error(
                 state, f"client interruption failed: {stopped.get('error', 'unverified stop')}"
             )
-        _update_incident(state, interrupted_jobs=state["interrupted_jobs"])
+        reconciliation = _reconcile_interrupted_leases(
+            state["interrupted_jobs"], state["incident_id"])
+        state["emergency_lease_reconciliation"] = reconciliation
+        _update_incident(state, interrupted_jobs=state["interrupted_jobs"],
+                         lease_reconciliation=reconciliation)
         _persist_emergency_phase(state, "clients_stopped")
         phase = "clients_stopped"
 
@@ -1307,6 +1556,23 @@ def tick() -> dict:
             state["healthy_since_monotonic"] = now_monotonic
         elif now_monotonic - float(first) >= time_policy.seconds(
                 time_policy.load(), "resource", "healthy_release_seconds"):
+            restrictions = _reopen_restrictions(cli.ROOT)
+            if restrictions:
+                state["pressure_reopen_deferred"] = {
+                    "reasons": restrictions, "at": cli.now()}
+                save_state(state)
+                return state
+            state.pop("pressure_reopen_deferred", None)
+            reconciliation = _reconcile_interrupted_leases(
+                state.get("pressure_interrupted_jobs", []),
+                state.get("pressure_incident_id") or "pressure")
+            state["pressure_lease_reconciliation"] = reconciliation
+            gate = _reopen_work_gate(cli.ROOT, time.monotonic)
+            if not gate["ok"]:
+                state["pressure_reopen_deferred"] = {
+                    "reasons": gate["reasons"], "at": cli.now()}
+                save_state(state)
+                return state
             started = _start_user_units(("agent-ecosystem.service",))
             state["pressure_client_start_result"] = started
             if not started.get("ok"):
@@ -1348,6 +1614,22 @@ def request_recovery(job_id: str) -> dict:
     if _threshold_state(snapshot) != "healthy":
         raise RuntimeError(f"recovery health gate refused: {json.dumps(snapshot, sort_keys=True)}")
     incident_id = state.get("incident_id")
+    restrictions = _reopen_restrictions(cli.ROOT)
+    if not restrictions:
+        reconciliation = _reconcile_interrupted_leases(
+            state.get("interrupted_jobs", []), incident_id or "emergency")
+        state["recovery_lease_reconciliation"] = reconciliation
+        gate = _reopen_work_gate(cli.ROOT, time.monotonic)
+        if not gate["ok"]:
+            restrictions = gate["reasons"]
+    if restrictions:
+        state.update(recovery_error=f"work gate reopen deferred: {restrictions}",
+                     recovery_error_at=cli.now())
+        save_state(state)
+        cli.audit("resource.recovery_deferred", incident_id=incident_id,
+                  survivor_job=job_id, reasons=restrictions)
+        return {"ok": False, "resumed_jobs": [], "resources": snapshot,
+                "executor_start": None}
     start = _start_user_units(("agent-ecosystem.service",))
     state["recovery_start_result"] = start
     if not start.get("ok"):
