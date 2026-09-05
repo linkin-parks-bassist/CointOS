@@ -217,8 +217,7 @@ asks active local jobs to wrap up. Codex waits for completion/checkpoint and obs
 that the process groups and inference requests have ended. A timeout names the
 blocker and defers smoke; it never authorizes running alongside an unknown worker.
 
-Local tasks target 2-5 minutes, hard run limit 300 seconds, wrap-up budget 30 seconds
-and termination grace 15 seconds. Split work at independently checkable outcomes.
+Local tasks are small and simple. Split work at independently checkable outcomes.
 Sol workers use `gpt-5.6-sol`, `reasoning_effort: medium`, with isolated context and
 15-25 minute task budgets. Hosted workers may continue read-only analysis during
 smoke; they may not mutate smoke-covered files/services or spawn local work. The

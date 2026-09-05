@@ -22,7 +22,7 @@
 - Unknown or stale safety evidence defers explicitly. Preserve the 32 GiB protected
   host reserve and 12 GiB load-transient reserve. The configured GTT capacity is the
   live measured 100 GiB pool; do not substitute the superseded 64 GiB TTM cap.
-- Local inference workers have no wall-time limit. Do not request wrap-up or termination merely because time elapsed. Interrupt a local run only when a GPU-involving smoke test is ready and competing for the GPU; then require a durable completion/checkpoint handoff and observed process/request exit before smoke. Resource guardians retain authority to stop a run to prevent OOM or loss of host responsiveness. The 300-second workload budget specified below governs managed CointOS task slicing after R5; it is not a coordinator-imposed limit on local implementation workers during bring-up.
+- Interrupt a local run only when a GPU-involving smoke test is ready and competing for the GPU; then require a durable completion/checkpoint handoff and observed process/request exit before smoke. Resource guardians retain authority to stop a run to prevent OOM or loss of host responsiveness. The execution budget specified below governs managed CointOS task slicing after R5; it is not a limit on local implementation workers during bring-up.
 - Sol implementation/review work uses `gpt-5.6-sol`, `reasoning_effort: medium`, isolated context, and one 15–25 minute bounded objective.
 - Hosted read-only analysis may continue during smoke. Every hosted writer touching smoke-covered files/services must finish and be observed before smoke.
 - The work gate may add restrictions but may not clear pressure, emergency, lifecycle, operator, or deployment pauses.
@@ -67,9 +67,9 @@ def release_worker(root: Path, lease_id: str, outcome: dict, clock) -> dict
 def admission_reasons(resource_state: dict, lifecycle_state: dict, work_state: dict) -> list[str]
 ```
 `request` carries supplied plain `job_id` and `agent_generation` without importing A1: S0's coordinator ledger supplies implementation-worker identity before A1 exists; A1 supplies later runtime-job identity. Process identity is separate. A local caller acquires `starting`, registers PID/start identity, then may request inference. Never-started ordinary runtime jobs are not B1 roster recipients; a starting implementation lease is valid. Release may leave the logical run continuing/paused; `dead_unreconciled` is never healthy.
-**Worker allocation:** Sol-medium owns the durable state/locking review (20 minutes). Local 2–5 minute workers may write isolated test cases after interfaces are fixed. The coordinator is the only writer to `workload_control.py` during integration.
+**Worker allocation:** Sol-medium owns the durable state/locking review (20 minutes). Local workers may write isolated test cases after interfaces are fixed. The coordinator is the only writer to `workload_control.py` during integration.
 
-- [ ] **Step 1: Add discoverable gate tests (local, 2–5 minutes each)**
+- [ ] **Step 1: Add discoverable gate tests (local, small and simple)**
 
 ```python
 import tempfile
@@ -119,7 +119,7 @@ def admission_reasons(resource_state, lifecycle_state, work_state):
     return reasons
 ```
 
-- [ ] **Step 4: Add process/hosted observation tests (local, 2–5 minutes each)**
+- [ ] **Step 4: Add process/hosted observation tests (local, small and simple)**
 
 Add `test_starting_lease_blocks_smoke_and_inference_until_pid_registration`, `test_pid_reuse_is_not_completion`, `test_checkpoint_without_process_and_request_exit_blocks_smoke`, `test_hosted_writer_blocks_covered_smoke`, and `test_failed_smoke_does_not_clear_pressure`. Pass explicit observations for handle or `(pid, start_ticks)`, process alive, inference requests active, writer and paths. Smoke requires checkpoint when requested plus observed process-group and inference-request exit.
 
@@ -191,7 +191,7 @@ Expected: FAIL because the new functions are absent.
 
 Validate registry types and provenance; do not infer parameters or capabilities from names. Filter by explicit task capabilities first. Among qualified safe models, prefer greatest verified `parameter_count`; use `model_bytes` only for the envelope. For each model, compute the largest backend-supported quantum no larger than its advertised maximum and current envelope. Record why every larger model/context was excluded. Missing parameter metadata cannot win the “largest” comparison and is reported, not guessed.
 
-- [ ] **Step 4: Add fresh-validation and reserve tests (local, 2–5 minutes each)**
+- [ ] **Step 4: Add fresh-validation and reserve tests (local, small and simple)**
 
 Add `test_parameter_count_and_model_bytes_are_distinct`, `test_non_candidate_context_quantum_is_allowed`, `test_total_context_is_divided_across_sequences`, `test_prompt_tool_output_and_handoff_are_reserved`, `test_loaded_model_rechecks_current_pressure`, `test_stale_inventory_defers`, and `test_validate_route_closes_route_load_race`. Build dictionaries inline as above; patch no live endpoints.
 
@@ -252,7 +252,7 @@ def load_tests(_loader, _tests, _pattern):
 
 Account resident model bytes once, active per-sequence KV/prompt/tool/output/handoff demand, load transient, host reserve, GTT boundary, and unknown facts. `realize_context_tokens` maps selected `context_tokens_per_sequence` to lease `context_tokens` and backend `ctx_size = context_tokens * parallel_sequences`, rejecting inconsistent totals. Validate Q1's accepted scheduling snapshot; compute trusted bounded priority. Under R1 lock order, keep front/work proxy identity distinct.
 
-- [ ] **Step 4: Add boundary tests and verify R3 (local, 2–5 minutes each)**
+- [ ] **Step 4: Add boundary tests and verify R3 (local, small and simple)**
 
 Add `test_realized_context_maps_per_sequence_to_backend_total`, `test_front_proxy_cannot_be_claimed_by_survivor_or_work`, `test_priority_bands_match_validated_policy`, `test_caller_priority_is_ignored`, `test_aging_cannot_cross_band`, `test_high_priority_arrival_preempts_work_lease`, and `test_release_requires_observed_sequence_end`. Run only `test_inference_capacity.py` here.
 
@@ -334,7 +334,7 @@ def serve_proxy(root, config, clock):
 
 Move identity, presentation, control, Telegram, routing, verification and OpenCode to `inference.request`. `credential_sink(secret: bytes) -> None` is called once. For OpenCode, `opencode_environment` writes anonymous `os.memfd_create` JSON containing proxy `baseURL` and bearer `apiKey`, returns `OPENCODE_CONFIG=/proc/self/fd/<n>` plus `pass_fds=(n,)`; parent closes after spawn. Other runners inherit a pipe FD and only its number in environment. Rotate each runner lease/resume, not logical agent generation. For SSE, write upstream status, `Content-Type: text/event-stream`, `Connection: close`, then use `select.select` and `HTTPResponse.read1(65536)`/flush without buffering. Cancellation, timeout or downstream close closes upstream; retain credential until request and run closure are observed, then revoke digest/FD. B2 uses the same boundary. Presentation is not ACK.
 
-- [ ] **Step 6: Add enforcement tests (local, 2–5 minutes each)**
+- [ ] **Step 6: Add enforcement tests (local, small and simple)**
 
 Add `test_body_limit_refuses_without_backend_call`, `test_released_or_mismatched_lease_never_calls_backend`, `test_unregistered_starting_lease_is_refused`, `test_opencode_memfd_is_inherited_and_secret_absent_from_environment`, `test_sse_chunks_forward_without_buffering`, `test_cancel_closes_upstream_before_revoke`, `test_ordinary_stream_does_not_block_coin_connection`, `test_guardian_allowlist_includes_proxy_without_gateway_dependency`, `test_messaging_uses_same_proxy_contract`, and `test_forwarded_result_is_not_ack`. Use fake sockets/streams and injected backend; no live calls.
 
@@ -392,7 +392,7 @@ Require A1-validated contracts at dispatch and account all six fields without re
 
 Replace fixed 1800 seconds with task budget. At 300 seconds request 30-second wrap-up, then SIGTERM and observe matching PID/start identity for 15 seconds before SIGKILL. Exhaustion first persists `checkpoint_required`; only `record_budget_handoff` may produce `partial_handoff_ready`, after verifying a nonempty durable artifact bound to job/generation. A timer never proves completion.
 
-- [ ] **Step 5: Add budget/fairness tests (local, 2–5 minutes each)**
+- [ ] **Step 5: Add budget/fairness tests (local, small and simple)**
 
 Add `test_missing_handoff_stays_checkpoint_required`, `test_verified_handoff_enters_partial_handoff_ready`, `test_approval_wait_does_not_consume_task_seconds`, `test_running_interval_consumes_task_seconds`, `test_pid_reuse_is_not_killed`, `test_scheduler_consumes_effective_priority`, `test_survivor_preempts_work_without_starving_coin`, and `test_short_jobs_rotate_without_starvation`.
 
@@ -445,7 +445,7 @@ def load_tests(_loader, _tests, _pattern):
 
 Implement `running -> handoff_requested -> handoff_durable -> continuation_ready`. Preserve `job_id` and `agent_generation` through context/model change, process restart and `paused_for_resources`; increment only context generation. A genuinely new A1 attempt increments agent generation. Reserve destination prompt/output/tool/handoff before handoff; archive evidence by reference. Missing semantic handoff remains visibly continuable.
 
-- [ ] **Step 4: Add arbitrary-window/crash tests (local, 2–5 minutes each)**
+- [ ] **Step 4: Add arbitrary-window/crash tests (local, small and simple)**
 
 Add `test_rollover_precedes_backend_limit`, `test_handoff_fits_destination_prompt_budget`, `test_model_switch_preserves_agent_generation`, `test_process_restart_preserves_agent_generation`, `test_new_attempt_increments_agent_generation`, `test_paused_for_resources_remains_addressable_without_lease`, `test_missing_handoff_is_visible_and_continues`, and `test_context_overflow_is_never_terminal`.
 
@@ -502,7 +502,7 @@ Close R1 first, checkpoint R5/R6 state, stop clients, observe matching process/s
 
 An increment in boot-bound `oom_kill` enters emergency immediately, preserves Coin's physical front slot, preempts/reconciles replaceable running leases, and admits exactly the recorded highest-priority Sole Survivor. Pre-OOM pressure never fabricates OOM. Survivor assertions cannot reopen; deterministic host/GTT/swap/PSI, Coin contact, process, and lease observations pass independently. Root recovery never depends on R4.
 
-- [ ] **Step 5: Add recovery tests (local, 2–5 minutes each)**
+- [ ] **Step 5: Add recovery tests (local, small and simple)**
 
 Add `test_pressure_is_not_oom`, `test_one_new_oom_latches_exactly_one_survivor`, `test_survivor_preempts_work_but_not_coin_front`, `test_recovery_reconciles_leases_before_reopen`, `test_reopen_cannot_clear_lifecycle_pause`, `test_survivor_claim_cannot_replace_observed_health`, and `test_pending_context_continues_after_pressure`.
 

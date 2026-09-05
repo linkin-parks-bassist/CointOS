@@ -23,7 +23,7 @@
 
 ## H1 — Small deterministic health catalogue and probes
 
-**Owner/budget:** Sol medium, 20 minutes. Local child: implement one specified check/test, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local child: implement one specified check/test.
 **Depends on:** R1, R7 and C3; does not block C5 early contact acceptance.
 **Files:** create `config/subsystems.json`, `ecosystem/health_checks.py`, `scripts/health_check`,
 `services/systemd/agent-health.service`, `tests/test_mvp_health_checks.py`; modify `config/time.cfg`
@@ -82,7 +82,7 @@ stop later probes; no model call occurs. Stop after this catalogue works, not af
 
 ## H2 — One incident owner and independent hard supervision
 
-**Owner/budget:** Sol medium, 20 minutes. Local child: pure reducer cases, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local child: pure reducer cases.
 **Depends on:** H1, existing survival guardian.
 **Files:** create `survival/health.py`, `tests/test_mvp_incidents.py`; modify
 `survival/guardian.py`, `survival/system_control.py` only at the incident dispatch/reporting adapter.
@@ -129,7 +129,7 @@ if event["kind"] == "repair_finished":
 ## H3 — Bounded recovery outside the failed ordinary scheduler
 
 **Owner/budget:** Sol medium, 25 minutes; split adapter, reducer tests and output validation among
-local <=300-second tasks only after the interface is fixed.
+small, simple local tasks only after the interface is fixed.
 **Depends on:** H2, R2-R7, C3.
 **Files:** create `ecosystem/repair_runner.py`, `scripts/incident_repair`,
 `services/systemd/agent-incident-repair@.service`, `tests/test_mvp_repair.py`;
@@ -229,7 +229,7 @@ after fresh evidence; failed repair is visible and bounded. A defect returns to 
 
 ## H5 — Small and large health inspectors with enforced priority
 
-**Owner/budget:** Sol medium, 15 minutes. Local child: role description/profile tests, <=300 seconds.
+**Owner/budget:** Sol medium, 15 minutes. Local child: role description/profile tests.
 **Depends on:** A3, H4, R3-R4. H1-H4 do not depend on this task.
 **Files:** create `roles/health_inspector.md`, `ecosystem/health_inspection.py`,
 `tests/test_mvp_health_inspection.py`; modify `config/autonomy.json`, `config/scheduling.json`.

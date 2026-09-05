@@ -56,3 +56,35 @@ OOM evidence.
   rejected parallel semantics at their cutovers.
 - Future agents update this note with compact accepted milestones and current
   boundaries; detailed task churn stays in the ignored SDD ledger.
+
+## 2026-09-05 late-day commits, noted at David's request
+
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF):
+
+- `32f1c69` test: supply bounded executor fixture contract (`tests/test_executor.py`)
+- `a8d6b3c` test: align control turns with trusted task intake (`tests/test_control_turns.py`)
+- `b0d4de7` docs: distinguish user-driven agent leases (topic HEAD; tree clean)
+  - R8 operator leases now explicitly cover David's independently launched
+    agent sessions, e.g. `lemonade opencode launch`, not only bare inference
+    clients.
+  - User-driven sessions remain outside CointOS-managed budgets, generations,
+    dispatch ownership and handoff state; CointOS observes their resource
+    ownership without taking over their task lifecycle. Coin-only preemption
+    and survival termination rules are unchanged.
+- David's direction (2026-09-05): where the plans name GPT-5.6 Sol worker
+  spawning, that is not appropriate for a local agent; a local dispatcher uses
+  local agents only. The index global constraints, the swarm worker-selection
+  rules and decision 0007 now make worker kind follow the dispatcher: Sol rows
+  apply only under a hosted coordinator, and owner/budget lines naming Sol are
+  assigned to the largest qualified local model/context under local dispatch.
+- David's direction (2026-09-05): the 2-5 minute / hard 300-second framing for
+  local build workers was a misread — it was "small, simple tasks that wrap up
+  quickly so others can slot in and the big model can routinely check the work",
+  not a ticking clock. All externally imposed time limits on build-swarm
+  subagents (hard 300s run limits, "2-5 minute" chunk framing, and the negative
+  "no wall-time limit" statements) are removed from the index, swarm contract,
+  resources, contact, messaging, autonomy, health and approval-release plans and
+  the spec. "Small and simple" is the standing wording for local build chunks.
+  Unaffected: the scheduler/executor budget machinery (R5 budgets, H3 repair
+  dispatch budgets, spec budget fields) governs agents managed by the running
+  system, and single-point step estimates in plan steps were left as-is.

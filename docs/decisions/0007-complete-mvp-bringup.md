@@ -24,7 +24,9 @@ New roles are Markdown plus configuration, not scheduler switches. All model
 requests go through shared measured admission. Communication uses durable mailboxes
 at asynchronous runner boundaries, not a generic actor framework between functions.
 
-Workers are GPT-5.6 Sol medium plus short bounded local jobs. Before smoke, Codex
+Under a hosted coordinator, workers are GPT-5.6 Sol medium plus short bounded
+local jobs; a local agent dispatches local workers only and never spawns
+hosted-model workers (David's direction, 2026-09-05). Before smoke, Codex
 closes admission and waits for local completion/checkpoint AND process/request
 exit. Candidate code cannot be live imported before verified, digest-bound approval
 and fixed recoverable activation. Protected self-update requires separate contact

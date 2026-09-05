@@ -18,7 +18,7 @@
 - Root-written `outbox/critical` remains separately owned; ordinary code cannot create, rename, mutate, or acknowledge it.
 - Persist send intent before Telegram; delivery uncertainty is terminal for automatic replay.
 - R1 owns drain/smoke exclusion. R7 pressure, emergency, lifecycle, and operator pauses remain stronger.
-- Local microtasks take 2-5 minutes. Sol work uses `gpt-5.6-sol`, medium reasoning, isolated context, and 15-25 minute task budgets.
+- Local microtasks are small and simple. Sol work uses `gpt-5.6-sol`, medium reasoning, isolated context, and 15-25 minute task budgets.
 - Function tests end in `load_tests` with `unittest.FunctionTestCase`; run via `python3 -m unittest discover -s tests -p 'test_name.py' -v`.
 - Tests never use live Telegram, models, systemd, accounts, credentials, installation, or runtime state.
 - `scripts/install-survival-plane --enable` currently fails to stop the old poller; it is not a cutover transaction.

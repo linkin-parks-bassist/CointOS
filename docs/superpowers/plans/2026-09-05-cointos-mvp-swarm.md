@@ -2,9 +2,9 @@
 
 > **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans. The coordinator assigns one task or named subtask; do not execute the entire suite from a worker prompt.
 
-**Goal:** Make the MVP tasks safe to distribute to Sol-medium and local workers while preserving smoke-test control.
+**Goal:** Make the MVP tasks safe to distribute to local workers, and to Sol-medium workers under a hosted coordinator, while preserving smoke-test control.
 
-**Architecture:** Astra owns design, task admission, integration and final acceptance. Sol workers own bounded implementation slices; local workers perform short concrete pieces in isolated scopes. Shared interfaces are fixed in the spec and owning task before parallel work begins.
+**Architecture:** Astra owns design, task admission, integration and final acceptance. Sol workers own bounded implementation slices; local workers perform short concrete pieces in isolated scopes. Worker kind follows the dispatcher: a hosted coordinator may run Sol workers; a local coordinator dispatches local workers only and never spawns or enqueues hosted-model workers. Shared interfaces are fixed in the spec and owning task before parallel work begins.
 
 **Tech Stack:** Codex collaboration tools, Git worktrees, existing local OpenCode/Lemonade tooling, plain durable handoff records and R1 worker leases.
 
@@ -55,7 +55,7 @@ discarded dirty edit. Then dispatch only dependency-ready tasks from the index.
 
 ## Q1 — Standard parsing, owned validation and safe configuration reload
 
-**Owner/budget:** Sol medium, 20 minutes. Local child: JSON reload or invalid-value tests, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local child: JSON reload or invalid-value tests.
 **Depends on:** S0. Other tasks add only the semantic validator for their own family.
 **Files:** create `survival/configuration.py`, `tests/test_mvp_configuration.py`;
 modify `survival/time_policy.py`, `ecosystem/time_policy.py`, `config/time.cfg` only to
@@ -111,13 +111,19 @@ invalid edits leave the last accepted whole policy active and visibly report the
 | --- | --- | --- |
 | Ambiguous architecture, cross-plan decisions, activation and smoke ownership | Astra/coordinator | One bounded decision or smoke scenario |
 | State integration, privilege-facing glue, concrete module ownership | GPT-5.6 Sol, medium | 15-25 minutes; one task, then handoff |
-| Parser/reducer case, one role description, test fixture, exact adapter change, static extraction | Largest safely feasible qualified local model/context | 2-5 minutes, hard 300-second run |
+| Parser/reducer case, one role description, test fixture, exact adapter change, static extraction | Largest safely feasible qualified local model/context | small, simple; one independently checkable outcome |
 | Independent review | Different worker from implementer, usually Sol medium | 5-10 minutes, assigned invariant/diff only |
+
+The Sol rows apply only under a hosted coordinator. A local coordinator assigns
+the same work to the largest safely feasible qualified local model/context, and
+every owner/budget line in the owning plans that names Sol is read that way under
+local dispatch.
 
 Local workers are the default for plentiful concrete jobs. The coordinator records
 why a chunk needs hosted judgment; do not leave all implementation to hosted models.
-Begin with one local inference worker at a time and at most two Sol writers with
-disjoint scopes. These are initial resource policy, not hard-coded population limits.
+Begin with one local inference worker at a time; a hosted coordinator may add at
+most two Sol writers with disjoint scopes. These are initial resource policy, not
+hard-coded population limits.
 
 Choose the largest task-qualified local model fitting the fresh envelope, then the
 largest safe context for it, including load and handoff reserves. Verify metadata and
@@ -129,10 +135,13 @@ did not establish that it is the maximum safe future choice.
 Each Sol task has local substeps: after fixing the interface, offload independent
 fixture/reducer/parser/role work. Local outputs land in separate patches/worktrees;
 one integrator owns shared files. Local workers never independently select broader
-files or create a recursive swarm. If a 300-second chunk cannot yield a useful
+files or create a recursive swarm. If a chunk cannot yield a useful
 artifact, split at a smaller verified boundary before admission.
 
 ## Exact hosted packet template
+
+Only a hosted coordinator issues this packet. A local coordinator dispatches local
+packets only; it never issues a hosted packet or spawns a hosted-model worker.
 
 Use the actual available collaboration tool; this is the requested model/effort,
 not a recommendation to substitute a different model:
@@ -164,7 +173,7 @@ contract: exact consuming/producing signatures and concrete examples
 deliverable: one patch, test result, role file or evidence extraction
 acceptance: exact bounded commands/assertions
 model_lease: selected model, backend, per-sequence context, output reserve
-budget: run 300s; wrap-up 30s; terminate grace 15s; explicit item/output limits
+budget: explicit item/output limits
 stop: acceptance reached, budget reached, drain requested, or named blocker
 handoff: changed paths, evidence, partial result, next step; no broad rereading
 authority: no new model loads, service changes, root, publication or other projects
@@ -216,7 +225,7 @@ boundary has a concrete failing example in its task; add the named real failure
 cases, not tests mirroring incidental implementation. Run existing affected modules
 as well. An offline integration checkpoint runs the combined route before a live
 scenario; the full suite runs once for an integrated milestone, not after every
-two-minute local patch. Repeat only for new changes/failures/relevant uncertainty.
+local patch. Repeat only for new changes/failures/relevant uncertainty.
 
 Reviewer checks the assigned invariant, exact diff, tests and contract. One bounded
 independent review per meaningful task is sufficient; substeps share that gate.

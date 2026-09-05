@@ -18,7 +18,7 @@
 - Bounds for payload bytes, publish fan-out, per-run pending count, and retention are validated data in `config/messaging.json`, not prompt instructions.
 - Do not store Telegram bodies, credentials, or professional/customer content in Git. Runtime envelopes live under ignored state.
 - R4 proxy/runner injection occurs at the earliest safe boundary. If the current OpenCode/backend request cannot be interrupted, state remains `queued`, never falsely delivered; urgent authorized control uses bounded cancellation/checkpoint policy.
-- Local tasks use the largest task-qualified model and context that fresh R2/R3 admission allows, with output/handoff reserve. Local chunks are 2-5 minutes, hard 300 seconds; Sol work is medium reasoning, isolated, 15-25 minutes.
+- Local tasks use the largest task-qualified model and context that fresh R2/R3 admission allows, with output/handoff reserve. Local chunks are small and simple; Sol work is medium reasoning, isolated, 15-25 minutes.
 - Before any live smoke, R1 closes admission, asks local jobs to finish/checkpoint, and Codex waits for process/request/lease completion. C5 early contact does not depend on this plan; B4 must pass before final A5 complete-MVP acceptance.
 - Tests use temporary roots and injected adapters only; no live inference, Telegram, systemd, services, credentials, or runtime state.
 - New tests use the swarm `load_tests`/`FunctionTestCase` collector and `python3 -m unittest discover`.
@@ -31,7 +31,7 @@
 - B1 depends on A1 and R1. B2 depends on B1 and R4. B3 depends on B1-B2 and R1/R5/R6. B4 depends on B1-B3 and C5; A5 depends on B4, while C5 does not depend on messaging.
 ---
 ### Task B1: Durable envelopes, address resolution, and per-recipient delivery
-**Owner/budget:** Sol medium, 20 minutes. Local workers may implement one validator/reducer test, <=300 seconds, after interfaces are fixed.
+**Owner/budget:** Sol medium, 20 minutes. Local workers may implement one validator/reducer test after interfaces are fixed.
 **Files:**
 - Create: `ecosystem/live_roster.py`, `ecosystem/messaging.py`, `config/messaging.json`
 - Create: `tests/test_mvp_live_roster.py`, `tests/test_mvp_messaging.py`
@@ -96,7 +96,7 @@ git diff --cached --check && git commit -m "Add durable live message envelopes"
 ```
 **Acceptance/stop:** Every publish has one immutable recipient snapshot and one state per recipient; roster comes only from job+lease truth. Stop if R1 lacks generation/live-owner facts—fix that contract, not a shadow registry.
 ### Task B2: Live runner, inference-proxy, and tool boundary adapters
-**Owner/budget:** Sol medium, 20 minutes. Local workers may implement one fake-boundary test or exact tool schema, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local workers may implement one fake-boundary test or exact tool schema.
 **Files:**
 - Create: `ecosystem/message_adapter.py`, `ecosystem/message_tools.py`
 - Create: `tests/test_mvp_message_adapter.py`, `tests/test_mvp_message_tools.py`
@@ -155,7 +155,7 @@ git diff --cached --check && git commit -m "Inject messages at live runner bound
 ```
 **Acceptance/stop:** A live run is presented a message at the earliest safe boundary and explicitly acknowledges observation; presentation alone is not ACK. Stop if an adapter exposes no boundary—record queued limitation and add controlled B3 cancellation rather than lie.
 ### Task B3: Status, wrap-up, cancel, handoff, and resource integration
-**Owner/budget:** Sol medium, 25 minutes. Split pure authority/reducer tests from runner integration; local chunks <=300 seconds.
+**Owner/budget:** Sol medium, 25 minutes. Split pure authority/reducer tests from runner integration; local chunks are small and simple.
 **Files:**
 - Create: `ecosystem/message_control.py`, `tests/test_mvp_message_control.py`
 - Modify: `ecosystem/workload_control.py`, `ecosystem/execution_budget.py`, `ecosystem/continuation.py` at their owning control boundaries.
@@ -238,7 +238,7 @@ def load_tests(loader, tests, pattern):
 ```
 `messaging_flow.run_offline` is a test-support function in `tests/integration/messaging_flow.py`; add that file to B4 ownership. It exchanges direct information/handoff, role/global snapshots, C3 Coin intent, status, authorized wrap-up/cancel, completed-before-observation, and the shown context transition.
 - [ ] Run `python3 -m unittest discover -s tests/integration -p 'test_mvp_messaging_flow.py' -v`. Then run affected B1-B3 modules separately and assert positive test counts. Expected: all pass offline; no network/model/systemd calls.
-- [ ] Acquire R1 smoke fence. Codex announces scope, stops new admission, asks every local job to finish its 2-5 minute chunk, waits for process groups/R4 requests/leases, and waits for hosted writers touching smoke files. Unknown owner blocks smoke. Preserve Coin reserve and resource/lifecycle/operator restrictions.
+- [ ] Acquire R1 smoke fence. Codex announces scope, stops new admission, asks every local job to finish its current chunk, waits for process groups/R4 requests/leases, and waits for hosted writers touching smoke files. Unknown owner blocks smoke. Preserve Coin reserve and resource/lifecycle/operator restrictions.
 - [ ] Admit two short test-owned logical runs using the largest qualified model/context that fresh R2/R3 evidence permits, including output/handoff reserve. They may time-share the initial single admitted work-model slot; simultaneous logical liveness does not require a second big inference process. Exercise direct, role-local, global, and Coin addresses during inference and tool use; observe explicit ACK after presentation, not publication or injection.
 - [ ] Send authorized `request_status`, then `wrap_up` to one run and `cancel` to the other. Observe bounded status, R6 handoff/checkpoint, R5 stop outcome, terminal lease/process state, and no silent recipient reassignment. If mid-generation interruption is unsupported, record queued delay and demonstrate the controlled authorized cancellation boundary truthfully.
 - [ ] Continue one logical run through a smaller safe context allocation and verify the same task/generation address receives pending mail exactly once. Confirm Coin remains responsive, no unmanaged inference, no OOM increment, bounds honored, and final health known; release only smoke fence.

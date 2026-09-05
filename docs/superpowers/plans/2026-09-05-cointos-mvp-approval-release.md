@@ -22,7 +22,7 @@
 
 ## P1 — Isolated candidates and exact verification evidence
 
-**Owner/budget:** Sol medium, 20 minutes. Local child: digest validation or a manifest test, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local child: digest validation or a manifest test.
 **Depends on:** A1, R1. Runs before A4; does not depend on contribution processing.
 **Files:** create `ecosystem/candidates.py`, `tests/test_mvp_candidates.py`; modify
 `ecosystem/executor.py`, `ecosystem/verification.py`, `config/workspaces.json`.
@@ -82,7 +82,7 @@ verified = (verdict.get("accepted") is True
 
 ## P2 — Authenticated, durable approval through Coin
 
-**Owner/budget:** Sol medium, 20 minutes. Local child: parser/replay tests, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local child: parser/replay tests.
 **Depends on:** P1, C3; uses C3 gateway egress and authenticated accepted-update identity.
 **Files:** create `survival/approvals.py`, `ecosystem/approval_requests.py`,
 `tests/test_mvp_approvals.py`; modify `survival/gateway.py`, installed approval spool permissions,

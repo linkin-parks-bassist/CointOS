@@ -17,12 +17,12 @@
 - Add roles without scheduler/executor source edits. Role names never grant authority.
 - Initial ambient scope is personal CointOS; exclude credentials, private conversation bodies and other projects.
 - Candidate writes occur in isolated workspaces; activation requires Coin approval under P1-P4.
-- Local work is <=300 seconds per dispatch; no autonomous recursion or queue growth outside shared budgets.
+- Local work is one small, simple task per dispatch; no autonomous recursion or queue growth outside shared budgets.
 - Use the function-test collector from the swarm contract; no classes or new dependencies.
 
 ## A1 — Explicit task contract and extensible role contexts
 
-**Owner/budget:** Sol medium, 20 minutes. Local jobs: one role file or one specified validator/test, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local jobs: one role file or one specified validator/test.
 **Depends on:** R1. R5 consumes this task's budget validator; do not create a reverse dependency.
 **Files:** create `ecosystem/task_contracts.py`, `roles/janitor.md`, `roles/gardener.md`,
 `roles/documenter.md`, `roles/innovator.md`, `roles/speculator.md`, `tests/test_mvp_task_contracts.py`;
@@ -91,7 +91,7 @@ contract nor widens permissions; child contract cannot outgrow its parent.
 
 ## A2 — Bounded environmental inspection with evidence references
 
-**Owner/budget:** Sol medium, 15 minutes. Local child: read pagination/check tests, <=300 seconds.
+**Owner/budget:** Sol medium, 15 minutes. Local child: read pagination/check tests.
 **Depends on:** A1, R5.
 **Files:** create `ecosystem/evidence.py`, `tests/test_mvp_evidence.py`; modify
 the executor's discovery-tool adapter in `ecosystem/executor.py` and `roles/_base.md`.
@@ -143,7 +143,7 @@ produces a partial contribution and cannot expand into a repository-wide audit.
 
 ## A3 — Scoped spontaneous scheduling and useful GPU work
 
-**Owner/budget:** Sol medium, 20 minutes. Local children: selector test cases and config entries, <=300 seconds each.
+**Owner/budget:** Sol medium, 20 minutes. Local children: selector test cases and config entries.
 **Depends on:** A1-A2, R1-R7, H1.
 **Files:** create `ecosystem/autonomy.py`, `config/autonomy.json`, `scripts/autonomy_tick`,
 `services/systemd/agent-autonomy.service`, `tests/test_mvp_autonomy.py`;
@@ -192,7 +192,7 @@ duplicate/pause/resource exclusions hold. Live activation waits for M1.
 
 ## A4 — Meaningful contributions, follow-ups and independent completion
 
-**Owner/budget:** Sol medium, 20 minutes. Local child: one terminal-result validator/test, <=300 seconds.
+**Owner/budget:** Sol medium, 20 minutes. Local child: one terminal-result validator/test.
 **Depends on:** A1-A3, existing verification, P1 candidate isolation.
 **Files:** create `ecosystem/contributions.py`, `tests/test_mvp_contributions.py`;
 modify `ecosystem/verification.py`, `ecosystem/cli.py`, `ecosystem/executor.py` at result boundaries.
