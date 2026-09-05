@@ -62,6 +62,7 @@
     "lease_seconds": 300,
     "release_observer_identity": "observer:inference-backend",
     "release_observation_maximum_age_seconds": 5,
+    "clock_domain_id": "host-monotonic:boot-one",
     "non_kv_bytes_per_token": 4
   }
 }
