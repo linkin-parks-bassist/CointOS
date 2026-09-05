@@ -1,6 +1,31 @@
 # Control-plane presence and live agent messaging
 
-Status: high-priority design/implementation backlog; not yet implemented.
+Status: fast-response slice implemented on `fix/snappy-initial-response` and awaiting
+live deployment verification; introductions, stranger names, and the general live
+message bus remain partially or wholly pending.
+
+## Deferred control-plane restoration
+
+David clarified on 2026-09-04 that model choice is not the immediate concern. Keep
+the small always-available front, provided it can immediately escalate anything it
+cannot handle. Restore Cointelprofessional's established identity and manner from
+Git history and these maintained notes: it is a trusted technical collaborator and
+local control plane, never a generic customer-service chatbot. The control plane
+should ultimately have broad access constrained by explicit policy, rather than a
+small artificial tool catalogue which makes it deny awareness of its own machine,
+files, skills, or ecosystem. Integrate that work after the canonical survival plane;
+design the broad global model-choice system separately rather than coupling this
+behavior restoration to one preferred model.
+
+The 2026-09-04 fast/deep split regression is reproducible in the private Telegram
+trace: the 4B front fabricated completed work and denied ecosystem capabilities,
+while the deep controller exposed only narrow status/dispatch tools and appended a
+generic opt-in question. A bounded interim change injects the durable workspace and
+control-plane instructions into the fast prompt and strips a common “Would you like
+me…” tail, but direct probes showed prompt injection alone does not restore truthful
+capability awareness. Treat that interim change as partial, not acceptance.
+
+— Codex root agent, 2026-09-04
 
 ## Natural agent introductions
 
@@ -34,6 +59,26 @@ five-minute disaster fallback when the generated path has genuinely failed.
 
 Measure time-to-first-generated-response separately from time-to-completed-work and
 preserve one reserved control-plane request slot so worker load cannot starve it.
+
+Implementation note, 2026-09-04: Telegram updates now become versioned durable turns
+before inference. Resident GLM produces the bounded first response; up to two Qwen
+deep-control processes claim turns outside polling and finish through typed publish-
+or-silent tools; result presentation is also a separate service. Offline probes found
+and corrected a GLM hallucination of Wren's completion time. Measured GLM response
+latency after prompt correction was 0.25–0.58 seconds on three representative turns;
+Qwen's deep silent decision took 18.0 seconds and an inspect-plus-answer turn took
+12.2 seconds without blocking intake. See ADR 0005 and the control-flow tests. Live
+Telegram deployment remains the acceptance gate. Two attempted independent local
+reviews were not counted as verification: Sieve (Qwen Verifier) and Ternary (GLM
+Verifier) both hit their inference timeouts without verdicts. A subsequent direct
+state-machine review added boot/process identities, a ten-minute whole-turn deadline,
+and idempotent replay for task amendments as well as creation.
+
+After service deployment, a contention probe ran while Coder-30B was already serving
+an ecosystem agent and Qwen was simultaneously making a deep terminal decision. GLM
+returned the truthful first response in 2.15 seconds; Qwen finished silently in 6.15
+seconds. This demonstrates model/process separation under representative load, not
+yet an end-to-end Telegram delivery measurement.
 
 ## Significantly stranger generated names
 
@@ -86,6 +131,13 @@ and must not silently clone work or create reply storms.
 The implementation must not depend on OpenCode, Telegram, Lemonade, systemd, or one
 particular model server. Those are adapters around the shared mailbox and lifecycle
 representation. Do not fake live messaging by mutating the original prompt.
+
+Implementation status, 2026-09-04 11:50 AEST: this bus is still absent. The live
+executor time-shares one OpenCode run at a time; queued agents are not live peers and
+cannot see or address one another. A fixed naming fallback also produced multiple
+historical agents called `Nameless Dave`; that fallback has been removed. Failed
+model naming now yields a unique, machine-honest role identity such as
+`steward-a13f09`, never a shared fictional persona.
 
 Safe shutdown should use this channel first: pause intake, send `wrap_up` to each
 live agent, wait a bounded interval for acknowledgment and a durable checkpoint,

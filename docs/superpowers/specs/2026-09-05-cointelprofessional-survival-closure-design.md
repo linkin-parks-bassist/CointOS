@@ -1,7 +1,10 @@
 # Cointelprofessional survival-plane closure
 
-Status: approved in conversation on 2026-09-05; written specification awaiting
-David's review.
+Status: historical closure design, previously approved in conversation on 2026-09-05.
+The [complete MVP proposal](2026-09-05-cointos-mvp-design.md) supersedes its
+closure-before-online delivery gate for David's review. Remaining obligations map
+to C4-C5, H2-H3 and P3-P4 in the [MVP index](../plans/2026-09-05-cointos-mvp-index.md);
+additional adversarial cases are bounded hardening work, not implicit bootstrap gates.
 
 Provenance: personal orchestration infrastructure. This work does not authorize
 professional or customer material to cross into Telegram, prompts, tests, or

@@ -1,6 +1,42 @@
 # Current status
 
+Implementation update, 2026-09-05 (Astra): David approved the [complete MVP bring-up
+suite](superpowers/plans/2026-09-05-cointos-mvp-index.md) for implementation and
+activation. S0 is preserving the exact dirty planning/source snapshot before the
+first worker writes code. No deployment or runtime behavior has changed yet. The
+dated implementation observations below are historical, not live telemetry.
+
 Updated: 2026-09-04 (Australia/Sydney)
+
+## Active CointOS reliability build
+
+The project is now named **CointOS**. The checkout remains temporarily at
+`/home/david/agent-ecosystem` because the currently live services resolve that
+path. Physical relocation is gated on installation of the root-owned permanent
+gateway so the rename cannot take Cointelprofessional/CoinToss offline.
+
+The approved reliability suite contains 25 tasks across five plans. Plan 1 is
+complete. Plan 2 Task 1 is complete and independently reviewed: exact `RESTART` and
+`RESET` recognition, typed records, strict JSON, replay identity, and crash-safe
+publication are committed through `5c54511`; focused tests passed 18/18 and the full
+suite passed 143/143. Plan 2 Task 2, the pure restart/reset lifecycle reducer, is at
+commit `c34f4a4`; focused tests passed 10/10 and the full suite passed 153/153, with
+independent review in progress.
+
+Fast-track order: finish and review the Plan 2 reducer, gateway, guardian, and
+root-owned packaging; install and smoke-test the model-independent permanent
+contact path; then safely swap out the temporary 4B model and bring Halo online for
+concrete implementation work. Hosted-model capacity is reserved primarily for
+architecture, decomposition, security-sensitive review, and escalation. A bounded
+follow-up will project approved plan tasks into dependency-aware, idempotent jobs so
+local citizens can continuously discover, claim, test, review, and hand off loose
+ends without gaining broader authority.
+
+The existing emergency latch still admits only the failed sole-survivor identity.
+Halo was not loaded yet because the resource admission calculation required 56.8
+GiB of bounded GTT headroom while 56.6 GiB was available alongside the live 4B
+contact model. A direct 4B attempt at the reducer made no durable progress and was
+terminated cleanly after repeated context compaction; it left no files or commit.
 
 ## Implemented
 

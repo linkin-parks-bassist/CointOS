@@ -1,7 +1,10 @@
 # Cointelprofessional survival control and subsystem health
 
-Status: approved in conversation on 2026-09-04; written specification awaiting
-David's review.
+Status: historical design, previously approved in conversation on 2026-09-04.
+The [complete MVP proposal](2026-09-05-cointos-mvp-design.md) now replaces its
+decomposition, priority details and delivery sequence for David's review. Preserve
+still-valid protocol/evidence obligations; use the [MVP index](../plans/2026-09-05-cointos-mvp-index.md)
+for proposed implementation tasks, not the superseded plan sequence below.
 
 Provenance: personal orchestration infrastructure. It may coordinate professional
 work, but this design does not authorize copying professional or customer material
