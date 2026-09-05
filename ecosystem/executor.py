@@ -7,6 +7,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -15,6 +16,208 @@ from ecosystem.inference_proxy import issue_proxy_credential, opencode_environme
 from ecosystem.models import realize, route, snapshot
 from ecosystem.scheduler import choose, policy as scheduling_policy, priority
 from ecosystem.resource_control import job_admitted_in_current_mode, mode as resource_mode, opencode_session_id
+
+
+_GATED_EXEC_WRAPPER = r"""
+import os
+import sys
+
+gate_fd = int(sys.argv[1])
+child_argv = sys.argv[2:]
+try:
+    release = os.read(gate_fd, 1)
+finally:
+    os.close(gate_fd)
+if release != b"\x01":
+    os._exit(125)
+os.execvpe(child_argv[0], child_argv, os.environ)
+"""
+
+
+def process_identity(pid: int) -> dict:
+    """Read the kernel identity needed to distinguish a process from PID reuse."""
+    if type(pid) is not int or pid <= 0:
+        raise ValueError("pid must be a positive integer")
+    stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    fields_after_command = stat.rsplit(")", 1)[1].split()
+    if len(fields_after_command) <= 19:
+        raise ValueError(f"malformed /proc/{pid}/stat")
+    identity = {
+        "pid": pid,
+        "pgid": int(fields_after_command[2]),
+        "start_ticks": int(fields_after_command[19]),
+    }
+    if identity["pgid"] <= 0 or identity["start_ticks"] <= 0:
+        raise ValueError(f"invalid /proc/{pid}/stat identity")
+    return identity
+
+
+def _close_record_fd(record: dict, field: str) -> None:
+    fd = record.get(field, -1)
+    record[field] = -1
+    if type(fd) is int and fd >= 0:
+        try:
+            os.close(fd)
+        except OSError as error:
+            if error.errno != 9:
+                raise
+
+
+def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
+                       *, stdin=None, stdout=None, stderr=None,
+                       popen=subprocess.Popen) -> dict:
+    """Take config_fd and spawn a wrapper which cannot exec before release."""
+    if type(config_fd) is not int or config_fd < 0:
+        raise ValueError("config_fd must be an open file descriptor")
+    if (type(child_argv) is not list or not child_argv
+            or any(type(argument) is not str for argument in child_argv)):
+        os.close(config_fd)
+        raise ValueError("child_argv must be a non-empty list of strings")
+    if (type(child_env) is not dict
+            or any(type(key) is not str or type(value) is not str
+                   for key, value in child_env.items())):
+        os.close(config_fd)
+        raise ValueError("child_env must contain string keys and values")
+
+    gate_read_fd, gate_write_fd = os.pipe()
+    process = None
+    record = None
+    try:
+        process = popen(
+            [sys.executable, "-c", _GATED_EXEC_WRAPPER,
+             str(gate_read_fd), *child_argv],
+            stdin=stdin,
+            stdout=stdout,
+            stderr=stderr,
+            env=child_env,
+            pass_fds=(config_fd, gate_read_fd),
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(gate_read_fd)
+        gate_read_fd = -1
+        identity = process_identity(process.pid)
+        if identity["pgid"] != process.pid:
+            raise RuntimeError("gated child did not establish its own process group")
+        record = {
+            "process": process,
+            **identity,
+            "gate_write_fd": gate_write_fd,
+            "config_fd": config_fd,
+            "state": "blocked",
+            "outcome": None,
+        }
+        return record
+    except Exception:
+        if gate_read_fd >= 0:
+            os.close(gate_read_fd)
+        if record is None and process is not None:
+            record = {
+                "process": process,
+                "pid": process.pid,
+                "start_ticks": None,
+                "pgid": process.pid,
+                "gate_write_fd": gate_write_fd,
+                "config_fd": config_fd,
+                "state": "blocked",
+                "outcome": None,
+            }
+        if record is not None:
+            gated_child_cleanup(record, 0.2)
+        else:
+            os.close(gate_write_fd)
+            os.close(config_fd)
+        raise
+
+
+def gated_child_release(record: dict) -> dict:
+    """Release a blocked wrapper after its caller has durably authorized launch."""
+    if record.get("state") in {"gate_released", "reaped"}:
+        return record
+    if record.get("state") != "blocked":
+        raise RuntimeError(f"cannot release gated child in state {record.get('state')!r}")
+    identity = process_identity(record["pid"])
+    if (identity["start_ticks"] != record["start_ticks"]
+            or identity["pgid"] != record["pgid"]):
+        raise RuntimeError("gated child identity changed before release")
+    try:
+        written = os.write(record["gate_write_fd"], b"\x01")
+        if written != 1:
+            raise RuntimeError("gate release was incomplete")
+        record["state"] = "gate_released"
+    finally:
+        _close_record_fd(record, "gate_write_fd")
+        _close_record_fd(record, "config_fd")
+    return record
+
+
+def _reaped_outcome(record: dict, returncode: int) -> dict:
+    outcome = {
+        "state": "reaped",
+        "returncode": returncode,
+        "pid": record["pid"],
+        "start_ticks": record["start_ticks"],
+    }
+    record["state"] = "reaped"
+    record["outcome"] = outcome
+    return outcome
+
+
+def gated_child_wait(record: dict, timeout: float) -> dict:
+    """Wait a bounded interval for a released child and cache the reap result."""
+    if record.get("outcome") is not None:
+        return record["outcome"]
+    returncode = record["process"].wait(timeout=timeout)
+    _close_record_fd(record, "gate_write_fd")
+    _close_record_fd(record, "config_fd")
+    return _reaped_outcome(record, returncode)
+
+
+def gated_child_cleanup(record: dict, timeout: float = 0.2) -> dict:
+    """Cancel, terminate, and reap an owned gated child within bounded waits."""
+    if record.get("outcome") is not None:
+        return record["outcome"]
+    _close_record_fd(record, "gate_write_fd")
+    process = record["process"]
+    returncode = process.poll()
+    if returncode is None:
+        identity_matches = False
+        try:
+            identity = process_identity(record["pid"])
+            identity_matches = (
+                record.get("start_ticks") in {None, identity["start_ticks"]}
+                and identity["pgid"] == record["pgid"]
+            )
+        except FileNotFoundError:
+            pass
+        if identity_matches:
+            try:
+                os.killpg(record["pgid"], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if identity_matches:
+                try:
+                    os.killpg(record["pgid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            try:
+                returncode = process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _close_record_fd(record, "config_fd")
+                outcome = {
+                    "state": "reconciliation_required",
+                    "returncode": None,
+                    "pid": record["pid"],
+                    "start_ticks": record.get("start_ticks"),
+                }
+                record["state"] = outcome["state"]
+                record["outcome"] = outcome
+                return outcome
+    _close_record_fd(record, "config_fd")
+    return _reaped_outcome(record, returncode)
 
 
 def queue_notifications(job: dict) -> None:
