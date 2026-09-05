@@ -20,7 +20,7 @@
     "parallel_requests": 2
   },
   "gpu_boundary": {
-    "gtt_limit_gb": 64,
+    "gtt_limit_gb": 100,
     "ttm_pages_limit": 16777216,
     "ttm_page_pool_pages": 2097152
   },
@@ -34,7 +34,7 @@
     "protected_host_bytes": 34359738368,
     "coin_reserved_bytes": 8589934592,
     "load_transient_bytes": 12884901888,
-    "gtt_limit_bytes": 68719476736
+    "gtt_limit_bytes": 107374182400
   },
   "dynamic_models": {
     "estimated_kv_bytes_per_token": 131072,
@@ -55,7 +55,7 @@
     "protected_host_bytes": 34359738368,
     "coin_reserved_bytes": 8589934592,
     "load_transient_bytes": 12884901888,
-    "gtt_limit_bytes": 68719476736,
+    "gtt_limit_bytes": 107374182400,
     "maximum_work_models": 1,
     "front_proxy_identity": "proxy:coin-front",
     "work_proxy_identity": "proxy:work",
