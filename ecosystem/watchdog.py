@@ -113,6 +113,8 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                 "scope": {"workspace": str(root), "read_paths": [str(root)],
                           "write_paths": [str(root)]},
                 "authority_profile": "scheduled_review",
+                "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
+                                 "minimum_context_tokens": 16384},
                 "acceptance": [{"kind": "handoff", "value": "evidence-backed review"}],
                 "budget": {"run_seconds": 300, "task_seconds": 900,
                            "maximum_attempts": 2, "maximum_output_bytes": 65536,

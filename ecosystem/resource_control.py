@@ -40,7 +40,8 @@ SURVIVOR_QUEUED_FIELDS = frozenset({
     "id", "kind", "state", "attempts", "created_at", "updated_at", "role",
     "task", "source", "model", "model_reason", "requested_model",
     "requested_model_reason", "prefer_models_other_than", "agent_name",
-    "idempotency_key", "task_contract", "remaining_budget",
+    "idempotency_key", "task_contract", "remaining_budget", "authority_profile",
+    "requirements", "scope", "write_paths", "workload_class",
 })
 SURVIVOR_READY_FIELDS = SURVIVOR_QUEUED_FIELDS | {
     "context_tokens", "prompt", "original_prompt",
@@ -753,7 +754,9 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
         "objective": task,
         "scope": {"workspace": str(root), "read_paths": [str(root)],
                   "write_paths": [str(root)]},
-        "authority_profile": "resource_emergency",
+        "authority_profile": "sole_survivor",
+        "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
+                         "minimum_context_tokens": emergency["chat_context_tokens"]},
         "acceptance": [{"kind": "artifact", "path": str(conclusion)}],
         "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
                    "maximum_output_bytes": 65536, "maximum_evidence_items": 20,
@@ -791,6 +794,11 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
         "idempotency_key": idempotency_key,
         "task_contract": contract,
         "remaining_budget": contract["budget"],
+        "authority_profile": contract["authority_profile"],
+        "requirements": contract["requirements"],
+        "scope": contract["scope"],
+        "write_paths": contract["scope"]["write_paths"],
+        "workload_class": "repair",
     }
     prompt_path = cli.ROOT / "state/jobs" / f"{job_id}.prompt.md"
     relative_prompt = str(prompt_path.relative_to(cli.ROOT))

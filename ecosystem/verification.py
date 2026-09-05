@@ -36,6 +36,8 @@ testing matters, or the evidence is insufficient. Do not omit the verdict file."
         "scope": {"workspace": str(root), "read_paths": [str(root)],
                   "write_paths": [str(path.resolve(strict=False))]},
         "authority_profile": "independent_verification",
+        "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
+                         "minimum_context_tokens": 16384},
         "acceptance": [{"kind": "artifact", "path": str(path.resolve(strict=False))}],
         "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
                    "maximum_output_bytes": 65536, "maximum_evidence_items": 20,

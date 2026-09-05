@@ -18,12 +18,14 @@ CONTRACT_FIELDS = {
     "objective",
     "scope",
     "authority_profile",
+    "requirements",
     "acceptance",
     "budget",
     "source_key",
     "parent_job_id",
     "stop_condition",
 }
+REQUIREMENT_FIELDS = {"required_capabilities", "minimum_context_tokens"}
 
 
 def _durable_copy(value: dict, label: str) -> dict:
@@ -49,6 +51,20 @@ def validate_budget(raw: dict) -> dict:
         if type(value) is not int or value < minimum:
             raise ValueError(f"invalid budget {field}")
     return _durable_copy(raw, "budget")
+
+
+def validate_requirements(raw: dict) -> dict:
+    if type(raw) is not dict or set(raw) != REQUIREMENT_FIELDS:
+        raise ValueError("model requirements must contain exactly the required fields")
+    capabilities = raw["required_capabilities"]
+    if (type(capabilities) is not list or not capabilities
+            or any(type(value) is not str or not value.strip() for value in capabilities)
+            or len(capabilities) != len(set(capabilities))):
+        raise ValueError("invalid required model capabilities")
+    minimum = raw["minimum_context_tokens"]
+    if type(minimum) is not int or minimum <= 0:
+        raise ValueError("invalid minimum model context")
+    return _durable_copy(raw, "model requirements")
 
 
 def _canonical_absolute_path(value: object, label: str) -> str:
@@ -108,6 +124,7 @@ def validate_task_contract(raw: dict) -> dict:
         "objective": objective,
         "scope": _validate_scope(raw["scope"]),
         "authority_profile": authority,
+        "requirements": validate_requirements(raw["requirements"]),
         "acceptance": acceptance,
         "budget": validate_budget(raw["budget"]),
         "source_key": source_key,
@@ -115,6 +132,105 @@ def validate_task_contract(raw: dict) -> dict:
         "stop_condition": stop_condition,
     }
     return _durable_copy(result, "task contract")
+
+
+def validate_workspace_policy(values: dict) -> dict:
+    if type(values) is not dict or set(values) != {"version", "authority_profiles", "workspaces"}:
+        raise ValueError("invalid workspace authority policy")
+    if values["version"] != 1:
+        raise ValueError("invalid workspace authority policy version")
+    profiles = values["authority_profiles"]
+    workspaces = values["workspaces"]
+    if type(profiles) is not list or type(workspaces) is not list:
+        raise ValueError("invalid workspace authority policy")
+    profile_ids = []
+    for profile in profiles:
+        if type(profile) is not dict or set(profile) != {"id", "effects", "workload_class"}:
+            raise ValueError("invalid authority profile")
+        profile_ids.append(_nonempty_text(profile["id"], "authority profile identity"))
+        if profile["workload_class"] not in {"front", "repair", "work", "monitor"}:
+            raise ValueError("invalid authority workload class")
+        effects = profile["effects"]
+        if (type(effects) is not list
+                or any(type(effect) is not str or not effect for effect in effects)
+                or len(effects) != len(set(effects))):
+            raise ValueError("invalid authority profile effects")
+    if len(profile_ids) != len(set(profile_ids)):
+        raise ValueError("duplicate authority profile")
+    workspace_paths = []
+    for workspace in workspaces:
+        if type(workspace) is not dict:
+            raise ValueError("invalid workspace policy entry")
+        for field in ("id", "path", "provenance", "mode"):
+            _nonempty_text(workspace.get(field), f"workspace {field}")
+        workspace_paths.append(_canonical_absolute_path(workspace["path"], "workspace path"))
+    if len(workspace_paths) != len(set(workspace_paths)):
+        raise ValueError("duplicate workspace path")
+    return _durable_copy(values, "workspace authority policy")
+
+
+def accepted_workspace_policy(root: Path) -> dict:
+    from survival.configuration import adopt_policy
+    from survival.json_codec import decode_json_object
+
+    root = Path(root).resolve()
+    path = root / "state/workspaces-policy.json"
+    try:
+        snapshot = decode_json_object(path.read_bytes(), "workspace authority snapshot")
+        activated_at = snapshot["activated_at"]
+        values = snapshot["values"]
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise ValueError("no accepted workspace authority policy") from error
+    accepted, error = adopt_policy(
+        snapshot, values, validate_workspace_policy, {"utc": activated_at},
+    )
+    source = snapshot.get("source_path")
+    source_path = Path(source) if type(source) is str else None
+    if source_path is not None and not source_path.is_absolute():
+        source_path = root / source_path
+    expected_source = (root / "config/workspaces.json").resolve(strict=False)
+    if (error is not None or accepted != snapshot or source_path is None
+            or source_path.resolve(strict=False) != expected_source):
+        raise ValueError("invalid accepted workspace authority policy")
+    return accepted["values"]
+
+
+def _resolved_authority(contract: dict, root: Path) -> tuple[dict, dict]:
+    validated = validate_task_contract(contract)
+    policy = accepted_workspace_policy(root)
+    profile = next((item for item in policy["authority_profiles"]
+                    if item["id"] == validated["authority_profile"]), None)
+    if profile is None:
+        raise ValueError("unknown authority profile")
+    workspace = next((item for item in policy["workspaces"]
+                      if item["path"] == validated["scope"]["workspace"]), None)
+    if workspace is None or workspace["mode"] not in {"active", "immutable-reference"}:
+        raise ValueError("workspace is not accepted for task execution")
+    effects = set(profile["effects"])
+    if validated["scope"]["read_paths"] and "read_scoped_files" not in effects:
+        raise ValueError("authority profile does not permit scoped reads")
+    if validated["scope"]["write_paths"] and not (
+            {"write_scoped_files", "write_verdict"} & effects):
+        raise ValueError("authority profile does not permit scoped writes")
+    if workspace["mode"] == "immutable-reference" and validated["scope"]["write_paths"]:
+        raise ValueError("immutable workspace cannot be writable")
+    return validated, profile
+
+
+def validate_task_authority(contract: dict, root: Path) -> dict:
+    return _resolved_authority(contract, root)[0]
+
+
+def resolve_task_intake(contract: dict, root: Path) -> dict:
+    validated, profile = _resolved_authority(contract, root)
+    return {
+        "task_contract": validated,
+        "authority_profile": validated["authority_profile"],
+        "requirements": dict(validated["requirements"]),
+        "scope": dict(validated["scope"]),
+        "write_paths": list(validated["scope"]["write_paths"]),
+        "workload_class": profile["workload_class"],
+    }
 
 
 def _paths_within(child_paths: list[str], parent_paths: list[str]) -> bool:

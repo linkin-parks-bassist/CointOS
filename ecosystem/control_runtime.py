@@ -139,33 +139,7 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
     elif name == "list_roles":
         result = {"ok": True, "roles": list_roles()}
     elif name in {"queue_task", "amend_pending_task"}:
-        role = arguments.get("role")
-        model = arguments.get("model")
-        task = arguments.get("task")
-        available_models = {item["id"] for item in snapshot()["models"]}
-        if model is not None and model not in available_models:
-            raise ValueError("unavailable model")
-        if not isinstance(task, str) or not task.strip():
-            raise ValueError("empty task")
-        task_contract = arguments.get("task_contract")
-        if not isinstance(task_contract, dict):
-            raise ValueError("queue or amendment requires an explicit task contract")
-        if name == "queue_task":
-            job_id = cli.enqueue_task(role, task, source=f"telegram:{user_id}", model=model,
-                                      model_reason=arguments.get("model_reason", ""),
-                                      agent_name=arguments.get("agent_name"),
-                                      idempotency_key=f"{identifier}:{key}",
-                                      task_contract=task_contract)
-            job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
-            result = {"ok": True, "agent_name": job["agent_name"],
-                      "role": safe_role_label(role),
-                      "requested_model_hint": model, "model_selection": "pending", "task": task}
-        else:
-            job_id = cli.amend_latest_task(f"telegram:{user_id}", role, task, model,
-                                           arguments.get("model_reason", ""),
-                                           idempotency_key=f"{identifier}:{key}",
-                                           task_contract=task_contract)
-            result = {"ok": bool(job_id), "amended": bool(job_id), "task": task}
+        raise ValueError("trusted contact conversion is required before executable work")
     elif name == "pause_dispatch":
         (cli.ROOT / "state/PAUSED").touch()
         cli.audit("ecosystem.paused", source="telegram", user_id=user_id)
