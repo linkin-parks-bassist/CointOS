@@ -78,6 +78,26 @@ def opencode_environment(root: Path, inference_lease: dict, credential: bytes) -
         raise
 
 
+def populate_opencode_credential(config: dict, credential: bytes) -> None:
+    """Replace the fixed anonymous-memfd placeholder without changing its shape."""
+    if type(config) is not dict or type(config.get("fd")) is not int:
+        raise ValueError("invalid anonymous OpenCode configuration")
+    if type(credential) is not bytes or len(credential) != 32:
+        raise ValueError("proxy credential must contain exactly 32 bytes")
+    descriptor = config["fd"]
+    payload = os.pread(descriptor, os.fstat(descriptor).st_size, 0)
+    placeholder = b'"apiKey":"' + (b"0" * 64) + b'"'
+    replacement = b'"apiKey":"' + credential.hex().encode("ascii") + b'"'
+    if payload.count(placeholder) != 1:
+        raise ValueError("OpenCode credential placeholder is absent or ambiguous")
+    populated = payload.replace(placeholder, replacement)
+    written = 0
+    while written < len(populated):
+        written += os.pwrite(descriptor, populated[written:], written)
+    if os.pread(descriptor, len(populated), 0) != populated:
+        raise RuntimeError("OpenCode credential population verification failed")
+
+
 def validate_loopback_base(value: str) -> dict:
     if type(value) is not str:
         raise ValueError("invalid inference endpoint")
@@ -175,6 +195,9 @@ def authorize_proxy_request(root: Path, metadata: dict, body: dict, clock) -> di
             "claimed_monotonic": now,
             "backend": None,
         }
+        # A new backend round supersedes prior end evidence until this round
+        # itself has a verified termination.
+        credential["last_backend_termination"] = None
         save()
         return {"status": 200, "claim_id": claim_id, "lease": _durable(lease),
                 "credential_binding": _durable(credential["binding"])}
@@ -197,7 +220,7 @@ def handle_proxy_request(root: Path, metadata: dict, body: dict, backend_request
             result = {"status": 502, "error": "backend returned no response"}
         if type(result) is not dict:
             raise ValueError("backend response must be a dictionary")
-        terminated = result.get("terminated", "upstream" not in result) is True
+        terminated = result.get("terminated") is True
         _finish_claim(Path(root), lease["lease_id"], claim_id, terminated, result, clock)
         return result
     except Exception:
@@ -266,6 +289,30 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
         credential["revoked_monotonic"] = _clock(clock)
         save()
     return {"state": "revoked", "lease_id": lease_id, "sequence": released}
+
+
+def completed_run_termination(root: Path, lease_id: str) -> dict | None:
+    """Return persisted backend-end evidence only after the bound runner has ended."""
+    with _proxy_lock(Path(root)) as (state, _save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None:
+            raise ValueError("unknown proxy credential")
+        if credential["in_flight"]:
+            return None
+        process = credential.get("binding", {}).get("process")
+        if type(process) is not dict:
+            raise ValueError("proxy credential lacks a bound process")
+        pid = process.get("pid")
+        expected_ticks = process.get("process_start_ticks")
+        try:
+            stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+            observed_ticks = int(stat.rsplit(")", 1)[1].split()[19])
+        except (OSError, ValueError, IndexError):
+            observed_ticks = None
+        if observed_ticks == expected_ticks:
+            return None
+        termination = credential.get("last_backend_termination")
+        return _durable(termination) if termination is not None else None
 
 
 def read_proxy_request(connection, limits: dict) -> tuple[dict, dict]:
