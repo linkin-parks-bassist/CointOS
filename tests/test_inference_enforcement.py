@@ -8,8 +8,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from ecosystem.inference_proxy import (
-    forward_proxy_response, handle_proxy_request, issue_proxy_credential,
-    opencode_environment, read_proxy_request,
+    completed_run_termination, forward_proxy_response, handle_proxy_request,
+    issue_proxy_credential, opencode_environment, populate_opencode_credential,
+    read_proxy_request,
 )
 
 
@@ -97,6 +98,44 @@ def test_backend_crash_does_not_fabricate_sequence_end():
         assert credential["in_flight"] == {} and credential["last_backend_termination"] is None
 
 
+def test_later_crash_invalidates_prior_round_termination():
+    with fixture() as value:
+        secret = issue(value)
+        metadata = {"authorization": "Bearer " + secret.hex()}
+        handle_proxy_request(
+            value["root"], metadata, body(),
+            lambda _request: {"status": 200, "terminated": True,
+                              "evidence_id": "ended-first"},
+            lambda: 11.0,
+        )
+
+        def crash(_request):
+            raise ConnectionError("second backend round disappeared")
+
+        with unittest.TestCase().assertRaises(ConnectionError):
+            handle_proxy_request(value["root"], metadata, body(), crash, lambda: 12.0)
+        proxy_path = value["root"] / "state/inference-proxy.json"
+        state = json.loads(proxy_path.read_text())
+        credential = state["credentials"][value["lease_id"]]
+        credential["binding"]["process"] = {"pid": 2 ** 30,
+                                                "process_start_ticks": 1}
+        proxy_path.write_text(json.dumps(state))
+        assert completed_run_termination(value["root"], value["lease_id"]) is None
+
+
+def test_missing_backend_response_is_not_termination_evidence():
+    with fixture() as value:
+        secret = issue(value)
+        result = handle_proxy_request(
+            value["root"], {"authorization": "Bearer " + secret.hex()}, body(),
+            lambda _request: None, lambda: 11.0,
+        )
+        assert result["status"] == 502
+        state = json.loads(
+            (value["root"] / "state/inference-proxy.json").read_text())
+        assert state["credentials"][value["lease_id"]]["last_backend_termination"] is None
+
+
 def test_unregistered_process_cannot_receive_credential():
     with fixture() as value:
         state_path = value["root"] / "state/workload-control.json"
@@ -122,6 +161,42 @@ def test_opencode_memfd_contains_secret_but_environment_does_not():
                 "http://127.0.0.1:13306/v1"
         finally:
             os.close(environment["fd"])
+
+
+def test_placeholder_is_populated_in_the_existing_memfd():
+    with fixture() as value:
+        environment = opencode_environment(value["root"], value["lease"], b"\0" * 32)
+        try:
+            descriptor = environment["fd"]
+            populate_opencode_credential(environment, b"z" * 32)
+            config = json.loads(os.pread(descriptor, 65536, 0))
+            assert config["provider"]["Lemonade"]["options"]["apiKey"] == \
+                (b"z" * 32).hex()
+            assert environment["fd"] == descriptor
+        finally:
+            os.close(environment["fd"])
+
+
+def test_completed_run_termination_requires_ended_bound_process():
+    with fixture() as value:
+        secret = issue(value)
+        metadata = {"authorization": "Bearer " + secret.hex()}
+        for now in (11.0, 12.0):
+            handle_proxy_request(
+                value["root"], metadata, body(),
+                lambda _request: {"status": 200, "terminated": True,
+                                  "evidence_id": f"end-{now}"},
+                lambda now=now: now,
+            )
+        assert completed_run_termination(value["root"], value["lease_id"]) is None
+        path = value["root"] / "state/inference-proxy.json"
+        state = json.loads(path.read_text())
+        state["credentials"][value["lease_id"]]["binding"]["process"] = {
+            "pid": 2 ** 30, "process_start_ticks": 1,
+        }
+        path.write_text(json.dumps(state))
+        evidence = completed_run_termination(value["root"], value["lease_id"])
+        assert evidence["evidence_id"] == "end-12.0"
 
 
 def test_fragmented_request_preserves_buffered_body_bytes():

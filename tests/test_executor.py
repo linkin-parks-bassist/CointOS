@@ -8,17 +8,295 @@ from unittest.mock import patch
 from tests.test_intake import IntakeTest
 from ecosystem import cli
 from ecosystem.executor import (
-    _job_opencode_config,
     execute_next,
     gated_child_cleanup,
     gated_child_launch,
     gated_child_release,
     gated_child_wait,
+    close_runner_round,
+    launch_runner_round,
     process_identity,
 )
 
 
 class ExecutorTest(IntakeTest):
+    def test_executor_orders_r1_process_r3_credential_before_gate_release(self):
+        events = []
+        marker = self.root / "producer-order-marker"
+        job_path = self.root / "state/jobs/task-order.json"
+        job = {
+            "id": "task-order", "kind": "agent-task", "state": "ready",
+            "agent_generation": 7, "workload_class": "work",
+            "owner_identity": "executor:task-order", "caller_handle": "executor:local",
+            "deadline_monotonic": time.monotonic() + 60, "role": "worker",
+            "authority_profile": "ordinary", "execution_profile": None,
+            "requirements": {"required_capabilities": ["coding"],
+                             "minimum_context_tokens": 1024},
+            "prompt_tokens": 1, "tool_tokens": 1, "handoff_tokens": 1,
+        }
+        route = {
+            "state": "admitted", "model_id": "model-x",
+            "context_tokens_per_sequence": 4096, "max_output_tokens": 128,
+            "backend_context_tokens": 4096, "parallel_sequences": 1,
+            "parameter_count": 1, "model_bytes": 1, "loaded": True,
+        }
+        (self.root / "config").mkdir(exist_ok=True)
+        (self.root / "config/resource-policy.json").write_text(json.dumps({
+            "inference_capacity": {"work_proxy_identity": "proxy:work"},
+        }), encoding="utf-8")
+
+        def acquire(_root, request, _clock):
+            events.append("acquire")
+            return {"state": "starting", "lease_id": "worker-lease", "request": request}
+
+        def launch(*args, **kwargs):
+            events.append("spawn")
+            return gated_child_launch(*args, **kwargs)
+
+        def register(_root, _lease_id, _pid, _ticks, _clock):
+            events.append("register")
+            return {"state": "active"}
+
+        def reserve(_root, request, _inventory, _clock):
+            events.append("reserve")
+            return {"state": "starting", "lease_id": "sequence-lease",
+                    "model_id": route["model_id"],
+                    "context_tokens": route["context_tokens_per_sequence"],
+                    "max_output_tokens": route["max_output_tokens"],
+                    "backend_sequence": 1, "request": request}
+
+        def issue(_root, _lease, sink, _clock):
+            events.append("issue")
+            sink(b"s" * 32)
+            return {"state": "issued"}
+
+        def populate(config, credential):
+            events.append("populate")
+            from ecosystem.inference_proxy import populate_opencode_credential
+            populate_opencode_credential(config, credential)
+
+        def release(record):
+            self.assertFalse(marker.exists())
+            events.append("release_gate")
+            return gated_child_release(record)
+
+        child = [sys.executable, "-c",
+                 "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran')",
+                 str(marker)]
+        context = launch_runner_round(
+            job, job_path, route, {}, child,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            acquire=acquire, launch=launch, register=register, reserve=reserve,
+            issue=issue, populate=populate, release_gate=release,
+            release=lambda *_args: None, observe=lambda *_args: None,
+        )
+        outcome = gated_child_wait(context["launch"], 2.0)
+        self.assertEqual(outcome["returncode"], 0)
+        self.assertEqual(events, ["acquire", "spawn", "register", "reserve",
+                                  "issue", "populate", "release_gate"])
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "running")
+        self.assertEqual(saved["runner_generation"], 1)
+        self.assertNotIn("inference_lease", saved)
+        self.assertNotIn((b"s" * 32).hex(), job_path.read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "state/opencode-configs").exists())
+
+    def test_normal_close_releases_r3_before_r1_quiescence(self):
+        events = []
+        job_path = self.root / "state/jobs/task-close.json"
+        job = {"id": "task-close", "state": "running"}
+        cli.atomic_json(job_path, job)
+        context = {
+            "inference_lease": {"lease_id": "sequence-close"},
+            "worker_lease": {"lease_id": "worker-close"},
+            "launch": {"pid": 101, "start_ticks": 202},
+        }
+
+        def termination(_root, _lease_id):
+            events.append("termination")
+            return {"terminated": True, "evidence_id": "end-one"}
+
+        def revoke(_root, _lease_id, evidence, _clock):
+            events.append(("revoke", evidence["evidence_id"]))
+            return {"state": "revoked", "sequence": {"state": "released"}}
+
+        def release(_root, _lease_id, outcome, _clock):
+            events.append(("release_worker", outcome["state"]))
+
+        def observe(_root, observations, _clock):
+            events.append(("observe_worker", observations[0]["inference_lease_active"]))
+
+        result = close_runner_round(
+            job, job_path, context, {"returncode": 0},
+            termination=termination, revoke=revoke, release=release, observe=observe,
+        )
+        self.assertEqual(result["state"], "run_finished")
+        self.assertEqual(events, ["termination", ("revoke", "end-one"),
+                                  ("release_worker", "run_finished"),
+                                  ("observe_worker", False)])
+        replay = close_runner_round(
+            job, job_path, context, {"returncode": 0},
+            termination=termination, revoke=revoke, release=release, observe=observe,
+        )
+        self.assertEqual(replay["state"], "run_finished")
+        self.assertEqual(len(events), 4)
+
+    def test_ambiguous_close_retains_both_leases_for_reconciliation(self):
+        job_path = self.root / "state/jobs/task-ambiguous.json"
+        job = {"id": "task-ambiguous", "state": "running"}
+        cli.atomic_json(job_path, job)
+        context = {
+            "inference_lease": {"lease_id": "sequence-ambiguous"},
+            "worker_lease": {"lease_id": "worker-ambiguous"},
+            "launch": {"pid": 303, "start_ticks": 404},
+        }
+        result = close_runner_round(
+            job, job_path, context, {"returncode": -9},
+            termination=lambda *_args: None,
+            revoke=lambda *_args: self.fail("ambiguous close must not release R3"),
+            release=lambda *_args: self.fail("ambiguous close must not release R1"),
+            observe=lambda *_args: self.fail("ambiguous close must not quiesce R1"),
+        )
+        self.assertEqual(result["state"], "reconciliation_required")
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["worker_lease_id"], "worker-ambiguous")
+        self.assertEqual(saved["inference_lease_id"], "sequence-ambiguous")
+
+    def test_drain_race_defers_before_spawn_or_credential(self):
+        job_path = self.root / "state/jobs/task-drain.json"
+        job = {
+            "id": "task-drain", "state": "ready", "agent_generation": 4,
+            "workload_class": "work", "owner_identity": "executor:drain",
+            "caller_handle": "executor:local", "deadline_monotonic": 100.0,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        result = launch_runner_round(
+            job, job_path, route, {}, ["must-not-spawn"],
+            stdin=None, stdout=None, stderr=None,
+            acquire=lambda *_args: {"state": "deferred", "reasons": ["drain"]},
+            launch=lambda *_args, **_kwargs: self.fail("drain must prevent spawn"),
+            issue=lambda *_args: self.fail("drain must prevent credential"),
+        )
+        self.assertEqual(result["state"], "deferred")
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "ready")
+        self.assertEqual(saved["runner_generation"], 1)
+        self.assertEqual(saved["runner_deferred_reasons"], ["drain"])
+
+    def test_resume_rotates_runner_requests_but_preserves_logical_identity(self):
+        (self.root / "config").mkdir(exist_ok=True)
+        (self.root / "config/resource-policy.json").write_text(json.dumps({
+            "inference_capacity": {"work_proxy_identity": "proxy:work"},
+        }), encoding="utf-8")
+        job_path = self.root / "state/jobs/task-resume.json"
+        job = {
+            "id": "task-resume", "state": "ready", "agent_generation": 9,
+            "workload_class": "work", "owner_identity": "executor:resume",
+            "caller_handle": "executor:local", "deadline_monotonic": 100.0,
+            "role": "worker", "authority_profile": "ordinary",
+            "execution_profile": None, "opencode_session": "session-one",
+            "prompt": "state/jobs/task-resume.prompt.md",
+            "output": "logs/runs/task-resume.opencode.log",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        worker_requests = []
+        sequence_requests = []
+
+        def acquire(_root, request, _clock):
+            worker_requests.append(request)
+            return {"state": "starting", "lease_id": f"worker-{len(worker_requests)}"}
+
+        def launch(config_fd, *_args, **_kwargs):
+            return {"pid": 100 + len(worker_requests), "start_ticks": 200,
+                    "config_fd": config_fd, "state": "blocked"}
+
+        def reserve(_root, request, _inventory, _clock):
+            sequence_requests.append(request)
+            return {"state": "starting", "lease_id": f"sequence-{len(sequence_requests)}",
+                    "model_id": "model-x", "context_tokens": 4096,
+                    "max_output_tokens": 128}
+
+        def release_gate(record):
+            os.close(record["config_fd"])
+            record["config_fd"] = -1
+
+        for _round in range(2):
+            launch_runner_round(
+                job, job_path, route, {}, ["fake-child"],
+                stdin=None, stdout=None, stderr=None,
+                acquire=acquire, launch=launch, register=lambda *_args: None,
+                reserve=reserve,
+                issue=lambda _root, _lease, sink, _clock: sink(b"r" * 32),
+                release_gate=release_gate,
+            )
+            job.update(state="ready")
+        self.assertNotEqual(worker_requests[0]["request_id"],
+                            worker_requests[1]["request_id"])
+        self.assertNotEqual(sequence_requests[0]["request_id"],
+                            sequence_requests[1]["request_id"])
+        self.assertEqual(job["runner_generation"], 2)
+        self.assertEqual(job["agent_generation"], 9)
+        self.assertEqual(job["opencode_session"], "session-one")
+        self.assertEqual(job["prompt"], "state/jobs/task-resume.prompt.md")
+        self.assertEqual(job["output"], "logs/runs/task-resume.opencode.log")
+
+    def test_failure_after_r3_never_releases_either_lease(self):
+        events = []
+        job_path = self.root / "state/jobs/task-r3-failure.json"
+        job = {
+            "id": "task-r3-failure", "state": "ready", "agent_generation": 1,
+            "workload_class": "work", "owner_identity": "executor:failure",
+            "caller_handle": "executor:local", "deadline_monotonic": 100.0,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        (self.root / "config").mkdir(exist_ok=True)
+        (self.root / "config/resource-policy.json").write_text(json.dumps({
+            "inference_capacity": {"work_proxy_identity": "proxy:work"},
+        }), encoding="utf-8")
+        record = None
+
+        def launch(config_fd, *_args, **_kwargs):
+            nonlocal record
+            record = {"pid": 111, "start_ticks": 222, "config_fd": config_fd,
+                      "gate_write_fd": -1, "state": "blocked", "outcome": {
+                          "state": "reaped", "returncode": -15}}
+            return record
+
+        def fail_release(launch_record):
+            os.close(launch_record["config_fd"])
+            launch_record["config_fd"] = -1
+            raise RuntimeError("after credential")
+
+        with self.assertRaisesRegex(RuntimeError, "after credential"):
+            launch_runner_round(
+                job, job_path, route, {}, ["fake-child"],
+                stdin=None, stdout=None, stderr=None,
+                acquire=lambda _root, request, _clock: {
+                    "state": "starting", "lease_id": "worker-failure",
+                    "request": request},
+                launch=launch, register=lambda *_args: None,
+                reserve=lambda _root, request, _inventory, _clock: {
+                    "state": "starting", "lease_id": "sequence-failure",
+                    "model_id": "model-x", "context_tokens": 4096,
+                    "max_output_tokens": 128, "request": request},
+                issue=lambda _root, _lease, sink, _clock: sink(b"q" * 32),
+                release_gate=fail_release,
+                cancel=lambda *_args: events.append("cancel"),
+                release=lambda *_args: self.fail("must not release R1"),
+                observe=lambda *_args: self.fail("must not observe R1 quiescent"),
+            )
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "reconciliation_required")
+        self.assertEqual(events, ["cancel"])
+        self.assertEqual(saved["worker_lease_id"], "worker-failure")
+        self.assertEqual(saved["inference_lease_id"], "sequence-failure")
+
     def test_gated_child_preserves_identity_config_and_stdin_across_exec(self):
         baseline = set(os.listdir("/proc/self/fd"))
         marker = self.root / "gated-child-marker.json"
@@ -151,59 +429,3 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
         self.assertIn("# Base Agent", prompt)
         self.assertNotIn("unknown role", prompt.lower())
-
-    def test_per_job_config_is_not_written_into_job_store(self):
-        (self.root / "config").mkdir(exist_ok=True)
-        (self.root / "config/executor-opencode.json").write_text(
-            '{"provider":{"Lemonade":{"models":{"model-x":{}}}}}'
-        )
-        job = {
-            "id": "task-x",
-            "inference_lease": {
-                "lease_id": "lease-x",
-                "model_id": "model-x",
-                "context_tokens": 65536,
-                "max_output_tokens": 256,
-            },
-        }
-        opencode = _job_opencode_config(job, b"y" * 32)
-        try:
-            config = json.loads(os.read(opencode["fd"], 1 << 20))
-            options = config["provider"]["Lemonade"]["options"]
-            self.assertEqual(options["apiKey"], (b"y" * 32).hex())
-            self.assertEqual(opencode["environment"]["OPENCODE_CONFIG"],
-                             f"/proc/self/fd/{opencode['fd']}")
-            self.assertEqual(opencode["pass_fds"], (opencode["fd"],))
-            self.assertFalse((self.root / "state/opencode-configs").exists())
-            self.assertFalse((self.root / "state/jobs/task-x.opencode.json").exists())
-        finally:
-            os.close(opencode["fd"])
-
-    def test_executor_refuses_ready_job_without_authoritative_lease(self):
-        roles = self.root / "roles"; roles.mkdir(exist_ok=True)
-        (roles / "worker.md").write_text("# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nRoot.\n## Handoff\nReport.\n")
-        (roles / "verifier.md").write_text("# Verifier\n## Mission\nCheck.\n## Permissions\nRead.\n## Approval required\nChanges.\n## Handoff\nVerdict.\n")
-        (self.root / "config").mkdir(exist_ok=True)
-        (self.root / "config/executor-opencode.json").write_text(
-            '{"provider":{"Lemonade":{"models":{"Qwen3.5-4B-GGUF":{},"Qwen3-Coder-30B-A3B-Instruct-GGUF":{}}}}}'
-        )
-        job_id = cli.enqueue_task("worker", "Inspect")
-        inventory = {"models": [{"id": "Qwen3.5-4B-GGUF", "size_gb": 3.34,
-                                  "loaded": True}], "scheduling_policy": {
-                                      "control_plane": {"model": "Qwen3.5-4B-GGUF"}}}
-        decision = {"action": "use_loaded", "model": "Qwen3.5-4B-GGUF",
-                    "context_tokens": 32768,
-                    "reason": "test model-mediated route", "valid": True}
-        with patch("ecosystem.models.snapshot", return_value=inventory), \
-                patch("ecosystem.models.route", return_value=decision):
-            cli.prepare_next()
-        def fake_run(command, **kwargs):
-            raise AssertionError("an unleased job must not launch OpenCode")
-        with patch("ecosystem.executor.snapshot", return_value=inventory), \
-                patch("ecosystem.executor.route", return_value=decision), \
-                patch("ecosystem.executor.realize", return_value={
-                    "state": "loaded", "model": decision["model"]}):
-            self.assertTrue(execute_next(run=fake_run))
-        job = json.loads((self.root / f"state/jobs/{job_id}.json").read_text())
-        self.assertEqual(job["state"], "failed")
-        self.assertIn("inference launch refused", job["error"])
