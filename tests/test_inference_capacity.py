@@ -84,10 +84,33 @@ def capacity_policy():
     }
 
 
+def resource_policy():
+    return {
+        "physical_capacity": {
+            "protected_host_bytes": 32 * GIB,
+            "coin_reserved_bytes": 8 * GIB,
+            "load_transient_bytes": 12 * GIB,
+            "gtt_limit_bytes": 100 * GIB,
+        },
+        "dynamic_models": {
+            "estimated_kv_bytes_per_token": 1024,
+            "parallel_sequences": 2,
+            "context_reserves": {
+                "prompt_tokens": 1_024,
+                "tool_tokens": 1_024,
+                "max_output_tokens": 2_048,
+                "handoff_tokens": 1_024,
+            },
+        },
+        "inference_capacity": capacity_policy(),
+    }
+
+
 def route():
     return {
         "state": "admitted",
         "model_id": "model-a",
+        "parameter_count": 10_000_000_000,
         "model_bytes": 30 * GIB,
         "loaded": True,
         "context_tokens_per_sequence": 32_768,
@@ -103,6 +126,35 @@ def route():
 
 def inventory():
     return {
+        "verified": True,
+        "fresh": True,
+        "provenance": "resource-observer:test",
+        "models": [{
+            "id": "model-a",
+            "parameter_count": 10_000_000_000,
+            "size_bytes": 30 * GIB,
+            "capabilities": ["coding"],
+            "context": 65_536,
+            "supported_context_quantum": 32_768,
+            "parallel_sequences": 2,
+            "loaded": True,
+            "loaded_context": 65_536,
+            "metadata_verified": True,
+            "fresh": True,
+            "provenance": "registry:test",
+        }],
+        "resource_envelope": {
+            "verified": True,
+            "fresh": True,
+            "safe": True,
+            "provenance": "resource-observer:test",
+            "maximum_model_bytes": 40 * GIB,
+            "maximum_context_tokens": 65_536,
+            "available_host_bytes": 100 * GIB,
+            "gtt_used_bytes": 20 * GIB,
+            "gtt_limit_bytes": 100 * GIB,
+            "maximum_kv_bytes": 20 * GIB,
+        },
         "host": {
             "available_host_bytes": 100 * GIB,
             "gtt_used_bytes": 20 * GIB,
@@ -119,7 +171,7 @@ def write_root(root):
     (root / "state").mkdir()
     (root / "config").mkdir()
     (root / "config" / "resource-policy.json").write_text(
-        json.dumps({"inference_capacity": capacity_policy()}), encoding="utf-8",
+        json.dumps(resource_policy()), encoding="utf-8",
     )
     (root / "config" / "scheduling.json").write_text(
         json.dumps(scheduling_values()), encoding="utf-8",
@@ -151,6 +203,11 @@ def write_root(root):
                     "context_tokens": 32_768,
                     "max_output_tokens": 2_048,
                     "stop_method": "process_group",
+                    "requirements": {"required_capabilities": ["coding"],
+                                     "minimum_context_tokens": 16_384},
+                    "prompt_tokens": 1_024,
+                    "tool_tokens": 1_024,
+                    "handoff_tokens": 1_024,
                     "authority_profile": "ordinary",
                     "execution_profile": None,
                 },
@@ -168,6 +225,11 @@ def write_root(root):
                     "context_tokens": 32_768,
                     "max_output_tokens": 2_048,
                     "stop_method": "process_group",
+                    "requirements": {"required_capabilities": ["coding"],
+                                     "minimum_context_tokens": 16_384},
+                    "prompt_tokens": 1_024,
+                    "tool_tokens": 1_024,
+                    "handoff_tokens": 1_024,
                     "authority_profile": "sole_survivor",
                     "execution_profile": None,
                 },
@@ -185,6 +247,11 @@ def write_root(root):
                     "context_tokens": 32_768,
                     "max_output_tokens": 2_048,
                     "stop_method": "process_group",
+                    "requirements": {"required_capabilities": ["coding"],
+                                     "minimum_context_tokens": 16_384},
+                    "prompt_tokens": 1_024,
+                    "tool_tokens": 1_024,
+                    "handoff_tokens": 1_024,
                     "authority_profile": "coin",
                     "execution_profile": None,
                 },
@@ -226,10 +293,29 @@ def sequence_request(request_id="request-one", authority_profile="ordinary",
         "execution_profile": None,
         "authority_profile": authority_profile,
         "preemption_method": "process_group",
+        "requirements": {
+            "required_capabilities": ["coding"],
+            "minimum_context_tokens": 16_384,
+        },
+        "prompt_tokens": 1_024,
+        "tool_tokens": 1_024,
+        "max_output_tokens": 2_048,
+        "handoff_tokens": 1_024,
     }
 
 
-def ended_observation(lease, observed_monotonic):
+def reserve(root, request, current_inventory, clock, capabilities=None):
+    def observer_sink(capability, binding):
+        if capabilities is not None:
+            capabilities[binding["lease_id"]] = capability
+
+    return reserve_sequence(
+        root, request, current_inventory, clock,
+        observer_capability_sink=observer_sink,
+    )
+
+
+def ended_observation(lease, observed_monotonic, capability):
     return {
         "lease_id": lease["lease_id"],
         "request_id": lease["request"]["request_id"],
@@ -239,6 +325,7 @@ def ended_observation(lease, observed_monotonic):
         "backend_sequence_state": "ended",
         "sequence_active": False,
         "observed_monotonic": observed_monotonic,
+        "observer_capability": capability,
     }
 
 
@@ -266,7 +353,7 @@ def test_work_cannot_consume_reserved_front_sequence():
         write_root(root)
         stale_inventory = inventory()
         stale_inventory["host"]["gtt_total_fresh"] = False
-        deferred = reserve_sequence(
+        deferred = reserve(
             root, sequence_request(), stale_inventory, lambda: 10.0,
         )
         assert deferred == {"state": "deferred", "reasons": ["gtt_total_bytes"]}
@@ -292,7 +379,7 @@ def test_front_proxy_cannot_be_claimed_by_survivor_or_work():
                 proxy_identity="proxy:coin-front",
             )
             with unittest.TestCase().assertRaisesRegex(ValueError, "front proxy"):
-                reserve_sequence(root, request, inventory(), lambda: 10.0)
+                reserve(root, request, inventory(), lambda: 10.0)
 
 
 def test_priority_bands_match_validated_policy():
@@ -326,12 +413,12 @@ def test_high_priority_arrival_preempts_work_lease():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        first = reserve_sequence(root, sequence_request(), inventory(), lambda: 10.0)
+        first = reserve(root, sequence_request(), inventory(), lambda: 10.0)
         assert first["state"] == "starting"
         survivor = sequence_request(
             request_id="request-survivor", authority_profile="sole_survivor",
         )
-        result = reserve_sequence(root, survivor, inventory(), lambda: 20.0)
+        result = reserve(root, survivor, inventory(), lambda: 20.0)
         assert result["state"] == "waiting_for_preemption"
         assert result["preempts_lease_id"] == first["lease_id"]
         state = json.loads(
@@ -347,21 +434,37 @@ def test_candidate_post_state_includes_sequence_and_nonresident_model_bytes():
         constrained = inventory()
         constrained["host"]["available_host_bytes"] = 70 * GIB
         constrained["resident_models"] = []
+        constrained["models"][0]["loaded"] = False
+        constrained["models"][0].pop("loaded_context")
         request = sequence_request()
         request["route"] = {**route(), "loaded": False}
-        result = reserve_sequence(root, request, constrained, lambda: 10.0)
+        result = reserve(root, request, constrained, lambda: 10.0)
         assert result == {"state": "deferred", "reasons": ["physical_capacity"]}
-        request = sequence_request(request_id="request-unknown-residency")
-        request["route"] = {key: value for key, value in route().items()
-                            if key != "loaded"}
-        result = reserve_sequence(root, request, inventory(), lambda: 10.0)
-        assert result == {"state": "deferred", "reasons": [
-            "active_leases:0:model",
-        ]}
         request = sequence_request(request_id="request-kv")
-        request["route"] = {**route(), "kv_estimate_bytes": 60 * GIB}
-        result = reserve_sequence(root, request, inventory(), lambda: 10.0)
+        exact_sequence_limit = inventory()
+        exact_sequence_limit["host"]["available_host_bytes"] = 52 * GIB
+        result = reserve(root, request, exact_sequence_limit, lambda: 10.0)
         assert result == {"state": "deferred", "reasons": ["physical_capacity"]}
+
+
+def test_caller_route_facts_are_replaced_by_fresh_r2_validation():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        request = sequence_request()
+        request["route"] = {
+            **route(), "loaded": False, "kv_estimate_bytes": 1,
+            "prompt_tokens": 0,
+        }
+        request["requirements"] = {
+            "required_capabilities": ["caller-invented"],
+            "minimum_context_tokens": 65_536,
+        }
+        result = reserve(root, request, inventory(), lambda: 10.0)
+        normalized = result["request"]["route"]
+        assert normalized["loaded"] is True
+        assert normalized["kv_estimate_bytes"] == 65_536 * 1024
+        assert normalized["prompt_tokens"] == 1_024
 
 
 def test_scheduling_snapshot_cannot_come_from_caller_inventory():
@@ -372,24 +475,26 @@ def test_scheduling_snapshot_cannot_come_from_caller_inventory():
         supplied = inventory()
         supplied["scheduling_policy"] = accepted_scheduling_policy()
         with unittest.TestCase().assertRaisesRegex(ValueError, "scheduling-policy"):
-            reserve_sequence(root, sequence_request(), supplied, lambda: 10.0)
+            reserve(root, sequence_request(), supplied, lambda: 10.0)
 
 
 def test_front_release_never_assigns_a_work_waiter():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        coin = reserve_sequence(
+        capabilities = {}
+        coin = reserve(
             root,
             sequence_request("coin-request", "coin", "front", "proxy:coin-front"),
-            inventory(), lambda: 10.0,
+            inventory(), lambda: 10.0, capabilities,
         )
-        reserve_sequence(root, sequence_request(), inventory(), lambda: 11.0)
-        waiter = reserve_sequence(
+        reserve(root, sequence_request(), inventory(), lambda: 11.0)
+        waiter = reserve(
             root, sequence_request("request-survivor", "sole_survivor"),
             inventory(), lambda: 12.0,
         )
-        release_sequence(root, coin["lease_id"], ended_observation(coin, 13.0),
+        release_sequence(root, coin["lease_id"],
+                         ended_observation(coin, 13.0, capabilities[coin["lease_id"]]),
                          lambda: 13.0)
         state = json.loads(
             (root / "state" / "inference-capacity.json").read_text(encoding="utf-8")
@@ -412,14 +517,16 @@ def test_sequence_identity_is_bound_to_exact_worker_lease():
         for index, mutation in enumerate(mutations):
             request = {**sequence_request(f"request-forged-{index}"), **mutation}
             with unittest.TestCase().assertRaisesRegex(ValueError, "worker and inference"):
-                reserve_sequence(root, request, inventory(), lambda: 10.0)
+                reserve(root, request, inventory(), lambda: 10.0)
 
 
 def test_waiter_selection_recomputes_trusted_age_within_band():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        active = reserve_sequence(root, sequence_request(), inventory(), lambda: 10.0)
+        capabilities = {}
+        active = reserve(root, sequence_request(), inventory(), lambda: 10.0,
+                         capabilities)
         state_path = root / "state" / "inference-capacity.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         template = state["leases"][active["lease_id"]]
@@ -437,34 +544,85 @@ def test_waiter_selection_recomputes_trusted_age_within_band():
             waiting["request"]["role"] = role
             state["leases"][lease_id] = waiting
         state_path.write_text(json.dumps(state), encoding="utf-8")
-        release_sequence(root, active["lease_id"], ended_observation(active, 21_000.0),
+        release_sequence(root, active["lease_id"],
+                         ended_observation(active, 21_000.0,
+                                           capabilities[active["lease_id"]]),
                          lambda: 21_000.0)
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        assert state["leases"]["old-gardener"]["state"] == "starting"
+        assert state["leases"]["old-gardener"]["state"] == "ready_for_revalidation"
         assert state["leases"]["old-gardener"]["priority"] == 699
         assert state["leases"]["new-auditor"]["state"] == "waiting_for_preemption"
+
+
+def test_waiter_requires_fresh_reservation_after_release():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        capabilities = {}
+        active = reserve(root, sequence_request(), inventory(), lambda: 10.0,
+                         capabilities)
+        waiter_request = sequence_request(
+            "request-survivor", authority_profile="sole_survivor",
+        )
+        waiter = reserve(root, waiter_request, inventory(), lambda: 20.0)
+        release_sequence(
+            root, active["lease_id"],
+            ended_observation(active, 30.0, capabilities[active["lease_id"]]),
+            lambda: 30.0,
+        )
+        state_path = root / "state" / "inference-capacity.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["leases"][waiter["lease_id"]]["state"] == "ready_for_revalidation"
+        stale = inventory()
+        stale["host"]["gtt_total_fresh"] = False
+        deferred = reserve(root, waiter_request, stale, lambda: 31.0)
+        assert deferred["state"] == "deferred"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["leases"][waiter["lease_id"]]["state"] == "ready_for_revalidation"
+        resumed = reserve(root, waiter_request, inventory(), lambda: 32.0)
+        assert resumed["state"] == "starting"
+        assert resumed["backend_sequence"] == 1
 
 
 def test_release_requires_observed_sequence_end():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
-        lease = reserve_sequence(root, sequence_request(), inventory(), lambda: 10.0)
+        capabilities = {}
+        lease = reserve(root, sequence_request(), inventory(), lambda: 10.0,
+                        capabilities)
         assert lease["release_observer_identity"] == "observer:inference-backend"
+        assert "observer_capability" not in lease
+        assert "observer_capability_digest" not in lease
+        assert len(capabilities[lease["lease_id"]]) == 32
+        durable = json.loads(
+            (root / "state" / "inference-capacity.json").read_text(encoding="utf-8")
+        )["leases"][lease["lease_id"]]
+        assert len(durable["observer_capability_digest"]) == 64
+        assert "observer_capability" not in durable
         adversarial = (
             {"backend_sequence": lease["backend_sequence"], "sequence_active": False},
-            {**ended_observation(lease, 20.0), "observer_identity": "caller:forged"},
-            ended_observation(lease, 10.0),
+            ended_observation(lease, 20.0, b"x" * 32),
+            {**ended_observation(lease, 20.0, b"forged"),
+             "observer_identity": "caller:forged"},
+            ended_observation(lease, 10.0, capabilities[lease["lease_id"]]),
         )
         for observed in adversarial:
             incomplete = release_sequence(root, lease["lease_id"], observed,
                                           lambda: 20.0)
             assert incomplete["state"] == "release_requested"
         released = release_sequence(
-            root, lease["lease_id"], ended_observation(lease, 30.0), lambda: 30.0,
+            root, lease["lease_id"],
+            ended_observation(lease, 30.0, capabilities[lease["lease_id"]]),
+            lambda: 30.0,
         )
         assert released["state"] == "released"
         assert released["observed_release"]["observed_monotonic"] == 30.0
+        assert "observer_capability" not in released["observed_release"]
+        durable = json.loads(
+            (root / "state" / "inference-capacity.json").read_text(encoding="utf-8")
+        )["leases"][lease["lease_id"]]
+        assert "observer_capability" not in durable["observed_release"]
 
 
 def load_tests(_loader, _tests, _pattern):
