@@ -1,6 +1,7 @@
 import hashlib
 import inspect
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +9,7 @@ from pathlib import Path
 from ecosystem.inference_capacity import (
     effective_priority,
     realize_context_tokens,
+    register_proxy_observer_adapter,
     release_sequence,
     reserve_sequence,
     resource_envelope,
@@ -304,15 +306,27 @@ def sequence_request(request_id="request-one", authority_profile="ordinary",
     }
 
 
+def proxy_process_identity(generation=1):
+    pid = os.getpid()
+    stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(
+        ")", 1,
+    )[1].split()
+    return {
+        "pid": pid,
+        "proc_start_ticks": int(stat_fields[19]),
+        "generation": generation,
+    }
+
+
 def reserve(root, request, current_inventory, clock, capabilities=None):
     def observer_sink(capability, binding):
         if capabilities is not None:
             capabilities[binding["lease_id"]] = capability
 
-    return reserve_sequence(
-        root, request, current_inventory, clock,
-        observer_capability_sink=observer_sink,
+    register_proxy_observer_adapter(
+        root, request["proxy_identity"], proxy_process_identity(), observer_sink,
     )
+    return reserve_sequence(root, request, current_inventory, clock)
 
 
 def ended_observation(lease, observed_monotonic, capability):
@@ -320,6 +334,7 @@ def ended_observation(lease, observed_monotonic, capability):
         "lease_id": lease["lease_id"],
         "request_id": lease["request"]["request_id"],
         "proxy_identity": lease["proxy_identity"],
+        "proxy_process_identity": lease["proxy_process_identity"],
         "observer_identity": "observer:inference-backend",
         "backend_sequence": lease["backend_sequence"],
         "backend_sequence_state": "ended",
@@ -582,6 +597,65 @@ def test_waiter_requires_fresh_reservation_after_release():
         resumed = reserve(root, waiter_request, inventory(), lambda: 32.0)
         assert resumed["state"] == "starting"
         assert resumed["backend_sequence"] == 1
+
+
+def test_ready_waiter_accepts_fresh_normalized_realization():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        capabilities = {}
+        active = reserve(root, sequence_request(), inventory(), lambda: 10.0,
+                         capabilities)
+        waiter_request = sequence_request(
+            "request-survivor", authority_profile="sole_survivor",
+        )
+        waiter = reserve(root, waiter_request, inventory(), lambda: 20.0)
+        release_sequence(
+            root, active["lease_id"],
+            ended_observation(active, 30.0, capabilities[active["lease_id"]]),
+            lambda: 30.0,
+        )
+        fresh = inventory()
+        fresh["models"][0]["loaded"] = False
+        fresh["models"][0].pop("loaded_context")
+        fresh["resident_models"] = []
+        resumed = reserve(root, waiter_request, fresh, lambda: 31.0)
+        assert resumed["lease_id"] == waiter["lease_id"]
+        assert resumed["state"] == "starting"
+        assert resumed["request"]["route"]["loaded"] is False
+
+
+def test_reservation_caller_cannot_choose_observer_capability_sink():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        trusted_capabilities = {}
+        captured_by_caller = []
+
+        def trusted_sink(capability, binding):
+            trusted_capabilities[binding["lease_id"]] = capability
+
+        forged_process = proxy_process_identity(7)
+        forged_process["proc_start_ticks"] += 1
+        with unittest.TestCase().assertRaisesRegex(
+                ValueError, "proxy process identity"):
+            register_proxy_observer_adapter(
+                root, "proxy:work", forged_process, trusted_sink,
+            )
+        register_proxy_observer_adapter(
+            root, "proxy:work", proxy_process_identity(7), trusted_sink,
+        )
+        request = sequence_request()
+        request["observer_capability_sink"] = captured_by_caller.append
+        with unittest.TestCase().assertRaisesRegex(
+                ValueError, "observer capability adapter"):
+            reserve_sequence(root, request, inventory(), lambda: 10.0)
+        request.pop("observer_capability_sink")
+        lease = reserve_sequence(root, request, inventory(), lambda: 10.0)
+        assert len(trusted_capabilities[lease["lease_id"]]) == 32
+        assert captured_by_caller == []
+        assert "observer_capability" not in lease
+        assert lease["proxy_process_identity"] == proxy_process_identity(7)
 
 
 def test_release_requires_observed_sequence_end():

@@ -23,6 +23,28 @@ LEASE_STATES = frozenset((
     "starting", "active", "preemption_requested", "waiting_for_preemption",
     "ready_for_revalidation", "release_requested", "released",
 ))
+_proxy_observer_adapters = {}
+
+
+def register_proxy_observer_adapter(
+    root: Path,
+    proxy_identity: str,
+    proxy_process_identity: dict,
+    capability_sink,
+) -> None:
+    """Register R4's trusted capability endpoint for one live proxy process."""
+    root = Path(root).resolve()
+    policy = _load_capacity_policy(root)
+    if proxy_identity not in {
+            policy["front_proxy_identity"], policy["work_proxy_identity"]}:
+        raise ValueError("invalid proxy observer identity")
+    process_identity = _validated_proxy_process_identity(proxy_process_identity)
+    if not callable(capability_sink):
+        raise ValueError("invalid proxy observer capability sink")
+    _proxy_observer_adapters[(str(root), proxy_identity)] = {
+        "proxy_process_identity": process_identity,
+        "capability_sink": capability_sink,
+    }
 
 
 def resource_envelope(
@@ -233,9 +255,8 @@ def reserve_sequence(
     request: dict,
     inventory: dict,
     clock,
-    observer_capability_sink=None,
 ) -> dict:
-    """Reserve after fresh R2 validation and issue observer capability via the sink."""
+    """Reserve after fresh R2 validation and notify R4's registered observer."""
     root = Path(root)
     now = _clock_value(clock)
     if type(inventory) is not dict:
@@ -278,7 +299,8 @@ def reserve_sequence(
         )
         prior = _lease_for_request(state, validated["request_id"])
         if prior is not None:
-            if prior["request"] != validated:
+            if (_stable_sequence_request(prior["request"])
+                    != _stable_sequence_request(validated)):
                 raise ValueError("inference request identity mismatch")
             if prior["state"] != "ready_for_revalidation":
                 return _public_lease(prior)
@@ -332,6 +354,9 @@ def reserve_sequence(
             "expires_monotonic": now + capacity_policy["lease_seconds"],
             "preemption_method": validated["preemption_method"],
             "release_observer_identity": capacity_policy["release_observer_identity"],
+            "proxy_process_identity": (
+                prior["proxy_process_identity"] if retrying else None
+            ),
             "observer_capability_digest": (
                 prior["observer_capability_digest"] if retrying else None
             ),
@@ -354,16 +379,19 @@ def reserve_sequence(
                 "physical_capacity",
             ]}
         if not retrying:
-            if not callable(observer_capability_sink):
-                raise ValueError("trusted observer capability sink is required")
+            adapter = _registered_proxy_observer_adapter(
+                root, validated["proxy_identity"],
+            )
             observer_capability = secrets.token_bytes(32)
+            lease["proxy_process_identity"] = adapter["proxy_process_identity"]
             lease["observer_capability_digest"] = hashlib.sha256(
                 observer_capability,
             ).hexdigest()
-            observer_capability_sink(observer_capability, {
+            adapter["capability_sink"](observer_capability, {
                 "lease_id": lease_id,
                 "request_id": validated["request_id"],
                 "proxy_identity": validated["proxy_identity"],
+                "proxy_process_identity": lease["proxy_process_identity"],
                 "observer_identity": lease["release_observer_identity"],
             })
         if preempted is not None:
@@ -479,6 +507,9 @@ def _validate_sequence_request(request: object, policy: dict, scheduling: dict) 
     }
     if type(request) is not dict or not required <= request.keys():
         raise ValueError("invalid inference sequence request")
+    if any(field in request for field in (
+            "observer_capability", "observer_capability_sink", "observer_adapter")):
+        raise ValueError("observer capability adapter is a trusted R4 dependency")
     durable = _durable_copy(request)
     for field in ("request_id", "worker_lease_id", "worker_request_id",
                   "owner_identity", "proxy_identity", "authority_profile",
@@ -664,6 +695,8 @@ def _trusted_release_observation(
         and observed.get("lease_id") == lease["lease_id"]
         and observed.get("request_id") == lease["request"]["request_id"]
         and observed.get("proxy_identity") == lease["proxy_identity"]
+        and observed.get("proxy_process_identity") == lease["proxy_process_identity"]
+        and _proxy_process_identity_is_current(lease["proxy_process_identity"])
         and lease.get("release_observer_identity") == policy["release_observer_identity"]
         and observed.get("observer_identity") == lease["release_observer_identity"]
         and observed.get("backend_sequence") == backend_sequence
@@ -677,6 +710,48 @@ def _public_lease(lease: dict) -> dict:
     public = _durable_copy(lease)
     public.pop("observer_capability_digest", None)
     return public
+
+
+def _stable_sequence_request(request: dict) -> dict:
+    return {key: value for key, value in request.items() if key != "route"}
+
+
+def _validated_proxy_process_identity(identity: object) -> dict:
+    if (type(identity) is not dict
+            or set(identity) != {"pid", "proc_start_ticks", "generation"}
+            or _positive_integer(identity.get("pid")) is None
+            or _positive_integer(identity.get("proc_start_ticks")) is None
+            or _positive_integer(identity.get("generation")) is None
+            or not _proxy_process_identity_is_current(identity)):
+        raise ValueError("invalid proxy process identity")
+    return _durable_copy(identity)
+
+
+def _proxy_process_identity_is_current(identity: object) -> bool:
+    if type(identity) is not dict:
+        return False
+    pid = identity.get("pid")
+    start_ticks = identity.get("proc_start_ticks")
+    if (_positive_integer(pid) is None
+            or _positive_integer(start_ticks) is None):
+        return False
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").rsplit(
+            ")", 1,
+        )[1].split()
+        return int(fields[19]) == start_ticks
+    except (FileNotFoundError, IndexError, OSError, ValueError):
+        return False
+
+
+def _registered_proxy_observer_adapter(root: Path, proxy_identity: str) -> dict:
+    adapter = _proxy_observer_adapters.get((str(Path(root).resolve()), proxy_identity))
+    if (type(adapter) is not dict
+            or not callable(adapter.get("capability_sink"))
+            or not _proxy_process_identity_is_current(
+                adapter.get("proxy_process_identity"))):
+        raise ValueError("trusted proxy observer adapter is not registered")
+    return adapter
 
 
 @contextmanager
