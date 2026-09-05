@@ -17,11 +17,15 @@ def _validator(values):
         raise ValueError("run_seconds exceeds lease_seconds")
 
 
-def _active_snapshot():
+def _active_snapshot(values=None):
+    values = values or {"run_seconds": 5, "lease_seconds": 10}
+    canonical = json.dumps(
+        values, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
     return {
         "schema_version": 1,
-        "values": {"run_seconds": 5, "lease_seconds": 10},
-        "digest": "a" * 64,
+        "values": values,
+        "digest": hashlib.sha256(canonical).hexdigest(),
         "activated_at": "old",
         "source_path": "policy.json",
     }
@@ -114,6 +118,25 @@ def test_no_accepted_boot_snapshot_is_an_explicit_failure():
     )
     assert result == {}
     assert error == "no accepted policy snapshot"
+
+
+def test_corrupt_accepted_snapshots_are_never_last_known_good():
+    wrong_digest = _active_snapshot()
+    wrong_digest["digest"] = "a" * 64
+    nonfinite = _active_snapshot()
+    nonfinite["values"]["run_seconds"] = float("nan")
+    cyclic = _active_snapshot()
+    cyclic["values"]["cycle"] = cyclic["values"]
+    semantically_invalid = _active_snapshot(
+        {"run_seconds": 11, "lease_seconds": 10},
+    )
+    for active in (wrong_digest, nonfinite, cyclic, semantically_invalid):
+        result, error = adopt_policy(
+            active, {"run_seconds": 5, "lease_seconds": 10}, _validator,
+            {"boot_id": "b", "monotonic": 10, "utc": "new"},
+        )
+        assert result is active
+        assert error == "no accepted policy snapshot"
 
 
 def test_publication_failure_preserves_the_prior_snapshot():

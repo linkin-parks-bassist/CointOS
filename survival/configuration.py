@@ -36,8 +36,8 @@ def load_json_policy(path: Path, validate: Callable) -> dict:
     return values
 
 
-def _accepted_snapshot(active: dict) -> bool:
-    return (
+def _accepted_snapshot(active: dict, validate: Callable) -> bool:
+    valid_shape = (
         type(active) is dict
         and set(active) == SNAPSHOT_FIELDS
         and type(active["schema_version"]) is int
@@ -51,6 +51,17 @@ def _accepted_snapshot(active: dict) -> bool:
         and type(active["source_path"]) is str
         and bool(active["source_path"])
     )
+    if not valid_shape:
+        return False
+    try:
+        canonical = json.dumps(
+            active["values"], sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ).encode("utf-8")
+        values = json.loads(canonical)
+        validate(values)
+    except (TypeError, ValueError):
+        return False
+    return hashlib.sha256(canonical).hexdigest() == active["digest"]
 
 
 def adopt_policy(
@@ -60,7 +71,7 @@ def adopt_policy(
     clock: dict,
 ) -> tuple[dict, str | None]:
     """Return a complete replacement snapshot, or the unchanged accepted one."""
-    if not _accepted_snapshot(active):
+    if not _accepted_snapshot(active, validate):
         return active, "no accepted policy snapshot"
     try:
         canonical = json.dumps(
