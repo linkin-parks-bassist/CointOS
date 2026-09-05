@@ -282,3 +282,60 @@ Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
   468/468 (457 baseline + 11).
 - Next on the critical path: R6 (context continuity; consumes R5's
   checkpoint states and A1's generation semantics).
+
+## 2026-09-06: R6 — context continuation state machine (`41308d3`)
+
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
+
+- New `ecosystem/continuation.py`: pure functions, plain data, no I/O. The
+  job record gains `context_state` (running / handoff_requested /
+  handoff_durable / continuation_ready / paused_for_resources) and
+  `context_generation`. `observe_context_usage(adapter_event, lease)`
+  normalizes a backend usage event against the lease `context_tokens`
+  (overflow >1.0 is a fact, not an error). `context_transition(job, usage,
+  rollover_fraction)` moves running→handoff_requested at the fraction,
+  which is validated 0 < f < 1 (rollover must precede the backend limit);
+  a requested context stays requested at any overflow — overflow is never
+  terminal. `attest_handoff` (non-empty summary + integer token_count),
+  `handoff_budget` (the destination prompt/handoff/tool/output partition
+  must fit its context; infeasible destinations are rejected, never
+  trimmed), `prepare_continuation` (advances ONLY context_generation,
+  binds the destination lease and budget, carries evidence by reference;
+  null handoff stays visibly continuable via `handoff_missing`; over-budget
+  handoff and double continuation fail explicitly), and `new_attempt` (the
+  ONLY path that increments agent_generation; resets context_generation to
+  1). Identity law by construction: transition fragments never carry
+  agent_generation or context_generation. Contract:
+  `docs/decisions/0010-context-continuation-state-machine.md`.
+- Executor (clean break): `handoff_pending`, `fresh_context_after_handoff`
+  and `context_rollover_usage` are deleted. Rollover detection runs in
+  `_run_preemptibly` (via the module; the outcome contract `context_rollover`
+  / `context_usage` / "total/limit" reason is unchanged — the preemption
+  tests pass untouched) AND at clean run end: a run finishing past the
+  threshold now rolls over instead of resuming a near-full session (a gap
+  that previously existed only on the preemption path). On a
+  handoff_requested run finishing, the executor reads the handoff artifact,
+  attests it (or writes the degraded artifact), archives the old context
+  log by reference, pops the session, and returns the job to the scheduler.
+  The continuation launches at ROUTING time with the freshly admitted lease
+  as `destination_lease` — a model change between handoff and relaunch is
+  honoured, and the rollover prompt (with degraded note when the handoff was
+  missing) is written there, not pre-prepared. A deferred job with a live
+  session and a plain running context enters paused_for_resources;
+  continuation-in-flight states are never clobbered by deferral. Launch
+  consumes continuation_ready/paused_for_resources back to running and
+  initializes context_generation to 1 on first launch. The handoff token
+  count is estimated at the adapter boundary (~1 token / 3 chars,
+  conservative); the gate is admission, not accounting.
+- Scope ruling: `new_attempt` is module-level. Wiring a control-plane
+  re-attempt of a R5 checkpointed job through it (e.g. amend/re-enqueue of
+  checkpoint_required) is a separate follow-up, not R6.
+- Tests: `tests/test_continuation.py` (10, function-based + load_tests;
+  Step-1 identity test verbatim from the plan plus the plan's named tests
+  and an explicit state-machine-advance test). Full suite 478/478
+  (468 baseline + 10). `tests/test_executor.py` needed no changes — the
+  existing harness exercises launch_runner_round with real children, and a
+  fake execute_next rollover cycle would need the opencode binary; the live
+  rollover smoke remains a manual operator procedure like R8's.
+- Next on the critical path: R7 (pressure, actual OOM, deterministic
+  recovery; consumes R6's continuation states) and A2 (needs A1+R5).
