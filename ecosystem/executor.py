@@ -165,14 +165,28 @@ def gated_child_release(record: dict) -> dict:
     return record
 
 
+def _process_group_alive(pgid: int) -> bool | None:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return None
+
+
 def _reaped_outcome(record: dict, returncode: int) -> dict:
+    group_alive = _process_group_alive(record["pgid"])
+    state = "reaped" if group_alive is False else "reconciliation_required"
     outcome = {
-        "state": "reaped",
+        "state": state,
         "returncode": returncode,
         "pid": record["pid"],
         "start_ticks": record["start_ticks"],
+        "pgid": record["pgid"],
+        "process_group_alive": group_alive,
     }
-    record["state"] = "reaped"
+    record["state"] = state
     record["outcome"] = outcome
     return outcome
 
@@ -189,8 +203,10 @@ def gated_child_wait(record: dict, timeout: float) -> dict:
 
 def gated_child_cleanup(record: dict, timeout: float = 0.2) -> dict:
     """Cancel, terminate, and reap an owned gated child within bounded waits."""
-    if record.get("outcome") is not None:
+    if (record.get("outcome") is not None
+            and record["outcome"].get("state") == "reaped"):
         return record["outcome"]
+    record["outcome"] = None
     _close_record_fd(record, "gate_write_fd")
     process = record["process"]
     returncode = process.poll()
@@ -231,6 +247,15 @@ def gated_child_cleanup(record: dict, timeout: float = 0.2) -> dict:
                 record["outcome"] = outcome
                 return outcome
     _close_record_fd(record, "config_fd")
+    group_alive = _process_group_alive(record["pgid"])
+    if group_alive is True:
+        try:
+            os.killpg(record["pgid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and _process_group_alive(record["pgid"]) is True:
+            time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
     return _reaped_outcome(record, returncode)
 
 
@@ -290,17 +315,23 @@ def _runner_sequence_request(root: Path, job: dict, worker_lease: dict,
 
 
 def _observe_stopped_worker(root: Path, worker_lease: dict, launch_record: dict,
-                            outcome: dict, clock, release, observe) -> None:
-    release(root, worker_lease["lease_id"], outcome, clock)
-    observe(root, [{
+                            process_outcome: dict, release_outcome: dict,
+                            clock, release, observe) -> None:
+    if (process_outcome.get("state") != "reaped"
+            or process_outcome.get("process_group_alive") is not False):
+        raise ValueError("worker process group termination is not established")
+    release(root, worker_lease["lease_id"], release_outcome, clock)
+    observation = {
         "lease_id": worker_lease["lease_id"],
         "pid": launch_record["pid"],
         "process_start_ticks": launch_record["start_ticks"],
         "process_group_alive": False,
         "backend_request_active": False,
         "inference_lease_active": False,
-        "checkpoint_observed": True,
-    }], clock)
+    }
+    if type(process_outcome.get("checkpoint_observed")) is bool:
+        observation["checkpoint_observed"] = process_outcome["checkpoint_observed"]
+    observe(root, [observation], clock)
 
 
 def launch_runner_round(
@@ -323,6 +354,8 @@ def launch_runner_round(
     release=release_worker,
     observe=observe_workers,
     cancel=cancel_proxy,
+    refresh_inventory=snapshot,
+    sleeper=time.sleep,
     clock=time.monotonic,
 ) -> dict:
     """Compose one trusted R1/R3/R4 runner admission before OpenCode can exec."""
@@ -334,15 +367,25 @@ def launch_runner_round(
             runner_generation=generation,
             runner_worker_request_id=f"{job['id']}:runner:{generation}:worker",
             runner_sequence_request_id=f"{job['id']}:runner:{generation}:sequence",
+            runner_phase="generation_claimed",
             updated_at=cli.now(),
         )
         job.pop("worker_lease_id", None)
         job.pop("inference_lease_id", None)
+        job.pop("runner_worker_request", None)
+        job.pop("runner_sequence_request", None)
         cli.atomic_json(job_path, job)
     elif job.get("state") != "runner_starting":
         raise ValueError("runner round requires ready or runner_starting job")
 
-    worker_request = _runner_worker_request(job, route_record)
+    worker_request = job.get("runner_worker_request")
+    if worker_request is None:
+        worker_request = _runner_worker_request(job, route_record)
+        job["runner_worker_request"] = worker_request
+    elif type(worker_request) is not dict:
+        raise ValueError("invalid durable runner worker request")
+    job["runner_phase"] = "r1_acquire_intent"
+    cli.atomic_json(job_path, job)
     worker_lease = None
     launch_record = None
     inference_lease = None
@@ -355,6 +398,7 @@ def launch_runner_round(
             cli.atomic_json(job_path, job)
             return {"state": "deferred", "job": job}
         job["worker_lease_id"] = worker_lease["lease_id"]
+        job["runner_phase"] = "r1_acquired"
         cli.atomic_json(job_path, job)
 
         provisional = {
@@ -366,22 +410,71 @@ def launch_runner_round(
         environment = os.environ.copy()
         environment.update(opencode["environment"])
         environment["AGENT_JOB_ID"] = job["id"]
+        job["runner_phase"] = "spawn_intent"
+        cli.atomic_json(job_path, job)
         launch_record = launch(
             opencode["fd"], command, environment,
             stdin=stdin, stdout=stdout, stderr=stderr,
         )
+        job.update(
+            runner_phase="spawned", executor_pid=launch_record["pid"],
+            executor_start_ticks=launch_record["start_ticks"],
+            executor_pgid=launch_record["pgid"],
+        )
+        cli.atomic_json(job_path, job)
+        job["runner_phase"] = "process_register_intent"
+        cli.atomic_json(job_path, job)
         register(
             root, worker_lease["lease_id"], launch_record["pid"],
             launch_record["start_ticks"], clock,
         )
+        job["runner_phase"] = "process_registered"
+        cli.atomic_json(job_path, job)
         sequence_request = _runner_sequence_request(
             root, job, worker_lease, worker_request, route_record,
         )
+        job["runner_sequence_request"] = sequence_request
+        job["runner_phase"] = "r3_reserve_intent"
+        cli.atomic_json(job_path, job)
         inference_lease = reserve(root, sequence_request, inventory, clock)
+        while inference_lease.get("state") in {
+            "waiting_for_preemption", "ready_for_revalidation",
+        }:
+            job.update(
+                runner_phase="r3_waiting",
+                inference_lease_id=inference_lease["lease_id"],
+                updated_at=cli.now(),
+            )
+            cli.atomic_json(job_path, job)
+            if clock() >= worker_request["deadline_monotonic"]:
+                outcome = gated_child_cleanup(launch_record)
+                job.update(
+                    state="reconciliation_required", updated_at=cli.now(),
+                    reconciliation_reason=(
+                        "inference waiter reached its deadline without withdrawal support"
+                    ),
+                    cleanup_state=outcome["state"],
+                )
+                cli.atomic_json(job_path, job)
+                return {"state": "reconciliation_required", "job": job}
+            sleeper(0.05)
+            inventory = refresh_inventory()
+            inference_lease = reserve(root, sequence_request, inventory, clock)
         if inference_lease.get("state") == "deferred":
             outcome = gated_child_cleanup(launch_record)
+            if outcome["state"] != "reaped":
+                job.update(
+                    state="reconciliation_required", updated_at=cli.now(),
+                    worker_lease_id=worker_lease["lease_id"],
+                    executor_pid=launch_record["pid"],
+                    executor_start_ticks=launch_record["start_ticks"],
+                    executor_pgid=launch_record["pgid"],
+                    reconciliation_reason="gated process group termination is unresolved",
+                )
+                cli.atomic_json(job_path, job)
+                return {"state": "reconciliation_required", "job": job}
             _observe_stopped_worker(
-                root, worker_lease, launch_record,
+                root, worker_lease, launch_record, outcome,
                 {"state": "deferred", "returncode": outcome["returncode"]},
                 clock, release, observe,
             )
@@ -389,7 +482,12 @@ def launch_runner_round(
                        runner_deferred_reasons=inference_lease.get("reasons", []))
             cli.atomic_json(job_path, job)
             return {"state": "deferred", "job": job}
+        if (inference_lease.get("state") not in {"starting", "active"}
+                or type(inference_lease.get("backend_sequence")) is not int
+                or type(inference_lease.get("expected_release_binding")) is not dict):
+            raise ValueError("inference reservation is not credential-ready")
         job["inference_lease_id"] = inference_lease["lease_id"]
+        job["runner_phase"] = "r3_reserved"
         cli.atomic_json(job_path, job)
         expected = (
             route_record["model_id"], route_record["context_tokens_per_sequence"],
@@ -399,14 +497,22 @@ def launch_runner_round(
             inference_lease.get("model_id"), inference_lease.get("context_tokens"),
             inference_lease.get("max_output_tokens"),
         )
+        job["runner_phase"] = "credential_issue_intent"
+        cli.atomic_json(job_path, job)
         issue(root, inference_lease,
               lambda credential: populate(opencode, credential), clock)
         credential_issued = True
+        job["runner_phase"] = "credential_issued"
+        cli.atomic_json(job_path, job)
         if actual != expected:
             raise ValueError("inference lease limits differ from admitted route")
+        job["runner_phase"] = "gate_release_intent"
+        cli.atomic_json(job_path, job)
         release_gate(launch_record)
+        job["runner_phase"] = "gate_released"
+        cli.atomic_json(job_path, job)
         job.update(
-            state="running", updated_at=cli.now(),
+            state="running", runner_phase="running", updated_at=cli.now(),
             worker_lease_id=worker_lease["lease_id"],
             inference_lease_id=inference_lease["lease_id"],
             executor_pid=launch_record["pid"],
@@ -439,26 +545,44 @@ def launch_runner_round(
                         f"{type(cancel_error).__name__}: {cancel_error}"
                     )
         else:
+            cleanup_outcome = None
             if launch_record is not None:
-                gated_child_cleanup(launch_record)
+                cleanup_outcome = gated_child_cleanup(launch_record)
+            if cleanup_outcome is not None and cleanup_outcome["state"] != "reaped":
+                job.update(
+                    state="reconciliation_required", updated_at=cli.now(),
+                    worker_lease_id=worker_lease["lease_id"],
+                    executor_pid=launch_record["pid"],
+                    executor_start_ticks=launch_record["start_ticks"],
+                    executor_pgid=launch_record["pgid"],
+                    reconciliation_reason="gated process group termination is unresolved",
+                )
+                cli.atomic_json(job_path, job)
+                raise
             if worker_lease is not None:
-                worker_outcome = {
-                    "state": "failed", "error": f"{type(error).__name__}: {error}",
-                }
                 if launch_record is not None:
                     _observe_stopped_worker(
-                        root, worker_lease, launch_record, worker_outcome,
+                        root, worker_lease, launch_record, cleanup_outcome,
+                        {"state": "failed",
+                         "error": f"{type(error).__name__}: {error}"},
                         clock, release, observe,
                     )
                 else:
+                    worker_outcome = {
+                        "state": "failed",
+                        "error": f"{type(error).__name__}: {error}",
+                    }
                     release(root, worker_lease["lease_id"], worker_outcome, clock)
-                    observe(root, [{
-                        "lease_id": worker_lease["lease_id"],
-                        "process_group_alive": False,
-                        "backend_request_active": False,
-                        "inference_lease_active": False,
-                        "checkpoint_observed": True,
-                    }], clock)
+                    job.update(
+                        state="reconciliation_required", updated_at=cli.now(),
+                        worker_lease_id=worker_lease["lease_id"],
+                        reconciliation_reason=(
+                            "R1 cannot quiesce a released lease without registered process "
+                            "or owner-supported never-spawned evidence"
+                        ),
+                    )
+                    cli.atomic_json(job_path, job)
+                    raise
             job.update(state="ready", updated_at=cli.now(),
                        runner_deferred_reasons=[f"{type(error).__name__}: {error}"])
         cli.atomic_json(job_path, job)
@@ -481,11 +605,26 @@ def close_runner_round(
     if ("runner_closed_generation" in job
             and job["runner_closed_generation"] == job.get("runner_generation")):
         return {"state": job["runner_close_state"]}
-    if job.get("state") == "reconciliation_required":
-        return {"state": "reconciliation_required"}
+    saved_outcome = job.get("runner_close_outcome")
+    if saved_outcome is not None and saved_outcome != child_outcome:
+        raise ValueError("runner close outcome changed during replay")
+    if saved_outcome is None:
+        job["runner_close_outcome"] = json.loads(json.dumps(child_outcome, sort_keys=True))
+        job["runner_phase"] = "close_intent"
+        cli.atomic_json(job_path, job)
     inference_lease = context["inference_lease"]
     worker_lease = context["worker_lease"]
     launch_record = context["launch"]
+    if (child_outcome.get("state") != "reaped"
+            or child_outcome.get("process_group_alive") is not False):
+        job.update(
+            state="reconciliation_required", updated_at=cli.now(),
+            worker_lease_id=worker_lease["lease_id"],
+            inference_lease_id=inference_lease["lease_id"],
+            reconciliation_reason="runner process group termination is unresolved",
+        )
+        cli.atomic_json(job_path, job)
+        return {"state": "reconciliation_required"}
     evidence = termination(cli.ROOT, inference_lease["lease_id"])
     if evidence is None:
         job.update(
@@ -503,7 +642,7 @@ def close_runner_round(
     final_state = "run_finished" if child_outcome["returncode"] == 0 else "failed"
     worker_outcome = {"state": final_state, "returncode": child_outcome["returncode"]}
     _observe_stopped_worker(
-        cli.ROOT, worker_lease, launch_record, worker_outcome,
+        cli.ROOT, worker_lease, launch_record, child_outcome, worker_outcome,
         clock, release, observe,
     )
     job.update(state=final_state, updated_at=cli.now(),
@@ -544,6 +683,33 @@ def _process_alive(job: dict) -> bool:
     return False
 
 
+def _stop_recovered_runner(job: dict, timeout: float = 0.2) -> bool | None:
+    pid = job.get("executor_pid")
+    start_ticks = job.get("executor_start_ticks")
+    pgid = job.get("executor_pgid")
+    if any(type(value) is not int for value in (pid, start_ticks, pgid)):
+        return None
+    try:
+        identity = process_identity(pid)
+    except FileNotFoundError:
+        return _process_group_alive(pgid)
+    if identity["start_ticks"] != start_ticks or identity["pgid"] != pgid:
+        return None
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and _process_group_alive(pgid) is True:
+        time.sleep(min(0.01, max(0.0, deadline - time.monotonic())))
+    if _process_group_alive(pgid) is True:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            return False
+    return _process_group_alive(pgid)
+
+
 def recover_abandoned_jobs() -> int:
     recovered = 0
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
@@ -552,10 +718,67 @@ def recover_abandoned_jobs() -> int:
         except (OSError, json.JSONDecodeError):
             continue
         if (job.get("kind") != "agent-task"
-                or job.get("state") not in {"runner_starting", "running"}
-                or _process_alive(job)):
+                or job.get("state") not in {
+                    "runner_starting", "running", "reconciliation_required",
+                }):
+            continue
+        if (job.get("runner_close_outcome") is not None
+                and job.get("worker_lease_id") and job.get("inference_lease_id")):
+            group_alive = _stop_recovered_runner(job)
+            if group_alive is False:
+                context = {
+                    "worker_lease": {"lease_id": job["worker_lease_id"]},
+                    "inference_lease": {"lease_id": job["inference_lease_id"]},
+                    "launch": {
+                        "pid": job["executor_pid"],
+                        "start_ticks": job["executor_start_ticks"],
+                        "pgid": job["executor_pgid"],
+                    },
+                }
+                try:
+                    closed = close_runner_round(
+                        job, path, context, job["runner_close_outcome"])
+                except (OSError, RuntimeError, ValueError):
+                    closed = {"state": "reconciliation_required"}
+                if closed["state"] != "reconciliation_required":
+                    recovered += 1
+                    continue
+            job["recovery_process_group_alive"] = group_alive
+            job.update(state="reconciliation_required", updated_at=cli.now())
+            cli.atomic_json(path, job)
+            recovered += 1
+            continue
+        if (job.get("state") == "runner_starting"
+                and job.get("runner_phase") not in {
+                    "generation_claimed", "r1_acquire_intent", "r1_acquired",
+                }):
+            if job.get("inference_lease_id"):
+                try:
+                    cancel_result = cancel_proxy(
+                        cli.ROOT, job["inference_lease_id"], time.monotonic)
+                    job["recovery_cancel_state"] = cancel_result["state"]
+                except ValueError:
+                    job["recovery_cancel_state"] = "credential_absent"
+            job["recovery_process_group_alive"] = _stop_recovered_runner(job)
+            job.update(
+                state="reconciliation_required", updated_at=cli.now(),
+                reconciliation_reason=(
+                    f"restart cannot resolve admission prefix {job.get('runner_phase')!r}"
+                ),
+            )
+            cli.atomic_json(path, job)
+            cli.audit("task.reconciliation_required", job_id=job["id"],
+                      runner_phase=job.get("runner_phase"))
+            recovered += 1
             continue
         if job.get("inference_lease_id"):
+            try:
+                cancel_result = cancel_proxy(
+                    cli.ROOT, job["inference_lease_id"], time.monotonic)
+                job["recovery_cancel_state"] = cancel_result["state"]
+            except ValueError:
+                job["recovery_cancel_state"] = "credential_absent"
+            job["recovery_process_group_alive"] = _stop_recovered_runner(job)
             job.update(
                 state="reconciliation_required", updated_at=cli.now(),
                 reconciliation_reason="runner disappeared after inference reservation",
@@ -564,6 +787,8 @@ def recover_abandoned_jobs() -> int:
             cli.audit("task.reconciliation_required", job_id=job["id"],
                       inference_lease_id=job["inference_lease_id"])
             recovered += 1
+            continue
+        if _process_alive(job):
             continue
         if job.get("state") == "runner_starting":
             continue
@@ -709,7 +934,6 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
 
 def execute_next(run=subprocess.run) -> bool:
     cli.initialize()
-    recover_abandoned_jobs()
     if (cli.ROOT / "state/PAUSED").exists():
         print("ecosystem is paused")
         return False
@@ -720,6 +944,7 @@ def execute_next(run=subprocess.run) -> bool:
         except BlockingIOError:
             print("executor already active")
             return False
+        recover_abandoned_jobs()
         ready = []
         for path in sorted((cli.ROOT / "state/jobs").glob("*.json")):
             job = json.loads(path.read_text(encoding="utf-8"))
@@ -882,11 +1107,8 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                 job.pop("executor_pid", None)
             except subprocess.TimeoutExpired:
                 if 'context' in locals():
-                    gated_child_cleanup(context["launch"])
-                    close_runner_round(
-                        job, path, context,
-                        {"returncode": context["launch"]["process"].returncode},
-                    )
+                    cleanup_outcome = gated_child_cleanup(context["launch"])
+                    close_runner_round(job, path, context, cleanup_outcome)
                 if job.get("state") != "reconciliation_required":
                     job.update(state="failed", updated_at=cli.now(),
                                error="executor timed out after 1800 seconds")

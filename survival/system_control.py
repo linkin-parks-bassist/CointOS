@@ -31,6 +31,7 @@ SURVIVAL_UNITS = frozenset((
 ))
 DESTRUCTIBLE_SYSTEM_UNITS = frozenset(("lemond.service",))
 DESTRUCTIBLE_USER_UNITS = frozenset((
+    "agent-inference-proxy.service",
     "agent-models.service",
     "agent-telegram.service",
     "agent-notifier.service",

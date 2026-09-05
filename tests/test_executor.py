@@ -16,6 +16,7 @@ from ecosystem.executor import (
     close_runner_round,
     launch_runner_round,
     process_identity,
+    recover_abandoned_jobs,
 )
 
 
@@ -63,7 +64,9 @@ class ExecutorTest(IntakeTest):
                     "model_id": route["model_id"],
                     "context_tokens": route["context_tokens_per_sequence"],
                     "max_output_tokens": route["max_output_tokens"],
-                    "backend_sequence": 1, "request": request}
+                    "backend_sequence": 1,
+                    "expected_release_binding": {"lease_id": "sequence-lease"},
+                    "request": request}
 
         def issue(_root, _lease, sink, _clock):
             events.append("issue")
@@ -128,7 +131,8 @@ class ExecutorTest(IntakeTest):
             events.append(("observe_worker", observations[0]["inference_lease_active"]))
 
         result = close_runner_round(
-            job, job_path, context, {"returncode": 0},
+            job, job_path, context, {"state": "reaped", "returncode": 0,
+                                     "process_group_alive": False},
             termination=termination, revoke=revoke, release=release, observe=observe,
         )
         self.assertEqual(result["state"], "run_finished")
@@ -136,7 +140,8 @@ class ExecutorTest(IntakeTest):
                                   ("release_worker", "run_finished"),
                                   ("observe_worker", False)])
         replay = close_runner_round(
-            job, job_path, context, {"returncode": 0},
+            job, job_path, context, {"state": "reaped", "returncode": 0,
+                                     "process_group_alive": False},
             termination=termination, revoke=revoke, release=release, observe=observe,
         )
         self.assertEqual(replay["state"], "run_finished")
@@ -212,13 +217,16 @@ class ExecutorTest(IntakeTest):
 
         def launch(config_fd, *_args, **_kwargs):
             return {"pid": 100 + len(worker_requests), "start_ticks": 200,
+                    "pgid": 100 + len(worker_requests),
                     "config_fd": config_fd, "state": "blocked"}
 
         def reserve(_root, request, _inventory, _clock):
             sequence_requests.append(request)
             return {"state": "starting", "lease_id": f"sequence-{len(sequence_requests)}",
                     "model_id": "model-x", "context_tokens": 4096,
-                    "max_output_tokens": 128}
+                    "max_output_tokens": 128, "backend_sequence": 1,
+                    "expected_release_binding": {
+                        "lease_id": f"sequence-{len(sequence_requests)}"}}
 
         def release_gate(record):
             os.close(record["config_fd"])
@@ -263,7 +271,8 @@ class ExecutorTest(IntakeTest):
 
         def launch(config_fd, *_args, **_kwargs):
             nonlocal record
-            record = {"pid": 111, "start_ticks": 222, "config_fd": config_fd,
+            record = {"pid": 111, "start_ticks": 222, "pgid": 111,
+                      "config_fd": config_fd,
                       "gate_write_fd": -1, "state": "blocked", "outcome": {
                           "state": "reaped", "returncode": -15}}
             return record
@@ -284,7 +293,9 @@ class ExecutorTest(IntakeTest):
                 reserve=lambda _root, request, _inventory, _clock: {
                     "state": "starting", "lease_id": "sequence-failure",
                     "model_id": "model-x", "context_tokens": 4096,
-                    "max_output_tokens": 128, "request": request},
+                    "max_output_tokens": 128, "backend_sequence": 1,
+                    "expected_release_binding": {"lease_id": "sequence-failure"},
+                    "request": request},
                 issue=lambda _root, _lease, sink, _clock: sink(b"q" * 32),
                 release_gate=fail_release,
                 cancel=lambda *_args: events.append("cancel"),
@@ -296,6 +307,78 @@ class ExecutorTest(IntakeTest):
         self.assertEqual(events, ["cancel"])
         self.assertEqual(saved["worker_lease_id"], "worker-failure")
         self.assertEqual(saved["inference_lease_id"], "sequence-failure")
+
+    def test_waiting_r3_keeps_one_child_gated_until_fresh_revalidation(self):
+        (self.root / "config").mkdir(exist_ok=True)
+        (self.root / "config/resource-policy.json").write_text(json.dumps({
+            "inference_capacity": {"work_proxy_identity": "proxy:work"},
+        }), encoding="utf-8")
+        job_path = self.root / "state/jobs/task-waiting.json"
+        job = {
+            "id": "task-waiting", "state": "ready", "agent_generation": 1,
+            "workload_class": "work", "owner_identity": "executor:waiting",
+            "caller_handle": "executor:local", "deadline_monotonic": 100.0,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 128}
+        reserve_states = ["waiting_for_preemption", "starting"]
+        calls = []
+
+        def launch(config_fd, *_args, **_kwargs):
+            calls.append("spawn")
+            return {"pid": 121, "start_ticks": 221, "pgid": 121,
+                    "config_fd": config_fd, "state": "blocked"}
+
+        def reserve(_root, _request, inventory, _clock):
+            state = reserve_states.pop(0)
+            calls.append(("reserve", inventory.get("generation"), state))
+            result = {"state": state, "lease_id": "sequence-waiting"}
+            if state == "starting":
+                result.update(model_id="model-x", context_tokens=4096,
+                              max_output_tokens=128, backend_sequence=1,
+                              expected_release_binding={"lease_id": "sequence-waiting"})
+            return result
+
+        def release_gate(record):
+            calls.append("release")
+            os.close(record["config_fd"])
+            record["config_fd"] = -1
+
+        result = launch_runner_round(
+            job, job_path, route, {"generation": 1}, ["fake-child"],
+            stdin=None, stdout=None, stderr=None,
+            acquire=lambda _root, request, _clock: {
+                "state": "starting", "lease_id": "worker-waiting", "request": request},
+            launch=launch, register=lambda *_args: None, reserve=reserve,
+            issue=lambda _root, _lease, sink, _clock: (
+                calls.append("issue"), sink(b"w" * 32)),
+            release_gate=release_gate,
+            refresh_inventory=lambda: {"generation": 2},
+            sleeper=lambda _seconds: calls.append("wait"), clock=lambda: 1.0,
+        )
+        self.assertEqual(result["state"], "running")
+        self.assertEqual(calls.count("spawn"), 1)
+        self.assertEqual(calls.count("issue"), 1)
+        self.assertEqual(calls[-2:], ["issue", "release"])
+        self.assertEqual(calls[1:4], [
+            ("reserve", 1, "waiting_for_preemption"), "wait",
+            ("reserve", 2, "starting"),
+        ])
+
+    def test_restart_quarantines_unknown_spawn_intent_without_respawn(self):
+        path = self.root / "state/jobs/task-prefix.json"
+        cli.atomic_json(path, {
+            "id": "task-prefix", "kind": "agent-task",
+            "state": "runner_starting", "runner_generation": 3,
+            "runner_phase": "spawn_intent", "worker_lease_id": "worker-prefix",
+        })
+        with patch("ecosystem.executor._stop_recovered_runner", return_value=None):
+            self.assertEqual(recover_abandoned_jobs(), 1)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "reconciliation_required")
+        self.assertEqual(saved["runner_generation"], 3)
+        self.assertEqual(saved["worker_lease_id"], "worker-prefix")
 
     def test_gated_child_preserves_identity_config_and_stdin_across_exec(self):
         baseline = set(os.listdir("/proc/self/fd"))
@@ -410,6 +493,26 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         self.assertIsNotNone(spawned[0].returncode)
         self.assertFalse(marker.exists())
         self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+
+    def test_reaped_leader_does_not_claim_a_live_or_unknown_process_group_ended(self):
+        config_fd = os.memfd_create("gated-child-group", os.MFD_CLOEXEC)
+        environment = os.environ.copy()
+        environment["OPENCODE_CONFIG"] = f"/proc/self/fd/{config_fd}"
+        record = gated_child_launch(
+            config_fd, [sys.executable, "-c", "pass"], environment,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        gated_child_release(record)
+        with patch("ecosystem.executor._process_group_alive", return_value=True):
+            unresolved = gated_child_wait(record, 2.0)
+        self.assertEqual(unresolved["state"], "reconciliation_required")
+        with patch("ecosystem.executor._process_group_alive", return_value=None):
+            still_unknown = gated_child_cleanup(record, 0.01)
+        self.assertEqual(still_unknown["state"], "reconciliation_required")
+        with patch("ecosystem.executor._process_group_alive", return_value=False):
+            reaped = gated_child_cleanup(record, 0.01)
+        self.assertEqual(reaped["state"], "reaped")
 
     def test_executor_prepares_base_context_without_a_role(self):
         roles = self.root / "roles"
