@@ -337,5 +337,66 @@ Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
   existing harness exercises launch_runner_round with real children, and a
   fake execute_next rollover cycle would need the opencode binary; the live
   rollover smoke remains a manual operator procedure like R8's.
-- Next on the critical path: R7 (pressure, actual OOM, deterministic
-  recovery; consumes R6's continuation states) and A2 (needs A1+R5).
+- Next on the critical path: A2 (needs A1+R5). R7 landed 2026-09-06, see
+  below.
+
+## 2026-09-06: R7 — reconciled pressure recovery (`6fe89eb`)
+
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as
+coordinator:
+
+- `ecosystem/resource_control.py` only (plus its test file). New
+  `WORK_GATE_OWNER = {"owner_identity": "resource-control",
+  "covered_paths": []}`. `enter_pressure` order is gate-first:
+  `begin_drain` (a conflict halts with `pressure_error` and the checkpoint
+  never runs — proven by the plan's verbatim ordering test) →
+  `checkpoint_running_jobs` → `_stop_user_units` →
+  `_reconcile_interrupted_leases` → `unload_dynamic_models` → R8 leased-model
+  preemption (unchanged law: Coin takes leased capacity only when nothing
+  unprotected remained).
+- `_process_group_observed_gone(pgid)` reads `/proc/*/stat` directly (pgid =
+  field 2 after the last `)`, same identity law as the executor). True only
+  when no live process belongs to the group; False when a member is alive;
+  None when unreadable. A pgid that could be reused is conservatively
+  alive. The survival side never infers death from its own records.
+- Reconciliation per interrupted job: the sequence lease is settled first
+  with an honest root release request (`kind: reconciled_absent`,
+  `observer_identity: resource-control`) that can only ever yield
+  `release_requested` — attesting a sequence end is the R4 observer's
+  authority alone, so root recovery never depends on R4 and never
+  fabricates a release; a missing `state/scheduling-policy.json` or unknown
+  lease quarantines honestly. The worker lease is settled only when the job
+  record corroborates the exact registered pid/start_ticks, released
+  `preempted` and observed with matching identity, dead group, no backend
+  activity, checkpoint observed → `quiescent`. A quiescent lease is never
+  re-observed (idempotent re-runs); anything else is quarantined with a
+  reason and persisted on the job record as `lease_reconciliation`.
+- Gated reopen: a sustained-healthy release (or `request_recovery`)
+  requires the healthy window AND no independently observed restrictions —
+  `state/PAUSED` (`lifecycle:paused`) and active operator sessions
+  (`operator:<id>`) — AND a work-gate reopen driven through the only
+  drain-to-open path (`enter_smoke`/`end_smoke` passed; any non-quiescent
+  lease blocks admission per R1). Restrictions are never cleared by
+  reopen: the controller defers with reasons, re-checks on every healthy
+  tick, and starts nothing. A foreign gate owner, a corrupt gate record, or
+  an active smoke window all keep dispatch closed. `request_recovery`
+  keeps its hard `RuntimeError` gates (emergency mode, sole-survivor
+  identity, observed health — a survivor claim cannot replace observed
+  health) but defers with `ok: False` when restricted.
+- Emergency side: `advance_emergency` "recorded" closes the gate
+  best-effort (a conflict is recorded but survival proceeds), then
+  checkpoint → client stop → reconcile before the model phases. OOM stays
+  distinct: a boot-bound `oom_kills` increment latches emergency
+  immediately and exclusively; pre-OOM pressure never fabricates OOM.
+- Contract: `docs/decisions/0011-reconciled-pressure-recovery.md`.
+- Tests: Step-1 ordering test verbatim plus the plan's seven named recovery
+  tests. Fixtures are real: `acquire_worker` + `register_process` create
+  live gate leases, `dead_process_identity` spawns and kills a real session
+  leader for the quiescent path, and the deferred-reopen case drives a live
+  `sleep` process so the quarantine demonstrably blocks reopen until the
+  process is actually killed. 57/57 focused, 486/486 full suite (478
+  baseline + 8).
+- Module graph: `resource_control` now imports `workload_control`,
+  `inference_capacity`, and `operator_session` at top level — verified
+  cycle-safe (`survival/records.py` and `models.py` are stdlib-only) — and
+  still does not import `executor`.
