@@ -521,7 +521,10 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
             "# Base Agent\n\n## Mission\nComplete the assigned task safely.\n",
             encoding="utf-8",
         )
-        job_id = cli.enqueue_task(None, "Inspect", agent_name="Noether")
+        job_id = cli.enqueue_task(
+            None, "Inspect", agent_name="Noether",
+            task_contract=self.task_contract("Inspect"),
+        )
         inventory = {"models": [], "scheduling_policy": {}}
         decision = {"action": "use_loaded", "model": "test-model",
                     "context_tokens": 32768,
