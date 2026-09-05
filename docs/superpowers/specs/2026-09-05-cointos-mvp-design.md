@@ -148,8 +148,18 @@ front lane has one exclusive physical sequence. Proxy/session credentials or
 process configuration identify the admitted owner; client-supplied priority alone
 cannot steal that lane. Root emergency mechanics do not depend on this arbiter.
 
-David's required scheduling order is Sole Survivor, Coin, small health inspectors,
-large health inspectors, then all other roles. Scheduling rank and protected
+David's independently launched local inference is represented by an explicit
+operator-session lease rather than inferred from backend busy state. The launcher
+binds the selected model/context to its exact PID and start time; explicit release
+or verified process exit ends the lease. While admitted, ordinary scheduling,
+repair and pressure management may not evict, unload, replace or resize that model.
+Coin may preempt the operator lease only when Coin's reserved physical capacity
+cannot otherwise be realized. Survival authority may still terminate it to prevent
+OOM or loss of host responsiveness. Operator sessions remain outside agent budgets,
+generations and handoff state.
+
+David's required scheduling order is Sole Survivor, Coin, active operator session,
+small health inspectors, large health inspectors, then all other roles. Scheduling rank and protected
 capacity are distinct: the highest-ranked survivor may preempt replaceable work
 but cannot consume Coin's reserved slot or memory. Deterministic guardian/resource
 actions are not model jobs and remain runnable without inference.
@@ -160,6 +170,7 @@ Proposed initial base priorities in `config/scheduling.json`:
 | --- | --- |
 | sole_survivor (installed incident authority only) | 1000 |
 | coin (authenticated front/control profile only) | 900 |
+| operator_session (David's explicit local launcher only) | 850 |
 | health_inspector / small | 800 |
 | health_inspector / large | 700 |
 | verifier | 600 |
