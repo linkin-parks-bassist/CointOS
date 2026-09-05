@@ -119,10 +119,15 @@ def _positive_integer(value) -> bool:
 
 def _request_reserves(request: dict, policy: dict) -> dict:
     defaults = _policy_value(policy, "context_reserves", {})
-    return {
-        name: request.get(name, defaults.get(name, 0))
-        for name in ("prompt_tokens", "tool_tokens", "max_output_tokens", "handoff_tokens")
-    }
+    reserves = {}
+    for name in ("prompt_tokens", "tool_tokens", "max_output_tokens", "handoff_tokens"):
+        requested = request.get(name, defaults.get(name))
+        configured = defaults.get(name) if isinstance(defaults, dict) else None
+        reserves[name] = (max(requested, configured)
+                          if isinstance(requested, int) and not isinstance(requested, bool)
+                          and isinstance(configured, int) and not isinstance(configured, bool)
+                          else requested)
+    return reserves
 
 
 def _policy_value(policy: dict, name: str, default=0):
@@ -137,15 +142,24 @@ def _policy_value(policy: dict, name: str, default=0):
 
 def _inventory_reasons(inventory: dict) -> list[str]:
     reasons = []
-    if inventory.get("verified") is False:
+    if inventory.get("verified") is not True:
         reasons.append("inventory:unverified")
-    if inventory.get("stale") is True or inventory.get("fresh") is False:
+    if inventory.get("fresh") is not True or inventory.get("stale") is True:
         reasons.append("inventory:stale")
+    if not isinstance(inventory.get("provenance"), str) or not inventory["provenance"]:
+        reasons.append("inventory:provenance")
     envelope = inventory.get("resource_envelope")
     if not isinstance(envelope, dict):
         reasons.append("resource_envelope:missing")
-    elif envelope.get("safe") is False:
-        reasons.append("resource_envelope:unsafe")
+    else:
+        if envelope.get("verified") is not True:
+            reasons.append("resource_envelope:unverified")
+        if envelope.get("fresh") is not True or envelope.get("stale") is True:
+            reasons.append("resource_envelope:stale")
+        if envelope.get("safe") is not True:
+            reasons.append("resource_envelope:unsafe")
+        if not isinstance(envelope.get("provenance"), str) or not envelope["provenance"]:
+            reasons.append("resource_envelope:provenance")
     return reasons
 
 
@@ -157,7 +171,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     advertised = model.get("context", model.get("advertised_context_tokens"))
     quantum = model.get("supported_context_quantum")
     parallel = model.get("parallel_sequences", _policy_value(policy, "parallel_sequences", 1))
-    capabilities = model.get("capabilities", model.get("labels"))
+    capabilities = model.get("capabilities")
     requirements = request.get("requirements", {})
     if not isinstance(requirements, dict):
         requirements = {}
@@ -167,8 +181,12 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
 
     if not isinstance(model_id, str) or not model_id:
         reasons.append("model_id")
-    if model.get("metadata_verified") is False:
+    if model.get("metadata_verified") is not True:
         reasons.append("metadata:unverified")
+    if model.get("fresh") is not True or model.get("stale") is True:
+        reasons.append("metadata:stale")
+    if not isinstance(model.get("provenance"), str) or not model["provenance"]:
+        reasons.append("metadata:provenance")
     if not _positive_integer(parameter_count):
         reasons.append("parameter_count")
     if not _positive_integer(model_bytes):
@@ -206,6 +224,13 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         reasons.append("model_bytes")
     if not _positive_integer(maximum_backend_context):
         reasons.append("resource_envelope:maximum_context_tokens")
+    for field in ("available_host_bytes", "gtt_limit_bytes", "maximum_kv_bytes"):
+        if not _positive_integer(envelope.get(field)):
+            reasons.append(f"resource_envelope:{field}")
+    gtt_used_evidence = envelope.get("gtt_used_bytes")
+    if (not isinstance(gtt_used_evidence, int) or isinstance(gtt_used_evidence, bool)
+            or gtt_used_evidence < 0):
+        reasons.append("resource_envelope:gtt_used_bytes")
 
     per_sequence = 0
     backend_context = 0
@@ -237,8 +262,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
             reasons.append("context_reserve")
 
     kv_bytes_per_token = _policy_value(policy, "estimated_kv_bytes_per_token", 0)
-    if not isinstance(kv_bytes_per_token, int) or isinstance(kv_bytes_per_token, bool) \
-            or kv_bytes_per_token < 0:
+    if not _positive_integer(kv_bytes_per_token):
         reasons.append("estimated_kv_bytes_per_token")
         kv_bytes_per_token = 0
     kv_estimate = backend_context * kv_bytes_per_token
@@ -250,9 +274,13 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     protected_host = _policy_value(policy, "protected_host_bytes", 0)
     coin_reserved = _policy_value(policy, "coin_reserved_bytes", 0)
     load_transient = _policy_value(policy, "load_transient_bytes", 0)
-    physical_values = (protected_host, coin_reserved, load_transient)
-    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
-           for value in physical_values):
+    policy_gtt_limit = _policy_value(policy, "gtt_limit_bytes", 0)
+    physical_values = (protected_host, coin_reserved, load_transient, policy_gtt_limit)
+    configured_reserves = _policy_value(policy, "context_reserves", {})
+    if (any(not _positive_integer(value) for value in physical_values)
+            or not isinstance(configured_reserves, dict)
+            or any(not _positive_integer(configured_reserves.get(name)) for name in (
+                "prompt_tokens", "tool_tokens", "max_output_tokens", "handoff_tokens"))):
         reasons.append("physical_policy")
     elif _positive_integer(model_bytes):
         load_demand = 0 if model.get("loaded") else model_bytes + load_transient
@@ -262,7 +290,9 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
                 or protected_host + coin_reserved + load_demand + kv_estimate > host_available):
             reasons.append("host_capacity")
         gtt_used = envelope.get("gtt_used_bytes")
-        gtt_limit = envelope.get("gtt_limit_bytes")
+        envelope_gtt_limit = envelope.get("gtt_limit_bytes")
+        gtt_limit = min(envelope_gtt_limit, policy_gtt_limit) \
+            if _positive_integer(envelope_gtt_limit) and _positive_integer(policy_gtt_limit) else None
         if gtt_used is not None or gtt_limit is not None:
             if (not isinstance(gtt_used, int) or isinstance(gtt_used, bool) or gtt_used < 0
                     or not _positive_integer(gtt_limit)
@@ -373,6 +403,12 @@ def realize(decision: dict, inventory: dict) -> dict:
                       if item.get("id") == model_id), None)
     if candidate is None:
         raise ValueError(f"routed model {model_id!r} disappeared from inventory")
+    context = decision.get("context_tokens_per_sequence")
+    backend_context = decision.get("backend_context_tokens")
+    parallel = decision.get("parallel_sequences")
+    if (not _positive_integer(context) or not _positive_integer(backend_context)
+            or not _positive_integer(parallel) or backend_context != context * parallel):
+        raise ValueError("route has inconsistent per-sequence and backend context allocation")
     control_model = inventory.get("scheduling_policy", {}).get("control_plane", {}).get("model")
     if candidate.get("loaded"):
         if model_id != control_model and candidate.get("pinned"):
@@ -384,23 +420,25 @@ def realize(decision: dict, inventory: dict) -> dict:
                 raise RuntimeError(f"could not unpin dynamic model {model_id!r}: "
                                    f"{subprocess_result.stderr.strip()}")
         return {"action": "already_loaded", "model": model_id,
-                "context_tokens": decision["context_tokens"]}
+                "context_tokens": context,
+                "backend_context_tokens": backend_context,
+                "parallel_sequences": parallel}
     admitted, reason = admission(model_id, inventory)
     if not admitted:
         raise RuntimeError(reason)
     settings = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))["dynamic_models"]
-    context = int(decision["context_tokens"])
-    parallel = int(settings["parallel_requests"])
     batch = int(settings["llamacpp_batch_size"])
     ubatch = int(settings["llamacpp_ubatch_size"])
     payload = {
         "model_name": model_id,
         "pinned": False,
-        "ctx_size": context,
+        "ctx_size": backend_context,
         "merge_args": True,
         "llamacpp_args": (f"--parallel {parallel} --batch-size {batch} "
                            f"--ubatch-size {ubatch} --poll 0 --prio -1"),
     }
     response = _post("/v1/load", payload, timeout=180.0)
     return {"action": "loaded", "model": model_id, "context_tokens": context,
+            "backend_context_tokens": backend_context,
+            "parallel_sequences": parallel,
             "pinned": False, "admission_reason": reason, "response": response}
