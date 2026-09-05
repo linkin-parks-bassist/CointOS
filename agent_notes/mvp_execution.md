@@ -162,3 +162,44 @@ Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
   operator procedure (no state/scheduling-policy.json is published on this
   machine and no code writes it); the Lemonade-side backend observer still
   gates the R4 live normal-close smoke.
+
+A1 (task contracts and durable execution claims) complete.
+Recorded by the local opencode agent (Qwen3.8-27B-GGUF), acting as coordinator:
+
+- A1's core was already in the tree (d1834a5..0fbad7a):
+  `ecosystem/task_contracts.py` (explicit budget + contract validation,
+  `narrow_contract`, trusted intake), data-driven roles under `roles/`
+  (janitor, gardener, documenter, innovator, speculator), `cli.enqueue_child`,
+  and the 8 acceptance tests in `tests/test_mvp_task_contracts.py`. The
+  remaining gap was the durable execution claim: the executor's
+  `_runner_worker_request` requires `deadline_monotonic`, `owner_identity`,
+  `agent_generation`, and `caller_handle` via `_required_job_field`, but no
+  production code wrote them — real enqueued jobs would have failed at claim
+  time (test fixtures all injected them manually).
+- Fix (commit afcd496): `enqueue_task`/`enqueue_child` write
+  `agent_generation=1` and `logical_run_state="active"` at creation.
+  `executor._claim_execution` fills missing claim fields only-if-missing —
+  record values are authoritative and replay reuses them (R6 continuations
+  must not increment the generation on replay). Defaults: `owner_identity`
+  `executor:<job id>`, `caller_handle` `executor:local`,
+  `deadline_monotonic` = clock() + `remaining_budget["task_seconds"]`, with an
+  explicit ValueError when the remaining budget is absent (no fallback). It is
+  called at the two existing persistence points in `launch_runner_round`
+  (the ready→runner_starting block and the worker-request branch before
+  `r1_acquire_intent`). No new `runner_phase` value: the recovery safe-phase
+  set replays only `generation_claimed`/`r1_acquire_intent`/`r1_acquired`, and
+  any other value quarantines the job to `reconciliation_required`.
+- Survivor canonical descriptor: `SURVIVOR_QUEUED_FIELDS` in
+  `resource_control.py` and its expected values now include the claim fields;
+  the field-set test was updated to match (the descriptor evolves with the job
+  record, not the reverse).
+- Cautionary tale: `tests/test_mvp_task_contracts.py` has a hand-maintained
+  `load_tests` tuple of test functions. A test added to the file but not to
+  the tuple is silently uncollected — discovery reports fewer tests with no
+  error. `test_resource_control.py` auto-scans module globals and is
+  unaffected. When adding tests to the hand-maintained files, verify the run
+  count moved.
+- R5 (mechanical budgets, stoppability, fairness) is next on the critical
+  path and consumes these claim fields plus the budget validators.
+  Incrementing `agent_generation` on a genuinely new attempt belongs to R5's
+  retry/new-attempt path, not to the claim.
