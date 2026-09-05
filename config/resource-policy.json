@@ -48,5 +48,18 @@
     "parallel_requests": 1,
     "llamacpp_batch_size": 512,
     "llamacpp_ubatch_size": 128
+  },
+  "inference_capacity": {
+    "front_sequences": 1,
+    "total_sequences": 2,
+    "protected_host_bytes": 34359738368,
+    "coin_reserved_bytes": 8589934592,
+    "load_transient_bytes": 12884901888,
+    "gtt_limit_bytes": 68719476736,
+    "maximum_work_models": 1,
+    "front_proxy_identity": "proxy:coin-front",
+    "work_proxy_identity": "proxy:work",
+    "lease_seconds": 300,
+    "non_kv_bytes_per_token": 4
   }
 }

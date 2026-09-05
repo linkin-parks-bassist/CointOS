@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "priority_bands": {
+    "sole_survivor": 1000,
+    "coin": 900,
+    "small_health": 800,
+    "large_health": 700,
+    "default": 500
+  },
+  "authority_profiles": {
+    "sole_survivor": "sole_survivor",
+    "coin": "coin"
+  },
+  "execution_profiles": {
+    "small_health": "small_health",
+    "large_health": "large_health"
+  },
+  "role_priorities": {
+    "verifier": 600,
+    "coder": 550,
+    "worker": 550,
+    "auditor": 500,
+    "refactorer": 450,
+    "gardener": 350,
+    "janitor": 300,
+    "documenter": 250,
+    "chunker": 200,
+    "innovator": 150,
+    "speculator": 100,
+    "default": 250
+  },
+  "aging_seconds_per_point": 60
+}
