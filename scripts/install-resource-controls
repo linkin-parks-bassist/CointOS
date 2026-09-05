@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source_dir="$repo_dir/infrastructure/resource-control"
+
+if (( EUID != 0 )); then
+    echo "run with sudo: sudo $0" >&2
+    exit 77
+fi
+
+install -D -m 0644 "$source_dir/ttm.conf" /etc/modprobe.d/ttm.conf
+install -D -m 0644 "$source_dir/inference.slice" /etc/systemd/system/inference.slice
+install -D -m 0644 "$source_dir/lemond-resource-control.conf" \
+    /etc/systemd/system/lemond.service.d/50-resource-control.conf
+install -D -m 0644 "$source_dir/oomd.conf" \
+    /etc/systemd/oomd.conf.d/50-workstation-survival.conf
+install -D -m 0644 "$source_dir/user.slice.conf" \
+    /etc/systemd/system/user.slice.d/50-interactive-reserve.conf
+install -D -m 0644 "$source_dir/user-1000.slice.conf" \
+    /etc/systemd/system/user-1000.slice.d/50-interactive-reserve.conf
+install -D -m 0644 "$source_dir/user@1000.service.conf" \
+    /etc/systemd/system/user@1000.service.d/50-interactive-reserve.conf
+
+systemd-analyze verify \
+    /etc/systemd/system/inference.slice \
+    /usr/lib/systemd/system/lemond.service
+systemctl daemon-reload
+systemctl restart systemd-oomd.service
+
+# Apply the decisive GTT allocation ceiling immediately and persist it in the
+# next initramfs. A reboot is still required to verify the complete boot state.
+if [[ -w /sys/module/ttm/parameters/pages_limit ]]; then
+    printf '%s\n' 16777216 > /sys/module/ttm/parameters/pages_limit
+fi
+if [[ -w /sys/module/ttm/parameters/page_pool_size ]]; then
+    printf '%s\n' 2097152 > /sys/module/ttm/parameters/page_pool_size
+fi
+update-initramfs -u
+
+systemctl restart lemond.service
+echo "resource controls installed; reboot once current work is safely drained"

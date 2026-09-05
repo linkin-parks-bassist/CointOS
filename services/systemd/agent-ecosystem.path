@@ -3,8 +3,8 @@ Description=Watch the local agent idea inbox
 
 [Path]
 PathChanged=%h/agent-ecosystem/inbox/new
+PathChanged=%h/agent-ecosystem/state/jobs
 Unit=agent-ecosystem.service
 
 [Install]
 WantedBy=default.target
-

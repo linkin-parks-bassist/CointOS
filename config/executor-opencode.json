@@ -6,10 +6,15 @@
       "npm": "@ai-sdk/openai-compatible",
       "options": {"apiKey": "lemonade", "baseURL": "http://127.0.0.1:13305/v1"},
       "models": {
-        "GLM-4.7-Flash-GGUF": {"name": "GLM-4.7-Flash-GGUF (local)", "limit": {"context": 202752, "output": 32768}},
+        "DeepSeek-Qwen3-8B-GGUF": {"name": "DeepSeek Qwen3 8B (local)", "limit": {"context": 16384, "output": 4096}},
+        "GLM-4.7-Flash-GGUF": {"name": "GLM-4.7-Flash-GGUF (local)", "limit": {"context": 16384, "output": 2048}},
+        "LMX-Omni-52B-Halo": {"name": "LMX Omni 52B (local)", "limit": {"context": 131072, "output": 16384}},
         "Qwen3.5-4B-GGUF": {"name": "Qwen3.5-4B-GGUF (local control)", "limit": {"context": 16384, "output": 4096}},
-        "Qwen3-Coder-30B-A3B-Instruct-GGUF": {"name": "Qwen3 Coder 30B (local)", "limit": {"context": 262144, "output": 32768}},
-        "Qwen3.8-27B-GGUF": {"name": "Qwen3.8 27B dense reasoning (local)", "limit": {"context": 262144, "output": 32768}}
+        "Qwen3-Coder-Next-GGUF": {"name": "Qwen3 Coder Next (local)", "limit": {"context": 131072, "output": 16384}},
+        "Qwen3-Coder-30B-A3B-Instruct-GGUF": {"name": "Qwen3 Coder 30B (local)", "limit": {"context": 32768, "output": 8192}},
+        "Qwen3.6-27B-FP16-vLLM": {"name": "Qwen3.6 27B FP16 vLLM (strictly resource-admitted)", "limit": {"context": 4096, "output": 1024}},
+        "Qwen3.6-35B-A3B-MTP-GGUF": {"name": "Qwen3.6 35B A3B MTP (local)", "limit": {"context": 262144, "output": 32768}},
+        "Qwen3.8-27B-GGUF": {"name": "Qwen3.8 27B dense reasoning (local)", "limit": {"context": 131072, "output": 32768}}
       }
     }
   },

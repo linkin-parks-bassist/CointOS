@@ -14,3 +14,10 @@ class IdentityTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary, patch.object(cli,"ROOT",Path(temporary)):
             (cli.ROOT / "state/jobs").mkdir(parents=True)
             self.assertEqual(validate("Journathan"),"Journathan")
+
+    def test_invalid_name_gets_unique_machine_honest_identity(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(cli,"ROOT",Path(temporary)):
+            (cli.ROOT / "state/jobs").mkdir(parents=True)
+            generated = validate("!")
+            self.assertRegex(generated, r"^agent-[0-9a-f]{6}$")
+            self.assertNotEqual(generated, "Nameless Dave")

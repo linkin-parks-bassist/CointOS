@@ -12,7 +12,10 @@ for attempt in $(seq 1 60); do
     sleep 2
 done
 
-/usr/bin/lemonade load Qwen3.8-27B-GGUF \
-    --pinned --ctx-size 131072 --merge-args=true --llamacpp-args '--parallel 4'
-/usr/bin/lemonade load Qwen3-Coder-30B-A3B-Instruct-GGUF \
-    --ctx-size 65536 --merge-args=true --llamacpp-args '--parallel 2'
+/usr/bin/lemonade config set max_loaded_models=2
+
+# The only pinned model is the small chatbot/router/emergency control plane. One
+# additional unpinned work model may be selected dynamically for agent work.
+/usr/bin/lemonade load Qwen3.5-4B-GGUF \
+    --save-options --pinned --ctx-size 32768 --merge-args=true \
+    --llamacpp-args '--parallel 2 --batch-size 512 --ubatch-size 128 --poll 0 --prio -1'

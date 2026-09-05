@@ -5,6 +5,11 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+Slice=background.slice
+Nice=10
+CPUWeight=10
+IOWeight=10
+IOSchedulingClass=idle
 WorkingDirectory=%h/agent-ecosystem
 ExecStart=%h/agent-ecosystem/scripts/load-resident-models
 RemainAfterExit=yes

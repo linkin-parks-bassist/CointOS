@@ -7,15 +7,23 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from pathlib import Path
 
 from ecosystem import cli, conversation, control_turns
 from ecosystem.control_runtime import friendly_status, recent_errors_text, status_text
 from ecosystem.inference import chat
+from ecosystem.presentation import sanitize_notification
 from ecosystem.resource_control import active_chat_model
 
 
 DISASTER_FALLBACK = "the local response system has failed to answer this for five minutes. that's not normal."
-FAST_SYSTEM = """You are Cointelprofessional's fast conversational front. Reply to
+CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
+WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
+FAST_SYSTEM = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
+
+{CONTROL_ROLE.read_text(encoding='utf-8')}
+
+You are Cointelprofessional's fast conversational front. Reply to
 David using the recent conversation in one brief, natural sentence. Match his
 informal tone without sounding like a support bot. You may directly answer ordinary
 conversation from context. This update is already durably accepted, and a separate
@@ -50,7 +58,7 @@ def generate_first_response(history: list[dict[str, str]], infer: Callable[..., 
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_FIRST_RESPONSE_MODEL", "Qwen3.5-4B-GGUF"))
     assistant = infer(model=model, messages=[{"role": "system", "content": FAST_SYSTEM}, *history[-6:]],
                       max_tokens=96, timeout=20, temperature=0.45)
-    content = (assistant.get("content") or "").strip()
+    content = sanitize_notification(assistant.get("content") or "")
     if not content:
         raise RuntimeError("fast model returned no visible response")
     return content

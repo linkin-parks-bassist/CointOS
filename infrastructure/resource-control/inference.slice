@@ -1,0 +1,13 @@
+[Unit]
+Description=Resource boundary for local model inference
+Before=lemond.service
+
+[Slice]
+CPUWeight=10
+IOWeight=10
+MemoryHigh=72G
+MemoryMax=80G
+MemorySwapMax=2G
+ManagedOOMMemoryPressure=kill
+ManagedOOMMemoryPressureLimit=20%
+ManagedOOMSwap=kill

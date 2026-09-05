@@ -24,6 +24,13 @@ class ConversationTest(unittest.TestCase):
             output = cli.ROOT / "logs/x.log"; output.parent.mkdir(exist_ok=True); output.write_text("working")
             self.assertIn("task-x: running / worker / model-x", status_text())
 
+    def test_status_ignores_non_job_json(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+            cli.initialize()
+            cli.atomic_json(cli.ROOT / "state/jobs/task-x.opencode.json",
+                            {"provider": {"Lemonade": {}}})
+            self.assertIn("No active agent tasks", status_text())
+
     def test_friendly_status_is_not_serialized_state(self):
         with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
             cli.initialize()

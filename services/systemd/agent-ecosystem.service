@@ -3,10 +3,14 @@ Description=Process local agent ecosystem inbox once
 
 [Service]
 Type=oneshot
+Slice=background.slice
+Nice=10
+CPUWeight=10
+IOWeight=10
+IOSchedulingClass=idle
 WorkingDirectory=%h/agent-ecosystem
 EnvironmentFile=-%h/.config/agent-ecosystem/telegram.env
 ExecStart=%h/agent-ecosystem/scripts/ecosystem run-once
-ExecStart=%h/agent-ecosystem/scripts/ecosystem prepare-next
 ExecStart=%h/agent-ecosystem/scripts/executor
 NoNewPrivileges=true
 PrivateTmp=true

@@ -8,13 +8,15 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from ecosystem.resource_control import active_chat_model
+
 
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
 WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
 
 
 def humanize_notification(raw: str, history: list[dict[str, str]] | None = None) -> str:
-    model = os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.8-27B-GGUF")
+    model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF"))
     system = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
 
 {CONTROL_ROLE.read_text(encoding='utf-8')}
@@ -45,6 +47,7 @@ def sanitize_notification(message: str) -> str:
     tails = (
         r"\s+Want to (?:dive into|chat about|go over|discuss)[^?]*\?\s*$",
         r"\s+Want me to [^?]*\?\s*$",
+        r"\s+Would you like me to [^?]*\?\s*$",
         r"\s+(?:Or )?[Ss]hould we [^?]*\?\s*$",
         r"\s+Let me know if [^.?!]*[.?!]\s*$",
     )

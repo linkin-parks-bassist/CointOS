@@ -1,0 +1,23 @@
+[Unit]
+Description=Protect desktop and chatbot from inference memory pressure
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Slice=control.slice
+ExecStart=%h/agent-ecosystem/scripts/resource-control run
+WorkingDirectory=%h/agent-ecosystem
+Restart=always
+RestartSec=1
+CPUWeight=1000
+IOWeight=1000
+MemoryMin=256M
+MemoryLow=512M
+ManagedOOMPreference=avoid
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/agent-ecosystem
+
+[Install]
+WantedBy=default.target

@@ -72,6 +72,31 @@ def test_fast_response_is_small_and_forbids_action_claims():
     assert len(captured["messages"]) == 2
 
 
+def test_fast_response_receives_the_durable_control_plane_identity():
+    captured = {}
+
+    def infer(**arguments):
+        captured.update(arguments)
+        return {"content": "Yep."}
+
+    generate_first_response([{"role": "user", "content": "Who are you?"}], infer=infer)
+    system = captured["messages"][0]["content"]
+    assert "David's private Telegram-facing control plane" in system
+    assert "You are not a generic internet chatbot" in system
+    assert "Do not end messages with generic opt-in chatbot questions" in system
+    assert "Object-oriented programming in software is strictly forbidden" in system
+
+
+def test_fast_response_removes_generic_chatbot_followup_tail():
+    response = generate_first_response(
+        [{"role": "user", "content": "yay"}],
+        infer=lambda **_arguments: {
+            "content": "Excellent, glad that's sorted! Would you like me to help with anything else?"
+        },
+    )
+    assert response == "Excellent, glad that's sorted!"
+
+
 def test_removes_generic_chatbot_tail():
     raw = "Cyrus updated the system map. Want to dive into it or should we chat about something else?"
     assert sanitize_notification(raw) == "Cyrus updated the system map."
@@ -83,6 +108,8 @@ def load_tests(_loader, _tests, _pattern):
         test_control_agent_can_finish_without_duplicate_reply,
         test_control_agent_queue_schema_and_handler_allow_omitted_role,
         test_fast_response_is_small_and_forbids_action_claims,
+        test_fast_response_receives_the_durable_control_plane_identity,
+        test_fast_response_removes_generic_chatbot_followup_tail,
         test_removes_generic_chatbot_tail,
     ]
     return unittest.TestSuite(unittest.FunctionTestCase(function) for function in functions)

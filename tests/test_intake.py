@@ -59,7 +59,13 @@ class IntakeTest(unittest.TestCase):
         roles.mkdir()
         (roles / "worker.md").write_text("# Worker\n## Mission\nDo it.\n## Permissions\nRead.\n## Approval required\nWrites.\n## Handoff\nReport.\n")
         job_id = cli.enqueue_task("worker", "Inspect the widget")
-        cli.prepare_next()
+        inventory = {"models": [], "scheduling_policy": {}}
+        decision = {"action": "use_loaded", "model": "test-model",
+                    "context_tokens": 32768,
+                    "reason": "test model-mediated route", "valid": True}
+        with patch("ecosystem.models.snapshot", return_value=inventory), \
+                patch("ecosystem.models.route", return_value=decision):
+            cli.prepare_next()
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
         self.assertIn("# Worker", prompt)
         self.assertIn("Inspect the widget", prompt)
@@ -70,7 +76,13 @@ class IntakeTest(unittest.TestCase):
         roles = self.root / "roles"; roles.mkdir(exist_ok=True)
         (roles / "worker.md").write_text("# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nRoot.\n## Handoff\nReport.\n")
         job_id = cli.enqueue_task("worker", "make an agreement", source="telegram:42")
-        cli.prepare_next()
+        inventory = {"models": [], "scheduling_policy": {}}
+        decision = {"action": "use_loaded", "model": "test-model",
+                    "context_tokens": 32768,
+                    "reason": "test model-mediated route", "valid": True}
+        with patch("ecosystem.models.snapshot", return_value=inventory), \
+                patch("ecosystem.models.route", return_value=decision):
+            cli.prepare_next()
         self.assertEqual(cli.amend_latest_task("telegram:42", "worker", "have an argument"), job_id)
         job = json.loads((self.root / f"state/jobs/{job_id}.json").read_text())
         self.assertEqual(job["task"], "have an argument")
