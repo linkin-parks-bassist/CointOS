@@ -16,7 +16,8 @@ KV caches. OpenCode does provide durable sessions, exact JSONL events, and token
 
 ## Decision
 
-Machine responsiveness outranks inference throughput. Bound TTM to 64 GiB, contain
+Machine responsiveness outranks inference throughput. Bound TTM to the deliberately
+configured 100 GiB GTT pool, contain
 Lemonade in a low-priority inference slice, protect interactive/control services, and
 watch OOM count, available memory, swap, PSI, and GTT each second.
 
@@ -27,6 +28,11 @@ generous context allocation from mechanically prevalidated choices. Caller model
 choices are hints. Deterministic validation retains authority over model existence,
 role compatibility, residency count, host/GTT reserve, and context safety. Prefer a
 compatible loaded large model for new smaller work.
+
+David corrected the original 64 GiB boundary on 2026-09-05. Live sysfs reports
+`mem_info_gtt_total=107374182400`; 64 GiB was a stale software cap which discarded
+usable Halo capacity. The host/desktop and load-transient reserves remain separate
+admission facts and may constrain a particular allocation below the GTT maximum.
 
 Run OpenCode in a process group. Higher-priority work preempts lower-priority work,
 and equal-priority work rotates after five minutes. Preserve the OpenCode session,

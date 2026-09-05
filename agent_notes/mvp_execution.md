@@ -33,6 +33,13 @@ bypass would violate Sole Survivor exclusivity before R1 supplies the new admiss
 owner. Q1 remains a Sol-medium TDD task; short Halo work begins only from an admitted
 state and remains required for later concrete substeps.
 
+David corrected the stale 64 GiB GTT boundary during R3. Astra observed
+`/sys/class/drm/card1/device/mem_info_gtt_total=107374182400`, exactly 100 GiB.
+R3 and the checked-in TTM/cgroup policy now expose that deliberate capacity; fresh
+host admission still preserves the independent 32 GiB desktop/control reserve and
+12 GiB load transient. Large local models and contexts should use the remaining
+measured envelope rather than inherit arbitrary small caps.
+
 Baseline evidence before the snapshot: `python3 -m unittest discover -s tests -v`
 ran 324 tests with zero failures in 13.154 seconds; `git diff --check` returned zero.
 This is offline repository evidence, not live service, Telegram, model-capacity or

@@ -182,9 +182,11 @@ and per-profile resource budgets bound inspection frequency; unused inspection
 capacity goes to ordinary work. Higher priority affects queued selection, bounded
 preemption of running work and resource reclamation, not just displayed ordering.
 
-The current 32 GiB protected reserve, 12 GiB model-load transient and 64 GiB GTT
-boundary remain initial policy pending measured validation. Do not widen them to
-fit a preferred worker. Actual pressure can invalidate an earlier admission.
+The 32 GiB protected host reserve and 12 GiB model-load transient remain initial
+policy. Live S0/R3 measurement confirmed David's deliberately configured
+107374182400-byte (100 GiB) GTT pool; admission may use that capacity while fresh
+host availability still preserves the separate reserves. Actual pressure can
+invalidate an earlier admission.
 
 Normal -> pressure drains work before OOM; pressure -> normal requires sustained
 healthy samples. An OOM increment immediately closes ordinary work, preserves

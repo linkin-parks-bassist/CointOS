@@ -19,7 +19,9 @@
 - Roles are advisory labels. Model qualification consumes explicit task requirements; validated priority configuration orders Sole Survivor 1000, Coin 900, small health 800, large health 700, and every other/default role below 700 without role-switch code.
 - Context is any backend-supported quantum inside the current envelope; do not encode `context_candidates` as architecture.
 - Parameter count, model bytes, host RAM, GTT, KV, prompt, tool, output, and handoff demand remain distinct facts.
-- Unknown or stale safety evidence defers explicitly. Never widen the 32 GiB protected reserve, 12 GiB load-transient reserve, or 64 GiB GTT boundary to fit a preferred worker.
+- Unknown or stale safety evidence defers explicitly. Preserve the 32 GiB protected
+  host reserve and 12 GiB load-transient reserve. The configured GTT capacity is the
+  live measured 100 GiB pool; do not substitute the superseded 64 GiB TTM cap.
 - Local work targets 2–5 minutes: maximum run 300 seconds, wrap-up 30 seconds, termination grace 15 seconds. No timer observation alone means completion.
 - Sol implementation/review work uses `gpt-5.6-sol`, `reasoning_effort: medium`, isolated context, and one 15–25 minute bounded objective.
 - Hosted read-only analysis may continue during smoke. Every hosted writer touching smoke-covered files/services must finish and be observed before smoke.

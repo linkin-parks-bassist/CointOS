@@ -5,8 +5,8 @@ Before=lemond.service
 [Slice]
 CPUWeight=10
 IOWeight=10
-MemoryHigh=72G
-MemoryMax=80G
+MemoryHigh=96G
+MemoryMax=100G
 MemorySwapMax=2G
 ManagedOOMMemoryPressure=kill
 ManagedOOMMemoryPressureLimit=20%
