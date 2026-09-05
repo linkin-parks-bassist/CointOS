@@ -1,7 +1,8 @@
 """Validation and fallback for model-generated agent names."""
 from __future__ import annotations
-import json, re, secrets, urllib.request
+import json, re, secrets
 from ecosystem import cli
+from ecosystem.inference import request as inference_request
 
 
 def _policy() -> dict:
@@ -38,7 +39,7 @@ def validate(name: str) -> str:
         return emergency_name(policy.get("fallback_prefix", "agent"))
     return cleaned
 
-def generate(role: str, task: str) -> str:
+def generate(role: str, task: str, inference_context: dict | None = None) -> str:
     path = cli.ROOT / "config/naming-policy.json"
     if not path.exists():
         return emergency_name(role)
@@ -53,11 +54,15 @@ Odd-name probability: {policy['odd_name_probability']}; alien-name probability:
 {policy.get('clever_pun_probability', 0.0)}. Treat these as rare style hints, not
 quotas, and do not force a joke that is not genuinely good.
 Return JSON only: {{"name":"..."}}"""
-    body = json.dumps({"model":policy["generator_model"],"messages":[{"role":"user","content":prompt}],"temperature":0.8,"max_tokens":80,"chat_template_kwargs":{"enable_thinking":False}}).encode()
-    request = urllib.request.Request("http://127.0.0.1:13305/v1/chat/completions",data=body,headers={"Content-Type":"application/json","Authorization":"Bearer lemonade"})
     try:
-        with urllib.request.urlopen(request,timeout=30) as response:
-            content=json.load(response)["choices"][0]["message"]["content"]
+        if not inference_context:
+            raise RuntimeError("no admitted inference context")
+        content = inference_request({
+            **inference_context,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8,
+            "timeout": 30,
+        }, cli.ROOT, __import__("time").monotonic)["content"]
         match=re.search(r"\{.*\}",content,re.DOTALL)
         if not match:
             raise ValueError("naming model returned no JSON object")

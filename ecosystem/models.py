@@ -11,16 +11,6 @@ def _get(path: str) -> dict:
         return json.load(response)
 
 
-def _post(path: str, payload: dict, timeout: float) -> dict:
-    request = urllib.request.Request(
-        BASE + path,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": "Bearer lemonade"},
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read()
-    return json.loads(raw) if raw else {}
-
 def gpu_memory() -> dict:
     result = {"firmware_carveout_gb": None, "gtt_total_gb": None, "gtt_used_gb": None}
     for device in glob.glob("/sys/class/drm/card*/device"):
@@ -426,19 +416,6 @@ def realize(decision: dict, inventory: dict) -> dict:
     admitted, reason = admission(model_id, inventory)
     if not admitted:
         raise RuntimeError(reason)
-    settings = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))["dynamic_models"]
-    batch = int(settings["llamacpp_batch_size"])
-    ubatch = int(settings["llamacpp_ubatch_size"])
-    payload = {
-        "model_name": model_id,
-        "pinned": False,
-        "ctx_size": backend_context,
-        "merge_args": True,
-        "llamacpp_args": (f"--parallel {parallel} --batch-size {batch} "
-                           f"--ubatch-size {ubatch} --poll 0 --prio -1"),
-    }
-    response = _post("/v1/load", payload, timeout=180.0)
-    return {"action": "loaded", "model": model_id, "context_tokens": context,
-            "backend_context_tokens": backend_context,
-            "parallel_sequences": parallel,
-            "pinned": False, "admission_reason": reason, "response": response}
+    raise RuntimeError(
+        f"model {model_id!r} requires privileged resource-control loading: {reason}"
+    )

@@ -1,6 +1,18 @@
 import unittest
+import json
+from pathlib import Path
 
 from survival import lifecycle
+
+
+def test_guardian_allowlist_includes_proxy_without_gateway_dependency():
+    root = Path(__file__).resolve().parents[1]
+    policy = json.loads((root / "config/survival-lifecycle.json").read_text())
+    controls = policy["user_units"]["control_services"]
+    assert {item["unit"] for item in controls} >= {"agent-inference-proxy.service"}
+    unit = (root / "services/systemd/agent-inference-proxy.service").read_text()
+    assert "PartOf=" not in unit
+    assert "Requires=" not in unit
 
 
 def command_record(command: str) -> dict:

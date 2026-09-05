@@ -18,6 +18,7 @@
       {"required": true, "unit": "agent-watchdog.timer"}
     ],
     "control_services": [
+      {"required": true, "unit": "agent-inference-proxy.service"},
       {"required": true, "unit": "agent-notifier.service"}
     ],
     "inactive_units": [

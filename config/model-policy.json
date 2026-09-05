@@ -1,5 +1,15 @@
 {
   "version": 2,
+  "inference_proxy": {
+    "proxy_base": "http://127.0.0.1:13306/v1",
+    "backend_base": "http://127.0.0.1:13305/v1",
+    "header_bytes": 65536,
+    "body_bytes": 16777216,
+    "stream_chunk_bytes": 65536,
+    "connections": 4,
+    "read_timeout_seconds": 5,
+    "backend_timeout_seconds": 180
+  },
   "resident_llm_slots": 2,
   "fast_front": {
     "model": "Qwen3.5-4B-GGUF",

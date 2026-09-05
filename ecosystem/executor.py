@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from ecosystem import cli
+from ecosystem.inference_proxy import issue_proxy_credential, opencode_environment
 from ecosystem.models import realize, route, snapshot
 from ecosystem.scheduler import choose, policy as scheduling_policy, priority
 from ecosystem.resource_control import job_admitted_in_current_mode, mode as resource_mode, opencode_session_id
@@ -102,16 +103,11 @@ def opencode_context_usage(output_path: Path, session: str | None = None) -> dic
     return latest
 
 
-def _job_opencode_config(job: dict) -> Path:
-    source = cli.ROOT / "config/executor-opencode.json"
-    config = json.loads(source.read_text(encoding="utf-8"))
-    models = config["provider"]["Lemonade"]["models"]
-    if job["model"] not in models:
-        raise ValueError(f"model {job['model']!r} is absent from OpenCode configuration")
-    models[job["model"]].setdefault("limit", {})["context"] = int(job["context_tokens"])
-    path = cli.ROOT / "state/opencode-configs" / f"{job['id']}.json"
-    cli.atomic_json(path, config)
-    return path
+def _job_opencode_config(job: dict, credential: bytes) -> dict:
+    lease = job.get("inference_lease")
+    if type(lease) is not dict:
+        raise ValueError("OpenCode launch requires an authoritative inference lease")
+    return opencode_environment(cli.ROOT, lease, credential)
 
 
 def _waiting_jobs(running_id: str) -> list[dict]:
@@ -169,11 +165,12 @@ def _stop_process(process: subprocess.Popen, grace_seconds: float) -> None:
 
 
 def _run_preemptibly(command: list[str], prompt, output, env: dict,
-                     job: dict, path: Path, output_path: Path) -> dict:
+                     job: dict, path: Path, output_path: Path,
+                     pass_fds: tuple[int, ...]) -> dict:
     settings = scheduling_policy()["workers"]
     process = subprocess.Popen(
         command, stdin=prompt, stdout=output, stderr=subprocess.STDOUT,
-        env=env, start_new_session=True,
+        env=env, pass_fds=pass_fds, start_new_session=True,
     )
     job.update(executor_pid=process.pid, last_started_at=cli.now(),
                dispatch_count=int(job.get("dispatch_count", 0)) + 1)
@@ -290,8 +287,19 @@ def execute_next(run=subprocess.run) -> bool:
                        updated_at=cli.now(), output=str(output_path.relative_to(cli.ROOT)))
             cli.atomic_json(path, job)
             cli.audit("task.started", job_id=job["id"], role=job.get("role"), executor="opencode")
+            try:
+                credentials = []
+                issue_proxy_credential(
+                    cli.ROOT, job.get("inference_lease"), credentials.append, time.monotonic)
+                opencode = _job_opencode_config(job, credentials.pop())
+            except Exception as error:
+                job.update(state="failed", updated_at=cli.now(),
+                           error=f"inference launch refused: {type(error).__name__}: {error}")
+                cli.atomic_json(path, job)
+                cli.audit("task.inference_launch_refused", job_id=job["id"], error=job["error"])
+                return True
             env = os.environ.copy()
-            env["OPENCODE_CONFIG"] = str(_job_opencode_config(job))
+            env.update(opencode["environment"])
             env["AGENT_JOB_ID"] = job["id"]
             selected = job.get("model") or env.get("AGENT_EXECUTOR_MODEL", "Qwen3.5-4B-GGUF")
             model = selected if "/" in selected else f"Lemonade/{selected}"
@@ -325,7 +333,9 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                 output_mode = "ab" if resume_session else "wb"
                 with prompt_path.open("rb") as prompt, output_path.open(output_mode) as output:
                     if run is subprocess.run:
-                        outcome = _run_preemptibly(command, prompt, output, env, job, path, output_path)
+                        outcome = _run_preemptibly(
+                            command, prompt, output, env, job, path, output_path,
+                            opencode["pass_fds"])
                         if outcome["preempted"]:
                             current = json.loads(path.read_text(encoding="utf-8"))
                             if current.get("state") == "interrupted":
@@ -352,7 +362,8 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                         result = subprocess.CompletedProcess(command, outcome["returncode"])
                     else:
                         result = run(command, stdin=prompt, stdout=output,
-                                     stderr=subprocess.STDOUT, env=env, timeout=1800)
+                                     stderr=subprocess.STDOUT, env=env,
+                                     pass_fds=opencode["pass_fds"], timeout=1800)
                 current = json.loads(path.read_text(encoding="utf-8"))
                 if current.get("state") == "interrupted":
                     print(f"{job['id']} interrupted by resource control")
@@ -366,6 +377,8 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                 job.update(state="failed", updated_at=cli.now(), error="executor timed out after 1800 seconds")
             except Exception as error:
                 job.update(state="failed", updated_at=cli.now(), error=f"{type(error).__name__}: {error}")
+            finally:
+                os.close(opencode["fd"])
             job.pop("executor_pid", None)
             if job.get("handoff_pending") and job.get("state") == "run_finished":
                 handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"

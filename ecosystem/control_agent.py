@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from pathlib import Path
 
-from ecosystem.inference import chat
+from ecosystem.inference import request as inference_request
 from ecosystem.resource_control import active_chat_model
 
 
@@ -33,7 +34,8 @@ TERMINAL_TOOLS = {"publish_followup", "finish_silently"}
 
 def respond(message: str, history: list[dict[str, str]], initial_response: str | None,
             live: dict, execute: Callable[[str, dict], dict],
-            infer: Callable[..., dict] = chat) -> dict:
+            infer: Callable[..., dict] | None = None,
+            inference_context: dict | None = None) -> dict:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF"))
     initial = initial_response or "No initial response was delivered."
     system = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
@@ -60,8 +62,13 @@ Live context at deep-turn start:
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
     for _ in range(MAX_TOOL_ROUNDS):
-        assistant = infer(model=model, messages=messages, tools=TOOLS,
-                          max_tokens=1400, timeout=180, temperature=0.35)
+        assistant = (infer(model=model, messages=messages, tools=TOOLS,
+                           max_tokens=1400, timeout=180, temperature=0.35)
+                     if infer is not None else inference_request({
+                         **(inference_context or {}), "messages": messages,
+                         "tools": TOOLS, "tool_choice": "auto", "timeout": 180,
+                         "temperature": 0.35,
+                     }, Path(__file__).resolve().parents[1], time.monotonic))
         calls = assistant.get("tool_calls") or []
         if not calls:
             messages.append(assistant)
