@@ -82,6 +82,8 @@ def resource_envelope(
 
     occupied = set()
     active_bytes = 0
+    nonresident_model_bytes = 0
+    nonresident_model_ids = set()
     work_occupied = 0
     for index, lease in enumerate(active_leases):
         if type(lease) is not dict:
@@ -106,6 +108,22 @@ def resource_envelope(
             unknown.append(f"active_leases:{index}:allocation")
         else:
             active_bytes += allocation
+        route = lease.get("route", lease.get("request", {}).get("route", {}))
+        if type(route) is not dict:
+            unknown.append(f"active_leases:{index}:model")
+            continue
+        loaded = route.get("loaded")
+        model_id = route.get("model_id")
+        model_bytes = _positive_integer(route.get("model_bytes"))
+        if (type(loaded) is not bool or type(model_id) is not str or not model_id
+                or model_bytes is None):
+            unknown.append(f"active_leases:{index}:model")
+        elif loaded and model_id not in resident_ids:
+            unknown.append(f"active_leases:{index}:resident_model")
+        elif not loaded:
+            if model_id not in resident_ids and model_id not in nonresident_model_ids:
+                nonresident_model_ids.add(model_id)
+                nonresident_model_bytes += model_bytes
 
     available_work_sequences = 0
     if total_sequences is not None and front_sequences is not None:
@@ -116,10 +134,13 @@ def resource_envelope(
     gtt_headroom = None
     if None not in (available_host, protected, coin_reserved, transient):
         host_headroom = (
-            available_host - protected - coin_reserved - transient - active_bytes
+            available_host - protected - coin_reserved - transient
+            - active_bytes - nonresident_model_bytes
         )
     if None not in (gtt_used, gtt_capacity, transient):
-        gtt_headroom = gtt_capacity - gtt_used - transient
+        gtt_headroom = (
+            gtt_capacity - gtt_used - transient - active_bytes - nonresident_model_bytes
+        )
     maximum_work_models = _positive_integer(policy.get("maximum_work_models"))
     if maximum_work_models is None:
         unknown.append("maximum_work_models")
@@ -128,7 +149,7 @@ def resource_envelope(
         and host_headroom is not None and host_headroom >= 0
         and gtt_headroom is not None and gtt_headroom >= 0
         and maximum_work_models is not None
-        and len(work_models) <= maximum_work_models
+        and len(work_models | nonresident_model_ids) <= maximum_work_models
     )
     return {
         "safe": safe,
@@ -138,10 +159,12 @@ def resource_envelope(
         "occupied_sequences": sorted(occupied),
         "resident_model_bytes": resident_bytes,
         "active_allocation_bytes": active_bytes,
+        "nonresident_model_bytes": nonresident_model_bytes,
         "host_headroom_bytes": host_headroom,
         "gtt_capacity_bytes": gtt_capacity,
         "gtt_headroom_bytes": gtt_headroom,
         "resident_work_models": len(work_models),
+        "proposed_work_models": len(work_models | nonresident_model_ids),
     }
 
 
@@ -208,20 +231,23 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
     if type(inventory) is not dict:
         raise ValueError("invalid inference inventory")
     capacity_policy = _load_capacity_policy(root)
-    scheduling_policy = inventory.get("scheduling_policy")
-    if scheduling_policy is None:
-        scheduling_policy = _load_json(root / "state" / "scheduling-policy.json")
+    scheduling_policy = _load_json(root / "state" / "scheduling-policy.json")
     scheduling_values = _validated_scheduling_snapshot(scheduling_policy)
     validated = _validate_sequence_request(request, capacity_policy, scheduling_values)
     realized = realize_context_tokens(
         validated["route"], validated["route"]["parallel_sequences"],
     )
-    priority = effective_priority(
-        scheduling_policy, validated.get("role"), validated.get("execution_profile"),
-        validated["authority_profile"], 0,
-    )
     with _locked_states(root) as (worker_state, state, save):
-        _validate_worker_lease(worker_state, validated)
+        worker_lease = _validate_worker_lease(worker_state, validated)
+        enqueued_monotonic = _finite_number(
+            worker_lease.get("acquired_monotonic"), "worker enqueue time",
+        )
+        if enqueued_monotonic > now:
+            raise ValueError("worker enqueue time is in the future")
+        priority = effective_priority(
+            scheduling_policy, validated.get("role"), validated.get("execution_profile"),
+            validated["authority_profile"], now - enqueued_monotonic,
+        )
         prior = _lease_for_request(state, validated["request_id"])
         if prior is not None:
             if prior["request"] != validated:
@@ -232,14 +258,6 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
             if lease["state"] in {"starting", "active", "preemption_requested",
                                   "release_requested"}
         ]
-        envelope = resource_envelope(
-            inventory.get("host", {}), inventory.get("resident_models", []),
-            active, capacity_policy,
-        )
-        if not envelope["safe"]:
-            return {"state": "deferred", "reasons": envelope["unknown_facts"] or [
-                "physical_capacity",
-            ]}
         lease_id = _lease_id(validated["request_id"], state["generation"])
         workload_class = validated["workload_class"]
         if workload_class == "front":
@@ -255,14 +273,18 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
         if sequence is None and workload_class != "front":
             victims = [
                 lease for lease in active
-                if lease["workload_class"] != "front" and lease["priority"] < priority
+                if lease["workload_class"] != "front"
+                and _lease_priority(scheduling_policy, lease, now) < priority
                 and lease["state"] not in {"preemption_requested", "release_requested"}
             ]
             if not victims:
                 return {"state": "deferred", "reasons": ["work_sequence_unavailable"]}
-            victim = min(victims, key=lambda item: (item["priority"], item["acquired_monotonic"]))
-            victim["state"] = "preemption_requested"
-            victim["preemption_requested_monotonic"] = now
+            victim = min(
+                victims,
+                key=lambda item: (_lease_priority(scheduling_policy, item, now),
+                                  item["acquired_monotonic"]),
+            )
+            sequence = victim["backend_sequence"]
             preempted = victim["lease_id"]
             lease_state = "waiting_for_preemption"
         lease = {
@@ -278,13 +300,29 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict:
             "backend_sequence": sequence,
             "expires_monotonic": now + capacity_policy["lease_seconds"],
             "preemption_method": validated["preemption_method"],
+            "release_observer_identity": capacity_policy["release_observer_identity"],
             "priority": priority,
+            "enqueued_monotonic": enqueued_monotonic,
             "request": validated,
             "acquired_monotonic": now,
             "observed_release": None,
         }
         if preempted is not None:
             lease["preempts_lease_id"] = preempted
+        proposed_active = [item for item in active if item["lease_id"] != preempted]
+        proposed_active.append(lease)
+        envelope = resource_envelope(
+            inventory.get("host", {}), inventory.get("resident_models", []),
+            proposed_active, capacity_policy,
+        )
+        if not envelope["safe"]:
+            return {"state": "deferred", "reasons": envelope["unknown_facts"] or [
+                "physical_capacity",
+            ]}
+        if preempted is not None:
+            victim["state"] = "preemption_requested"
+            victim["preemption_requested_monotonic"] = now
+            lease["backend_sequence"] = None
         state["leases"][lease_id] = lease
         save()
         return _durable_copy(lease)
@@ -296,6 +334,9 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
     now = _clock_value(clock)
     if type(observed) is not dict:
         raise ValueError("invalid sequence observation")
+    capacity_policy = _load_capacity_policy(root)
+    scheduling_policy = _load_json(root / "state" / "scheduling-policy.json")
+    _validated_scheduling_snapshot(scheduling_policy)
     with _locked_states(root) as (_worker_state, state, save):
         lease = state["leases"].get(lease_id)
         if lease is None:
@@ -305,10 +346,8 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
                 return _durable_copy(lease)
             return _durable_copy(lease)
         expected = lease["backend_sequence"]
-        matching = (
-            expected is not None
-            and observed.get("backend_sequence") == expected
-            and observed.get("sequence_active") is False
+        matching = _trusted_release_observation(
+            lease, observed, expected, now, capacity_policy,
         )
         if not matching:
             lease["state"] = "release_requested"
@@ -316,9 +355,13 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
             save()
             return _durable_copy(lease)
         lease["state"] = "released"
-        lease["observed_release"] = {**_durable_copy(observed), "observed_monotonic": now}
+        lease["observed_release"] = {
+            **_durable_copy(observed), "accepted_monotonic": now,
+        }
         lease["released_monotonic"] = now
-        _activate_waiter(state, expected, now)
+        _activate_waiter(
+            state, expected, now, scheduling_policy, capacity_policy,
+        )
         save()
         return _durable_copy(lease)
 
@@ -383,13 +426,15 @@ def _validate_scheduling_values(values: object) -> None:
 def _validate_sequence_request(request: object, policy: dict, scheduling: dict) -> dict:
     required = {
         "request_id", "worker_lease_id", "workload_class", "proxy_identity", "route",
+        "owner_identity", "worker_request_id", "role", "execution_profile",
         "authority_profile", "preemption_method",
     }
     if type(request) is not dict or not required <= request.keys():
         raise ValueError("invalid inference sequence request")
     durable = _durable_copy(request)
-    for field in ("request_id", "worker_lease_id", "proxy_identity",
-                  "authority_profile", "preemption_method"):
+    for field in ("request_id", "worker_lease_id", "worker_request_id",
+                  "owner_identity", "proxy_identity", "authority_profile",
+                  "preemption_method"):
         if type(durable[field]) is not str or not durable[field]:
             raise ValueError(f"invalid inference {field}")
     if durable["workload_class"] not in {"front", "repair", "work", "monitor"}:
@@ -407,20 +452,35 @@ def _validate_sequence_request(request: object, policy: dict, scheduling: dict) 
     return durable
 
 
-def _validate_worker_lease(worker_state: dict, request: dict) -> None:
+def _validate_worker_lease(worker_state: dict, request: dict) -> dict:
     if worker_state.get("mode") != "open":
         raise ValueError("worker admission is closed")
     lease = worker_state.get("leases", {}).get(request["worker_lease_id"])
     if lease is None or lease.get("state") not in {"starting", "active"}:
         raise ValueError("worker lease is not admitted")
-    worker_class = lease.get("request", {}).get("workload_class")
-    if worker_class != request["workload_class"]:
+    worker_request = lease.get("request", {})
+    if worker_request.get("workload_class") != request["workload_class"]:
         raise ValueError("worker and inference workload classes differ")
-    worker_request = lease["request"]
+    if worker_request.get("request_id") != request["worker_request_id"]:
+        raise ValueError("worker and inference request identities differ")
+    if worker_request.get("owner_identity") != request["owner_identity"]:
+        raise ValueError("worker and inference owner identities differ")
+    if worker_request.get("role") != request.get("role"):
+        raise ValueError("worker and inference roles differ")
     if worker_request.get("authority_profile") != request["authority_profile"]:
         raise ValueError("worker and inference authority profiles differ")
     if worker_request.get("execution_profile") != request.get("execution_profile"):
         raise ValueError("worker and inference execution profiles differ")
+    route = request["route"]
+    if worker_request.get("model_id") != route.get("model_id"):
+        raise ValueError("worker and inference model identities differ")
+    if worker_request.get("context_tokens") != route.get("context_tokens_per_sequence"):
+        raise ValueError("worker and inference context allocations differ")
+    if worker_request.get("max_output_tokens") != route.get("max_output_tokens"):
+        raise ValueError("worker and inference output allocations differ")
+    if worker_request.get("stop_method") != request["preemption_method"]:
+        raise ValueError("worker and inference preemption methods differ")
+    return lease
 
 
 def _lease_allocation_bytes(lease: dict, policy: dict) -> int | None:
@@ -444,12 +504,57 @@ def _available_sequences(active: list[dict], start: int, stop: int) -> list[int]
     return [sequence for sequence in range(start, stop) if sequence not in occupied]
 
 
-def _activate_waiter(state: dict, backend_sequence: int, now: float) -> None:
-    waiting = [lease for lease in state["leases"].values()
-               if lease["state"] == "waiting_for_preemption"]
+def _lease_priority(scheduling_policy: dict, lease: dict, now: float) -> int:
+    enqueued = _finite_number(lease.get("enqueued_monotonic"), "lease enqueue time")
+    if enqueued > now:
+        raise ValueError("lease enqueue time is in the future")
+    request = lease.get("request", {})
+    return effective_priority(
+        scheduling_policy, request.get("role"), request.get("execution_profile"),
+        request.get("authority_profile"), now - enqueued,
+    )
+
+
+def _activate_waiter(
+    state: dict,
+    backend_sequence: int,
+    now: float,
+    scheduling_policy: dict,
+    capacity_policy: dict,
+) -> None:
+    front_sequence = backend_sequence < capacity_policy["front_sequences"]
+    coin_authority = _validated_scheduling_snapshot(
+        scheduling_policy,
+    )["authority_profiles"]["coin"]
+
+    def compatible(lease: dict) -> bool:
+        request = lease.get("request", {})
+        if front_sequence:
+            return (
+                lease.get("workload_class") == "front"
+                and lease.get("proxy_identity") == capacity_policy["front_proxy_identity"]
+                and request.get("authority_profile") == coin_authority
+            )
+        return (
+            lease.get("workload_class") != "front"
+            and lease.get("proxy_identity") == capacity_policy["work_proxy_identity"]
+        )
+
+    waiting = [
+        lease for lease in state["leases"].values()
+        if lease["state"] == "waiting_for_preemption"
+        and compatible(lease)
+    ]
     if not waiting:
         return
-    selected = max(waiting, key=lambda item: (item["priority"], -item["acquired_monotonic"]))
+    selected = max(
+        waiting,
+        key=lambda item: (
+            _lease_priority(scheduling_policy, item, now),
+            -item["enqueued_monotonic"],
+        ),
+    )
+    selected["priority"] = _lease_priority(scheduling_policy, selected, now)
     selected["backend_sequence"] = backend_sequence
     selected["state"] = "starting"
     selected["sequence_assigned_monotonic"] = now
@@ -463,18 +568,49 @@ def _load_capacity_policy(root: Path) -> dict:
         "coin_reserved_bytes", "load_transient_bytes", "gtt_limit_bytes",
         "maximum_work_models",
         "front_proxy_identity", "work_proxy_identity", "lease_seconds",
+        "release_observer_identity", "release_observation_maximum_age_seconds",
     }
     if type(policy) is not dict or not required <= policy.keys():
         raise ValueError("invalid inference capacity policy")
-    numeric = required - {"front_proxy_identity", "work_proxy_identity"}
+    numeric = required - {
+        "front_proxy_identity", "work_proxy_identity", "release_observer_identity",
+    }
     if any(_positive_integer(policy[field]) is None for field in numeric):
         raise ValueError("invalid inference capacity policy")
     if (policy["front_sequences"] >= policy["total_sequences"]
             or any(type(policy[field]) is not str or not policy[field]
-                   for field in ("front_proxy_identity", "work_proxy_identity"))
+                   for field in ("front_proxy_identity", "work_proxy_identity",
+                                 "release_observer_identity"))
             or policy["front_proxy_identity"] == policy["work_proxy_identity"]):
         raise ValueError("invalid inference capacity policy")
     return policy
+
+
+def _trusted_release_observation(
+    lease: dict,
+    observed: dict,
+    backend_sequence: int | None,
+    now: float,
+    policy: dict,
+) -> bool:
+    try:
+        observed_at = _finite_number(
+            observed.get("observed_monotonic"), "release observation time",
+        )
+    except ValueError:
+        return False
+    return (
+        backend_sequence is not None
+        and observed.get("lease_id") == lease["lease_id"]
+        and observed.get("request_id") == lease["request"]["request_id"]
+        and observed.get("proxy_identity") == lease["proxy_identity"]
+        and lease.get("release_observer_identity") == policy["release_observer_identity"]
+        and observed.get("observer_identity") == lease["release_observer_identity"]
+        and observed.get("backend_sequence") == backend_sequence
+        and observed.get("backend_sequence_state") == "ended"
+        and observed_at <= now
+        and now - observed_at <= policy["release_observation_maximum_age_seconds"]
+    )
 
 
 @contextmanager
