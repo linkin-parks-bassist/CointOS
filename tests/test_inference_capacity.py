@@ -23,6 +23,7 @@ def scheduling_values():
         "priority_bands": {
             "sole_survivor": 1000,
             "coin": 900,
+            "user_driven": 850,
             "small_health": 800,
             "large_health": 700,
             "default": 500,
@@ -401,6 +402,51 @@ def test_aging_cannot_cross_band():
     policy = accepted_scheduling_policy()
     assert effective_priority(policy, "worker", None, "ordinary", 10 ** 9) == 699
     assert effective_priority(policy, None, "large_health", "ordinary", 10 ** 9) == 799
+    assert effective_priority(policy, None, "small_health", "ordinary",
+                              10 ** 9) == 849
+
+
+def test_operator_session_resolves_user_driven_band():
+    policy = accepted_scheduling_policy()
+    assert effective_priority(policy, None, None, "ordinary", 0,
+                              operator_session=True) == 850
+    assert effective_priority(policy, None, None, "ordinary", 10 ** 9,
+                              operator_session=True) == 899
+    assert effective_priority(policy, None, None, "coin", 0,
+                              operator_session=True) == 900
+    assert effective_priority(policy, None, None, "sole_survivor", 0,
+                              operator_session=True) == 1000
+    with unittest.TestCase().assertRaisesRegex(ValueError, "operator session"):
+        effective_priority(policy, None, None, "ordinary", 0,
+                           operator_session="yes")
+
+
+def _snapshot_for(values):
+    canonical = json.dumps(
+        values, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")
+    return {
+        "schema_version": 1,
+        "values": values,
+        "digest": hashlib.sha256(canonical).hexdigest(),
+        "activated_at": "2026-09-05T00:00:00+00:00",
+        "source_path": "config/scheduling.json",
+    }
+
+
+def test_scheduling_policy_requires_user_driven_band():
+    values = scheduling_values()
+    del values["priority_bands"]["user_driven"]
+    with unittest.TestCase().assertRaisesRegex(ValueError, "missing user_driven"):
+        effective_priority(_snapshot_for(values), None, None, "ordinary", 0)
+
+
+def test_user_driven_band_must_sit_between_coin_and_small_health():
+    values = scheduling_values()
+    values["priority_bands"]["user_driven"] = 800
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "user_driven band must sit"):
+        effective_priority(_snapshot_for(values), None, None, "ordinary", 0)
 
 
 def test_high_priority_arrival_preempts_work_lease():

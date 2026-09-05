@@ -96,7 +96,14 @@ def _write_snapshot_policy(root):
             "context_reserves": admission_policy()["context_reserves"],
         },
     }
-    scheduling_values = {"version": 1, "priority_bands": {"default": 500}}
+    scheduling_values = {"version": 1, "priority_bands": {
+        "sole_survivor": 1000,
+        "coin": 900,
+        "user_driven": 850,
+        "small_health": 800,
+        "large_health": 700,
+        "default": 500,
+    }}
     canonical = json.dumps(
         scheduling_values, sort_keys=True, separators=(",", ":"), allow_nan=False,
     ).encode("utf-8")

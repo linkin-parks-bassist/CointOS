@@ -3,6 +3,7 @@
   "priority_bands": {
     "sole_survivor": 1000,
     "coin": 900,
+    "user_driven": 850,
     "small_health": 800,
     "large_health": 700,
     "default": 500

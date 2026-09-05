@@ -174,8 +174,11 @@ def effective_priority(
     execution_profile: str | None,
     authority_profile: str,
     age_seconds: float,
+    operator_session: bool = False,
 ) -> int:
     """Resolve trusted configured bands; age may rise only within its band."""
+    if type(operator_session) is not bool:
+        raise ValueError("invalid operator session flag")
     values = _validated_scheduling_snapshot(policy)
     if type(role) not in (str, type(None)) or type(execution_profile) not in (str, type(None)):
         raise ValueError("invalid scheduling identity")
@@ -191,6 +194,8 @@ def effective_priority(
         band = "sole_survivor"
     elif authority_profile == authority["coin"]:
         band = "coin"
+    elif operator_session:
+        band = "user_driven"
     elif execution_profile == execution["small_health"]:
         band = "small_health"
     elif execution_profile == execution["large_health"]:
@@ -202,7 +207,8 @@ def effective_priority(
     ceilings = {
         "default": bands["large_health"] - 1,
         "large_health": bands["small_health"] - 1,
-        "small_health": bands["coin"] - 1,
+        "small_health": bands["user_driven"] - 1,
+        "user_driven": bands["coin"] - 1,
         "coin": bands["sole_survivor"] - 1,
         "sole_survivor": bands["sole_survivor"] + 99,
     }
@@ -396,6 +402,12 @@ def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict:
         return _public_lease(lease)
 
 
+def scheduling_snapshot(root: Path) -> dict:
+    """Load and validate the published scheduling snapshot; return its values."""
+    document = _load_json(Path(root) / "state" / "scheduling-policy.json")
+    return _validated_scheduling_snapshot(document)
+
+
 def _validated_scheduling_snapshot(snapshot: dict) -> dict:
     if type(snapshot) is not dict or set(snapshot) != SNAPSHOT_FIELDS:
         raise ValueError("invalid accepted scheduling policy snapshot")
@@ -427,16 +439,24 @@ def _validate_scheduling_values(values: object) -> None:
     if type(values) is not dict or set(values) != expected or values.get("version") != 1:
         raise ValueError("invalid accepted scheduling policy snapshot")
     bands = values.get("priority_bands")
-    if type(bands) is not dict or set(bands) != {
-        "sole_survivor", "coin", "small_health", "large_health", "default",
+    if type(bands) is not dict or "user_driven" not in bands:
+        raise ValueError("scheduling values missing user_driven band")
+    if set(bands) != {
+        "sole_survivor", "coin", "user_driven", "small_health", "large_health",
+        "default",
     }:
         raise ValueError("invalid accepted scheduling policy snapshot")
     ordered = [bands.get(name) for name in (
         "sole_survivor", "coin", "small_health", "large_health", "default",
     )]
-    if ordered[:4] != [1000, 900, 800, 700] or not _positive_integer(ordered[4]) \
-            or ordered[4] >= 700:
-        raise ValueError("invalid accepted scheduling policy snapshot")
+    if ordered[:4] != [1000, 900, 800, 700]:
+        raise ValueError("priority bands out of order")
+    if not _positive_integer(bands["user_driven"]) \
+            or not 800 < bands["user_driven"] < 900:
+        raise ValueError(
+            "user_driven band must sit strictly between small_health and coin")
+    if not _positive_integer(ordered[4]) or ordered[4] >= 700:
+        raise ValueError("invalid default priority band")
     authority = values.get("authority_profiles")
     execution = values.get("execution_profiles")
     role_priorities = values.get("role_priorities")
