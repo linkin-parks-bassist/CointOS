@@ -9,6 +9,7 @@ from unittest.mock import patch
 from ecosystem import cli, conversation, control_turns
 from ecosystem.control_worker import _reap, process_turn
 from ecosystem.telegram import accept_update, deliver_due_disaster_fallbacks
+from tests.test_mvp_task_contracts import accepted_workspace_policy, contract
 
 
 def update(identifier=81, text="hello"):
@@ -105,7 +106,7 @@ def test_delivered_generation_cancels_disaster_fallback(_root):
     assert sent == []
 
 
-def _telegram_enqueues_role(root: Path, identifier: int, role_marker: object) -> None:
+def _telegram_refuses_untrusted_dispatch(root: Path, identifier: int, role_marker: object) -> None:
     accept_update("token", update(identifier, "inspect it"), {42},
                   send=lambda *_arguments: None,
                   infer=lambda **_arguments: {"content": "I’ll inspect it."})
@@ -118,46 +119,50 @@ def _telegram_enqueues_role(root: Path, identifier: int, role_marker: object) ->
         arguments["role"] = role_marker
 
     def controller(_message, _history, _initial, _live, execute):
-        assert execute("queue_task", arguments)["ok"] is True
+        result = execute("queue_task", arguments)
+        assert result["ok"] is False
+        assert "trusted contact conversion" in result["error"]
         return {"followup": None}
 
     with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}):
         process_turn(turn_id, send=lambda *_arguments: None, controller=controller)
     jobs = list((root / "state/jobs").glob("task-*.json"))
-    assert len(jobs) == 1
-    expected = None if role_marker is _OMITTED else role_marker
-    assert json.loads(jobs[0].read_text(encoding="utf-8"))["role"] == expected
+    assert jobs == []
 
 
 _OMITTED = object()
 
 
 @with_root
-def test_telegram_dispatch_accepts_omitted_role(root):
-    _telegram_enqueues_role(root, 82, _OMITTED)
+def test_telegram_dispatch_refuses_omitted_role_without_trusted_contract(root):
+    _telegram_refuses_untrusted_dispatch(root, 82, _OMITTED)
 
 
 @with_root
-def test_telegram_dispatch_accepts_null_role(root):
-    _telegram_enqueues_role(root, 83, None)
+def test_telegram_dispatch_refuses_null_role_without_trusted_contract(root):
+    _telegram_refuses_untrusted_dispatch(root, 83, None)
 
 
 @with_root
-def test_telegram_dispatch_preserves_unknown_role(root):
-    _telegram_enqueues_role(root, 84, "mathematical_mongoose")
+def test_telegram_dispatch_refuses_unknown_role_without_trusted_contract(root):
+    _telegram_refuses_untrusted_dispatch(root, 84, "mathematical_mongoose")
 
 
 @with_root
 def test_idempotent_task_key_does_not_duplicate_work(root):
+    accepted_workspace_policy(root)
     roles = root / "roles"
     roles.mkdir()
     (roles / "worker.md").write_text(
         "# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nAsk.\n## Handoff\nReport.\n")
     inventory = {"models": [{"id": "model", "loaded": True}]}
     with patch("ecosystem.models.snapshot", return_value=inventory), patch("ecosystem.identity.generate", return_value="Journathan"):
-        first = cli.enqueue_task("worker", "do it", model="model", idempotency_key="same")
+        task_contract = contract(root, objective="do it")
+        first = cli.enqueue_task("worker", "do it", model="model", idempotency_key="same",
+                                 task_contract=task_contract)
     with patch("ecosystem.models.snapshot", side_effect=RuntimeError("model server unavailable")):
-        second = cli.enqueue_task("worker", "do it", model="model", idempotency_key="same")
+        second = cli.enqueue_task("worker", "do it", model="model", idempotency_key="same",
+                                  task_contract=task_contract)
     assert first == second
     assert len(list((root / "state/jobs").glob("task-*.json"))) == 1
     assert json.loads((root / f"state/jobs/{first}.json").read_text())["agent_name"] == "Journathan"
@@ -165,18 +170,23 @@ def test_idempotent_task_key_does_not_duplicate_work(root):
 
 @with_root
 def test_replayed_amendment_does_not_modify_a_newer_task(root):
+    accepted_workspace_policy(root)
     roles = root / "roles"
     roles.mkdir()
     (roles / "worker.md").write_text(
         "# Worker\n## Mission\nDo.\n## Permissions\nRead.\n## Approval required\nAsk.\n## Handoff\nReport.\n")
     inventory = {"models": [{"id": "model", "loaded": True}]}
     with patch("ecosystem.models.snapshot", return_value=inventory), patch("ecosystem.identity.generate", return_value="Journathan"):
-        original = cli.enqueue_task("worker", "agreement", source="telegram:42", model="model")
+        original = cli.enqueue_task("worker", "agreement", source="telegram:42", model="model",
+                                    task_contract=contract(root, objective="agreement"))
         assert cli.amend_latest_task("telegram:42", "worker", "argument", model="model",
-                                     idempotency_key="turn:amend") == original
-        newer = cli.enqueue_task("worker", "new work", source="telegram:42", model="model")
+                                     idempotency_key="turn:amend",
+                                     task_contract=contract(root, objective="argument")) == original
+        newer = cli.enqueue_task("worker", "new work", source="telegram:42", model="model",
+                                 task_contract=contract(root, objective="new work"))
     assert cli.amend_latest_task("telegram:42", "worker", "argument", model="model",
-                                 idempotency_key="turn:amend") == original
+                                 idempotency_key="turn:amend",
+                                 task_contract=contract(root, objective="argument")) == original
     assert json.loads((root / f"state/jobs/{newer}.json").read_text())["task"] == "new work"
 
 
