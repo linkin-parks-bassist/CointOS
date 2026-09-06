@@ -13,7 +13,9 @@ import secrets
 import select
 import socket
 import threading
+import time
 import urllib.parse
+import uuid
 from contextlib import contextmanager
 from email.parser import BytesHeaderParser
 from pathlib import Path
@@ -280,7 +282,7 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
     attestation = {
         "schema_version": 1,
         "binding": _durable(observed_end["binding"]),
-        "kind": "sequence_end",
+        "kind": observed_end.get("kind", "sequence_end"),
         "observer_identity": observed_end["observer_identity"],
         "observer_generation": observed_end["observer_generation"],
         "observed_monotonic": observed_end["observed_monotonic"],
@@ -300,9 +302,10 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
     return {"state": "revoked", "lease_id": lease_id, "sequence": released}
 
 
-def completed_run_termination(root: Path, lease_id: str) -> dict | None:
-    """Return persisted backend-end evidence only after the bound runner has ended."""
-    with _proxy_lock(Path(root)) as (state, _save):
+def completed_run_termination(root: Path, lease_id: str,
+                              clock=time.monotonic) -> dict | None:
+    """Persist fresh reconciled_absent proof only after the bound runner ended."""
+    with _proxy_lock(Path(root)) as (state, save):
         credential = state["credentials"].get(lease_id)
         if credential is None:
             raise ValueError("unknown proxy credential")
@@ -311,11 +314,85 @@ def completed_run_termination(root: Path, lease_id: str) -> dict | None:
         process = credential.get("binding", {}).get("process")
         if type(process) is not dict:
             raise ValueError("proxy credential lacks a bound process")
-        ended = _bound_process_ended(process)
-        if ended is not True:
+        if _bound_process_ended(process) is not True:
             return None
-        termination = credential.get("last_backend_termination")
-        return _durable(termination) if termination is not None else None
+        if credential.get("state") == "revoked":
+            termination = credential.get("last_backend_termination")
+            return _durable(termination) if termination is not None else None
+        credential["state"] = "closing"
+        save()
+        if credential.get("backend_observation_unknown"):
+            return None
+        identity = credential.get("backend_identity")
+        if type(identity) is not dict:
+            termination = credential.get("last_backend_termination")
+            return _durable(termination) if termination is not None else None
+        snapshot_credential = _durable(credential)
+        snapshot_identity = _durable(identity)
+    try:
+        observation = observe_backend_idle(snapshot_identity)
+    except Exception:
+        observation = None
+    if not _idle_observation_matches(observation, snapshot_identity):
+        return None
+    with _proxy_lock(Path(root)) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        if (credential is None or _durable(credential) != snapshot_credential
+                or credential["in_flight"]
+                or _bound_process_ended(
+                    credential["binding"]["process"]) is not True):
+            return None
+        now = _clock(clock)
+        try:
+            policy = json.loads((root / "config/resource-policy.json").read_text(
+                encoding="utf-8"))["inference_capacity"]
+            observer_identity = str(policy["release_observer_identity"])
+            clock_domain_id = str(policy["clock_domain_id"])
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            return None
+        generation = int(state["generation"]) + 1
+        record_id = uuid.uuid4().hex
+        evidence_id = "backend-observations.jsonl#" + record_id
+        termination = {
+            "terminated": True,
+            "kind": "reconciled_absent",
+            "binding": _durable(credential["binding"]["release_binding"]),
+            "observer_identity": observer_identity,
+            "observer_generation": generation,
+            "observed_monotonic": now,
+            "clock_domain_id": clock_domain_id,
+            "evidence_id": evidence_id,
+        }
+        record = {
+            "record_id": record_id,
+            "kind": "reconciled_absent",
+            "binding": termination["binding"],
+            "observed_monotonic": now,
+            "evidence_id": evidence_id,
+            "identity": snapshot_identity,
+            "all_slots_idle": True,
+            "slots": [{"id": slot["id"], "is_processing": False}
+                      for slot in observation["slots"]],
+        }
+        try:
+            _append_backend_observation(Path(root), record)
+        except OSError:
+            return None
+        state["generation"] = generation
+        credential["last_backend_termination"] = termination
+        save()
+        return _durable(termination)
+
+
+def _idle_observation_matches(observation, identity: dict) -> bool:
+    if (type(observation) is not dict
+            or observation.get("identity") != identity
+            or observation.get("all_slots_idle") is not True
+            or type(observation.get("slots")) is not list):
+        return False
+    return all(type(slot) is dict and type(slot.get("id")) is int
+               and slot.get("is_processing") is False
+               for slot in observation["slots"])
 
 
 def _bound_process_ended(process: dict) -> bool | None:
@@ -690,6 +767,15 @@ def _proxy_lock(root: Path):
         yield state, save
         if dirty:
             atomic_json(path, state)
+
+
+def _append_backend_observation(root: Path, record: dict) -> None:
+    path = Path(root) / "state" / "backend-observations.jsonl"
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(record, sort_keys=True,
+                                separators=(",", ":")) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 @contextmanager

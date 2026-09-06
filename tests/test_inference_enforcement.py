@@ -304,6 +304,15 @@ def stored_credential(value):
     return state["credentials"][value["lease_id"]]
 
 
+def dead_process(value, **credential_changes):
+    path = value["root"] / "state/inference-proxy.json"
+    state = json.loads(path.read_text())
+    credential = state["credentials"][value["lease_id"]]
+    credential["binding"]["process"] = {"pid": 2 ** 30, "process_start_ticks": 1}
+    credential.update(credential_changes)
+    path.write_text(json.dumps(state))
+
+
 def test_first_backend_identity_is_persisted_on_claim_and_credential():
     with fixture() as value:
         secret = issue(value)
@@ -453,6 +462,292 @@ def test_only_exact_fresh_trusted_backend_observation_is_retained():
                 (value["root"] / "state/inference-proxy.json").read_text())
             assert state["credentials"][value["lease_id"]][
                 "last_backend_termination"] is None
+
+
+def test_close_never_probes_live_unknown_or_claimed_worker():
+    with fixture() as value:
+        issue(value)
+        with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            probe.assert_not_called()
+    with fixture() as value:
+        issue(value)
+        with patch("ecosystem.inference_proxy._bound_process_ended",
+                   return_value=None), \
+             patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            probe.assert_not_called()
+    with fixture() as value:
+        issue(value)
+        dead_process(value, in_flight={"claim-x": {"request_id": "request-1"}})
+        with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            probe.assert_not_called()
+
+
+def test_close_without_recorded_identity_returns_only_stored_evidence():
+    with fixture() as value:
+        secret = issue(value)
+        metadata = {"authorization": "Bearer " + secret.hex()}
+        handle_proxy_request(
+            value["root"], {**metadata, "request_id": "request-1"},
+            body(request_id="request-1"),
+            lambda request: trusted_result(request, 12.0, "end-12.0"),
+            lambda: 12.0)
+        dead_process(value)
+        with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
+            evidence = completed_run_termination(value["root"], value["lease_id"])
+            probe.assert_not_called()
+        assert evidence["evidence_id"] == "end-12.0"
+        assert stored_credential(value)["state"] == "closing"
+
+
+def test_close_without_identity_or_trusted_end_returns_none():
+    with fixture() as value:
+        issue(value)
+        dead_process(value)
+        with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            probe.assert_not_called()
+        assert stored_credential(value)["last_backend_termination"] is None
+        assert not (value["root"] / "state/backend-observations.jsonl").exists()
+
+
+def test_sticky_backend_unknown_close_never_probes():
+    with fixture() as value:
+        issue(value)
+        dead_process(value, backend_identity=snapshot()["identity"],
+                     backend_observation_unknown=True)
+        with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            probe.assert_not_called()
+        assert stored_credential(value)["last_backend_termination"] is None
+
+
+def test_unreliable_idle_probe_yields_no_proof():
+    for kwargs in (
+        {"return_value": None},
+        {"return_value": {"identity": snapshot()["identity"],
+                          "all_slots_idle": False,
+                          "slots": [{"id": 0, "is_processing": True}]}},
+        {"return_value": {"identity": {"model_id": "other"},
+                          "all_slots_idle": True, "slots": []}},
+        {"return_value": {"identity": snapshot()["identity"],
+                          "all_slots_idle": True, "slots": [{"id": 0}]}},
+        {"side_effect": OSError("backend unreachable")},
+    ):
+        with fixture() as value:
+            issue(value)
+            dead_process(value, backend_identity=snapshot()["identity"])
+            with patch("ecosystem.inference_proxy.observe_backend_idle", **kwargs):
+                assert completed_run_termination(
+                    value["root"], value["lease_id"]) is None
+            assert stored_credential(value)["last_backend_termination"] is None
+            assert not (value["root"] / "state/backend-observations.jsonl").exists()
+
+
+def test_changed_credential_during_probe_yields_no_proof():
+    with fixture() as value:
+        issue(value)
+        dead_process(value, backend_identity=snapshot()["identity"])
+
+        def probe_and_mutate(_identity):
+            path = value["root"] / "state/inference-proxy.json"
+            state = json.loads(path.read_text())
+            state["credentials"][value["lease_id"]]["in_flight"]["claim-x"] = {
+                "request_id": "request-1"}
+            path.write_text(json.dumps(state))
+            return {"identity": snapshot()["identity"], "all_slots_idle": True,
+                    "slots": [{"id": 0, "is_processing": False}]}
+
+        with patch("ecosystem.inference_proxy.observe_backend_idle",
+                   side_effect=probe_and_mutate):
+            assert completed_run_termination(value["root"], value["lease_id"]) is None
+        assert stored_credential(value)["last_backend_termination"] is None
+        assert not (value["root"] / "state/backend-observations.jsonl").exists()
+
+
+def test_fresh_idle_probe_persists_reconciled_absent_proof():
+    with fixture() as value:
+        issue(value)
+        dead_process(value, backend_identity=snapshot()["identity"])
+        idle = {"identity": snapshot()["identity"], "all_slots_idle": True,
+                "slots": [{"id": 3, "is_processing": False},
+                          {"id": 4, "is_processing": False}]}
+        with patch("ecosystem.inference_proxy.observe_backend_idle",
+                   return_value=idle) as probe:
+            evidence = completed_run_termination(
+                value["root"], value["lease_id"], lambda: 55.0)
+        probe.assert_called_once_with(snapshot()["identity"])
+        assert evidence is not None
+        assert evidence["terminated"] is True
+        assert evidence["kind"] == "reconciled_absent"
+        assert evidence["binding"] == value["lease"]["expected_release_binding"]
+        assert evidence["observer_identity"] == "observer:inference-backend"
+        assert type(evidence["observer_generation"]) is int
+        assert evidence["observer_generation"] > 0
+        assert evidence["observed_monotonic"] == 55.0
+        assert evidence["clock_domain_id"] == "host-monotonic:boot-one"
+        assert type(evidence["evidence_id"]) is str and evidence["evidence_id"]
+        state = json.loads((value["root"] / "state/inference-proxy.json").read_text())
+        assert state["generation"] == evidence["observer_generation"]
+        credential = stored_credential(value)
+        assert credential["state"] == "closing"
+        assert credential["last_backend_termination"] == evidence
+        lines = (value["root"] / "state/backend-observations.jsonl").read_text() \
+            .splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["record_id"]
+        assert record["kind"] == "reconciled_absent"
+        assert record["binding"] == evidence["binding"]
+        assert record["observed_monotonic"] == 55.0
+        assert record["evidence_id"] == evidence["evidence_id"]
+        assert record["identity"] == snapshot()["identity"]
+        assert record["all_slots_idle"] is True
+        assert record["slots"] == idle["slots"]
+        assert "backend-observations.jsonl" in evidence["evidence_id"]
+        assert record["record_id"] in evidence["evidence_id"]
+
+
+def test_recorded_identity_refreshes_old_response_observation():
+    with fixture() as value:
+        secret = issue(value)
+        metadata = {"authorization": "Bearer " + secret.hex()}
+        handle_proxy_request(
+            value["root"], {**metadata, "request_id": "request-1"},
+            body(request_id="request-1"),
+            lambda request: trusted_result(request, 12.0, "end-12.0"),
+            lambda: 12.0)
+        dead_process(value, backend_identity=snapshot()["identity"])
+        idle = {"identity": snapshot()["identity"], "all_slots_idle": True,
+                "slots": [{"id": 0, "is_processing": False}]}
+        with patch("ecosystem.inference_proxy.observe_backend_idle",
+                   return_value=idle):
+            evidence = completed_run_termination(
+                value["root"], value["lease_id"], lambda: 55.0)
+        assert evidence["kind"] == "reconciled_absent"
+        assert evidence["evidence_id"] != "end-12.0"
+        assert evidence["observed_monotonic"] == 55.0
+        assert stored_credential(value)["last_backend_termination"] == evidence
+
+
+def test_failed_evidence_append_yields_no_proof():
+    with fixture() as value:
+        issue(value)
+        dead_process(value, backend_identity=snapshot()["identity"])
+        idle = {"identity": snapshot()["identity"], "all_slots_idle": True,
+                "slots": [{"id": 0, "is_processing": False}]}
+        with patch("ecosystem.inference_proxy.observe_backend_idle",
+                   return_value=idle), \
+             patch("ecosystem.inference_proxy._append_backend_observation",
+                   side_effect=OSError("disk full")) as append:
+            assert completed_run_termination(
+                value["root"], value["lease_id"], lambda: 55.0) is None
+            append.assert_called_once()
+        credential = stored_credential(value)
+        assert credential["last_backend_termination"] is None
+        assert not (value["root"] / "state/backend-observations.jsonl").exists()
+
+
+def test_revoke_preserves_reconciled_absent_attestation():
+    with fixture() as value:
+        issue(value)
+        dead_process(value, backend_identity=snapshot()["identity"])
+        idle = {"identity": snapshot()["identity"], "all_slots_idle": True,
+                "slots": [{"id": 0, "is_processing": False}]}
+        with patch("ecosystem.inference_proxy.observe_backend_idle",
+                   return_value=idle):
+            evidence = completed_run_termination(
+                value["root"], value["lease_id"], lambda: 55.0)
+        attested = []
+        released = {"state": "released", "lease_id": value["lease_id"]}
+        with patch("ecosystem.inference_proxy.release_sequence",
+                   side_effect=lambda root, lease, attestation, clock:
+                   attested.append(attestation) or released):
+            result = revoke_proxy_credential(value["root"], value["lease_id"],
+                                             evidence, lambda: 55.0)
+        assert result["state"] == "revoked"
+        assert result["sequence"] == released
+        assert attested[0]["kind"] == "reconciled_absent"
+        assert attested[0]["binding"] == evidence["binding"]
+        assert attested[0]["evidence_id"] == evidence["evidence_id"]
+        assert attested[0]["observed_monotonic"] == 55.0
+        assert stored_credential(value)["state"] == "revoked"
+
+
+def test_revoke_defaults_sequence_end_for_trusted_adapter_evidence():
+    with fixture() as value:
+        secret = issue(value)
+        metadata = {"authorization": "Bearer " + secret.hex()}
+        handle_proxy_request(
+            value["root"], {**metadata, "request_id": "request-1"},
+            body(request_id="request-1"),
+            lambda request: trusted_result(request, 12.0, "end-12.0"),
+            lambda: 12.0)
+        dead_process(value)
+        evidence = completed_run_termination(value["root"], value["lease_id"],
+                                             lambda: 55.0)
+        assert evidence["evidence_id"] == "end-12.0"
+        attested = []
+        released = {"state": "released", "lease_id": value["lease_id"]}
+        with patch("ecosystem.inference_proxy.release_sequence",
+                   side_effect=lambda root, lease, attestation, clock:
+                   attested.append(attestation) or released):
+            result = revoke_proxy_credential(value["root"], value["lease_id"],
+                                             evidence, lambda: 55.0)
+        assert result["state"] == "revoked"
+        assert attested[0]["kind"] == "sequence_end"
+
+
+def test_production_eof_close_proves_absence_only_from_fresh_probe():
+    with fixture() as value:
+        secret = issue(value)
+        encoded = json.dumps(body()).encode()
+        raw = (b"POST /v1/chat/completions HTTP/1.1\r\n"
+               + f"Authorization: Bearer {secret.hex()}\r\n".encode()
+               + f"Content-Length: {len(encoded)}\r\n\r\n".encode() + encoded)
+        reads = [raw, b""]
+        sent = []
+        connection = types.SimpleNamespace(
+            recv=lambda _maximum: reads.pop(0), sendall=sent.append,
+            settimeout=lambda _timeout: None, close=lambda: None,
+        )
+        upstream = types.SimpleNamespace(
+            status=200, getheader=lambda _name, default: "application/json",
+            read1=lambda _maximum: b"",
+        )
+        backend = MagicMock()
+        backend.getresponse.return_value = upstream
+        with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
+                   return_value=backend), \
+             patch("ecosystem.inference_proxy.backend_snapshot",
+                   return_value=snapshot()):
+            serve_one_connection(connection, value["root"], {
+                "backend_base": "http://127.0.0.1:13305/v1",
+            }, lambda: 11.0)
+        assert stored_credential(value)["last_backend_termination"] is None
+        assert stored_credential(value)["backend_identity"] == snapshot()["identity"]
+        dead_process(value)
+        idle = {"identity": snapshot()["identity"], "all_slots_idle": True,
+                "slots": [{"id": 0, "is_processing": False}]}
+        with patch("ecosystem.inference_proxy.observe_backend_idle",
+                   return_value=idle) as probe:
+            evidence = completed_run_termination(
+                value["root"], value["lease_id"], lambda: 55.0)
+        probe.assert_called_once_with(snapshot()["identity"])
+        assert evidence["kind"] == "reconciled_absent"
+        assert evidence["observed_monotonic"] == 55.0
+        attested = []
+        released = {"state": "released", "lease_id": value["lease_id"]}
+        with patch("ecosystem.inference_proxy.release_sequence",
+                   side_effect=lambda root, lease, attestation, clock:
+                   attested.append(attestation) or released):
+            result = revoke_proxy_credential(value["root"], value["lease_id"],
+                                             evidence, lambda: 55.0)
+        assert result["state"] == "revoked"
+        assert attested[0]["kind"] == "reconciled_absent"
+        assert stored_credential(value)["state"] == "revoked"
 
 
 def load_tests(_loader, _tests, _pattern):
