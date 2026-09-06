@@ -25,13 +25,16 @@ absence assertion made after temp-directory deletion; local correction uses plai
 functions and asserts absence while the directory still exists. No dummy credential
 or parallel gate implementation. Tiny test children only, no live operator changes.
 
-R8-G2 running: local-r8-gated-launch adapts run_command to register before opening
-the gate. Setup exceptions clean up returned gates (or retain launch helper's
-attestation), append sanitized operator-launch-events.jsonl, and re-raise original
-failure. Lease state remains conservatively unchanged on failure; no fabricated
-release/quiescence or automatic dead-session recovery. Normal post-release wait,
-returncode and release semantics stay unchanged. Only operator_session.py and new
-tests/test_operator_launch.py; packet fixes exact contracts and regression cases.
+R8-G2 combined packet local-r8-gated-launch REJECTED: exited zero/run_finished
+but final reason length at 32000 output tokens, no patch or tests. Runtime close
+worked; semantic deliverable did not. Do not mark it completed. Keep output cap
+32000 (OpenCode's actual limit); split tasks rather than inflate it.
+R8-G2A running: local-r8-register-gate, only run_command registration-before-exec,
+verified setup cleanup and attached failure attestation; two tiny real-child tests.
+R8-G2B next: durable sanitized setup-failure reporting, separate packet after G2A.
+Lease state stays conservatively unchanged on failure; no fabricated release,
+quiescence or dead-session self-healing. Post-release wait/interruption semantics
+unchanged. Only operator_session.py and new tests/test_operator_launch.py.
 Do not silently change detached-session interruption semantics, preemption policy,
 dead-session reconciliation authority or add an autonomous repair loop.
 
