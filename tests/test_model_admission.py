@@ -6,7 +6,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ecosystem.inference_capacity import resource_envelope
-from ecosystem.models import choose_route, realize, safe_routes, snapshot, validate_route
+from ecosystem.models import (
+    _observed_model_record, choose_route, realize, safe_routes, snapshot, validate_route,
+)
 
 
 GIB = 1024 ** 3
@@ -485,6 +487,222 @@ def test_realize_requires_privileged_owner_for_nonresident_loading():
     with unittest.TestCase().assertRaisesRegex(
             RuntimeError, "requires privileged resource-control loading"):
         realize(decision, current)
+
+
+def observed_inputs():
+    return (
+        {
+            "id": "Qwen3-Coder-30B-131K-GGUF",
+            "downloaded": True,
+            "recipe": "llamacpp",
+        },
+        {
+            "model_name": "Qwen3-Coder-30B-131K-GGUF",
+            "loaded": True,
+            "backend_alive": True,
+            "pid": 4242,
+            "backend_url": "http://127.0.0.1:13306",
+            "launch_command": [
+                "/usr/bin/llama-server",
+                "--model", "/models/qwen3-coder-30b.gguf",
+                "--ctx-size", "65536",
+            ],
+            "recipe_options": {"ctx_size": 65_536},
+            "is_busy": False,
+            "pinned": False,
+        },
+        {
+            "data": [{
+                "id": "/models/qwen3-coder-30b.gguf",
+                "meta": {
+                    "n_params": 30_000_000_000,
+                    "size": 18 * GIB,
+                    "n_ctx_train": 131_072,
+                },
+            }]
+        },
+        {
+            "model_path": "/models/qwen3-coder-30b.gguf",
+            "total_slots": 2,
+            "chat_template_caps": {"supports_tools": True},
+        },
+    )
+
+
+def observed_json(document):
+    return json.loads(json.dumps(document))
+
+
+def test_observed_record_normalizes_registry_gaps_and_keeps_inputs_immutable():
+    item, resident, backend_document, props = observed_inputs()
+    kept = [observed_json(document) for document in (item, resident, backend_document, props)]
+    result = _observed_model_record(item, resident, backend_document, props, 1_700_000_000.0)
+    assert result is not None
+    assert result["id"] == "Qwen3-Coder-30B-131K-GGUF"
+    assert result["parameter_count"] == 30_000_000_000
+    assert result["size_bytes"] == 18 * GIB
+    assert result["context"] == 131_072
+    assert result["capabilities"] == ["tool-calling"]
+    assert result["parallel_sequences"] == 2
+    assert result["supported_context_quantum"] == 32_768
+    assert result["loaded"] is True
+    assert result["loaded_context"] == 65_536
+    assert result["metadata_verified"] is True
+    assert result["residency_verified"] is True
+    assert result["fresh"] is True
+    assert result["observed_at"] == 1_700_000_000.0
+    assert result["provenance"] == (
+        "http://127.0.0.1:13306/v1/models;http://127.0.0.1:13306/props;"
+        "lemonade:/api/v1/health;observed-allocation-only"
+    )
+    for original, before in zip((item, resident, backend_document, props), kept):
+        assert original == before
+
+
+def test_observed_record_keeps_parameter_count_distinct_from_bytes():
+    item, resident, backend_document, props = observed_inputs()
+    result = _observed_model_record(item, resident, backend_document, props, 10.0)
+    assert result is not None
+    assert result["parameter_count"] == 30_000_000_000
+    assert result["size_bytes"] == 18 * GIB
+    assert result["parameter_count"] != result["size_bytes"]
+
+
+def test_observed_record_rejects_path_launch_and_identity_mismatches():
+    for change in (
+        lambda item, resident, backend_document, props: props.__setitem__(
+            "model_path", "/models/other.gguf"),
+        lambda item, resident, backend_document, props: resident.__setitem__(
+            "launch_command", ["/usr/bin/llama-server"]),
+        lambda item, resident, backend_document, props: item.__setitem__("id", "model-b"),
+        lambda item, resident, backend_document, props: backend_document.__setitem__(
+            "data", [{
+                "id": "/models/other.gguf",
+                "meta": {
+                    "n_params": 30_000_000_000,
+                    "size": 18 * GIB,
+                    "n_ctx_train": 131_072,
+                },
+            }]),
+        lambda item, resident, backend_document, props: backend_document.__setitem__(
+            "data", []),
+    ):
+        item, resident, backend_document, props = observed_inputs()
+        change(item, resident, backend_document, props)
+        assert _observed_model_record(
+            item, resident, backend_document, props, 10.0) is None
+
+
+def test_observed_record_rejects_missing_or_bool_numeric_facts():
+    cases = (
+        ("resident", "pid", None),
+        ("resident", "pid", True),
+        ("resident", "pid", 0),
+        ("backend", "n_params", None),
+        ("backend", "n_params", True),
+        ("backend", "size", None),
+        ("backend", "n_ctx_train", True),
+        ("props", "total_slots", None),
+        ("props", "total_slots", True),
+        ("props", "total_slots", 0),
+        ("resident", "ctx_size", None),
+    )
+    for target, name, value in cases:
+        item, resident, backend_document, props = observed_inputs()
+        if target == "resident":
+            container = resident["recipe_options"] if name == "ctx_size" else resident
+            if value is None:
+                del container[name]
+            else:
+                container[name] = value
+        elif target == "backend":
+            if value is None:
+                del backend_document["data"][0]["meta"][name]
+            else:
+                backend_document["data"][0]["meta"][name] = value
+        else:
+            if value is None:
+                del props[name]
+            else:
+                props[name] = value
+        assert _observed_model_record(
+            item, resident, backend_document, props, 10.0) is None, (target, name, value)
+
+
+def test_observed_record_rejects_slot_and_context_mismatches():
+    item, resident, backend_document, props = observed_inputs()
+    resident["recipe_options"]["ctx_size"] = 65_535
+    assert _observed_model_record(item, resident, backend_document, props, 10.0) is None
+    item, resident, backend_document, props = observed_inputs()
+    backend_document["data"][0]["meta"]["n_ctx_train"] = 16_384
+    assert _observed_model_record(item, resident, backend_document, props, 10.0) is None
+    item, resident, backend_document, props = observed_inputs()
+    resident["parallel_sequences"] = 4
+    assert _observed_model_record(item, resident, backend_document, props, 10.0) is None
+    item, resident, backend_document, props = observed_inputs()
+    resident["recipe_options"]["llamacpp_args"] = "--parallel 3 --batch-size 512"
+    assert _observed_model_record(item, resident, backend_document, props, 10.0) is None
+
+
+def test_observed_record_accepts_missing_explicit_parallel_from_props():
+    item, resident, backend_document, props = observed_inputs()
+    result = _observed_model_record(item, resident, backend_document, props, 10.0)
+    assert result is not None
+    assert result["parallel_sequences"] == props["total_slots"]
+    item, resident, backend_document, props = observed_inputs()
+    resident["recipe_options"]["llamacpp_args"] = "--parallel 2 --batch-size 512"
+    result = _observed_model_record(item, resident, backend_document, props, 10.0)
+    assert result is not None
+    assert result["parallel_sequences"] == 2
+
+
+def test_observed_record_derives_only_tool_calling_capability():
+    def capabilities_for(supports_tools, registry_capabilities=...):
+        item, resident, backend_document, props = observed_inputs()
+        if registry_capabilities is ...:
+            item.pop("capabilities", None)
+        else:
+            item["capabilities"] = registry_capabilities
+        props["chat_template_caps"]["supports_tools"] = supports_tools
+        result = _observed_model_record(item, resident, backend_document, props, 10.0)
+        return None if result is None else result["capabilities"]
+
+    assert capabilities_for(True) == ["tool-calling"]
+    assert capabilities_for(False) == []
+    assert capabilities_for(True, ["coding", "tool-calling"]) == ["coding", "tool-calling"]
+    assert capabilities_for("yes") is None
+    item, resident, backend_document, props = observed_inputs()
+    props["chat_template_caps"].pop("supports_tools")
+    assert _observed_model_record(item, resident, backend_document, props, 10.0) is None
+    assert capabilities_for(True, ["coding"]) is None
+    assert capabilities_for(False, ["coding", "tool-calling"]) is None
+
+
+def test_observed_record_rejects_registry_contradictions():
+    def normalized(**registry_fields):
+        item, resident, backend_document, props = observed_inputs()
+        item.update(registry_fields)
+        return _observed_model_record(item, resident, backend_document, props, 10.0)
+
+    assert normalized(parameter_count=30_000_000_000, size_bytes=18 * GIB,
+                      context_length=131_072) is not None
+    assert normalized(parameter_count=27_000_000_000) is None
+    assert normalized(parameter_count="30000000000") is None
+    assert normalized(size_bytes=17 * GIB) is None
+    assert normalized(context_length=65_536) is None
+    assert normalized(parameter_count=None, size_bytes=None, context_length=None) is not None
+
+
+def test_observed_record_never_guesses_capability_or_count_from_name():
+    item, resident, backend_document, props = observed_inputs()
+    backend_document["data"][0]["meta"]["n_params"] = 27_000_000_000
+    props["chat_template_caps"]["supports_tools"] = False
+    result = _observed_model_record(item, resident, backend_document, props, 10.0)
+    assert result is not None
+    assert result["capabilities"] == []
+    assert "coding" not in result["capabilities"]
+    assert result["parameter_count"] == 27_000_000_000
+    assert result["metadata_verified"] is True
 
 
 def load_tests(_loader, _tests, _pattern):

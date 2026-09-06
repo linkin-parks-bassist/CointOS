@@ -161,6 +161,100 @@ def _verified_model_record(
     }
 
 
+def _observed_model_record(item, resident, backend_document, props, observed_at):
+    """Normalize one observed resident allocation into a verified registry record.
+
+    Pure function: returns a copied record built from measured backend facts,
+    or None when any mandatory fact is missing, malformed, or contradictory.
+    """
+    if not all(isinstance(value, dict) for value in (item, resident, backend_document, props)):
+        return None
+    model_id = item.get("id")
+    if not isinstance(model_id, str) or not model_id or resident.get("model_name") != model_id:
+        return None
+    if resident.get("loaded") is not True or resident.get("backend_alive") is not True:
+        return None
+    if not _positive_integer(resident.get("pid")):
+        return None
+    backend_url = resident.get("backend_url")
+    if not isinstance(backend_url, str) or not backend_url:
+        return None
+    model_path = props.get("model_path")
+    if not isinstance(model_path, str) or not model_path:
+        return None
+    launch_command = resident.get("launch_command")
+    if (not isinstance(launch_command, list)
+            or not all(isinstance(argument, str) for argument in launch_command)
+            or model_path not in launch_command):
+        return None
+    data = backend_document.get("data")
+    if not isinstance(data, list) or len(data) != 1 or not isinstance(data[0], dict):
+        return None
+    if data[0].get("id") != model_path:
+        return None
+    meta = data[0].get("meta")
+    if not isinstance(meta, dict):
+        return None
+    n_params = meta.get("n_params")
+    size = meta.get("size")
+    n_ctx_train = meta.get("n_ctx_train")
+    if not all(_positive_integer(value) for value in (n_params, size, n_ctx_train)):
+        return None
+    total_slots = props.get("total_slots")
+    if not _positive_integer(total_slots):
+        return None
+    options = resident.get("recipe_options")
+    if not isinstance(options, dict):
+        return None
+    ctx_size = options.get("ctx_size")
+    if not _positive_integer(ctx_size) or ctx_size % total_slots != 0:
+        return None
+    if ctx_size // total_slots > n_ctx_train:
+        return None
+    health_parallel = _health_parallel_sequences(resident)
+    if health_parallel is not None and health_parallel != total_slots:
+        return None
+    caps = props.get("chat_template_caps")
+    if not isinstance(caps, dict) or not isinstance(caps.get("supports_tools"), bool):
+        return None
+    supports_tools = caps.get("supports_tools")
+    registry_capabilities = item.get("capabilities")
+    if registry_capabilities is None:
+        capabilities = ["tool-calling"] if supports_tools else []
+    elif isinstance(registry_capabilities, list):
+        if not all(isinstance(value, str) and value for value in registry_capabilities):
+            return None
+        capabilities = list(registry_capabilities)
+        if ("tool-calling" in capabilities) != supports_tools:
+            return None
+    else:
+        return None
+    for field, measured in (("parameter_count", n_params),
+                            ("size_bytes", size),
+                            ("context_length", n_ctx_train)):
+        declared = item.get(field)
+        if declared is not None and not (
+                _positive_integer(declared) and declared == measured):
+            return None
+    record = dict(item)
+    record["parameter_count"] = n_params
+    record["size_bytes"] = size
+    record["context_length"] = n_ctx_train
+    record["capabilities"] = capabilities
+    record["parallel_sequences"] = total_slots
+    record["supported_context_quantum"] = ctx_size // total_slots
+    observed_resident = dict(resident)
+    observed_resident["parallel_sequences"] = total_slots
+    result = _verified_model_record(record, observed_resident, True, observed_at)
+    if result.get("metadata_verified") is not True or result.get("residency_verified") is not True:
+        return None
+    result["provenance"] = (
+        f"{backend_url}/v1/models;{backend_url}/props;"
+        "lemonade:/api/v1/health;observed-allocation-only"
+    )
+    return result
+
+
 def snapshot(root: Path | None = None, clock=None) -> dict:
     """Sample literal registry, residency, host and accepted scheduling facts."""
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
