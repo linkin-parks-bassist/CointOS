@@ -17,16 +17,25 @@ The read-only local-r8-gated-map confirmed executor gated_child_launch/release /
 cleanup contracts. Parent owns a blocked gate; requested exec starts only on release.
 Cleanup reports reaped only after leader reap and observed process-group absence.
 Existing credential-bearing gate requires an FD, while arbitrary operator tools
-need no executor credential. R8-G1 running: local-r8-gate-optional-fd adds explicit
-config_fd=None support (record sentinel -1), preserving existing FD behavior and
-all gate/cleanup contracts. New plain-function tests use tiny marker-writing
-children, no model inference. No dummy credential or parallel gate implementation.
-After acceptance, R8-G2 adapts run_command to register before opening that gate;
-its precise exception/state contract must be fixed before dispatch.
+need no executor credential. R8-G1 accepted: local 316fb41/9b92f18 -> 538fb54/afe41b3.
+config_fd=None support (record sentinel -1) preserves existing FD behavior and all
+gate/cleanup contracts. Astra passed 40 initial focused/executor tests, then four
+corrected gate tests. Review rejected two new TestCase instances and a marker-
+absence assertion made after temp-directory deletion; local correction uses plain
+functions and asserts absence while the directory still exists. No dummy credential
+or parallel gate implementation. Tiny test children only, no live operator changes.
+
+R8-G2 running: local-r8-gated-launch adapts run_command to register before opening
+the gate. Setup exceptions clean up returned gates (or retain launch helper's
+attestation), append sanitized operator-launch-events.jsonl, and re-raise original
+failure. Lease state remains conservatively unchanged on failure; no fabricated
+release/quiescence or automatic dead-session recovery. Normal post-release wait,
+returncode and release semantics stay unchanged. Only operator_session.py and new
+tests/test_operator_launch.py; packet fixes exact contracts and regression cases.
 Do not silently change detached-session interruption semantics, preemption policy,
 dead-session reconciliation authority or add an autonomous repair loop.
 
 Packets/logs remain in ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
 Read-only work used the clean metadata worktree. Writer worktree now exists at
 /home/david/.worktrees/cointos-mvp-operator-launch, branch fix/mvp-operator-launch,
-base 05723b0. Only executor.py and new tests/test_operator_gate.py in R8-G1.
+base 05723b0. Current worker base includes accepted R8-G1 commits above.
