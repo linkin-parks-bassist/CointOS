@@ -39,3 +39,16 @@ stages schema2 accept and exclusive durable claim; existing legacy route tests
 will intentionally expose candidate cutover incompleteness. Report these honestly,
 do not weaken tests or deploy the staged branch. Completion/dispatch/link/conversion
 are separate next packets; C1 and full contact remain incomplete.
+e1b0acd accepted in staging: Astra reviewed diff/tests and independently passed
+12 canonical tests. schema2 uses only canonical fields, duplicate legacy refusal,
+per-turn locked claim and no-write repeat refusal. Worker honestly reports old
+test_control_turns: 11 run, 8 failures + 1 error, 2 pass; no old tests modified.
+Those are candidate C4 route-removal/composition blockers, not runtime regressions
+in root. Next local-c1-complete-decision adds only durable completion/replay.
+a268b91 accepted in staging: Astra independently passed 18 canonical tests and
+reviewed completion copy/immutability/no-write replay. Next local-c1-dispatch-intent
+only reserves the exact validated task contract and turn-scoped key. The existing
+A1 enqueue owner retains workspace/authority admission; later dispatch composition
+must use it and never infer permissions from model role. Plan's old example lacks
+the now-required requirements field; use current A1 fixture/validator, not a weaker
+local substitute. No source changes cherry-picked to runtime root.
