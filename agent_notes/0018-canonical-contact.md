@@ -189,3 +189,17 @@ exception/process-exit release, no custom owner state. Next local-c3-locked-send
 adds only private caller-locked send phase returning actual state/attempted flag;
 tests inject callbacks, never Telegram. Intent authorization/lock acquisition/
 decision acknowledgement and loop/degraded wiring remain subsequent packets.
+7623240 accepted in staging: Astra reviewed source and independently passed 71
+send/lock/record/gateway tests. Actual sending+marker precedes callback; False,
+sender error and final-state-write failure remain unknown/no replay. E4 handoff
+overstated independent decision-after-notice callback coverage; next
+local-c3-authorized-send explicitly adds it while composing strict intent/trusted
+inbox validation, per-inbound lock and decision-only inbox acknowledgement. No
+drain/tick/degraded behavior changed yet. Ack failure must retry projection only,
+not resend; no second ack field or forged destination.
+1c6ca42 source reviewed and 71 focused tests independently passed, but E5's
+notice-independence test used DIFFERENT inbound IDs and the OLD inbox-based send
+helper. This does not prove the requested same-inbound identity separation.
+local-c3-same-inbound-proof is a test-only correction using accepted locked send
+for telegram-8:degraded-notice then real publication/delivery of telegram-8:decision.
+Do not accept the claimed proof until the corrected same-inbound test is reviewed.

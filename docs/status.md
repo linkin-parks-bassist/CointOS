@@ -11,12 +11,18 @@ and durable setup-failure evidence. Astra independently passed 622 tests
 (589 discovered + 33 integration), plus a real-child gate-release failure probe.
 This is bounded R8 launch acceptance, not complete operator inference admission.
 Active: [isolated canonical contact work](../agent_notes/0018-canonical-contact.md)
-through staging `edd341b`: shared decision validation, durable claim/completion,
-one-job dispatch replay after injected final-write failure, and immutable reply
-linkage. Astra passed 27 contact tests (earlier dispatch/A1 set: 33). These changes
-are NOT in the runtime root: old-route candidate failures and C1 conversion/C2-C4
-remain open. Next is read-only legacy shape evidence; no contact cutover or
-services changed. See
+through staging `7623240`: canonical decision/dispatch/reply linkage, pure prompt,
+immutable ordinary intent publication, and gateway-owned delivery/attempt records,
+per-inbound lock and private locked send primitive. These changes are NOT in the
+runtime root. Astra's latest accepted focused send/record/gateway set passed 71
+tests; candidate full discovery at `b3f5b41` had 10 old-route failures (627 run),
+while its separate 33 integration tests passed. Those failures remain closure
+blockers, not waived tests. `1c6ca42` adds authorization and decision-only delivery
+acknowledgement; its 71 tests pass independently but a claimed notice/reply test
+used different inbound IDs. Local test correction is running before acceptance.
+C1 historical representation, C2 admitted front-request lifecycle, C3 wiring and
+C4 canonical caller/cutover closure remain open. No live sender/cutover or services
+changed. See
 [metadata checkpoint](../agent_notes/0016-model-metadata.md).
 
 Conservative backend-close observation is live-accepted as David's temporary
