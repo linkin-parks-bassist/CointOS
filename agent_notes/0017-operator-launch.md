@@ -29,9 +29,16 @@ R8-G2 combined packet local-r8-gated-launch REJECTED: exited zero/run_finished
 but final reason length at 32000 output tokens, no patch or tests. Runtime close
 worked; semantic deliverable did not. Do not mark it completed. Keep output cap
 32000 (OpenCode's actual limit); split tasks rather than inflate it.
-R8-G2A running: local-r8-register-gate, only run_command registration-before-exec,
+R8-G2A pending correction: local-r8-register-gate e7e83de, only run_command registration-before-exec,
 verified setup cleanup and attached failure attestation; two tiny real-child tests.
-R8-G2B next: durable sanitized setup-failure reporting, separate packet after G2A.
+Independent 23 tests pass, but injected cleanup exception raises UnboundLocalError:
+Python deletes the except target cleanup_error, losing original registration error.
+Do not accept e7e83de alone. local-r8-cleanup-error adds the missing regression and
+minimal binding fix before integration; runtime success was not semantic acceptance.
+Correction c4eeca3 accepted with e7e83de as 6555a10/7314204: Astra independently
+passed 24 tests; exact original exception and cleanup cause survive in the added
+regression. R8-G2A is now accepted. R8-G2B running: local-r8-launch-journal,
+durable sanitized setup-failure reporting, separate packet after G2A.
 Lease state stays conservatively unchanged on failure; no fabricated release,
 quiescence or dead-session self-healing. Post-release wait/interruption semantics
 unchanged. Only operator_session.py and new tests/test_operator_launch.py.
