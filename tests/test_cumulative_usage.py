@@ -133,7 +133,7 @@ def test_preemption_returns_closed_usage_with_final_output():
         assert usage["output_bytes"] == 5
 
 
-def test_execute_next_persists_usage_before_reconciliation():
+def _run_execute_next_case(initial_attempts, opencode_session, remaining_budget):
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         cli.initialize()
         prompt = cli.ROOT / "state/jobs/task-exec.prompt.md"
@@ -142,10 +142,13 @@ def test_execute_next_persists_usage_before_reconciliation():
         job = {
             "id": "task-exec", "kind": "agent-task", "state": "ready",
             "role": "worker", "source": "local-cli", "model": "test-model",
-            "attempts": 0, "created_at": _utc_stamp(), "authority_profile": "worker",
-            "remaining_budget": LARGE_BUDGET,
+            "attempts": initial_attempts, "agent_generation": 7,
+            "created_at": _utc_stamp(), "authority_profile": "worker",
+            "remaining_budget": remaining_budget,
             "prompt": "state/jobs/task-exec.prompt.md",
         }
+        if opencode_session is not None:
+            job["opencode_session"] = opencode_session
         path = cli.ROOT / "state/jobs/task-exec.json"
         cli.atomic_json(path, job)
 
@@ -176,6 +179,7 @@ def test_execute_next_persists_usage_before_reconciliation():
                 "context_tokens": 1024}),
             patch("ecosystem.executor.realize", return_value={"state": "realized"}),
             patch("ecosystem.executor.job_admitted_in_current_mode", return_value=True),
+            patch("ecosystem.executor.cancel_proxy", return_value={"state": "cancelled"}),
             patch("ecosystem.executor.launch_runner_round", side_effect=fake_launch),
             patch("ecosystem.executor.gated_child_wait", return_value={
                 "state": "reaped", "process_group_alive": False, "returncode": 0}),
@@ -190,6 +194,8 @@ def test_execute_next_persists_usage_before_reconciliation():
             for entry in patches:
                 entry.stop()
         saved = json.loads(path.read_text(encoding="utf-8"))
+        assert saved["attempts"] == 1
+        assert saved["agent_generation"] == 7
         assert saved["state"] == "reconciliation_required"
         usage = saved["budget_usage"]
         assert "run_started" not in usage and "task_started" not in usage
@@ -197,6 +203,23 @@ def test_execute_next_persists_usage_before_reconciliation():
         assert usage["run_seconds"] > 0
         assert usage["output_bytes"] == 5
         assert usage["attempts"] == 1
+        return saved
+
+
+def test_execute_next_persists_usage_before_reconciliation():
+    _run_execute_next_case(0, None, LARGE_BUDGET)
+
+
+def test_execute_next_resumed_session_keeps_positive_attempts():
+    budget = dict(LARGE_BUDGET)
+    budget["maximum_attempts"] = 1
+    _run_execute_next_case(1, "ses_resume_7", budget)
+
+
+def test_execute_next_fresh_context_keeps_positive_attempts():
+    budget = dict(LARGE_BUDGET)
+    budget["maximum_attempts"] = 1
+    _run_execute_next_case(1, None, budget)
 
 
 def load_tests(_loader, _tests, _pattern):
@@ -206,4 +229,6 @@ def load_tests(_loader, _tests, _pattern):
         unittest.FunctionTestCase(test_persisted_near_limit_usage_checkpoints_later_round),
         unittest.FunctionTestCase(test_preemption_returns_closed_usage_with_final_output),
         unittest.FunctionTestCase(test_execute_next_persists_usage_before_reconciliation),
+        unittest.FunctionTestCase(test_execute_next_resumed_session_keeps_positive_attempts),
+        unittest.FunctionTestCase(test_execute_next_fresh_context_keeps_positive_attempts),
     ])

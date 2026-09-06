@@ -1215,7 +1215,7 @@ the next incomplete boundary without repeating completed work.
             job.setdefault("context_generation", 1)
             prompt_path = cli.ROOT / job["prompt"]
             output_path = cli.ROOT / "logs/runs" / f"{job['id']}.opencode.log"
-            job.update(attempts=job["attempts"] + 1,
+            job.update(attempts=1 if not job["attempts"] else job["attempts"],
                        updated_at=cli.now(), output=str(output_path.relative_to(cli.ROOT)))
             selected = job.get("model") or os.environ.get(
                 "AGENT_EXECUTOR_MODEL", "Qwen3.5-4B-GGUF")
