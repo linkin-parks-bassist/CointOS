@@ -107,6 +107,21 @@ def test_run_command_registration_failure_never_executes_child():
             session = load_state(root)["sessions"]["opencode:one"]
             assert session["state"] == "starting"
             assert session["process"] is None
+            journal = root / "state" / "operator-launch-events.jsonl"
+            lines = journal.read_text(encoding="utf-8").strip().splitlines()
+            assert len(lines) == 1
+            event = json.loads(lines[0])
+            assert set(event) == {
+                "event", "session_id", "request_id", "observed_monotonic",
+                "error_type", "launch_failure"}
+            assert event["event"] == "operator.launch_failed"
+            assert event["session_id"] == "opencode:one"
+            assert event["request_id"] == session_request()["request_id"]
+            assert event["error_type"] == "RuntimeError"
+            assert type(event["observed_monotonic"]) is float
+            assert event["observed_monotonic"] >= 0
+            assert event["launch_failure"] == failure
+            assert "injected registration failure" not in lines[0]
         finally:
             _reap_leaked_child(pidfile)
 
@@ -138,11 +153,15 @@ def test_run_command_preserves_setup_error_when_cleanup_raises():
             raised = None
             try:
                 operator_session.run_command(
-                    Path(temporary), session_request(), ["true"])
+                    Path(temporary), session_request(), ["true"],
+                    clock=lambda: 41.5)
             except BaseException as error:
                 raised = error
             else:
                 raise AssertionError("registration failure did not propagate")
+        journal_line = (
+            Path(temporary) / "state" / "operator-launch-events.jsonl"
+        ).read_text(encoding="utf-8").strip()
     assert raised is registration_error, (
         f"expected the original registration exception object, got "
         f"{type(raised).__name__}: {raised}")
@@ -158,6 +177,127 @@ def test_run_command_preserves_setup_error_when_cleanup_raises():
         "state": "reconciliation_required",
         "error_type": "OSError",
     }
+    assert "\n" not in journal_line
+    event = json.loads(journal_line)
+    assert set(event) == {
+        "event", "session_id", "request_id", "observed_monotonic",
+        "error_type", "launch_failure"}
+    assert event["event"] == "operator.launch_failed"
+    assert event["session_id"] == "opencode:one"
+    assert event["request_id"] == session_request()["request_id"]
+    assert event["observed_monotonic"] == 41.5
+    assert event["error_type"] == "ValueError"
+    assert event["launch_failure"] == failure
+    assert event["launch_failure"]["cleanup"]["state"] == \
+        "reconciliation_required"
+    assert "injected registration failure" not in journal_line
+    assert "injected cleanup failure" not in journal_line
+
+
+def test_run_command_launch_failure_journal_is_truthful_without_cleanup():
+    from unittest import mock
+
+    from ecosystem import executor
+
+    cases = (
+        ({"spawned": False}, {"spawned": False}),
+        (None, {"spawned": None}),
+    )
+    for attestation, expected_failure in cases:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "state").mkdir()
+            (root / "state" / "scheduling-policy.json").write_text(
+                json.dumps(scheduling_snapshot()), encoding="utf-8")
+            launch_error = RuntimeError("injected launch failure")
+            if attestation is not None:
+                launch_error.launch_failure = attestation
+
+            with mock.patch.object(
+                    executor, "gated_child_launch",
+                    side_effect=launch_error), \
+                    mock.patch.object(
+                        executor, "gated_child_cleanup") as fake_cleanup:
+                raised = None
+                try:
+                    operator_session.run_command(
+                        root, session_request(), ["true"],
+                        clock=lambda: 1234.5)
+                except BaseException as error:
+                    raised = error
+                else:
+                    raise AssertionError("launch failure did not propagate")
+            assert raised is launch_error
+            fake_cleanup.assert_not_called()
+            session = load_state(root)["sessions"]["opencode:one"]
+            assert session["state"] == "starting"
+            assert session["process"] is None
+            journal = root / "state" / "operator-launch-events.jsonl"
+            lines = journal.read_text(encoding="utf-8").strip().splitlines()
+            assert len(lines) == 1
+            event = json.loads(lines[0])
+            assert set(event) == {
+                "event", "session_id", "request_id", "observed_monotonic",
+                "error_type", "launch_failure"}
+            assert event["event"] == "operator.launch_failed"
+            assert event["session_id"] == "opencode:one"
+            assert event["request_id"] == session_request()["request_id"]
+            assert event["observed_monotonic"] == 1234.5
+            assert event["error_type"] == "RuntimeError"
+            assert event["launch_failure"] == expected_failure
+            assert "injected launch failure" not in lines[0]
+
+
+def test_run_command_persistence_failure_preserves_original_after_cleanup():
+    from unittest import mock
+
+    from ecosystem import executor
+    from survival import records
+
+    registration_error = ValueError("injected registration failure")
+    persistence_error = OSError("injected persistence failure")
+    gate = {"pid": 4242, "start_ticks": 7, "pgid": 4242, "process": None}
+    order = []
+
+    def fake_cleanup(_gate):
+        order.append("cleanup")
+        return {"state": "reaped", "process_group_alive": False}
+
+    def failing_append(_path, _event):
+        order.append("append")
+        raise persistence_error
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        (root / "state").mkdir()
+        (root / "state" / "scheduling-policy.json").write_text(
+            json.dumps(scheduling_snapshot()), encoding="utf-8")
+        with mock.patch.object(
+                executor, "gated_child_launch", return_value=gate), \
+                mock.patch.object(
+                    operator_session, "register_operator_process",
+                    side_effect=registration_error), \
+                mock.patch.object(
+                    executor, "gated_child_cleanup",
+                    side_effect=fake_cleanup), \
+                mock.patch.object(
+                    records, "append_event", side_effect=failing_append):
+            raised = None
+            try:
+                operator_session.run_command(
+                    root, session_request(), ["true"])
+            except BaseException as error:
+                raised = error
+            else:
+                raise AssertionError("registration failure did not propagate")
+        assert order == ["cleanup", "append"]
+        session = load_state(root)["sessions"]["opencode:one"]
+        assert session["state"] == "starting"
+        assert session["process"] is None
+        assert not (
+            root / "state" / "operator-launch-events.jsonl").exists()
+    assert raised is registration_error
+    assert raised.__cause__ is persistence_error
 
 
 def load_tests(_loader, _tests, _pattern):

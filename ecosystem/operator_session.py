@@ -220,7 +220,9 @@ def run_command(
     register it before it may exec, wait for it, release the session with the
     child's outcome, and return the exit code. Only a fresh starting session
     may spawn; a stale or dead session must be reconciled or released before
-    the tool is launched again."""
+    the tool is launched again. Any setup failure appends one sanitized
+    launch-failure event after the existing cleanup, then re-raises the same
+    exception."""
     session = acquire_operator_session(root, request, clock)
     if session["state"] != "starting":
         raise ValueError(
@@ -229,31 +231,49 @@ def run_command(
     # Local import: executor imports resource_control, which imports this
     # module; the gated spawner is only needed at launch time.
     from ecosystem import executor
-    gate = executor.gated_child_launch(None, command, dict(os.environ))
     try:
-        register_operator_process(
-            root, session["session_id"],
-            gate["pid"], gate["start_ticks"], clock)
-        executor.gated_child_release(gate)
-    except Exception as error:
-        cleanup_error = None
+        gate = executor.gated_child_launch(None, command, dict(os.environ))
         try:
-            cleanup = executor.gated_child_cleanup(gate)
-        except Exception as cleanup_failure:
-            cleanup_error = cleanup_failure
-            cleanup = {
-                "state": "reconciliation_required",
-                "error_type": type(cleanup_failure).__name__,
+            register_operator_process(
+                root, session["session_id"],
+                gate["pid"], gate["start_ticks"], clock)
+            executor.gated_child_release(gate)
+        except Exception as error:
+            cleanup_error = None
+            try:
+                cleanup = executor.gated_child_cleanup(gate)
+            except Exception as cleanup_failure:
+                cleanup_error = cleanup_failure
+                cleanup = {
+                    "state": "reconciliation_required",
+                    "error_type": type(cleanup_failure).__name__,
+                }
+            error.launch_failure = {
+                "spawned": True,
+                "pid": gate["pid"],
+                "start_ticks": gate["start_ticks"],
+                "pgid": gate["pgid"],
+                "cleanup": cleanup,
             }
-        error.launch_failure = {
-            "spawned": True,
-            "pid": gate["pid"],
-            "start_ticks": gate["start_ticks"],
-            "pgid": gate["pgid"],
-            "cleanup": cleanup,
-        }
-        if cleanup_error is not None:
-            raise error from cleanup_error
+            if cleanup_error is not None:
+                raise error from cleanup_error
+            raise
+    except Exception as error:
+        try:
+            records.append_event(
+                root / "state" / "operator-launch-events.jsonl",
+                {
+                    "event": "operator.launch_failed",
+                    "session_id": session["session_id"],
+                    "request_id": request["request_id"],
+                    "observed_monotonic": clock(),
+                    "error_type": type(error).__name__,
+                    "launch_failure": getattr(
+                        error, "launch_failure", {"spawned": None}),
+                },
+            )
+        except Exception as persistence_error:
+            raise error from persistence_error
         raise
     returncode = gate["process"].wait()
     release_operator_session(
