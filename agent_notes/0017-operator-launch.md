@@ -13,13 +13,20 @@ Reject the worker's hypothetical None/TypeError branch as an established blocker
 an unreaped rapid-exit child normally remains observable as a zombie as well.
 Existing two CLI tests run actual small children but do not cover registration failure.
 
-Next packet local-r8-gated-map is read-only: exact executor gated_child_launch /
-release / cleanup contracts and reusable regression fixtures. Prefer adapting the
-existing gate so requested code cannot execute before lease registration, preserving
-owner-attested failure evidence, rather than another raw Popen cleanup mechanism.
+The read-only local-r8-gated-map confirmed executor gated_child_launch/release /
+cleanup contracts. Parent owns a blocked gate; requested exec starts only on release.
+Cleanup reports reaped only after leader reap and observed process-group absence.
+Existing credential-bearing gate requires an FD, while arbitrary operator tools
+need no executor credential. R8-G1 running: local-r8-gate-optional-fd adds explicit
+config_fd=None support (record sentinel -1), preserving existing FD behavior and
+all gate/cleanup contracts. New plain-function tests use tiny marker-writing
+children, no model inference. No dummy credential or parallel gate implementation.
+After acceptance, R8-G2 adapts run_command to register before opening that gate;
+its precise exception/state contract must be fixed before dispatch.
 Do not silently change detached-session interruption semantics, preemption policy,
 dead-session reconciliation authority or add an autonomous repair loop.
 
 Packets/logs remain in ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
-Read-only work uses the clean metadata worktree; create a new isolated writer
-worktree for any operator-session implementation after the bounded design is fixed.
+Read-only work used the clean metadata worktree. Writer worktree now exists at
+/home/david/.worktrees/cointos-mvp-operator-launch, branch fix/mvp-operator-launch,
+base 05723b0. Only executor.py and new tests/test_operator_gate.py in R8-G1.
