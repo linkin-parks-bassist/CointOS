@@ -120,3 +120,10 @@ C2 status adapter not yet implemented; no existing status/health module found by
 bounded filename check, so no factual projection is assumed. Next independent
 local-c3-publication-map is read-only preparation of approved immutable ordinary
 spool publication; full C3 still depends on C2, and no active egress changes occur.
+Sieve local-c3-publication-map identifies reusable records._create_exclusive_json
+(fsynced private file, link publication, collision raises) and validated full
+telegram_api.read_inbox_entry. Correction: source_key is telegram-N:kind, NOT just
+inbound id as map proposed. C3 examples and C1 link use distinct decision/result
+identities. Next local-c3-intent-link stages strict seven-field ordinary intent
+validation and read-only authenticated inbox linkage. No publisher/sender yet;
+shared-directory ownership remains C4 packaging, not silently enabled in tests.
