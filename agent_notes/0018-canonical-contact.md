@@ -1,5 +1,29 @@
 # Canonical contact bring-up — Astra, 2026-09-07
 
+## Current design amendment — read before new C1-C3 work
+
+David requested three message stages: new (entry decision pending), open (deeper
+response pending, potentially indefinitely), and closed. Entry outcomes must
+support respond, escalate, respond+escalate, and ignore. Metadata must allow links
+to earlier messages in a continuing chain; entry inference identifies clear links
+or asks deeper work to investigate recent new/open/closed history.
+The prior forced-nonblank-reply/respond-or-dispatch schema and role/content-only
+history are NOT the final target. Do not keep implementing them merely to make
+the old plan green. New semantic implementation dispatches are paused while the
+amendment is specified; transport primitives remain staged, not activated.
+Astra asked whether escalation includes stronger-model reasoning without an
+actionable background task; no answer recorded yet. Open waiting messages must
+not imply an indefinitely occupied inference lease. Closed history remains
+available as context; model-suggested links are not facts or new task authority.
+
+Important composition follow-up: degraded suppression currently checks only
+decision intent/attempt/delivery presence. No-reply ignore/escalate outcomes need
+an explicit disposition path so the gateway does not invent fallback responses
+after intentional no-reply decisions. Old C3 arbitration is not sufficient proof
+for the revised lifecycle until that seam is designed and tested.
+
+## Earlier accepted implementation checkpoints
+
 Authority: approved MVP contact plan C1-C5. Local inference only; David requests
 economical local dispatch, five-minute polling and continued overnight work.
 Root remains runtime/legacy-compatible until offline canonical composition and
@@ -256,3 +280,9 @@ explicitly approved the recommended separate archive/replay-fence direction.
 Decision 0013 records the choice and boundaries. Exact archive/index interfaces,
 resumable conversion and caller behavior still need a compact written design;
 no live migration or cutover was authorized/performed by that approval.
+7b61886 accepted as staged TRANSPORT wiring: Astra reviewed the one-call egress edit
+and two real-spool tests, independently passed 84 focused tests. Critical precedes
+ordinary, then notice arbitration; failed ordinary send does not renew heartbeat,
+later tick projects unknown without repeating either transport. Normal worker
+close/release observed. Revised message lifecycle remains unimplemented; this is
+not full C3/contact acceptance.

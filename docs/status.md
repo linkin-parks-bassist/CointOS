@@ -1,5 +1,15 @@
 # Current status
 
+Contact design amendment, 2026-09-07: David requests new/open/closed message states,
+four entry outcomes including no-reply escalation/ignore, and linked context across
+all message states. See [current contact note](../agent_notes/0018-canonical-contact.md)
+before any new C1-C3 implementation. Prior forced-reply/respond-or-dispatch contract
+is being revised, not treated as final. Transport staging through `7b61886` passed
+84 focused tests independently, but no-reply disposition/arbitration is a new
+required seam. Pre-MVP history archive/replay-fence direction is approved in
+[decision 0013](decisions/0013-preserve-pre-mvp-contact-history.md); no live migration
+or cutover has occurred.
+
 Production model metadata is integrated through `4372020`; Astra independently
 passed 613 tests and compared real snapshot/model-selection results with backend
 facts. The commissioning metadata override is removed from dispatch. The next

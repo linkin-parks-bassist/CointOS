@@ -1,4 +1,10 @@
 # CointOS MVP Contact Plane Implementation Plan
+> Design amendment in progress, 2026-09-07: David requires new/open/closed message
+> lifecycle, respond/escalate/respond+escalate/ignore outcomes, and linked context
+> across message states. C1-C3 decision/history interfaces below are historical
+> implementation targets pending revision, not authorization to keep building
+> the superseded contract. See [current contact note](../../../agent_notes/0018-canonical-contact.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 **Goal:** Replace the mixed Telegram/deep-control route with one responsive, resource-reserved, durable respond-or-dispatch path whose ordinary egress is owned by the permanent gateway.
 **Architecture:** The gateway remains the only Telegram fingertip and writes authenticated inbound records. A user-owned worker reduces each record through the existing control-turn identity into one structured response or dispatch using R4 inference; it publishes immutable ordinary reply intents which the gateway authenticates against inbound identity and delivers separately from root-owned critical messages.
