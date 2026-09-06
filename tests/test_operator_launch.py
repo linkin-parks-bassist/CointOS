@@ -202,6 +202,44 @@ def test_run_command_launch_failure_journal_is_truthful_without_cleanup():
     cases = (
         ({"spawned": False}, {"spawned": False}),
         (None, {"spawned": None}),
+        ("not an attestation", {"spawned": None}),
+        (
+            {
+                "spawned": True,
+                "pid": 4242,
+                "start_ticks": 7,
+                "pgid": 4242,
+                "command": ["true", "--verbose"],
+                "environment": {"PATH": "/usr/bin"},
+                "config_fd": 9,
+                "cleanup": {
+                    "state": "reaped",
+                    "returncode": 1,
+                    "pid": 4242,
+                    "start_ticks": 7,
+                    "pgid": 4242,
+                    "process_group_alive": False,
+                    "error_type": "RuntimeError",
+                    "diagnostic": "sensitive cleanup diagnostic",
+                    "message": "injected cleanup message",
+                },
+            },
+            {
+                "spawned": True,
+                "pid": 4242,
+                "start_ticks": 7,
+                "pgid": 4242,
+                "cleanup": {
+                    "state": "reaped",
+                    "returncode": 1,
+                    "pid": 4242,
+                    "start_ticks": 7,
+                    "pgid": 4242,
+                    "process_group_alive": False,
+                    "error_type": "RuntimeError",
+                },
+            },
+        ),
     )
     for attestation, expected_failure in cases:
         with tempfile.TemporaryDirectory() as temporary:
@@ -228,6 +266,8 @@ def test_run_command_launch_failure_journal_is_truthful_without_cleanup():
                 else:
                     raise AssertionError("launch failure did not propagate")
             assert raised is launch_error
+            if attestation is not None:
+                assert launch_error.launch_failure is attestation
             fake_cleanup.assert_not_called()
             session = load_state(root)["sessions"]["opencode:one"]
             assert session["state"] == "starting"

@@ -29,6 +29,11 @@ REQUIRED_REQUEST_FIELDS = frozenset((
     "session_id", "owner_identity", "tool", "model_id", "request_id",
 ))
 PREEMPTION_OUTCOME = {"state": "preempted", "returncode": None}
+LAUNCH_FAILURE_FIELDS = frozenset(("spawned", "pid", "start_ticks", "pgid"))
+LAUNCH_CLEANUP_FIELDS = frozenset((
+    "state", "returncode", "pid", "start_ticks", "pgid",
+    "process_group_alive", "error_type",
+))
 
 
 def acquire_operator_session(
@@ -268,8 +273,8 @@ def run_command(
                     "request_id": request["request_id"],
                     "observed_monotonic": clock(),
                     "error_type": type(error).__name__,
-                    "launch_failure": getattr(
-                        error, "launch_failure", {"spawned": None}),
+                    "launch_failure": _projected_launch_failure(
+                        getattr(error, "launch_failure", None)),
                 },
             )
         except Exception as persistence_error:
@@ -433,6 +438,22 @@ def _durable_copy(value) -> dict:
         return json.loads(json.dumps(value, sort_keys=True))
     except (TypeError, ValueError) as error:
         raise ValueError("session record is not durable JSON") from error
+
+
+def _projected_launch_failure(attestation) -> dict:
+    if type(attestation) is not dict:
+        return {"spawned": None}
+    projected = {
+        key: attestation[key]
+        for key in attestation if key in LAUNCH_FAILURE_FIELDS
+    }
+    cleanup = attestation.get("cleanup")
+    if type(cleanup) is dict:
+        projected["cleanup"] = {
+            key: cleanup[key]
+            for key in cleanup if key in LAUNCH_CLEANUP_FIELDS
+        }
+    return projected
 
 
 def _now(clock: Callable[[], float]) -> float:
