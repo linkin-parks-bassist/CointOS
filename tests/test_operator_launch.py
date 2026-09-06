@@ -111,6 +111,55 @@ def test_run_command_registration_failure_never_executes_child():
             _reap_leaked_child(pidfile)
 
 
+def test_run_command_preserves_setup_error_when_cleanup_raises():
+    from unittest import mock
+
+    from ecosystem import executor
+
+    registration_error = ValueError("injected registration failure")
+    cleanup_error = OSError("injected cleanup failure")
+    gate = {"pid": 4242, "start_ticks": 7, "pgid": 4242, "process": None}
+
+    with tempfile.TemporaryDirectory() as temporary:
+        with mock.patch.object(
+                operator_session, "acquire_operator_session",
+                return_value={
+                    "state": "starting",
+                    "session_id": "opencode:one",
+                }), \
+                mock.patch.object(
+                    executor, "gated_child_launch", return_value=gate), \
+                mock.patch.object(
+                    operator_session, "register_operator_process",
+                    side_effect=registration_error), \
+                mock.patch.object(
+                    executor, "gated_child_cleanup",
+                    side_effect=cleanup_error):
+            raised = None
+            try:
+                operator_session.run_command(
+                    Path(temporary), session_request(), ["true"])
+            except BaseException as error:
+                raised = error
+            else:
+                raise AssertionError("registration failure did not propagate")
+    assert raised is registration_error, (
+        f"expected the original registration exception object, got "
+        f"{type(raised).__name__}: {raised}")
+    assert raised.__cause__ is cleanup_error, (
+        f"expected __cause__ to be the cleanup exception object, "
+        f"got {raised.__cause__!r}")
+    failure = raised.launch_failure
+    assert failure["spawned"] is True
+    assert failure["pid"] == 4242
+    assert failure["start_ticks"] == 7
+    assert failure["pgid"] == 4242
+    assert failure["cleanup"] == {
+        "state": "reconciliation_required",
+        "error_type": "OSError",
+    }
+
+
 def load_tests(_loader, _tests, _pattern):
     return unittest.TestSuite(
         unittest.FunctionTestCase(fn) for name, fn in globals().items()

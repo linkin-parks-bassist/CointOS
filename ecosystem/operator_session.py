@@ -239,10 +239,11 @@ def run_command(
         cleanup_error = None
         try:
             cleanup = executor.gated_child_cleanup(gate)
-        except Exception as cleanup_error:
+        except Exception as cleanup_failure:
+            cleanup_error = cleanup_failure
             cleanup = {
                 "state": "reconciliation_required",
-                "error_type": type(cleanup_error).__name__,
+                "error_type": type(cleanup_failure).__name__,
             }
         error.launch_failure = {
             "spawned": True,
