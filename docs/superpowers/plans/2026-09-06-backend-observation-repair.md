@@ -28,11 +28,14 @@ file and edit-cycle boundaries. Runtime evidence stays append-only and ignored.
   Astra passed 553 discovered tests plus 33 separately invoked integration tests
   on the integrated tree (586 total). Synthetic fresh proof -> real R3 release
   -> proxy revocation also passed without mocking R3.
-- [ ] OBS-3 live acceptance: controlled activation/smoke under the approval and
-  admission boundaries. Await explicit approval to restart the existing transient
-  proxy with reviewed bytes and perform one bounded admitted smoke. No new service,
-  Telegram access, credentials, backend unload or broader activation implied.
-  A committed patch is not live acceptance.
+- [x] OBS-3 live acceptance: David explicitly approved the existing transient
+  proxy restart and one bounded admitted smoke. Astra fenced admissions, restarted
+  the proxy, verified its listener/authentication boundary, then ran
+  `local-r4-live-observer-smoke`. One response; automatic `reconciled_absent`
+  release, proxy revoked, R3 released, R1 quiescent, process group gone; no manual
+  reconciliation. Evidence: `state/backend-observations.jsonl` record
+  `83135806225749e8a5762cc6291199a4`; activation/transcript in the ignored SDD ledger.
+  No new service, Telegram access, backend unload or broader activation occurred.
 
 ## R4-PRECISE — REQUIRED, OPEN
 

@@ -52,3 +52,13 @@ acceptance may proceed with the documented all-slots-idle limitation.
 
 Do not let a green conservative test suite close R4-PRECISE. Record successor
 implementation/verification commits here and in status when that work is done.
+
+## Conservative acceptance checkpoint — 2026-09-06
+
+Implemented in `b17c8fc`, `4776e15`, `5e4f333`, `f4fc438`; Astra independently
+passed 586 tests and a synthetic real-R3 handoff. Following David's separate
+explicit restart/smoke approval, `local-r4-live-observer-smoke` automatically
+released through R4/R3/R1 with one response, durable `reconciled_absent` evidence
+and no operator reconciliation. Runtime evidence record:
+`83135806225749e8a5762cc6291199a4` in `state/backend-observations.jsonl`.
+R4-PRECISE remains open; this acceptance retains the all-slots-idle limitation.

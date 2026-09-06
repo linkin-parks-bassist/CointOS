@@ -31,11 +31,21 @@ misattributed the count difference to duplicates and corrected that claim.
 The ignored `verify_close_r3.py` probe also passed with actual R3 validation and
 release, not a mocked release_sequence. Synthetic observations are not live proof.
 
-Remaining: OBS-3 controlled live acceptance. The existing transient proxy still
-runs its earlier imported code. Ask David to approve restarting that proxy with
-reviewed bytes and one bounded admitted smoke; preserve a fresh idle/admission
-fence and rollback path. Do not enable new services or activate broader changes.
-Both local workers exited and were independently reconciled; no worker is active.
+OBS-3 live-accepted after David explicitly approved restart and one admitted smoke.
+Astra fenced R1 admissions, checked zero active leases/claims and actual backend
+idle, then restarted only `cointos-mvp-proxy.service` (62160 -> 266838).
+The immediate listener probe raced startup and got connection refused; admissions
+stayed fenced until a subsequent probe confirmed listening and unauthenticated
+401. No inference was attempted during that gap; the service was not restarted twice.
+The existing bootstrap executor then ran `local-r4-live-observer-smoke`: exactly
+one request returned `OBSERVER_SMOKE_OK`, and normal close reached `run_finished`,
+proxy revoked, R3 released, R1 quiescent without any manual reconciliation.
+Astra independently checked exact evidence/binding equality, process/group absence
+and healthy resources. Proof: `state/backend-observations.jsonl` record
+`83135806225749e8a5762cc6291199a4`; restart evidence `observer-activation.jsonl`
+and smoke transcript remain in the ignored SDD ledger. No worker remains active.
+This accepts conservative release, not autonomous MVP, production model metadata,
+precise concurrent release or broader protected service activation.
 The exact local packets are retained under ignored .superpowers/sdd/
 2026-09-05-cointos-mvp-index/. The implementation worktree is
 /home/david/.worktrees/cointos-mvp-backend-observation; temporary coordinator-owned
