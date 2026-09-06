@@ -25,6 +25,14 @@ def _marker_child(marker: Path) -> list:
     ]
 
 
+def _expect_error(exc_type, fn):
+    try:
+        fn()
+    except exc_type as raised:
+        return raised
+    raise AssertionError(f"{exc_type.__name__} not raised")
+
+
 def test_none_config_fd_blocks_until_release_and_reaps_with_chosen_code():
     with tempfile.TemporaryDirectory(prefix="operator-gate-none-") as temporary:
         marker = Path(temporary) / "marker-none"
@@ -59,13 +67,15 @@ def test_none_config_fd_preserves_injected_pre_spawn_failure():
         def failing_popen(*_args, **_kwargs):
             raise OSError("injected pre-spawn failure")
 
-        with unittest.TestCase().assertRaisesRegex(
-                OSError, "injected pre-spawn failure") as raised:
-            gated_child_launch(
+        raised = _expect_error(
+            OSError,
+            lambda: gated_child_launch(
                 None, _marker_child(marker), dict(os.environ),
                 popen=failing_popen,
-            )
-        assert getattr(raised.exception, "launch_failure", None) == {"spawned": False}
+            ),
+        )
+        assert "injected pre-spawn failure" in str(raised)
+        assert getattr(raised, "launch_failure", None) == {"spawned": False}
         assert not marker.exists()
         assert _parent_fds() == before
 
@@ -83,19 +93,25 @@ def test_none_config_fd_cleanup_without_release_reaps_blocked_wrapper():
         finally:
             if record is not None:
                 gated_child_cleanup(record, timeout=2.0)
-    assert outcome["state"] == "reaped"
-    assert outcome["process_group_alive"] is False
-    assert not marker.exists()
-    assert _parent_fds() == before
+        assert Path(temporary).is_dir()
+        assert not marker.exists()
+        assert outcome["state"] == "reaped"
+        assert outcome["process_group_alive"] is False
+        assert _parent_fds() == before
 
 
 def test_invalid_config_fd_values_are_still_rejected():
     with tempfile.TemporaryDirectory(prefix="operator-gate-invalid-") as temporary:
         marker = Path(temporary) / "marker-invalid"
         for invalid in (-1, -3, True, False, "0", 0.5, [0], b"0"):
-            with unittest.TestCase().assertRaises(ValueError):
+            try:
                 gated_child_launch(invalid, _marker_child(marker), dict(os.environ))
-    assert not marker.exists()
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"ValueError not raised for {invalid!r}")
+        assert Path(temporary).is_dir()
+        assert not marker.exists()
 
 
 def load_tests(_loader, _tests, _pattern):
