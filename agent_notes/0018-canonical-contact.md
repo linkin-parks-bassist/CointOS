@@ -69,3 +69,9 @@ decision/task_result ids and publication timestamps; a later task result must no
 regress an already-delivered or unknown decision. Gateway/outbox delivery records
 remain the authority. link_reply does not send or append conversation history;
 those owners compose in C3. Canonical ids are telegram-N:decision/:task_result.
+edd341b accepted in staging: Astra reviewed source/tests and passed 27 contact
+tests. Independent late-result probe confirms first task_result linkage preserves
+already delivered and delivery_unknown substantive states. No outbox/send effect.
+Next local-c1-legacy-shapes is READ ONLY: establish actual terminal legacy shapes
+and missing historical facts before assigning conversion semantics. Do not invent
+a past respond/dispatch decision or job simply to make old records fit schema2.

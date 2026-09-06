@@ -10,8 +10,13 @@ is now integrated through `faae7ad`: registered-before-exec gate, truthful clean
 and durable setup-failure evidence. Astra independently passed 622 tests
 (589 discovered + 33 integration), plus a real-child gate-release failure probe.
 This is bounded R8 launch acceptance, not complete operator inference admission.
-Active next: read-only C1 contract mapping in an isolated contact worktree; no
-contact cutover or services changed. See
+Active: [isolated canonical contact work](../agent_notes/0018-canonical-contact.md)
+through staging `edd341b`: shared decision validation, durable claim/completion,
+one-job dispatch replay after injected final-write failure, and immutable reply
+linkage. Astra passed 27 contact tests (earlier dispatch/A1 set: 33). These changes
+are NOT in the runtime root: old-route candidate failures and C1 conversion/C2-C4
+remain open. Next is read-only legacy shape evidence; no contact cutover or
+services changed. See
 [metadata checkpoint](../agent_notes/0016-model-metadata.md).
 
 Conservative backend-close observation is live-accepted as David's temporary
