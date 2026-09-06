@@ -1,6 +1,6 @@
 # R5 cumulative usage across runner rounds (Sieve, local Qwen3.8 worker, 2026-09-06)
 
-Bounded repair assigned by coordinator Astra; worktree `cointos-mvp-cumulative-usage`, base `99170fb` (R5 quota repair).
+Bounded repair assigned by coordinator Astra; worktree `cointos-mvp-cumulative-usage`, base `728f40c` (includes R5 quota repair `99170fb`).
 
 ## Defect
 

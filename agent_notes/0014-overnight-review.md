@@ -170,3 +170,24 @@ waits. Keep its evidence to the exact accounting/return/persistence functions an
 a small composition fixture. Retain the original contract allowance when testing
 cumulative usage; never compare cumulative usage with an already depleted quota.
 Production metadata and backend-close observation remain distinct bring-up tasks.
+
+## Accepted cumulative-usage repair (2026-09-06)
+
+Local packet `local-r5-cumulative-usage` delivered `adc13c1`, integrated as
+`d113c2a`: executor accounting/persistence only, four function-style regressions,
+and a short handoff. No old assertions or contract limits weakened. Red evidence
+was three missing-parameter errors and one missing persisted-usage error; green
+was 4 new / 18 focused / 508 full tests. Astra independently ran the focused and
+full suites and probed carried output exhaustion plus wrap-up bytes/time.
+The output/time allowance is not decremented again by this repair. Attempts still
+increment per launch; retry/rollover semantics remain a separate unfinished item.
+
+Worker exploration exceeded the targeted-read preference and required two
+coordinator-owned nested AGENTS checkpoints; those were removed after stopping.
+It initially hid the full-suite summary with tail, noticed this itself, and reran
+with captured Ran/OK evidence. After its committed final handoff OpenCode started
+another step. Astra cancelled proxy admission and sent identity-checked SIGINT
+at the deliverable boundary (exit -2, not a worker failure claim). Actual process
+and backend absence were observed, leases reconciled, and the reviewed artifact
+accepted independently of exit status. Append-only transcript and absence evidence
+remain in the ignored build ledger. No push or broader service activation.
