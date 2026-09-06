@@ -12,10 +12,13 @@ file and edit-cycle boundaries. Runtime evidence stays append-only and ignored.
 
 ## Conservative MVP implementation
 
-- [ ] OBS-1: Add bounded read-only backend identity/idle-observation functions
+- [x] OBS-1: Add bounded read-only backend identity/idle-observation functions
   under inference_proxy's ownership. Verify all-slot completeness, identity,
   busy/missing/unreadable data and sanitized evidence using synthetic responses.
-- [ ] OBS-2: Record identity before forwarding; close admission and observe fresh
+  Integrated `b17c8fc` + `4776e15`; Astra independently passed 43 focused tests.
+- [ ] OBS-2A: Record identity before forwarding; retain a sticky unknown flag
+  for absent/changed identity. No release changes in this packet.
+- [ ] OBS-2B: Close admission and observe fresh
   backend absence only after the bound runner/claims end. Persist evidence before
   returning it; preserve `reconciled_absent` through R3 release. Reuse the existing
   enforcement fixture; retain false-EOF/forged-proof regressions.

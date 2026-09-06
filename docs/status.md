@@ -6,6 +6,9 @@ hardening: track [implementation and precise-release tasks](superpowers/plans/20
 and [decision 0012](decisions/0012-temporary-conservative-backend-release.md).
 Future R4/bring-up agents must pick up that successor after conservative live
 bring-up and before claiming complete concurrent-backend release support.
+The read-only observation adapter is integrated at `b17c8fc`/`4776e15` (43
+independently passing focused tests); request recording and close-time release
+wiring remain in progress. See [observer checkpoint](../agent_notes/0015-backend-observation.md).
 
 Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
