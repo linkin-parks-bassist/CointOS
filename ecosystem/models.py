@@ -166,6 +166,10 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
 
     Pure function: returns a copied record built from measured backend facts,
     or None when any mandatory fact is missing, malformed, or contradictory.
+    Only parameter_count and size_bytes must agree between registry and
+    backend; a present registry context_length is retained verbatim as
+    result["registry_context_length"] without interpretation, because it
+    records the allocated context, not the measured training maximum.
     """
     if not all(isinstance(value, dict) for value in (item, resident, backend_document, props)):
         return None
@@ -230,8 +234,7 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
     else:
         return None
     for field, measured in (("parameter_count", n_params),
-                            ("size_bytes", size),
-                            ("context_length", n_ctx_train)):
+                            ("size_bytes", size)):
         declared = item.get(field)
         if declared is not None and not (
                 _positive_integer(declared) and declared == measured):
@@ -248,10 +251,14 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
     result = _verified_model_record(record, observed_resident, True, observed_at)
     if result.get("metadata_verified") is not True or result.get("residency_verified") is not True:
         return None
+    root = backend_url.removesuffix("/v1").rstrip("/")
     result["provenance"] = (
-        f"{backend_url}/v1/models;{backend_url}/props;"
+        f"{root}/v1/models;{root}/props;"
         "lemonade:/api/v1/health;observed-allocation-only"
     )
+    registry_context = item.get("context_length")
+    if registry_context is not None:
+        result["registry_context_length"] = registry_context
     return result
 
 

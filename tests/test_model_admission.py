@@ -501,7 +501,7 @@ def observed_inputs():
             "loaded": True,
             "backend_alive": True,
             "pid": 4242,
-            "backend_url": "http://127.0.0.1:13306",
+            "backend_url": "http://127.0.0.1:13306/v1",
             "launch_command": [
                 "/usr/bin/llama-server",
                 "--model", "/models/qwen3-coder-30b.gguf",
@@ -533,6 +533,79 @@ def observed_json(document):
     return json.loads(json.dumps(document))
 
 
+def realistic_resident_inputs(name, port, registry_context, ctx_size, slots,
+                              n_ctx, n_ctx_train, n_params, size):
+    path = f"/models/{name}.gguf"
+    return (
+        {
+            "id": name,
+            "downloaded": True,
+            "recipe": "llamacpp",
+            "context_length": registry_context,
+        },
+        {
+            "model_name": name,
+            "loaded": True,
+            "backend_alive": True,
+            "pid": 4242,
+            "backend_url": f"http://127.0.0.1:{port}/v1",
+            "launch_command": [
+                "/usr/bin/llama-server",
+                "--model", path,
+                "--ctx-size", str(ctx_size),
+                "--parallel", str(slots),
+            ],
+            "recipe_options": {"ctx_size": ctx_size},
+            "parallel_sequences": slots,
+            "is_busy": False,
+            "pinned": False,
+        },
+        {
+            "data": [{
+                "id": path,
+                "meta": {
+                    "n_params": n_params,
+                    "size": size,
+                    "n_ctx": n_ctx,
+                    "n_ctx_train": n_ctx_train,
+                },
+            }]
+        },
+        {
+            "model_path": path,
+            "total_slots": slots,
+            "chat_template_caps": {"supports_tools": True},
+        },
+    )
+
+
+def test_observed_record_normalizes_realistic_4b_and_27b_residents():
+    specs = (
+        dict(name="qwen3.5-4b", port=13306, registry_context=65_536,
+             ctx_size=65_536, slots=2, n_ctx=32_768, n_ctx_train=262_144,
+             n_params=4_000_000_000, size=2 * GIB),
+        dict(name="qwen3.5-27b", port=13307, registry_context=131_072,
+             ctx_size=131_072, slots=1, n_ctx=131_072, n_ctx_train=262_144,
+             n_params=27_000_000_000, size=16 * GIB),
+    )
+    for spec in specs:
+        item, resident, backend_document, props = realistic_resident_inputs(**spec)
+        result = _observed_model_record(item, resident, backend_document, props, 10.0)
+        assert result is not None
+        assert result["id"] == spec["name"]
+        assert result["parameter_count"] == spec["n_params"]
+        assert result["size_bytes"] == spec["size"]
+        assert result["context"] == spec["n_ctx_train"]
+        assert result["loaded_context"] == spec["ctx_size"]
+        assert result["supported_context_quantum"] == spec["ctx_size"] // spec["slots"]
+        assert result["registry_context_length"] == spec["registry_context"]
+        root = f"http://127.0.0.1:{spec['port']}"
+        assert result["provenance"] == (
+            f"{root}/v1/models;{root}/props;"
+            "lemonade:/api/v1/health;observed-allocation-only"
+        )
+
+
 def test_observed_record_normalizes_registry_gaps_and_keeps_inputs_immutable():
     item, resident, backend_document, props = observed_inputs()
     kept = [observed_json(document) for document in (item, resident, backend_document, props)]
@@ -545,6 +618,7 @@ def test_observed_record_normalizes_registry_gaps_and_keeps_inputs_immutable():
     assert result["capabilities"] == ["tool-calling"]
     assert result["parallel_sequences"] == 2
     assert result["supported_context_quantum"] == 32_768
+    assert "registry_context_length" not in result
     assert result["loaded"] is True
     assert result["loaded_context"] == 65_536
     assert result["metadata_verified"] is True
@@ -679,6 +753,15 @@ def test_observed_record_derives_only_tool_calling_capability():
 
 
 def test_observed_record_rejects_registry_contradictions():
+    # Observed evidence from both residents: the registry context_length
+    # records the allocated/advertised context (65_536 for the 4B,
+    # 131_072 for the 27B), a distinct fact from the measured training
+    # maximum backend meta.n_ctx_train (262_144 for both). The former
+    # expectation that a differing registry context_length was a
+    # contradiction conflated those two facts; now the raw registry value
+    # is retained distinctly as registry_context_length while context
+    # stays the measured n_ctx_train. Genuine parameter/byte
+    # contradictions still reject.
     def normalized(**registry_fields):
         item, resident, backend_document, props = observed_inputs()
         item.update(registry_fields)
@@ -689,8 +772,13 @@ def test_observed_record_rejects_registry_contradictions():
     assert normalized(parameter_count=27_000_000_000) is None
     assert normalized(parameter_count="30000000000") is None
     assert normalized(size_bytes=17 * GIB) is None
-    assert normalized(context_length=65_536) is None
-    assert normalized(parameter_count=None, size_bytes=None, context_length=None) is not None
+    retained = normalized(context_length=65_536)
+    assert retained is not None
+    assert retained["registry_context_length"] == 65_536
+    assert retained["context"] == 131_072
+    absent = normalized(parameter_count=None, size_bytes=None, context_length=None)
+    assert absent is not None
+    assert "registry_context_length" not in absent
 
 
 def test_observed_record_never_guesses_capability_or_count_from_name():
