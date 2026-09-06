@@ -1,8 +1,9 @@
 # Production model metadata — Astra, 2026-09-06
 
-Next approved R2 gap after conservative OBS-3 live acceptance: models.snapshot
-lacks backend metadata; dispatch uses the ignored operator commissioning helper.
-That helper is not production qualification. Never infer facts from model names.
+R2 follow-up after conservative OBS-3: production models.snapshot now qualifies
+measured backend metadata. The dispatch helper's operator metadata override has
+been removed; it calls production_inventory(), a checked models.snapshot only.
+Never infer facts from model names or mark unobserved allocations qualified.
 
 Sieve's read-only `local-r2-metadata-map` found the snapshot/normalizer seam but
 hallucinated ecosystem/backend_observation.py and attributed registry normalization,
@@ -30,12 +31,17 @@ Packets/transcripts: ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
   model-admission tests. _get_backend allows only numeric-loopback HTTP metadata
   GET /v1/models and /props, timeout 1 second, maximum response 1 MiB; no redirects,
   completions, lifecycle control or new inference path. No live caller yet.
-- R2-M2B running: snapshot composition with truthful unqualified reasons and fresh
-  backend identity/config recheck. Reuse normalized resident facts for capacity;
-  no guessed metadata fallback or duplicated route selection.
-- R2-M3 next: independent combined tests and read-only comparison of production
-  snapshot with observed backend facts. Retire commissioning override only after
-  real production admission is demonstrated under approved boundaries.
+- R2-M2B code accepted: local 56b661e/31a7cab -> dbb4d58/4372020. Snapshot uses
+  bounded metadata reads, post-read identity/config recheck and normalized resident
+  capacity. Unknown resident facts invalidate inventory. Astra caught a present
+  null/empty/non-string endpoint falling back to registry-only verification;
+  the correction demonstrated that failure red, then 46 focused tests passed.
+- R2-M3: Astra independently passed 580 discovered + 33 integration tests (613)
+  on integrated root; read-only production snapshot qualified both loaded models
+  and selected Qwen3.8 without the commissioning override. Dispatch helper now
+  uses that production path for initial and refreshed admission. First actual
+  packet `local-r8-launch-review` is admitted/running; final normal-close evidence
+  will complete this checkpoint. No model/service change was needed.
 
 This does not close arbitrary model/context qualification, R4-PRECISE, operator
 leases, autonomous MVP or protected deployment acceptance.

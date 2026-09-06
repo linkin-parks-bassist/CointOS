@@ -1,10 +1,12 @@
 # Current status
 
-Active next: R2 production model-metadata bring-up. The pure normalizer is
-integrated at `34456c8`/`dcd1add`: 29 focused tests and actual read-only metadata
-checks passed. The bounded reader is integrated at `4ee10de` (38 focused tests);
-local Sieve is wiring measured metadata into snapshot and resident accounting.
-See [metadata checkpoint](../agent_notes/0016-model-metadata.md).
+Production model metadata is integrated through `4372020`; Astra independently
+passed 613 tests and compared real snapshot/model-selection results with backend
+facts. The commissioning metadata override is removed from dispatch. The next
+local packet, `local-r8-launch-review`, was admitted using production snapshot
+alone and is reviewing ordinary operator-session cleanup. Its final normal close
+will complete the metadata live checkpoint. See
+[metadata checkpoint](../agent_notes/0016-model-metadata.md).
 
 Conservative backend-close observation is live-accepted as David's temporary
 MVP path. **R4-PRECISE remains a required open successor**, not optional
@@ -40,8 +42,8 @@ ledger; a validated scheduling snapshot is published and the transient
 `cointos-mvp-proxy.service` runs the admitted endpoint. Earlier repair workers exited;
 their process/backend absence was independently observed and their leases reconciled.
 Current worker progress is recorded above and in the ignored dispatch ledger.
-Conservative normal-close observation is live-accepted; the production model-metadata
-adapter remains an implementation gap. This checkpoint does not assert working autonomous dispatch or
+Conservative normal-close observation is live-accepted; production model metadata
+is integrated as recorded above. This checkpoint does not assert working autonomous dispatch or
 end-to-end Coin contact. The earlier implementation observations below are history.
 
 Implementation update, 2026-09-05 (Astra): David approved the [complete MVP bring-up
