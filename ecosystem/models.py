@@ -307,6 +307,48 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
     return result
 
 
+def _observed_resident_record(item, resident, now):
+    """Read a resident's bounded backend facts, re-check gateway health once,
+    and normalize the allocation.
+
+    Returns (record, None) when the resident is fully observed, or
+    (None, reason) with 'unavailable', 'inconsistent', or 'backend_changed'.
+    """
+    backend_url = resident.get("backend_url")
+    if not isinstance(backend_url, str) or not backend_url:
+        return None, "unavailable"
+    try:
+        backend_document = _get_backend(backend_url, "/v1/models")
+        props = _get_backend(backend_url, "/props")
+    except Exception:
+        return None, "unavailable"
+    try:
+        health_document = _get("/api/v1/health")
+    except Exception:
+        return None, "unavailable"
+    entries = health_document.get("all_models_loaded") \
+        if isinstance(health_document, dict) else None
+    if not isinstance(entries, list) \
+            or not all(isinstance(entry, dict) for entry in entries):
+        return None, "unavailable"
+    matches = [entry for entry in entries
+               if isinstance(entry.get("model_name"), str)
+               and entry.get("model_name") == item.get("id")]
+    if not matches:
+        return None, "unavailable"
+    if len(matches) != 1:
+        return None, "backend_changed"
+    fresh = matches[0]
+    stable_fields = ("model_name", "backend_url", "pid", "loaded",
+                     "backend_alive", "recipe_options", "launch_command")
+    if any(fresh.get(field) != resident.get(field) for field in stable_fields):
+        return None, "backend_changed"
+    record = _observed_model_record(item, fresh, backend_document, props, now)
+    if record is None:
+        return None, "inconsistent"
+    return record, None
+
+
 def snapshot(root: Path | None = None, clock=None) -> dict:
     """Sample literal registry, residency, host and accepted scheduling facts."""
     root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
@@ -329,8 +371,26 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
         if isinstance(item.get("model_name"), str) and item["model_name"]
     }
     downloaded = [item for item in registry if item.get("downloaded") is True]
-    models = [_verified_model_record(item, loaded.get(item.get("id")), health_fresh, now)
-              for item in downloaded]
+    models = []
+    for item in downloaded:
+        resident = loaded.get(item.get("id"))
+        record = _verified_model_record(item, resident, health_fresh, now)
+        if resident is not None and isinstance(resident.get("backend_url"), str) \
+                and resident["backend_url"]:
+            observed, reason = _observed_resident_record(item, resident, now)
+            if observed is not None:
+                observed["metadata_error"] = None
+                record = observed
+            else:
+                record["metadata_verified"] = False
+                record["residency_verified"] = False
+                record["fresh"] = False
+                record["stale"] = True
+                record["metadata_error"] = reason
+        else:
+            record["metadata_error"] = None if record["metadata_verified"] \
+                else "missing_metadata"
+        models.append(record)
 
     host_memory = _host_memory()
     gpu = gpu_memory()
@@ -412,20 +472,28 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
     resident_facts_complete = True
     for model_id, resident in loaded.items():
         model = model_by_id.get(model_id)
-        options = resident.get("recipe_options")
-        total_context = options.get("ctx_size") if isinstance(options, dict) else None
-        parallel = _health_parallel_sequences(resident)
+        total_context = model.get("loaded_context") if isinstance(model, dict) else None
+        parallel = model.get("parallel_sequences") if isinstance(model, dict) else None
         work_model = resident.get("work_model")
         if not isinstance(work_model, bool) and isinstance(control_model, str) and control_model:
             work_model = model_id != control_model
         complete = (
-            isinstance(model, dict) and _positive_integer(model.get("size_bytes"))
+            isinstance(model, dict)
+            and model.get("metadata_verified") is True
+            and model.get("residency_verified") is True
+            and model.get("fresh") is True
+            and _positive_integer(model.get("size_bytes"))
             and _positive_integer(total_context) and _positive_integer(parallel)
             and total_context % parallel == 0 and isinstance(work_model, bool)
         )
         if not complete:
             resident_facts_complete = False
             continue
+        if isinstance(model.get("provenance"), str) \
+                and model["provenance"].endswith("observed-allocation-only"):
+            provenance = f"{model['provenance']};policy:config/model-policy.json"
+        else:
+            provenance = "lemonade:/api/v1/health;policy:config/model-policy.json"
         resident_models.append({
             "model_id": model_id,
             "model_bytes": model["size_bytes"],
@@ -435,7 +503,7 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
             "context_tokens_per_sequence": total_context // parallel,
             "fresh": True,
             "observed_at": now,
-            "provenance": "lemonade:/api/v1/health;policy:config/model-policy.json",
+            "provenance": provenance,
         })
     scheduling = _read_json(root / "state" / "scheduling-policy.json")
     verified = (

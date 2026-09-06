@@ -290,6 +290,425 @@ def test_snapshot_marks_failed_residency_observation_unknown_and_stale():
     assert current["models"][0]["fresh"] is False
 
 
+def gateway_reads(paths):
+    remaining = {path: list(values) for path, values in paths.items()}
+
+    def fake_get(path):
+        values = remaining.get(path)
+        if not values:
+            raise AssertionError("unexpected gateway read %s" % path)
+        value = values.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return fake_get
+
+
+def backend_reads(reads):
+    remaining = {key: list(values) for key, values in reads.items()}
+
+    def fake_backend(backend_base, path):
+        values = remaining.get((backend_base, path))
+        if not values:
+            raise AssertionError(
+                "unexpected backend read %s %s" % (backend_base, path))
+        value = values.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return fake_backend
+
+
+SNAPSHOT_HOST_MEMORY = {
+    "total_bytes": 128 * GIB, "available_bytes": 92 * GIB,
+    "provenance": "linux:/proc/meminfo", "fresh": True,
+}
+SNAPSHOT_GPU_MEMORY = {
+    "firmware_carveout_bytes": 512 * 1024 ** 2,
+    "gtt_total_bytes": 100 * GIB, "gtt_used_bytes": 20 * GIB,
+    "provenance": "amdgpu:sysfs", "fresh": True,
+}
+
+
+def run_snapshot(root, gateway, backend):
+    with patch("ecosystem.models._get", side_effect=gateway), \
+            patch("ecosystem.models._get_backend", side_effect=backend), \
+            patch("ecosystem.models._host_memory",
+                  return_value=SNAPSHOT_HOST_MEMORY), \
+            patch("ecosystem.models.gpu_memory",
+                  return_value=SNAPSHOT_GPU_MEMORY):
+        return snapshot(root=root, clock=lambda: 1000.0)
+
+
+def complete_resident_inputs():
+    item = {
+        "id": "model-a", "downloaded": True, "recipe": "llamacpp",
+        "parameter_count": 10_000_000_000, "size_bytes": 30 * GIB,
+        "capabilities": ["coding", "tool-calling"],
+        "context_length": 131_072, "supported_context_quantum": 32_768,
+        "parallel_sequences": 2,
+    }
+    resident = {
+        "model_name": "model-a", "loaded": True, "backend_alive": True,
+        "pid": 4242, "backend_url": "http://127.0.0.1:13306/v1",
+        "launch_command": [
+            "/usr/bin/llama-server", "--model", "/models/model-a.gguf",
+            "--ctx-size", "65536", "--parallel", "2",
+        ],
+        "recipe_options": {
+            "ctx_size": 65_536, "llamacpp_args": "--parallel 2",
+        },
+        "is_busy": False, "pinned": False,
+    }
+    models_document = {"data": [{
+        "id": "/models/model-a.gguf",
+        "meta": {
+            "n_params": 10_000_000_000, "size": 30 * GIB,
+            "n_ctx_train": 131_072,
+        },
+    }]}
+    props = {
+        "model_path": "/models/model-a.gguf", "total_slots": 2,
+        "chat_template_caps": {"supports_tools": True},
+    }
+    return item, resident, models_document, props
+
+
+def test_snapshot_verified_resident_capacity_from_measured_backend():
+    name = "Qwen3-Coder-30B-131K-GGUF"
+    item = {"id": name, "downloaded": True, "recipe": "llamacpp"}
+    resident, models_document, props = realistic_resident_inputs(
+        name, 13306, None, 65_536, 2, 32_768, 131_072, 30_000_000_000, 18 * GIB,
+    )[1:]
+    base = "http://127.0.0.1:13306/v1"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        current = run_snapshot(
+            root,
+            gateway_reads({
+                "/v1/models": [{"data": [item]}],
+                "/api/v1/health": [
+                    {"all_models_loaded": [resident]},
+                    {"all_models_loaded": [resident]},
+                ],
+            }),
+            backend_reads({
+                (base, "/v1/models"): [models_document],
+                (base, "/props"): [props],
+            }),
+        )
+    assert current["verified"] is True
+    assert current["fresh"] is True
+    assert current["models"] == [{
+        "id": name, "parameter_count": 30_000_000_000,
+        "size_bytes": 18 * GIB, "size_gb": 18.0,
+        "capabilities": ["tool-calling"], "context": 131_072,
+        "supported_context_quantum": 32_768, "parallel_sequences": 2,
+        "loaded": True, "loaded_context": 65_536, "busy": False,
+        "pinned": False, "recipe": "llamacpp",
+        "metadata_verified": True, "residency_verified": True,
+        "fresh": True, "stale": False, "observed_at": 1000.0,
+        "provenance": (
+            "http://127.0.0.1:13306/v1/models;"
+            "http://127.0.0.1:13306/props;"
+            "lemonade:/api/v1/health;observed-allocation-only"),
+        "metadata_error": None,
+    }]
+    assert current["resident_models"] == [{
+        "model_id": name, "model_bytes": 18 * GIB, "work_model": True,
+        "backend_context_tokens": 65_536, "parallel_sequences": 2,
+        "context_tokens_per_sequence": 32_768, "fresh": True,
+        "observed_at": 1000.0,
+        "provenance": (
+            "http://127.0.0.1:13306/v1/models;"
+            "http://127.0.0.1:13306/props;"
+            "lemonade:/api/v1/health;observed-allocation-only;"
+            "policy:config/model-policy.json"),
+    }]
+    modest = request(
+        requirements={"required_capabilities": ["tool-calling"],
+                      "minimum_context_tokens": 16_384},
+        prompt_tokens=1, tool_tokens=1, max_output_tokens=1,
+        handoff_tokens=1,
+    )
+    selected = choose_route(safe_routes(current, admission_policy(), modest),
+                            modest)
+    assert selected["state"] == "admitted", selected
+    assert selected["model_id"] == name
+    assert selected["parameter_count"] == 30_000_000_000
+    assert selected["model_bytes"] == 18 * GIB
+    assert selected["backend_context_tokens"] == 65_536
+    assert selected["parallel_sequences"] == 2
+    assert selected["context_tokens_per_sequence"] == 32_768
+    assert selected["loaded"] is True
+
+
+def test_snapshot_resident_capacity_uses_props_slots_without_explicit_parallel():
+    name = "qwen3.5-4b"
+    path = "/models/qwen3.5-4b.gguf"
+    item = {"id": name, "downloaded": True, "recipe": "llamacpp"}
+    resident = {
+        "model_name": name, "loaded": True, "backend_alive": True,
+        "pid": 4242, "backend_url": "http://127.0.0.1:13307/v1",
+        "launch_command": [
+            "/usr/bin/llama-server", "--model", path, "--ctx-size", "65536",
+        ],
+        "recipe_options": {"ctx_size": 65_536},
+        "is_busy": False, "pinned": False,
+    }
+    models_document = {"data": [{
+        "id": path,
+        "meta": {"n_params": 4_000_000_000, "size": 2 * GIB,
+                 "n_ctx_train": 262_144},
+    }]}
+    props = {"model_path": path, "total_slots": 2,
+             "chat_template_caps": {"supports_tools": True}}
+    base = "http://127.0.0.1:13307/v1"
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        current = run_snapshot(
+            root,
+            gateway_reads({
+                "/v1/models": [{"data": [item]}],
+                "/api/v1/health": [
+                    {"all_models_loaded": [resident]},
+                    {"all_models_loaded": [resident]},
+                ],
+            }),
+            backend_reads({
+                (base, "/v1/models"): [models_document],
+                (base, "/props"): [props],
+            }),
+        )
+    assert current["verified"] is True
+    produced = current["models"][0]
+    assert produced["metadata_verified"] is True
+    assert produced["residency_verified"] is True
+    assert produced["parallel_sequences"] == 2
+    assert produced["loaded_context"] == 65_536
+    assert produced["capabilities"] == ["tool-calling"]
+    assert current["resident_models"] == [{
+        "model_id": name, "model_bytes": 2 * GIB, "work_model": True,
+        "backend_context_tokens": 65_536, "parallel_sequences": 2,
+        "context_tokens_per_sequence": 32_768, "fresh": True,
+        "observed_at": 1000.0,
+        "provenance": (
+            "http://127.0.0.1:13307/v1/models;"
+            "http://127.0.0.1:13307/props;"
+            "lemonade:/api/v1/health;observed-allocation-only;"
+            "policy:config/model-policy.json"),
+    }]
+
+
+def test_snapshot_backend_read_failure_invalidates_inventory():
+    item, resident, _models_document, _props = complete_resident_inputs()
+    base = resident["backend_url"]
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        current = run_snapshot(
+            root,
+            gateway_reads({
+                "/v1/models": [{"data": [item]}],
+                "/api/v1/health": [{"all_models_loaded": [resident]}],
+            }),
+            backend_reads({
+                (base, "/v1/models"): [ValueError("connection refused")],
+            }),
+        )
+    assert current["verified"] is False
+    produced = current["models"][0]
+    assert produced["loaded"] is True
+    assert produced["parameter_count"] == 10_000_000_000
+    assert produced["metadata_verified"] is False
+    assert produced["residency_verified"] is False
+    assert produced["fresh"] is False
+    assert produced["stale"] is True
+    assert produced["metadata_error"] == "unavailable"
+    assert current["resident_models"] == []
+    selected = choose_route(
+        safe_routes(current, admission_policy(), request()), request())
+    assert selected["state"] == "deferred", selected
+    assert "inventory:unverified" in selected["exclusion_reasons"]
+    assert "metadata:unverified" in selected["exclusion_reasons"]
+
+
+def test_snapshot_inconsistent_backend_facts_invalidate_inventory():
+    item, resident, _models_document, props = complete_resident_inputs()
+    contradictory = {"data": [{
+        "id": "/models/model-a.gguf",
+        "meta": {"n_params": 9_000_000_000, "size": 30 * GIB,
+                 "n_ctx_train": 131_072},
+    }]}
+    base = resident["backend_url"]
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        current = run_snapshot(
+            root,
+            gateway_reads({
+                "/v1/models": [{"data": [item]}],
+                "/api/v1/health": [
+                    {"all_models_loaded": [resident]},
+                    {"all_models_loaded": [resident]},
+                ],
+            }),
+            backend_reads({
+                (base, "/v1/models"): [contradictory],
+                (base, "/props"): [props],
+            }),
+        )
+    produced = current["models"][0]
+    assert produced["loaded"] is True
+    assert produced["parameter_count"] == 10_000_000_000
+    assert produced["metadata_error"] == "inconsistent"
+    assert produced["metadata_verified"] is False
+    assert produced["residency_verified"] is False
+    assert produced["fresh"] is False
+    assert produced["stale"] is True
+    assert current["verified"] is False
+    assert current["resident_models"] == []
+
+
+def test_snapshot_post_read_identity_change_invalidates_resident():
+    item, resident, models_document, props = complete_resident_inputs()
+    base = resident["backend_url"]
+    scenarios = [
+        ("pid changed", dict(resident, pid=9999), "backend_changed"),
+        ("backend_url changed",
+         dict(resident, backend_url="http://127.0.0.1:13307/v1"),
+         "backend_changed"),
+        ("recipe_options changed",
+         dict(resident, recipe_options={
+             "ctx_size": 32_768, "llamacpp_args": "--parallel 2",
+         }),
+         "backend_changed"),
+        ("launch_command changed",
+         dict(resident, launch_command=["/usr/bin/llama-server"]),
+         "backend_changed"),
+        ("resident missing after read", [], "unavailable"),
+        ("health unreadable after read", OSError("health unavailable"),
+         "unavailable"),
+    ]
+    for label, post_read, expected_error in scenarios:
+        if isinstance(post_read, Exception):
+            post_read_health = post_read
+        elif isinstance(post_read, list):
+            post_read_health = {"all_models_loaded": post_read}
+        else:
+            post_read_health = {"all_models_loaded": [post_read]}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_snapshot_policy(root)
+            current = run_snapshot(
+                root,
+                gateway_reads({
+                    "/v1/models": [{"data": [item]}],
+                    "/api/v1/health": [
+                        {"all_models_loaded": [resident]},
+                        post_read_health,
+                    ],
+                }),
+                backend_reads({
+                    (base, "/v1/models"): [models_document],
+                    (base, "/props"): [props],
+                }),
+            )
+        produced = current["models"][0]
+        assert produced["metadata_error"] == expected_error, (
+            label, expected_error, produced["metadata_error"])
+        assert produced["metadata_verified"] is False, label
+        assert produced["residency_verified"] is False, label
+        assert produced["fresh"] is False, label
+        assert produced["stale"] is True, label
+        assert current["verified"] is False, label
+        assert current["resident_models"] == [], label
+
+
+def test_snapshot_busy_change_keeps_measured_metadata_verified():
+    item, resident, models_document, props = complete_resident_inputs()
+    busy = dict(resident, is_busy=True)
+    base = resident["backend_url"]
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        current = run_snapshot(
+            root,
+            gateway_reads({
+                "/v1/models": [{"data": [item]}],
+                "/api/v1/health": [
+                    {"all_models_loaded": [resident]},
+                    {"all_models_loaded": [busy]},
+                ],
+            }),
+            backend_reads({
+                (base, "/v1/models"): [models_document],
+                (base, "/props"): [props],
+            }),
+        )
+    assert current["verified"] is True
+    produced = current["models"][0]
+    assert produced["metadata_verified"] is True
+    assert produced["residency_verified"] is True
+    assert produced["fresh"] is True
+    assert produced["stale"] is False
+    assert produced["busy"] is True
+    assert produced["metadata_error"] is None
+    assert current["resident_models"] == [{
+        "model_id": "model-a", "model_bytes": 30 * GIB, "work_model": False,
+        "backend_context_tokens": 65_536, "parallel_sequences": 2,
+        "context_tokens_per_sequence": 32_768, "fresh": True,
+        "observed_at": 1000.0,
+        "provenance": (
+            "http://127.0.0.1:13306/v1/models;"
+            "http://127.0.0.1:13306/props;"
+            "lemonade:/api/v1/health;observed-allocation-only;"
+            "policy:config/model-policy.json"),
+    }]
+
+
+def test_snapshot_unqualified_resident_never_counts_as_capacity():
+    item, resident, _models_document, _props = complete_resident_inputs()
+    clean = {
+        "id": "model-b", "downloaded": True, "recipe": "llamacpp",
+        "parameter_count": 4_000_000_000, "size_bytes": 2 * GIB,
+        "capabilities": ["coding", "tool-calling"],
+        "context_length": 131_072, "supported_context_quantum": 32_768,
+        "parallel_sequences": 1,
+    }
+    base = resident["backend_url"]
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        _write_snapshot_policy(root)
+        current = run_snapshot(
+            root,
+            gateway_reads({
+                "/v1/models": [{"data": [clean, item]}],
+                "/api/v1/health": [{"all_models_loaded": [resident]}],
+            }),
+            backend_reads({
+                (base, "/v1/models"): [ValueError("backend down")],
+            }),
+        )
+    assert current["verified"] is False
+    assert current["resident_models"] == []
+    by_id = {record["id"]: record for record in current["models"]}
+    assert by_id["model-a"]["loaded"] is True
+    assert by_id["model-a"]["metadata_error"] == "unavailable"
+    assert by_id["model-a"]["metadata_verified"] is False
+    assert by_id["model-a"]["stale"] is True
+    assert by_id["model-b"]["metadata_error"] is None
+    assert by_id["model-b"]["loaded"] is False
+    selected = choose_route(
+        safe_routes(current, admission_policy(), request()), request())
+    assert selected["state"] == "deferred", selected
+    assert selected["model_id"] is None
+
+
 def test_new_role_uses_explicit_requirements_without_code_change():
     current = inventory([
         model("small", parameter_count=4_000_000_000, size_bytes=3_000_000_000,
