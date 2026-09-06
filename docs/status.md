@@ -1,5 +1,12 @@
 # Current status
 
+Active next: conservative backend-close observation, approved by David as a
+temporary MVP path. **R4-PRECISE remains a required open successor**, not optional
+hardening: track [implementation and precise-release tasks](superpowers/plans/2026-09-06-backend-observation-repair.md)
+and [decision 0012](decisions/0012-temporary-conservative-backend-release.md).
+Future R4/bring-up agents must pick up that successor after conservative live
+bring-up and before claiming complete concurrent-backend release support.
+
 Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
 preserves cumulative task time/output across runner rounds, resets per-run time,
