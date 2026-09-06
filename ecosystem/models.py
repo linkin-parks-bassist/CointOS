@@ -1,6 +1,6 @@
 """Live inventory, model-mediated routing, and deterministic safety validation."""
 from __future__ import annotations
-import glob, json, os, re, shlex, subprocess, time, urllib.request
+import glob, http.client, ipaddress, json, os, re, shlex, subprocess, time, urllib.request
 from pathlib import Path
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
@@ -9,6 +9,51 @@ RESOURCE_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/resource-po
 def _get(path: str) -> dict:
     with urllib.request.urlopen(BASE + path, timeout=10) as response:
         return json.load(response)
+
+
+_BACKEND_MAX_BYTES = 1_048_576
+_BACKEND_PATHS = ("/v1/models", "/props")
+
+
+def _get_backend(backend_base: str, path: str) -> dict:
+    if path not in _BACKEND_PATHS:
+        raise ValueError("backend path must be /v1/models or /props")
+    parsed = urllib.parse.urlsplit(backend_base)
+    if parsed.scheme != "http":
+        raise ValueError("backend base must be an http URL")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("backend base must not contain credentials")
+    if parsed.query or parsed.fragment:
+        raise ValueError("backend base must not contain a query or fragment")
+    if parsed.path != "/v1":
+        raise ValueError("backend base path must be /v1")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("backend base must have a valid explicit port") from exc
+    if port is None or not 1 <= port <= 65535:
+        raise ValueError("backend base must have an explicit valid port")
+    host = parsed.hostname
+    if not host:
+        raise ValueError("backend base must have a host")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as exc:
+        raise ValueError("backend base host must be a numeric loopback address") from exc
+    if not address.is_loopback:
+        raise ValueError("backend base host must be a loopback address")
+    conn = http.client.HTTPConnection(host, port, timeout=1)
+    try:
+        conn.request("GET", path)
+        response = conn.getresponse()
+        if response.status != 200:
+            raise ValueError("backend returned HTTP %d" % response.status)
+        body = response.read(_BACKEND_MAX_BYTES + 1)
+        if len(body) > _BACKEND_MAX_BYTES:
+            raise ValueError("backend response exceeds %d bytes" % _BACKEND_MAX_BYTES)
+        return json.loads(body)
+    finally:
+        conn.close()
 
 
 def gpu_memory() -> dict:

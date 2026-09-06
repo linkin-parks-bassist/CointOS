@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from ecosystem.inference_capacity import resource_envelope
 from ecosystem.models import (
-    _observed_model_record, choose_route, realize, safe_routes, snapshot, validate_route,
+    _get_backend, _observed_model_record, choose_route, realize, safe_routes,
+    snapshot, validate_route,
 )
 
 
@@ -791,6 +792,148 @@ def test_observed_record_never_guesses_capability_or_count_from_name():
     assert "coding" not in result["capabilities"]
     assert result["parameter_count"] == 27_000_000_000
     assert result["metadata_verified"] is True
+
+
+def _expect_backend_value_error(backend_base, path):
+    with patch("http.client.HTTPConnection") as connection:
+        try:
+            _get_backend(backend_base, path)
+        except ValueError:
+            connection.assert_not_called()
+        else:
+            raise AssertionError("expected ValueError for %r / %r" % (backend_base, path))
+
+
+def _backend_round_trip(backend_base, path, host, port, document):
+    with patch("http.client.HTTPConnection") as connection:
+        instance = connection.return_value
+        response = instance.getresponse.return_value
+        response.status = 200
+        response.read.return_value = json.dumps(document).encode("utf-8")
+        result = _get_backend(backend_base, path)
+        connection.assert_called_once_with(host, port, timeout=1)
+        instance.request.assert_called_once_with("GET", path)
+        response.read.assert_called_once_with(1_048_577)
+        instance.close.assert_called_once()
+    return result
+
+
+def test_get_backend_reads_models_and_props_on_numeric_loopback():
+    for path in ("/v1/models", "/props"):
+        document = {"path": path, "ok": True}
+        result = _backend_round_trip("http://127.0.0.1:1234/v1", path, "127.0.0.1", 1234, document)
+        assert result == document
+
+
+def test_get_backend_accepts_bracketed_ipv6_loopback():
+    result = _backend_round_trip("http://[::1]:8000/v1", "/v1/models", "::1", 8000, {"models": []})
+    assert result == {"models": []}
+
+
+def test_get_backend_rejects_base_violations_before_connecting():
+    bad_bases = [
+        "http://localhost:1234/v1",
+        "http://192.168.1.5:1234/v1",
+        "http://10.0.0.1:1234/v1",
+        "http://0.0.0.0:1234/v1",
+        "http://user:pass@127.0.0.1:1234/v1",
+        "http://127.0.0.1:1234/v1?x=1",
+        "http://127.0.0.1:1234/v1#frag",
+        "http://127.0.0.1:1234/v1/",
+        "http://127.0.0.1:1234/api/v1",
+        "http://127.0.0.1:1234/",
+        "http://127.0.0.1/v1",
+        "http://127.0.0.1:0/v1",
+        "http://127.0.0.1:99999/v1",
+        "http://127.0.0.1:abc/v1",
+        "https://127.0.0.1:1234/v1",
+        "ftp://127.0.0.1:1234/v1",
+        "http://:1234/v1",
+    ]
+    for base in bad_bases:
+        _expect_backend_value_error(base, "/v1/models")
+
+
+def test_get_backend_rejects_request_paths_before_connecting():
+    for path in ("/v1", "/v1/", "/v1/models/", "/models", "/v1/other", "/props/", "", "/"):
+        _expect_backend_value_error("http://127.0.0.1:1234/v1", path)
+
+
+def test_get_backend_requires_http_200_and_never_follows_redirects():
+    for status in (301, 302, 404, 500):
+        with patch("http.client.HTTPConnection") as connection:
+            instance = connection.return_value
+            response = instance.getresponse.return_value
+            response.status = status
+            response.read.return_value = b"{}"
+            try:
+                _get_backend("http://127.0.0.1:1234/v1", "/v1/models")
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("expected ValueError for status %d" % status)
+            instance.request.assert_called_once_with("GET", "/v1/models")
+            response.read.assert_not_called()
+            instance.close.assert_called_once()
+
+
+def test_get_backend_rejects_oversized_response():
+    with patch("http.client.HTTPConnection") as connection:
+        instance = connection.return_value
+        response = instance.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b"x" * 1_048_577
+        try:
+            _get_backend("http://127.0.0.1:1234/v1", "/v1/models")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError for oversized response")
+        response.read.assert_called_once_with(1_048_577)
+        instance.close.assert_called_once()
+
+
+def test_get_backend_accepts_response_at_exact_limit():
+    base, tail = b'{"pad":"', b'"}'
+    payload = base + b"x" * (1_048_576 - len(base) - len(tail)) + tail
+    assert len(payload) == 1_048_576
+    with patch("http.client.HTTPConnection") as connection:
+        instance = connection.return_value
+        response = instance.getresponse.return_value
+        response.status = 200
+        response.read.return_value = payload
+        result = _get_backend("http://127.0.0.1:1234/v1", "/props")
+        response.read.assert_called_once_with(1_048_577)
+        instance.close.assert_called_once()
+    assert result["pad"] == payload[len(base):-len(tail)].decode("ascii")
+
+
+def test_get_backend_rejects_malformed_json():
+    with patch("http.client.HTTPConnection") as connection:
+        instance = connection.return_value
+        response = instance.getresponse.return_value
+        response.status = 200
+        response.read.return_value = b"{not valid json"
+        try:
+            _get_backend("http://127.0.0.1:1234/v1", "/v1/models")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError for malformed JSON")
+        instance.close.assert_called_once()
+
+
+def test_get_backend_propagates_transport_error_and_closes():
+    with patch("http.client.HTTPConnection") as connection:
+        instance = connection.return_value
+        instance.request.side_effect = ConnectionRefusedError("connection refused")
+        try:
+            _get_backend("http://127.0.0.1:1234/v1", "/v1/models")
+        except ConnectionRefusedError:
+            pass
+        else:
+            raise AssertionError("expected transport error to propagate")
+        instance.close.assert_called_once()
 
 
 def load_tests(_loader, _tests, _pattern):
