@@ -203,3 +203,34 @@ helper. This does not prove the requested same-inbound identity separation.
 local-c3-same-inbound-proof is a test-only correction using accepted locked send
 for telegram-8:degraded-notice then real publication/delivery of telegram-8:decision.
 Do not accept the claimed proof until the corrected same-inbound test is reviewed.
+a7649b9 corrects that proof: Astra reviewed actual same-inbound notice/decision
+callbacks and independently passed 71 tests. Accepted together with 1c6ca42 in
+staging only. Next local-c3-ordinary-drain scans immutable sources, preflight
+quarantines invalid source/link records, then calls accepted locked wrapper.
+Transport/delivery errors must propagate, NEVER misclassify valid source as corrupt.
+Count actual attempts, not replay/recovery. Tick/degraded behavior remains unchanged.
+fae839a accepted in staging: Astra reviewed source/tests and independently passed
+76 focused tests. Malformed sources quarantine; callback ValueError propagates
+with valid source intact and unknown/no resend. Next local-c3-degraded-arbitration
+replaces old inbox-based notice state with per-notice identity under shared inbound
+lock. Decision intent/attempt suppresses unsent notice; notice delivered/unknown
+never completes substantive inbox. Existing notice tests must retain crash/deadline
+invariants against new owner. Historical inbox conversion still parked for C4.
+E7 commissioning problem: local-c3-degraded-arbitration performed 24 tool reads,
+including two complete reads each of 11 source/test files, passed ~101k request
+tokens and rolled context before any source/test edit (clean staged worktree except
+coordinator AGENTS). This is evidenced read/rollover churn, not accepted progress.
+Astra is stopping this specific worker gracefully and will split the notice
+arbitration helper from existing scan/test migration. No arbitrary short BUILD
+timeout is introduced; preserve its JSONL and normal cleanup/release evidence.
+Mechanical necessary-evidence/tool budget enforcement remains required R5 debt;
+prompted <=3 reads did not enforce this boundary.
+Stopped exact child PID695503 with SIGINT, retained transcript and clean staging
+source. Initial close retained leases because backend proof unavailable; after
+process/group absence and proxy cancellation(in_flight0), replayed EXISTING
+executor.close_runner_round with persisted close outcome and exact recorded
+identities. PRODUCTION completed_run_termination supplied fresh durable proof:
+job failed(returncode-2), credential revoked, R3 sequence released. No legacy
+manual-slot observation/release shortcut used. Failure reason and semantic review
+audit persisted. Next local-c3-notice-helper is ONLY private one-inbound arbitration
+plus three tests, strict targeted reads; scan/test migration stays separate.

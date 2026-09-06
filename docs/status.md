@@ -11,15 +11,18 @@ and durable setup-failure evidence. Astra independently passed 622 tests
 (589 discovered + 33 integration), plus a real-child gate-release failure probe.
 This is bounded R8 launch acceptance, not complete operator inference admission.
 Active: [isolated canonical contact work](../agent_notes/0018-canonical-contact.md)
-through staging `7623240`: canonical decision/dispatch/reply linkage, pure prompt,
+through staging `fae839a`: canonical decision/dispatch/reply linkage, pure prompt,
 immutable ordinary intent publication, and gateway-owned delivery/attempt records,
-per-inbound lock and private locked send primitive. These changes are NOT in the
-runtime root. Astra's latest accepted focused send/record/gateway set passed 71
+per-inbound lock, authorized send and ordinary outbox drain. These changes are NOT
+in the runtime root. Astra's latest accepted focused send/record/gateway set passed 76
 tests; candidate full discovery at `b3f5b41` had 10 old-route failures (627 run),
 while its separate 33 integration tests passed. Those failures remain closure
-blockers, not waived tests. `1c6ca42` adds authorization and decision-only delivery
-acknowledgement; its 71 tests pass independently but a claimed notice/reply test
-used different inbound IDs. Local test correction is running before acceptance.
+blockers, not waived tests. Authorization and decision-only acknowledgement at
+`1c6ca42` are accepted with corrected same-inbound notice/reply proof `a7649b9`.
+Combined notice-scan packet was stopped after repeated full-file/context rollover
+without edits, not accepted as progress; normal production proof then allowed
+truthful failed-run close and lease release. Smaller private notice-helper packet
+is running; scan migration remains separate. See the contact note for evidence.
 C1 historical representation, C2 admitted front-request lifecycle, C3 wiring and
 C4 canonical caller/cutover closure remain open. No live sender/cutover or services
 changed. See
