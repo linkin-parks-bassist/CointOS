@@ -1,5 +1,9 @@
 # Current status
 
+Active next: R2 production model-metadata bring-up. Local Sieve is implementing
+the pure measured-record normalizer in an isolated worktree; transport/snapshot
+wiring follows separately. See [metadata checkpoint](../agent_notes/0016-model-metadata.md).
+
 Conservative backend-close observation is live-accepted as David's temporary
 MVP path. **R4-PRECISE remains a required open successor**, not optional
 hardening: track [implementation and precise-release tasks](superpowers/plans/2026-09-06-backend-observation-repair.md)
@@ -12,8 +16,9 @@ integrated at `b17c8fc`/`4776e15`/`5e4f333`/`f4fc438`. Astra independently passe
 David then approved the existing proxy restart and one admitted live smoke.
 `local-r4-live-observer-smoke` returned one response and automatically reached
 proxy revoked / R3 released / R1 quiescent using persisted `reconciled_absent`
-evidence, with no manual reconciliation. No worker remains active; resources
-were healthy afterward. See [observer checkpoint](../agent_notes/0015-backend-observation.md).
+evidence, with no manual reconciliation. Resources were healthy afterward;
+subsequent metadata packets also use the working normal-close path. See
+[observer checkpoint](../agent_notes/0015-backend-observation.md).
 
 Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
