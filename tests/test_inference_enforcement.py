@@ -6,9 +6,10 @@ import types
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from ecosystem.inference_proxy import (
+    _finish_claim, _record_backend_identity, authorize_proxy_request,
     completed_run_termination, forward_proxy_response, handle_proxy_request,
     issue_proxy_credential, opencode_environment, populate_opencode_credential,
     read_proxy_request, revoke_proxy_credential, serve_one_connection,
@@ -285,6 +286,104 @@ def test_sse_chunks_are_forwarded_without_a_false_end():
     assert len(observed) == 1
 
 
+def snapshot(model_id="model-a", pid=4242):
+    return {"identity": {"model_id": model_id, "endpoint": "127.0.0.1:13305",
+                         "process": {"pid": pid, "start_ticks": 7}},
+            "busy": False}
+
+
+def authorize(value, secret):
+    admission = authorize_proxy_request(value["root"],
+        {"authorization": "Bearer " + secret.hex()}, body(), lambda: 10.0)
+    assert admission["status"] == 200
+    return admission
+
+
+def stored_credential(value):
+    state = json.loads((value["root"] / "state/inference-proxy.json").read_text())
+    return state["credentials"][value["lease_id"]]
+
+
+def test_first_backend_identity_is_persisted_on_claim_and_credential():
+    with fixture() as value:
+        secret = issue(value)
+        first = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            first["claim_id"], value["lease"]["backend_sequence"],
+            snapshot(), lambda: 11.0)
+        credential = stored_credential(value)
+        assert credential["backend_identity"] == snapshot()["identity"]
+        assert credential["backend_observation_unknown"] is False
+        assert credential["in_flight"][first["claim_id"]]["backend"] == {
+            "observer": "configured-backend", "backend_sequence": 1,
+            "started_monotonic": 11.0, "identity": snapshot()["identity"]}
+        _finish_claim(value["root"], value["lease_id"], first["claim_id"],
+                      False, {}, lambda: 12.0)
+        second = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            second["claim_id"], value["lease"]["backend_sequence"],
+            snapshot(), lambda: 13.0)
+        credential = stored_credential(value)
+        assert credential["backend_identity"] == snapshot()["identity"]
+        assert credential["backend_observation_unknown"] is False
+
+
+def test_missing_snapshot_then_known_identity_stays_unknown():
+    with fixture() as value:
+        secret = issue(value)
+        first = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            first["claim_id"], value["lease"]["backend_sequence"],
+            None, lambda: 11.0)
+        credential = stored_credential(value)
+        assert credential["backend_identity"] is None
+        assert credential["backend_observation_unknown"] is True
+        assert credential["in_flight"][first["claim_id"]]["backend"]["identity"] is None
+        _finish_claim(value["root"], value["lease_id"], first["claim_id"],
+                      False, {}, lambda: 12.0)
+        second = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            second["claim_id"], value["lease"]["backend_sequence"],
+            snapshot(), lambda: 13.0)
+        credential = stored_credential(value)
+        assert credential["backend_identity"] == snapshot()["identity"]
+        assert credential["backend_observation_unknown"] is True
+
+
+def test_changed_backend_identity_keeps_first_and_stays_unknown():
+    with fixture() as value:
+        secret = issue(value)
+        first = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            first["claim_id"], value["lease"]["backend_sequence"],
+            snapshot(), lambda: 11.0)
+        _finish_claim(value["root"], value["lease_id"], first["claim_id"],
+                      False, {}, lambda: 12.0)
+        second = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            second["claim_id"], value["lease"]["backend_sequence"],
+            snapshot(pid=999), lambda: 13.0)
+        credential = stored_credential(value)
+        assert credential["backend_identity"] == snapshot()["identity"]
+        assert credential["backend_observation_unknown"] is True
+        assert credential["in_flight"][second["claim_id"]]["backend"]["identity"] \
+            == snapshot(pid=999)["identity"]
+
+
+def test_wrong_model_snapshot_becomes_unknown():
+    with fixture() as value:
+        secret = issue(value)
+        first = authorize(value, secret)
+        _record_backend_identity(value["root"], value["lease_id"],
+            first["claim_id"], value["lease"]["backend_sequence"],
+            snapshot(model_id="model-b"), lambda: 11.0)
+        credential = stored_credential(value)
+        assert credential["backend_identity"] == snapshot(model_id="model-b")["identity"]
+        assert credential["backend_observation_unknown"] is True
+        assert credential["in_flight"][first["claim_id"]]["backend"]["identity"] \
+            == snapshot(model_id="model-b")["identity"]
+
+
 def test_production_http_eof_does_not_create_sequence_end_evidence():
     with fixture() as value:
         secret = issue(value)
@@ -302,15 +401,24 @@ def test_production_http_eof_does_not_create_sequence_end_evidence():
             status=200, getheader=lambda _name, default: "application/json",
             read1=lambda _maximum: b"",
         )
-        backend = types.SimpleNamespace(
-            request=lambda *_args, **_kwargs: None,
-            getresponse=lambda: upstream, close=lambda: None,
-        )
+        identities_during_post = []
+
+        def upstream_request(*_args, **_kwargs):
+            claim = next(iter(stored_credential(value)["in_flight"].values()))
+            identities_during_post.append(claim["backend"]["identity"])
+
+        backend = MagicMock()
+        backend.request.side_effect = upstream_request
+        backend.getresponse.return_value = upstream
         with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
-                   return_value=backend):
+                   return_value=backend), \
+                patch("ecosystem.inference_proxy.backend_snapshot",
+                      return_value=snapshot()) as observe:
             serve_one_connection(connection, value["root"], {
                 "backend_base": "http://127.0.0.1:13305/v1",
             }, lambda: 11.0)
+        observe.assert_called_once_with("http://127.0.0.1:13305/v1", "model-a")
+        assert identities_during_post == [snapshot()["identity"]]
         state = json.loads(
             (value["root"] / "state/inference-proxy.json").read_text())
         credential = state["credentials"][value["lease_id"]]

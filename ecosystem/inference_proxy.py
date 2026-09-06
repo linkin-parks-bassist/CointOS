@@ -413,12 +413,16 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             return
         lease = admission["lease"]
         endpoint = validate_loopback_base(config["backend_base"])
+        try:
+            snapshot = backend_snapshot(config["backend_base"], lease["model_id"])
+        except Exception:
+            snapshot = None
         upstream_connection = http.client.HTTPConnection(
             endpoint["host"], endpoint["port"], timeout=float(config.get("backend_timeout_seconds", 180)))
         try:
             _register_upstream(Path(root), lease["lease_id"], upstream_connection)
             _record_backend_identity(Path(root), lease["lease_id"], admission["claim_id"],
-                                     lease["backend_sequence"], clock)
+                                     lease["backend_sequence"], snapshot, clock)
             upstream_connection.request("POST", "/v1/chat/completions",
                                         body=json.dumps(body, separators=(",", ":")),
                                         headers={"Content-Type": "application/json",
@@ -585,17 +589,38 @@ def _validated_backend_termination(root: Path, credential: dict, claim_id: str,
     return _durable(observation) if valid else None
 
 
+def _snapshot_identity(snapshot):
+    if type(snapshot) is not dict:
+        return None
+    identity = snapshot.get("identity")
+    if type(identity) is not dict:
+        return None
+    return _durable(identity)
+
+
 def _record_backend_identity(root: Path, lease_id: str, claim_id: str,
-                             backend_sequence: int, clock) -> None:
+                             backend_sequence: int, snapshot, clock) -> None:
     with _proxy_lock(root) as (state, save):
         credential = state["credentials"].get(lease_id)
         claim = None if credential is None else credential["in_flight"].get(claim_id)
         if claim is None:
             raise ValueError("request claim disappeared before backend start")
+        identity = _snapshot_identity(snapshot)
+        unknown = identity is None
+        if credential.get("backend_identity") is None:
+            credential["backend_identity"] = identity
+        elif identity is not None and identity != credential["backend_identity"]:
+            unknown = True
+        if identity is not None \
+                and identity.get("model_id") != credential["binding"]["model_id"]:
+            unknown = True
+        credential["backend_observation_unknown"] = (
+            bool(credential.get("backend_observation_unknown")) or unknown)
         claim["backend"] = {
             "observer": "configured-backend",
             "backend_sequence": backend_sequence,
             "started_monotonic": _clock(clock),
+            "identity": identity,
         }
         save()
 
