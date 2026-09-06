@@ -275,6 +275,14 @@ def make_fake_connection(body, status=200):
     return connection, events
 
 
+def expect_value_error(function):
+    try:
+        function()
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
 def test_backend_json_uses_bounded_get_and_closes_connection():
     connection, events = make_fake_connection(b'{"ok": true}')
     created = []
@@ -295,8 +303,7 @@ def test_backend_json_rejects_non_200_status_and_closes():
     connection, events = make_fake_connection(b"", status=302)
     with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
                return_value=connection):
-        with unittest.TestCase().assertRaises(ValueError):
-            _backend_json(BACKEND_BASE, "/api/v1/health")
+        expect_value_error(lambda: _backend_json(BACKEND_BASE, "/api/v1/health"))
     assert events == [("GET", "/api/v1/health"), "close"]
 
 
@@ -311,8 +318,7 @@ def test_backend_json_enforces_bounded_read():
     connection, events = make_fake_connection(b"x" * 1048577)
     with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
                return_value=connection):
-        with unittest.TestCase().assertRaises(ValueError):
-            _backend_json(BACKEND_BASE, "/slots")
+        expect_value_error(lambda: _backend_json(BACKEND_BASE, "/slots"))
     assert events == [("GET", "/slots"), "close"]
 
 
@@ -320,14 +326,12 @@ def test_backend_json_rejects_invalid_json():
     connection, _events = make_fake_connection(b"not json")
     with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
                return_value=connection):
-        with unittest.TestCase().assertRaises(ValueError):
-            _backend_json(BACKEND_BASE, "/slots")
+        expect_value_error(lambda: _backend_json(BACKEND_BASE, "/slots"))
 
 
 def test_backend_json_refuses_non_loopback_base_without_connecting():
     with patch("ecosystem.inference_proxy.http.client.HTTPConnection") as factory:
-        with unittest.TestCase().assertRaises(ValueError):
-            _backend_json("http://10.9.8.7:8002/v1", "/slots")
+        expect_value_error(lambda: _backend_json("http://10.9.8.7:8002/v1", "/slots"))
     factory.assert_not_called()
 
 
@@ -344,6 +348,18 @@ def test_backend_process_identity_rejects_invalid_or_absent_pids():
     pid_max = int(Path("/proc/sys/kernel/pid_max").read_text().strip())
     for pid in (0, -3, True, "7", pid_max + 1):
         assert _backend_process_identity(pid) is None
+
+
+def test_backend_process_identity_rejects_zombie_and_dead_states():
+    def fake_read_text(self, encoding=None):
+        if "boot_id" in str(self):
+            return "0123456789abcdef0123456789abcdef\n"
+        return "7 (fake) " + " ".join(suffix)
+
+    for state in ("Z", "X"):
+        suffix = [state] + ["0"] * 18 + ["42"]
+        with patch.object(Path, "read_text", new=fake_read_text):
+            assert _backend_process_identity(7) is None, state
 
 
 def load_tests(_loader, _tests, _pattern):

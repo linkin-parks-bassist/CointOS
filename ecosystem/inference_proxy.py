@@ -747,7 +747,7 @@ def _backend_process_identity(pid) -> dict | None:
         start_ticks = int(fields[19])
     except (OSError, ValueError, IndexError):
         return None
-    if state == "Z":
+    if state in ("Z", "X"):
         return None
     try:
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
