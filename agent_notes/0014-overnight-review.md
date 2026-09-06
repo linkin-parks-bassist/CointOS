@@ -191,3 +191,24 @@ at the deliverable boundary (exit -2, not a worker failure claim). Actual proces
 and backend absence were observed, leases reconciled, and the reviewed artifact
 accepted independently of exit status. Append-only transcript and absence evidence
 remain in the ignored build ledger. No push or broader service activation.
+
+## Accepted logical-attempt accounting (2026-09-06)
+
+The initial combined `local-r5-logical-attempts` packet over-read without editing;
+Astra stopped it at its scope boundary, reconciled absence, and split it. The
+two-file `local-r5-attempt-transition` delivered `4bb6f19` (integrated `0f3802c`):
+new_attempt requires an authoritative nonnegative attempts counter and increments
+it alongside agent_generation, preserving cumulative usage when applied. Red was
+one error/one failure among 11 tests; green 11/11, independently rerun by Astra.
+
+The two-file `local-r5-runner-attempts` delivered `61859ee` (integrated `1fa017d`):
+execute_next initializes the first attempt only, leaving existing positive counts
+alone. Two actual executor regressions failed with persisted attempts=2 before
+the fix; first launch, resumed session and fresh-context cases now retain the
+correct count independently of agent_generation7. Focused 6/6, full 511/511;
+Astra independently ran the full suite and checked exact integrated source.
+Both narrowed workers exited normally; their leases were reconciled from actual
+process/backend absence. Coordinator steering files were removed, no push.
+Smaller pure-transition packets were markedly more productive than combined
+executor investigations. Backend normal-close observation and production metadata
+remain distinct bring-up gaps; this repair adds no retry scheduler/admission policy.

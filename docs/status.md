@@ -1,20 +1,21 @@
 # Current status
 
-Bring-up checkpoint, 2026-09-06 (Astra): two reviewed local Qwen repairs are
+Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
 preserves cumulative task time/output across runner rounds, resets per-run time,
 counts final output, and saves usage before backend-close reconciliation.
-Astra independently passed 508 tests, 18 focused tests, and a carried-output/
-wrap-up accounting probe, then checked the integrated source against the worker
-commit. Retry/continuation attempt semantics remain unfinished; this does not
-close all R5/R6 requirements. David prioritizes MVP existence and plan fidelity
+`0f3802c` makes the explicit new-attempt transition increment the attempts counter;
+`1fa017d` stops runner resumes/fresh contexts charging another attempt. Astra
+reviewed both diffs and independently passed 511 tests. Earlier verification also
+covered a carried-output/wrap-up accounting probe. This does not close all R5/R6
+requirements or implement a retry scheduler. David prioritizes MVP existence and plan fidelity
 before broad hardening. The overnight task labels do not establish integrated/live acceptance. See
 `agent_notes/0014-overnight-review.md` for the bounded review.
 
 David authorized operator reconciliation of the prior-boot emergency and restored
 local dispatch. The prior resource state is preserved in the ignored build
 ledger; a validated scheduling snapshot is published and the transient
-`cointos-mvp-proxy.service` runs the admitted endpoint. Both local repair workers have exited;
+`cointos-mvp-proxy.service` runs the admitted endpoint. All dispatched repair workers have exited;
 their process/backend absence was independently observed and their leases reconciled.
 No local build worker remains active at this checkpoint. Backend
 normal-close observation and the production model-metadata adapter remain
