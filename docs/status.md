@@ -5,8 +5,13 @@ passed 613 tests and compared real snapshot/model-selection results with backend
 facts. The commissioning metadata override is removed from dispatch. The next
 local packet, `local-r8-launch-review`, was admitted using production snapshot
 alone and completed with normal automatic release, finishing the scoped metadata
-live checkpoint. Active next: [operator launch cleanup](../agent_notes/0017-operator-launch.md),
-mapping the existing gated-launch contract before a bounded R8 repair. See
+live checkpoint. [Operator launch cleanup](../agent_notes/0017-operator-launch.md)
+is now integrated through `faae7ad`: registered-before-exec gate, truthful cleanup
+and durable setup-failure evidence. Astra independently passed 622 tests
+(589 discovered + 33 integration), plus a real-child gate-release failure probe.
+This is bounded R8 launch acceptance, not complete operator inference admission.
+Active next: read-only C1 contract mapping in an isolated contact worktree; no
+contact cutover or services changed. See
 [metadata checkpoint](../agent_notes/0016-model-metadata.md).
 
 Conservative backend-close observation is live-accepted as David's temporary

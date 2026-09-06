@@ -29,7 +29,7 @@ R8-G2 combined packet local-r8-gated-launch REJECTED: exited zero/run_finished
 but final reason length at 32000 output tokens, no patch or tests. Runtime close
 worked; semantic deliverable did not. Do not mark it completed. Keep output cap
 32000 (OpenCode's actual limit); split tasks rather than inflate it.
-R8-G2A pending correction: local-r8-register-gate e7e83de, only run_command registration-before-exec,
+R8-G2A review history: local-r8-register-gate e7e83de, only run_command registration-before-exec,
 verified setup cleanup and attached failure attestation; two tiny real-child tests.
 Independent 23 tests pass, but injected cleanup exception raises UnboundLocalError:
 Python deletes the except target cleanup_error, losing original registration error.
@@ -37,7 +37,7 @@ Do not accept e7e83de alone. local-r8-cleanup-error adds the missing regression 
 minimal binding fix before integration; runtime success was not semantic acceptance.
 Correction c4eeca3 accepted with e7e83de as 6555a10/7314204: Astra independently
 passed 24 tests; exact original exception and cleanup cause survive in the added
-regression. R8-G2A is now accepted. R8-G2B running: local-r8-launch-journal,
+regression. R8-G2A is now accepted. R8-G2B: local-r8-launch-journal,
 durable sanitized setup-failure reporting, separate packet after G2A.
 Lease state stays conservatively unchanged on failure; no fabricated release,
 quiescence or dead-session self-healing. Post-release wait/interruption semantics
@@ -49,3 +49,27 @@ Packets/logs remain in ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
 Read-only work used the clean metadata worktree. Writer worktree now exists at
 /home/david/.worktrees/cointos-mvp-operator-launch, branch fix/mvp-operator-launch,
 base 05723b0. Current worker base includes accepted R8-G1 commits above.
+
+## Accepted launch checkpoint — Astra, 2026-09-07
+
+R8-G2B local 016a051/3f2c030 -> f6994d3/faae7ad. Initial 26 tests passed,
+but the requested field projection was missing; local-r8-journal-fields supplied
+it and a polluted-attestation table regression. Events retain only allowed facts,
+unknown spawn/cleanup remains unknown, cleanup precedes persistence, original
+errors survive, and failed persistence is chained. No automatic lease closure.
+Astra independently passed all 622 tests (589 discovery + 33 separately discovered
+integration), 26 focused tests, and diff check. Additional tiny real-child probe:
+gate-release failure after registration never ran the marker command, reaped the
+group, persisted proof, and retained active (not falsely released) lease state.
+All local packet processes closed normally through conservative backend evidence.
+Removed only two temporary coordinator-owned AGENTS steering files; committed
+source, tests and isolated writer branch remain preserved.
+
+R8 launch repair is accepted; full R8 ordinary tool inference admission, detached
+session semantics and explicit failed-launch reconciliation remain separate
+requirements, not claimed complete. Existing post-release wait/release and no-dead-
+self-healing boundary unchanged. R4-PRECISE remains open as tracked in status.
+Next priority is approved C1 canonical contact, initially read-only local mapping
+in /home/david/.worktrees/cointos-mvp-contact. Keep canonical replacement isolated
+until its offline callers/cutover are ready; do not break live legacy consumers
+by cherry-picking a half-converted schema into the runtime checkout.
