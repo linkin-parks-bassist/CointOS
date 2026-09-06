@@ -151,3 +151,10 @@ not ordinary publisher behavior. C3 notifier/C4 canonical caller closure must
 replace that obsolete route and retain notification/delivery invariants. Do not
 skip or weaken tests to call this candidate deployable. Root source remains green
 at its separate 622-test accepted checkpoint.
+The same b3f5b41 staging checkpoint separately passed all 33 integration tests.
+e85ee89 tests accepted: Astra reviewed both real-root composition tests and passed
+17 focused tests; sentinel now actually outbox/critical. Publish/link failure
+replay remains byte/inode stable and result-before-decision does not fabricate
+delivery or duplicate jobs. Test-only change, not production contact acceptance.
+Next local-c3-egress-map is read-only decomposition of approved gateway ordinary
+send/degraded-notice identity separation; no live gateway modifications.
