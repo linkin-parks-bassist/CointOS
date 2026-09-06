@@ -95,3 +95,28 @@ the actual R4 owners. Do not mistake a fake infer callback for reserved front
 acceptance, manufacture credentials or introduce direct HTTP. C2 pure prompt/status
 work may stage independently once its input contract is explicit; live integration
 must close the real admission seam first.
+Sieve admission map finds no high-level admitted helper. Astra confirmed ordinary
+executor explicitly refuses front. Map qualifications: OpenCode uses its configured
+proxy HTTP client, not ecosystem.inference.request; same-process R1 registration
+does NOT establish a safe close while that process remains alive. Do not accept
+the map's proposed acquire/self-register/release sequence as verified architecture.
+Map did not inspect reserve_sequence body, so exclusive front admission proof is
+still open. Its operator-session/new-wrapper fork is unresolved, not permission to
+borrow David's operator owner for Coin. Park executable C2 wiring pending exact
+owner/close contract; continue independent approved pure prompt in
+local-c2-decision-prompt without fake admission or decide stub.
+Astra inspected the omitted owner code: _validate_sequence_request enforces Coin
+authority and configured front proxy; reserve_sequence selects only reserved front
+indices, and resource_envelope refuses an exhausted/None sequence. Thus logical
+front exclusion exists. completed_run_termination explicitly requires the bound
+process ended, confirming same-process long-lived worker closure is NOT supplied.
+This is a missing front request lifecycle composition, not permission to weaken
+release proof or claim logical reservation proves native physical-slot correlation.
+R4-PRECISE remains the latter's required successor.
+685cecf accepted in staging: Astra independently passed 10 prompt/decision tests
+and reviewed source. Pure prompt preserves supplied facts/history, uses one C1
+validator, invents no actions, has NO decide/inference/status-read implementation.
+C2 status adapter not yet implemented; no existing status/health module found by
+bounded filename check, so no factual projection is assumed. Next independent
+local-c3-publication-map is read-only preparation of approved immutable ordinary
+spool publication; full C3 still depends on C2, and no active egress changes occur.
