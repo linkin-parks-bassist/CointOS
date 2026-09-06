@@ -26,9 +26,11 @@ Packets/transcripts: ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
   slot 1, training maximum 262144. Corrected tests preserve those separate meanings
   and registry_context_length diagnostic. Backend URLs end /v1; provenance now
   correctly names root /v1/models and /props, not /v1/v1/models.
-- R2-M2A running: bounded metadata-only loopback HTTP reader in models.py. No
-  completions, lifecycle control or new inference path. Pure transport tests.
-- R2-M2B next: snapshot composition with truthful unqualified reasons and fresh
+- R2-M2A code accepted: local dec6fb2 -> 4ee10de; Astra independently passed 38
+  model-admission tests. _get_backend allows only numeric-loopback HTTP metadata
+  GET /v1/models and /props, timeout 1 second, maximum response 1 MiB; no redirects,
+  completions, lifecycle control or new inference path. No live caller yet.
+- R2-M2B running: snapshot composition with truthful unqualified reasons and fresh
   backend identity/config recheck. Reuse normalized resident facts for capacity;
   no guessed metadata fallback or duplicated route selection.
 - R2-M3 next: independent combined tests and read-only comparison of production

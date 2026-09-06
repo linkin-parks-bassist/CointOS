@@ -2,8 +2,9 @@
 
 Active next: R2 production model-metadata bring-up. The pure normalizer is
 integrated at `34456c8`/`dcd1add`: 29 focused tests and actual read-only metadata
-checks passed. Local Sieve is adding the bounded metadata reader; snapshot wiring
-follows separately. See [metadata checkpoint](../agent_notes/0016-model-metadata.md).
+checks passed. The bounded reader is integrated at `4ee10de` (38 focused tests);
+local Sieve is wiring measured metadata into snapshot and resident accounting.
+See [metadata checkpoint](../agent_notes/0016-model-metadata.md).
 
 Conservative backend-close observation is live-accepted as David's temporary
 MVP path. **R4-PRECISE remains a required open successor**, not optional
