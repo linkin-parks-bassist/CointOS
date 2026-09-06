@@ -1,5 +1,25 @@
 # Current status
 
+Bring-up checkpoint, 2026-09-06 (Astra): the first reviewed local Qwen repair is
+integrated at `99170fb`. It lets a permitted active attempt run at its attempt
+quota and permits a parent with zero child allowance. The worker demonstrated
+failing regressions before the fix and passed 504 tests; Astra independently
+passed the 14 focused tests and reviewed the exact diff. David prioritizes MVP
+existence and plan fidelity before broad hardening. R5 cumulative accounting
+across continuation still needs repair; the
+overnight task labels do not establish integrated/live acceptance. See
+`agent_notes/0014-overnight-review.md` for the bounded review.
+
+David authorized operator reconciliation of the prior-boot emergency and restored
+local dispatch. The prior resource state is preserved in the ignored build
+ledger; a validated scheduling snapshot is published and the transient
+`cointos-mvp-proxy.service` runs the admitted endpoint. The local worker has exited;
+its process/backend absence was independently observed and its leases reconciled.
+No local build worker remains active at this checkpoint. Backend
+normal-close observation and the production model-metadata adapter remain
+integration gaps. This checkpoint does not assert working autonomous dispatch or
+end-to-end Coin contact. The earlier implementation observations below are history.
+
 Implementation update, 2026-09-05 (Astra): David approved the [complete MVP bring-up
 suite](superpowers/plans/2026-09-05-cointos-mvp-index.md) for implementation and
 activation. S0 is preserving the exact dirty planning/source snapshot before the
