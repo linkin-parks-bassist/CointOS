@@ -75,3 +75,23 @@ already delivered and delivery_unknown substantive states. No outbox/send effect
 Next local-c1-legacy-shapes is READ ONLY: establish actual terminal legacy shapes
 and missing historical facts before assigning conversion semantics. Do not invent
 a past respond/dispatch decision or job simply to make old records fit schema2.
+
+## Parked conversion semantics and next C2 seam
+
+Sieve local-c1-legacy-shapes confirms old terminal front/deep/followup shapes;
+Astra checked actual control_worker: only followup/actions, not a canonical
+respond/dispatch decision, are persisted. A schema2 completed model decision cannot
+be reconstructed honestly. Conversion remains OPEN pending explicit historical
+representation choice; do not invent decisions/jobs or silently auto-migrate.
+Candidate alternatives to present before implementing: immutable historical
+envelope with preserved original plus replay fence, or separately preserved terminal
+archive with canonical terminal identity references. No choice or migration made.
+Nonterminal old work must still be previewed/drained before any conversion.
+
+C2 seam found by Astra: inference.request is currently a low-level admitted client
+requiring lease+32-byte credential, whereas the C2 plan's plain mocked call omits
+that production setup. local-c2-admission-map is read-only evidence for reusing
+the actual R4 owners. Do not mistake a fake infer callback for reserved front
+acceptance, manufacture credentials or introduce direct HTTP. C2 pure prompt/status
+work may stage independently once its input contract is explicit; live integration
+must close the real admission seam first.
