@@ -127,3 +127,27 @@ inbound id as map proposed. C3 examples and C1 link use distinct decision/result
 identities. Next local-c3-intent-link stages strict seven-field ordinary intent
 validation and read-only authenticated inbox linkage. No publisher/sender yet;
 shared-directory ownership remains C4 packaging, not silently enabled in tests.
+f57757c reviewed: Astra independently passed 75 ordinary/gateway/records tests;
+link validates before path use and checks actual inbox payload identity. One small
+contract gap: kind list/dict currently leaks TypeError. local-c3-publish-intent
+must correct that guard/table while adding immutable ordinary publication, then
+accept the two together. Publication will read trusted inbox before writing and
+preserve original created_at/bytes on same semantic replay; no gateway delivery or
+critical mutation, and user directory provisioning remains C4.
+b3f5b41 accepted with f57757c in staging: Astra reviewed code and independently
+passed 78 ordinary/gateway/records tests. Publisher validates trusted inbox first,
+uses existing exclusive writer, preserves timestamp/bytes/inode on replay, rejects
+conflicts without repair, and fixes kind type guard. Test sentinel was placed at
+root/critical, not actual outbox/critical; Astra independently probed actual path
+and gateway absence successfully. local-c3-publication-replay-test corrects that
+fixture path and adds two real temporary-filesystem C1/C3 composition proofs,
+including publish-success/link-failure recovery. No production worker implied.
+Astra full staging discovery at b3f5b41: 627 run, 9 failures + 1 error. Nine are
+the already recorded test_control_turns old-route cases; the additional failure is
+test_notifier.test_terminal_result_uses_notifier_without_blocking_telegram_ingress,
+which still invokes legacy telegram.accept_update and expects a front reply.
+Independent focused rerun confirms failure at that old-route sent-list assertion,
+not ordinary publisher behavior. C3 notifier/C4 canonical caller closure must
+replace that obsolete route and retain notification/delivery invariants. Do not
+skip or weaken tests to call this candidate deployable. Root source remains green
+at its separate 622-test accepted checkpoint.
