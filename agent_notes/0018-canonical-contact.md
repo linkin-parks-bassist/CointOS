@@ -158,3 +158,13 @@ replay remains byte/inode stable and result-before-decision does not fabricate
 delivery or duplicate jobs. Test-only change, not production contact acceptance.
 Next local-c3-egress-map is read-only decomposition of approved gateway ordinary
 send/degraded-notice identity separation; no live gateway modifications.
+Sieve egress map confirms old degraded send mutates inbox egress_state and no
+ordinary per-identity delivery owner/flock exists. Astra checked gateway and record
+helpers. Corrections: C3 can reuse existing inbox egress_state for decision-only
+acknowledgement; no second ack field is required. Kernel flock releases on process
+exit; don't invent a persistent lock-owner/stale-healing protocol. Legacy inbox
+meaning conversion remains a C4 cutover concern, not an implicit runtime fallback.
+Next local-c3-delivery-records stages only exact gateway/ordinary-delivery records
+for decision/task_result/degraded-notice with monotonic states. Attempt evidence
+and per-inbound serialization must follow BEFORE any sender is wired. Existing
+critical protocol remains untouched; no new gateway activation authority inferred.
