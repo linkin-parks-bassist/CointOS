@@ -375,8 +375,7 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
     for item in downloaded:
         resident = loaded.get(item.get("id"))
         record = _verified_model_record(item, resident, health_fresh, now)
-        if resident is not None and isinstance(resident.get("backend_url"), str) \
-                and resident["backend_url"]:
+        if resident is not None and "backend_url" in resident:
             observed, reason = _observed_resident_record(item, resident, now)
             if observed is not None:
                 observed["metadata_error"] = None

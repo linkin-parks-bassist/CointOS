@@ -574,6 +574,32 @@ def test_snapshot_inconsistent_backend_facts_invalidate_inventory():
     assert current["resident_models"] == []
 
 
+def test_snapshot_present_but_invalid_backend_url_fails_closed():
+    for backend_url in (None, "", 123):
+        item, resident, _models_document, _props = complete_resident_inputs()
+        resident["backend_url"] = backend_url
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            _write_snapshot_policy(root)
+            current = run_snapshot(
+                root,
+                gateway_reads({
+                    "/v1/models": [{"data": [item]}],
+                    "/api/v1/health": [{"all_models_loaded": [resident]}],
+                }),
+                backend_reads({}),
+            )
+        assert current["verified"] is False
+        assert current["fresh"] is False
+        assert current["resident_models"] == []
+        record = current["models"][0]
+        assert record["metadata_verified"] is False
+        assert record["residency_verified"] is False
+        assert record["fresh"] is False
+        assert record["stale"] is True
+        assert record["metadata_error"] == "unavailable"
+
+
 def test_snapshot_post_read_identity_change_invalidates_resident():
     item, resident, models_document, props = complete_resident_inputs()
     base = resident["backend_url"]
