@@ -295,3 +295,11 @@ discovery passed33 tests in108.3s. Root runtime source remains unchanged.
 local-c3-lifecycle-impact is a bounded READ-ONLY source/interface map for David's
 new lifecycle, not implementation of unapproved details. Exact escalation meaning
 and final amendment remain under discussion; no semantic writer is running.
+Sieve lifecycle-impact map finished with no source edits and normal release.
+Astra confirms conversation.append supports optional source_id deduplication, but
+recent/recent_before strip identity to role/content; notifier.run_once still uses
+direct legacy send then history append without source_id. Revised lifecycle needs
+identity-preserving context projection and canonical notifier/result publication,
+not merely new enum values. Existing old front/deep methods are legacy callers,
+not the chosen implementation of the new/open/closed requirement. Map used eight
+bounded reads rather than six requested; scope stayed within the six source files.
