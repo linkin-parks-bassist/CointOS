@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import subprocess
+import os
 import sys
 import time
 from collections.abc import Callable
@@ -216,29 +216,45 @@ def run_command(
     command: list[str],
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
-    """Acquire, spawn the operator tool in its own process group, register it,
-    wait for it, release it with the child's outcome, and return the exit code.
-    Only a fresh starting session may spawn; a stale or dead session must be
-    reconciled or released before the tool is launched again."""
+    """Acquire, spawn the operator tool blocked in its own process group,
+    register it before it may exec, wait for it, release the session with the
+    child's outcome, and return the exit code. Only a fresh starting session
+    may spawn; a stale or dead session must be reconciled or released before
+    the tool is launched again."""
     session = acquire_operator_session(root, request, clock)
     if session["state"] != "starting":
         raise ValueError(
             f"operator session {session['session_id']} is not fresh "
             f"(state: {session['state']}); release or reconcile it first")
     # Local import: executor imports resource_control, which imports this
-    # module; the kernel-identity reader is only needed at spawn time.
+    # module; the gated spawner is only needed at launch time.
     from ecosystem import executor
-    child = subprocess.Popen(command, start_new_session=True)
+    gate = executor.gated_child_launch(None, command, dict(os.environ))
     try:
-        identity = executor.process_identity(child.pid)
-    except (OSError, ValueError):
-        release_operator_session(
+        register_operator_process(
             root, session["session_id"],
-            {"state": "spawn_failed", "returncode": None}, clock)
+            gate["pid"], gate["start_ticks"], clock)
+        executor.gated_child_release(gate)
+    except Exception as error:
+        cleanup_error = None
+        try:
+            cleanup = executor.gated_child_cleanup(gate)
+        except Exception as cleanup_error:
+            cleanup = {
+                "state": "reconciliation_required",
+                "error_type": type(cleanup_error).__name__,
+            }
+        error.launch_failure = {
+            "spawned": True,
+            "pid": gate["pid"],
+            "start_ticks": gate["start_ticks"],
+            "pgid": gate["pgid"],
+            "cleanup": cleanup,
+        }
+        if cleanup_error is not None:
+            raise error from cleanup_error
         raise
-    register_operator_process(
-        root, session["session_id"], child.pid, identity["start_ticks"], clock)
-    returncode = child.wait()
+    returncode = gate["process"].wait()
     release_operator_session(
         root, session["session_id"],
         {"state": "run_finished", "returncode": returncode}, clock)
