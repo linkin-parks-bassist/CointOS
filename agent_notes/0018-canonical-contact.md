@@ -234,3 +234,25 @@ job failed(returncode-2), credential revoked, R3 sequence released. No legacy
 manual-slot observation/release shortcut used. Failure reason and semantic review
 audit persisted. Next local-c3-notice-helper is ONLY private one-inbound arbitration
 plus three tests, strict targeted reads; scan/test migration stays separate.
+f562405 accepted in staging: small notice-helper packet finished normally, Astra
+reviewed source/tests and independently passed 68 tests. Shared lock/trusted chat,
+decision-evidence suppression, reboot due rule and same-inbound later decision
+compose without notice changing substantive acknowledgement. Next
+local-c3-notice-scan replaces old inline inbox-based notice transport with this
+helper, retaining preflight quarantine but propagating later transport errors.
+Existing notice tests migrate to actual notice record owner, not waived invariants.
+3072907 accepted in staging: Astra reviewed exact old-path deletion/new tests and
+independently passed 82 focused tests. Degraded scan now uses notice helper;
+preflight crossed/malformed inbox quarantines, sender ValueError propagates with
+inbox retained. Public API composition proves same-inbound notice/decision replay.
+Next local-c3-egress-tick adds ordinary drain after critical drain and before
+degraded scan, preserving successful-loop-only heartbeat and existing transport
+deadline boundary. Still isolated: no active gateway change or full contact claim.
+David was asked asynchronously about the parked legacy conversion direction:
+separate immutable historical archive plus durable replay fence. No reply yet;
+no conversion design/implementation authorization inferred from the question.
+David then asked whether "old" meant pre-MVP, received that clarification, and
+explicitly approved the recommended separate archive/replay-fence direction.
+Decision 0013 records the choice and boundaries. Exact archive/index interfaces,
+resumable conversion and caller behavior still need a compact written design;
+no live migration or cutover was authorized/performed by that approval.
