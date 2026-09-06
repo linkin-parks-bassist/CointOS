@@ -40,8 +40,12 @@ Packets/transcripts: ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
   on integrated root; read-only production snapshot qualified both loaded models
   and selected Qwen3.8 without the commissioning override. Dispatch helper now
   uses that production path for initial and refreshed admission. First actual
-  packet `local-r8-launch-review` is admitted/running; final normal-close evidence
-  will complete this checkpoint. No model/service change was needed.
+  packet `local-r8-launch-review` completed with job run_finished, proxy revoked,
+  R3 released, R1 quiescent. Astra checked its measured backend route provenance
+  and exact release evidence `87da51defed441e2be727b95105ba833` in
+  state/backend-observations.jsonl. This completes the scoped metadata live
+  checkpoint; no model/service change was needed. Operator scheduling bootstrap
+  remains commissioning infrastructure, but metadata values are no longer overridden.
 
 This does not close arbitrary model/context qualification, R4-PRECISE, operator
 leases, autonomous MVP or protected deployment acceptance.

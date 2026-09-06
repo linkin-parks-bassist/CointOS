@@ -4,8 +4,9 @@ Production model metadata is integrated through `4372020`; Astra independently
 passed 613 tests and compared real snapshot/model-selection results with backend
 facts. The commissioning metadata override is removed from dispatch. The next
 local packet, `local-r8-launch-review`, was admitted using production snapshot
-alone and is reviewing ordinary operator-session cleanup. Its final normal close
-will complete the metadata live checkpoint. See
+alone and completed with normal automatic release, finishing the scoped metadata
+live checkpoint. Active next: [operator launch cleanup](../agent_notes/0017-operator-launch.md),
+mapping the existing gated-launch contract before a bounded R8 repair. See
 [metadata checkpoint](../agent_notes/0016-model-metadata.md).
 
 Conservative backend-close observation is live-accepted as David's temporary
