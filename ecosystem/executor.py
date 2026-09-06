@@ -81,26 +81,33 @@ def _close_record_fd(record: dict, field: str) -> None:
                 raise
 
 
-def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
+def gated_child_launch(config_fd: int | None, child_argv: list[str], child_env: dict,
                        *, stdin=None, stdout=None, stderr=None,
                        popen=subprocess.Popen) -> dict:
-    """Take config_fd and spawn a wrapper which cannot exec before release."""
-    if type(config_fd) is not int or config_fd < 0:
-        raise ValueError("config_fd must be an open file descriptor")
+    """Spawn a wrapper which cannot exec before release.
+
+    config_fd=None passes no credential descriptor to the child and closes
+    nothing; the gate, identity checks, and cleanup rules still apply.
+    """
+    if config_fd is not None and (type(config_fd) is not int or config_fd < 0):
+        raise ValueError("config_fd must be an open file descriptor or None")
     if (type(child_argv) is not list or not child_argv
             or any(type(argument) is not str for argument in child_argv)):
         error = ValueError("child_argv must be a non-empty list of strings")
         error.launch_failure = {"spawned": False}
-        os.close(config_fd)
+        if config_fd is not None:
+            os.close(config_fd)
         raise error
     if (type(child_env) is not dict
             or any(type(key) is not str or type(value) is not str
                    for key, value in child_env.items())):
         error = ValueError("child_env must contain string keys and values")
         error.launch_failure = {"spawned": False}
-        os.close(config_fd)
+        if config_fd is not None:
+            os.close(config_fd)
         raise error
 
+    config_record_fd = config_fd if config_fd is not None else -1
     gate_read_fd, gate_write_fd = os.pipe()
     process = None
     record = None
@@ -112,7 +119,8 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
             stdout=stdout,
             stderr=stderr,
             env=child_env,
-            pass_fds=(config_fd, gate_read_fd),
+            pass_fds=(gate_read_fd,) if config_fd is None
+            else (config_fd, gate_read_fd),
             start_new_session=True,
             close_fds=True,
         )
@@ -125,7 +133,7 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
             "process": process,
             **identity,
             "gate_write_fd": gate_write_fd,
-            "config_fd": config_fd,
+            "config_fd": config_record_fd,
             "state": "blocked",
             "outcome": None,
         }
@@ -140,7 +148,7 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
                 "start_ticks": None,
                 "pgid": process.pid,
                 "gate_write_fd": gate_write_fd,
-                "config_fd": config_fd,
+                "config_fd": config_record_fd,
                 "state": "blocked",
                 "outcome": None,
             }
@@ -154,7 +162,8 @@ def gated_child_launch(config_fd: int, child_argv: list[str], child_env: dict,
             }
         else:
             os.close(gate_write_fd)
-            os.close(config_fd)
+            if config_fd is not None:
+                os.close(config_fd)
             error.launch_failure = {"spawned": False}
         raise
 
