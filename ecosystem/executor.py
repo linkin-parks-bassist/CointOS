@@ -933,8 +933,25 @@ def _preemption_reason(job: dict, started: float, scheduling: dict) -> str | Non
     return None
 
 
+def _close_usage(budget: dict, usage: dict, output_path: Path,
+                 last_output_bytes: int, stopped: float) -> dict:
+    """Close both observed intervals and count output written up to the stop."""
+    from ecosystem import execution_budget
+    if output_path.exists():
+        size = output_path.stat().st_size
+        if size > last_output_bytes:
+            usage = execution_budget.account_usage(
+                budget, usage, {"kind": "output", "bytes": size - last_output_bytes})
+    usage = execution_budget.account_usage(
+        budget, usage, {"kind": "run_stopped", "at": stopped})
+    usage = execution_budget.account_usage(
+        budget, usage, {"kind": "task_stopped", "at": stopped})
+    return usage
+
+
 def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
-                     output_path: Path, before_stop, scheduling: dict) -> dict:
+                     output_path: Path, before_stop, scheduling: dict,
+                     initial_output_bytes: int | None = None) -> dict:
     from ecosystem import execution_budget
     from ecosystem.time_policy import load as load_time_policy
 
@@ -959,12 +976,22 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
             return None
         return current if current["start_ticks"] == identity["start_ticks"] else None
 
+    usage = dict(job.get("budget_usage") or {})
+    # A new runner round starts fresh: live interval markers never carry
+    # across rounds, and the per-round run budget resets each round.
+    # Task-level counters (task_seconds, output_bytes, evidence_items,
+    # children) persist; the attempts policy stays on the job counter.
+    usage.pop("run_started", None)
+    usage.pop("task_started", None)
+    usage.pop("run_seconds", None)
+    usage["attempts"] = int(job.get("attempts", 0))
     usage = execution_budget.account_usage(
-        budget, {"attempts": int(job.get("attempts", 0))},
-        {"kind": "run_started", "at": started})
+        budget, usage, {"kind": "run_started", "at": started})
     usage = execution_budget.account_usage(
         budget, usage, {"kind": "task_started", "at": started})
-    last_output_bytes = output_path.stat().st_size if output_path.exists() else 0
+    if initial_output_bytes is None:
+        initial_output_bytes = output_path.stat().st_size if output_path.exists() else 0
+    last_output_bytes = initial_output_bytes
     while process.poll() is None:
         now = time.monotonic()
         if output_path.exists():
@@ -987,9 +1014,12 @@ Distinguish verified facts from assumptions. This artifact seeds the next attemp
             before_stop()
             execution_budget.stop_process_group(
                 process.pid, wrapup_seconds, grace_seconds, observe)
+            stopped = time.monotonic()
             return {"returncode": process.wait(), "preempted": False,
-                    "budget_checkpoint": outcome, "usage": usage,
-                    "elapsed_seconds": round(time.monotonic() - started, 3)}
+                    "budget_checkpoint": outcome,
+                    "usage": _close_usage(budget, usage, output_path,
+                                          last_output_bytes, stopped),
+                    "elapsed_seconds": round(stopped - started, 3)}
         elapsed = now - started
         context_rollover = False
         context_usage = None
@@ -1016,12 +1046,18 @@ Distinguish verified facts from assumptions. This artifact seeds the next attemp
                 session = session or opencode_session_id(output_path)
                 return {"returncode": process.returncode, "preempted": True,
                         "reason": reason, "session": session,
+                        "usage": _close_usage(budget, usage, output_path,
+                                               last_output_bytes,
+                                               time.monotonic()),
                         "context_rollover": context_rollover,
                         "context_usage": context_usage,
                         "elapsed_seconds": round(elapsed, 3)}
         time.sleep(1)
+    stopped = time.monotonic()
     return {"returncode": process.returncode, "preempted": False,
-            "elapsed_seconds": round(time.monotonic() - started, 3)}
+            "usage": _close_usage(budget, usage, output_path,
+                                  last_output_bytes, stopped),
+            "elapsed_seconds": round(stopped - started, 3)}
 
 
 def discovery_evidence(job: dict) -> dict:
@@ -1212,6 +1248,12 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                     prompt_path = resume_path
             try:
                 output_mode = "ab" if resume_session else "wb"
+                # Baseline before launch: a fresh (truncated) log starts at
+                # zero; an appended resume log at its current size, so fast
+                # startup writes cannot escape the output budget.
+                initial_output_bytes = (output_path.stat().st_size
+                                        if resume_session and output_path.exists()
+                                        else 0)
                 with prompt_path.open("rb") as prompt, output_path.open(output_mode) as output:
                     if run is not subprocess.run:
                         raise ValueError("injected runner bypass is not permitted")
@@ -1237,8 +1279,12 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
 
                     outcome = _run_preemptibly(
                         context["launch"]["process"], command, job, output_path,
-                        cancel_before_stop, scheduling,
-                    )
+                        cancel_before_stop, scheduling, initial_output_bytes)
+                    # Persist observed usage before close/reconciliation so
+                    # no later branch (including reconciliation_required) can
+                    # discard accounting.
+                    job["budget_usage"] = outcome["usage"]
+                    cli.atomic_json(path, job)
                     child_outcome = gated_child_wait(context["launch"], 0)
                     closed = close_runner_round(job, path, context, child_outcome)
                     if closed["state"] == "reconciliation_required":
@@ -1267,7 +1313,6 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                         job.update(state=state_record["state"],
                                    logical_run_state="terminal",
                                    budget_outcome=checkpoint,
-                                   budget_usage=outcome["usage"],
                                    updated_at=cli.now())
                         if handoff:
                             job["budget_handoff"] = state_record["artifact"]
