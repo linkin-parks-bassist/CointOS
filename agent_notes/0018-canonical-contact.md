@@ -168,3 +168,24 @@ Next local-c3-delivery-records stages only exact gateway/ordinary-delivery recor
 for decision/task_result/degraded-notice with monotonic states. Attempt evidence
 and per-inbound serialization must follow BEFORE any sender is wired. Existing
 critical protocol remains untouched; no new gateway activation authority inferred.
+f3c78f3 pending test correction: Astra independently passed 75 tests and reviewed
+ordinary record code, but new tests contain six unittest.TestCase() instances,
+contrary to repository's no-new-OOP requirement. local-c3-functional-delivery-tests
+must preserve all assertions using a plain try/except helper before acceptance.
+No critical behavior changes or actual sender wiring in this packet.
+f3c78f3/9fa5248 accepted in staging after Astra's independent 75-test rerun and
+test-only diff review; new TestCase instances removed. Next local-c3-attempt-evidence
+adds immutable per-message attempt facts and conservative missing/ready-state
+recovery to unknown. No sends until that proof and per-inbound flock compose.
+81931dd accepted in staging: Astra reviewed diff and independently passed 79
+ordinary/gateway/records tests. Marker makes missing/ready delivery unknown;
+decision stays independent of notice. Sender must still handle stale sending.
+Next local-c3-inbound-lock adds nonblocking kernel flock shared by all identities
+of an inbound, no persistent owner/TTL/stale-healing. Busy retries on later tick,
+not indefinite blocking. No sender wired before following composition packet.
+e9dcead accepted in staging: Astra independently passed 67 lock/delivery/gateway
+tests and reviewed source/real subprocess proof. One kernel lock, nonblocking busy,
+exception/process-exit release, no custom owner state. Next local-c3-locked-send
+adds only private caller-locked send phase returning actual state/attempted flag;
+tests inject callbacks, never Telegram. Intent authorization/lock acquisition/
+decision acknowledgement and loop/degraded wiring remain subsequent packets.
