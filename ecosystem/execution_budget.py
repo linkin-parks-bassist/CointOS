@@ -89,10 +89,27 @@ def account_usage(budget: dict, usage: dict, event: dict) -> dict:
     raise ValueError(f"unknown usage event kind {kind!r}")
 
 
+def _reached_ceiling(total: float, limit: float) -> bool:
+    """Continuous usage (time, output, evidence) is never admitted: the
+    running interval has no admission, so reaching the ceiling already
+    exhausts the budget."""
+    return total >= limit
+
+
+def _exceeded_ceiling(total: float, limit: float) -> bool:
+    """Admitted counts (the running attempt, created children) may stand at
+    their ceiling: the attempt was admitted before it started and the child
+    only exists because creation was admitted. Only exceeding the ceiling is
+    an overrun."""
+    return total > limit
+
+
 def budget_outcome(budget: dict, usage: dict, now_monotonic: float) -> dict:
     """Mechanical budget state. An exhausted budget yields checkpoint_required;
     a timer alone never proves completion. Field order is authoritative when
-    several limits are exhausted at once."""
+    several limits are exhausted at once. Continuous usage exhausts at its
+    ceiling; an admitted running attempt or already created child exhausts
+    only when its quota is exceeded."""
     validated = validate_budget(budget)
     now = _finite_number(now_monotonic, "now_monotonic")
     if type(usage) is not dict:
@@ -109,22 +126,22 @@ def budget_outcome(budget: dict, usage: dict, now_monotonic: float) -> dict:
 
     checks = (
         ("task_seconds", consumed("task_started", "task_seconds"),
-         validated["task_seconds"]),
+         validated["task_seconds"], _reached_ceiling),
         ("run_seconds", consumed("run_started", "run_seconds"),
-         validated["run_seconds"]),
+         validated["run_seconds"], _reached_ceiling),
         ("maximum_attempts", _count(usage.get("attempts", 0), "attempts"),
-         validated["maximum_attempts"]),
+         validated["maximum_attempts"], _exceeded_ceiling),
         ("maximum_output_bytes",
          _count(usage.get("output_bytes", 0), "output_bytes"),
-         validated["maximum_output_bytes"]),
+         validated["maximum_output_bytes"], _reached_ceiling),
         ("maximum_evidence_items",
          _count(usage.get("evidence_items", 0), "evidence_items"),
-         validated["maximum_evidence_items"]),
+         validated["maximum_evidence_items"], _reached_ceiling),
         ("maximum_children", _count(usage.get("children", 0), "children"),
-         validated["maximum_children"]),
+         validated["maximum_children"], _exceeded_ceiling),
     )
-    for reason, total, limit in checks:
-        if total >= limit:
+    for reason, total, limit, exhausted in checks:
+        if exhausted(total, limit):
             return {"state": "checkpoint_required", "reason": reason}
     return {"state": "within_budget"}
 

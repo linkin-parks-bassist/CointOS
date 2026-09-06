@@ -59,6 +59,40 @@ def test_higher_priority_work_preempts_and_preserves_session():
         assert "higher-priority job task-user" in outcome["reason"]
 
 
+def test_first_admitted_attempt_runs_with_zero_child_quota():
+    with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
+        cli.initialize()
+        budget = {"run_seconds": 300, "task_seconds": 900,
+                  "maximum_attempts": 1, "maximum_output_bytes": 10_000_000,
+                  "maximum_evidence_items": 100, "maximum_children": 0}
+        running = {
+            "id": "task-first-attempt", "kind": "agent-task", "state": "running",
+            "role": "worker", "source": "local-cli", "attempts": 1,
+            "created_at": (datetime.now(timezone.utc)
+                           .replace(microsecond=0)).isoformat(),
+            "authority_profile": "worker", "remaining_budget": budget,
+        }
+        cli.atomic_json(cli.ROOT / "state/jobs/task-first-attempt.json", running)
+        output_path = cli.ROOT / "logs/runs/task-first-attempt.opencode.log"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        process = subprocess.Popen(
+            ["bash", "-c", "sleep 0.4"], start_new_session=True,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            outcome = _run_preemptibly(
+                process, ["bash", "-c", "sleep 0.4"], running, output_path,
+                lambda: None, scheduling_document(),
+            )
+        finally:
+            if process.poll() is None:
+                process.kill(); process.wait()
+        assert outcome["preempted"] is False
+        assert "budget_checkpoint" not in outcome
+        assert outcome["returncode"] == 0
+
+
 def test_abandoned_running_job_returns_to_model_routing():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         cli.initialize()
@@ -120,6 +154,7 @@ def test_context_rollover_preempts_at_seventy_five_percent():
 def load_tests(_loader, _tests, _pattern):
     return unittest.TestSuite([
         unittest.FunctionTestCase(test_higher_priority_work_preempts_and_preserves_session),
+        unittest.FunctionTestCase(test_first_admitted_attempt_runs_with_zero_child_quota),
         unittest.FunctionTestCase(test_abandoned_running_job_returns_to_model_routing),
         unittest.FunctionTestCase(test_context_rollover_preempts_at_seventy_five_percent),
     ])

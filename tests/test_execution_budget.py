@@ -16,6 +16,10 @@ BUDGET = {"run_seconds": 300, "task_seconds": 900,
           "maximum_attempts": 3, "maximum_output_bytes": 100,
           "maximum_evidence_items": 4, "maximum_children": 1}
 
+FIRST_ATTEMPT_BUDGET = {"run_seconds": 300, "task_seconds": 900,
+                        "maximum_attempts": 1, "maximum_output_bytes": 100,
+                        "maximum_evidence_items": 4, "maximum_children": 0}
+
 
 def test_output_limit_yields_partial_handoff():
     usage = {"run_started": 0.0, "task_started": 0.0, "attempts": 1,
@@ -23,6 +27,24 @@ def test_output_limit_yields_partial_handoff():
     result = budget_outcome(BUDGET, usage, 10.0)
     assert result == {"state": "checkpoint_required",
                       "reason": "maximum_output_bytes"}
+
+
+def test_admitted_first_attempt_with_zero_child_quota_stays_within_budget():
+    usage = {"run_started": 0.0, "task_started": 0.0, "attempts": 1,
+             "output_bytes": 0, "evidence_items": 0, "children": 0}
+    assert budget_outcome(FIRST_ATTEMPT_BUDGET, usage, 10.0) == {
+        "state": "within_budget"}
+
+
+def test_actual_attempt_and_child_overruns_still_require_checkpoint():
+    overrun = {"run_started": 0.0, "task_started": 0.0, "attempts": 2,
+               "output_bytes": 0, "evidence_items": 0, "children": 0}
+    assert budget_outcome(FIRST_ATTEMPT_BUDGET, overrun, 10.0) == {
+        "state": "checkpoint_required", "reason": "maximum_attempts"}
+    created_child = {"run_started": 0.0, "task_started": 0.0, "attempts": 1,
+                     "output_bytes": 0, "evidence_items": 0, "children": 1}
+    assert budget_outcome(FIRST_ATTEMPT_BUDGET, created_child, 10.0) == {
+        "state": "checkpoint_required", "reason": "maximum_children"}
 
 
 def test_missing_handoff_stays_checkpoint_required():
@@ -133,6 +155,8 @@ def test_escalation_terminates_then_kills():
 def load_tests(_loader, _tests, _pattern):
     return unittest.TestSuite((
         unittest.FunctionTestCase(test_output_limit_yields_partial_handoff),
+        unittest.FunctionTestCase(test_admitted_first_attempt_with_zero_child_quota_stays_within_budget),
+        unittest.FunctionTestCase(test_actual_attempt_and_child_overruns_still_require_checkpoint),
         unittest.FunctionTestCase(test_missing_handoff_stays_checkpoint_required),
         unittest.FunctionTestCase(test_verified_handoff_enters_partial_handoff_ready),
         unittest.FunctionTestCase(test_approval_wait_does_not_consume_task_seconds),
