@@ -30,3 +30,12 @@ decision contract instead of creating an independent validator. No arbitrary new
 schema fields or conversion semantics delegated to local judgment.
 First packet local-c1-decision-validator is pure and additive: no runtime route
 change, no C1-complete claim. Later packets remain subject to independent acceptance.
+49f6136 pending correction: 15 tests pass, but code/tests confused nonblank with
+nonempty; Astra independently found whitespace-only reply/task/role accepted.
+local-c1-nonblank fixes this existing contract, preserving original string content.
+Correction 60a6970 accepted in staging with 49f6136: Astra passed 16 focused tests
+and reviewed exact diff. No root source integration. Next local-c1-accept-claim
+stages schema2 accept and exclusive durable claim; existing legacy route tests
+will intentionally expose candidate cutover incompleteness. Report these honestly,
+do not weaken tests or deploy the staged branch. Completion/dispatch/link/conversion
+are separate next packets; C1 and full contact remain incomplete.
