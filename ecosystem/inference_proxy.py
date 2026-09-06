@@ -714,3 +714,143 @@ def _unregister_upstream(root: Path, lease_id: str, upstream) -> None:
         values.discard(upstream)
         if not values:
             _active_upstreams.pop(key, None)
+
+
+def _backend_json(base: str, path: str):
+    endpoint = validate_loopback_base(base)
+    if type(path) is not str or not path.startswith("/"):
+        raise ValueError("backend path must be an absolute path")
+    connection = http.client.HTTPConnection(endpoint["host"], endpoint["port"], timeout=1)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        if response.status != 200:
+            raise ValueError(f"backend status {response.status} is not 200")
+        payload = response.read(1048577)
+        if len(payload) > 1048576:
+            raise ValueError("backend response exceeds the bounded read")
+    finally:
+        connection.close()
+    try:
+        return json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("backend response is not valid JSON") from error
+
+
+def _backend_process_identity(pid) -> dict | None:
+    if type(pid) is not int or pid <= 0:
+        return None
+    try:
+        stat = (Path("/proc") / str(pid) / "stat").read_text(encoding="utf-8")
+        fields = stat.rsplit(")", 1)[1].split()
+        state = fields[0]
+        start_ticks = int(fields[19])
+    except (OSError, ValueError, IndexError):
+        return None
+    if state == "Z":
+        return None
+    try:
+        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not boot_id:
+        return None
+    return {"pid": pid, "process_start_ticks": start_ticks, "boot_id": boot_id}
+
+
+def backend_snapshot(gateway_base: str, model_id: str) -> dict | None:
+    """Capture one verified backend identity, or None when facts are absent."""
+    if type(model_id) is not str or not model_id:
+        return None
+    try:
+        health = _backend_json(gateway_base, "/api/v1/health")
+    except Exception:
+        return None
+    entries = health.get("all_models_loaded") if type(health) is dict else None
+    if type(entries) is not list:
+        return None
+    matches = [entry for entry in entries
+               if type(entry) is dict and entry.get("model_name") == model_id]
+    if len(matches) != 1:
+        return None
+    entry = matches[0]
+    if entry.get("loaded") is not True or entry.get("backend_alive") is not True:
+        return None
+    if type(entry.get("is_busy")) is not bool:
+        return None
+    pid = entry.get("pid")
+    if type(pid) is not int or pid <= 0:
+        return None
+    try:
+        validate_loopback_base(entry.get("backend_url"))
+    except ValueError:
+        return None
+    backend_base = entry["backend_url"]
+    first = _backend_process_identity(pid)
+    if first is None:
+        return None
+    try:
+        props = _backend_json(backend_base, "/props")
+    except Exception:
+        return None
+    second = _backend_process_identity(pid)
+    if second is None or second != first:
+        return None
+    total_slots = props.get("total_slots") if type(props) is dict else None
+    model_path = props.get("model_path") if type(props) is dict else None
+    if type(total_slots) is not int or total_slots <= 0:
+        return None
+    if type(model_path) is not str or not model_path:
+        return None
+    return {
+        "identity": {
+            "gateway_base": gateway_base,
+            "backend_base": backend_base,
+            "model_id": model_id,
+            "pid": pid,
+            "process_start_ticks": first["process_start_ticks"],
+            "boot_id": first["boot_id"],
+            "model_path": model_path,
+            "total_slots": total_slots,
+        },
+        "busy": entry["is_busy"],
+    }
+
+
+def observe_backend_idle(identity: dict) -> dict | None:
+    """Prove every recorded slot is idle without exposing slot contents."""
+    if type(identity) is not dict:
+        return None
+    gateway_base = identity.get("gateway_base")
+    model_id = identity.get("model_id")
+    if type(gateway_base) is not str or type(model_id) is not str:
+        return None
+    before = backend_snapshot(gateway_base, model_id)
+    if (before is None or before.get("identity") != identity
+            or before.get("busy") is not False):
+        return None
+    try:
+        slots = _backend_json(identity["backend_base"], "/slots")
+    except Exception:
+        return None
+    after = backend_snapshot(gateway_base, model_id)
+    if (after is None or after.get("identity") != identity
+            or after.get("busy") is not False):
+        return None
+    if type(slots) is not list or not slots:
+        return None
+    if len(slots) != identity["total_slots"]:
+        return None
+    seen = set()
+    normalized = []
+    for slot in slots:
+        if type(slot) is not dict:
+            return None
+        slot_id = slot.get("id")
+        if type(slot_id) is not int or slot_id < 0 or slot_id in seen:
+            return None
+        if slot.get("is_processing") is not False:
+            return None
+        seen.add(slot_id)
+        normalized.append({"id": slot_id, "is_processing": False})
+    return {"identity": dict(identity), "all_slots_idle": True, "slots": normalized}
