@@ -25,12 +25,14 @@ broader service activation is authorized by this record alone.
 
 ## Required successor: precise per-request physical-slot observation
 
-**Open follow-up R4-PRECISE; not optional cleanup or a completed R4 milestone.**
+**Open follow-up R4-PRECISE; not optional cleanup or already-completed work.**
 The next R4 integration owner must consult the tracked task in
 `docs/superpowers/plans/2026-09-06-backend-observation-repair.md` and report its
 state at bring-up/acceptance checkpoints. Keep it linked from `docs/status.md`
 until verified and integrated. Trigger implementation after conservative live
-bring-up, before claiming complete concurrent-backend release support.
+bring-up, before claiming complete concurrent-backend release support. This is
+NOT an additional gate on the conservative MVP David approved: its R4/MVP
+acceptance may proceed with the documented all-slots-idle limitation.
 
 1. Establish a backend-native request identifier and authoritative mapping from
    proxy claim to actual physical slot AND backend incarnation. Do not infer this

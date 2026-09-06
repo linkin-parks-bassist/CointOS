@@ -28,7 +28,8 @@ file and edit-cycle boundaries. Runtime evidence stays append-only and ignored.
 Trigger: after conservative live bring-up, before claiming complete concurrent
 backend release support. Owner: next R4 integration agent, coordinated by Astra
 or the current authorized coordinator. This is an explicit uncompleted deliverable,
-not a suggestion to future agents to audit everything.
+not a suggestion to future agents to audit everything and not an added gate on
+conservative MVP acceptance. Report the temporary limitation at that acceptance.
 
 - [ ] P1: Inspect the installed backend's native request/physical-slot lifecycle
   contract. Record a demonstrated claim -> request -> slot/incarnation mapping;
@@ -42,5 +43,5 @@ not a suggestion to future agents to audit everything.
   and update decision 0012 plus status with evidence/commits.
 
 Stopping condition: the specified packet is verified, or an honest partial
-handoff identifies the missing evidence/authority. Do not mark R4 complete while
-R4-PRECISE remains open.
+handoff identifies the missing evidence/authority. Conservative R4 acceptance
+must state its limitation; do not close R4-PRECISE on the strength of that proof.
