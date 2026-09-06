@@ -192,9 +192,13 @@ def new_attempt(job: dict) -> dict:
     generation = job.get("agent_generation")
     if not _positive_integer(generation):
         raise ValueError("new_attempt requires an A1 agent_generation")
+    attempts = job.get("attempts")
+    if not _non_negative_integer(attempts):
+        raise ValueError("new_attempt requires a non-negative integer attempts counter")
     return {
         "id": job["id"],
         "agent_generation": generation + 1,
+        "attempts": attempts + 1,
         "context_generation": 1,
         "context_state": "running",
         "logical_run_state": "active",

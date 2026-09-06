@@ -91,14 +91,36 @@ def test_process_restart_preserves_agent_generation():
 
 
 def test_new_attempt_increments_agent_generation():
-    terminal = dict(JOB, context_state="running",
-                    logical_run_state="terminal", state="checkpoint_required")
+    terminal = dict(JOB, attempts=1, context_state="running",
+                    logical_run_state="terminal", state="checkpoint_required",
+                    budget_usage={"task_seconds": 3, "output_bytes": 5})
     attempt = new_attempt(terminal)
     assert attempt["id"] == "task-one"
     assert attempt["agent_generation"] == 8
+    assert attempt["attempts"] == 2
     assert attempt["context_generation"] == 1
     assert attempt["context_state"] == "running"
     assert attempt["logical_run_state"] == "active"
+    merged = {**terminal, **attempt}
+    assert merged["budget_usage"] == {"task_seconds": 3, "output_bytes": 5}
+
+
+def test_new_attempt_requires_authoritative_attempts_counter():
+    base = dict(JOB, context_state="running",
+                logical_run_state="terminal", state="checkpoint_required")
+    for invalid in (None, True, -1, 1.0, "1"):
+        try:
+            new_attempt(dict(base, attempts=invalid))
+            raise AssertionError(f"attempts {invalid!r} must be rejected")
+        except ValueError:
+            pass
+    try:
+        new_attempt(base)
+        raise AssertionError("a missing attempts counter must be rejected")
+    except ValueError:
+        pass
+    first = new_attempt(dict(base, attempts=0))
+    assert first["attempts"] == 1
 
 
 def test_paused_for_resources_remains_addressable_without_lease():
@@ -178,6 +200,7 @@ def load_tests(_loader, _tests, _pattern):
         unittest.FunctionTestCase(test_model_switch_preserves_agent_generation),
         unittest.FunctionTestCase(test_process_restart_preserves_agent_generation),
         unittest.FunctionTestCase(test_new_attempt_increments_agent_generation),
+        unittest.FunctionTestCase(test_new_attempt_requires_authoritative_attempts_counter),
         unittest.FunctionTestCase(test_paused_for_resources_remains_addressable_without_lease),
         unittest.FunctionTestCase(test_missing_handoff_is_visible_and_continues),
         unittest.FunctionTestCase(test_context_overflow_is_never_terminal),
