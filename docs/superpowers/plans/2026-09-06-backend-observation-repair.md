@@ -16,8 +16,9 @@ file and edit-cycle boundaries. Runtime evidence stays append-only and ignored.
   under inference_proxy's ownership. Verify all-slot completeness, identity,
   busy/missing/unreadable data and sanitized evidence using synthetic responses.
   Integrated `b17c8fc` + `4776e15`; Astra independently passed 43 focused tests.
-- [ ] OBS-2A: Record identity before forwarding; retain a sticky unknown flag
-  for absent/changed identity. No release changes in this packet.
+- [x] OBS-2A: Record identity before forwarding; retain a sticky unknown flag
+  for absent/changed identity. Integrated `5e4f333`; Astra independently passed
+  83 observer/enforcement/executor tests. No release changes in this packet.
 - [ ] OBS-2B: Close admission and observe fresh
   backend absence only after the bound runner/claims end. Persist evidence before
   returning it; preserve `reconciled_absent` through R3 release. Reuse the existing

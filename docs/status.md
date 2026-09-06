@@ -6,9 +6,10 @@ hardening: track [implementation and precise-release tasks](superpowers/plans/20
 and [decision 0012](decisions/0012-temporary-conservative-backend-release.md).
 Future R4/bring-up agents must pick up that successor after conservative live
 bring-up and before claiming complete concurrent-backend release support.
-The read-only observation adapter is integrated at `b17c8fc`/`4776e15` (43
-independently passing focused tests); request recording and close-time release
-wiring remain in progress. See [observer checkpoint](../agent_notes/0015-backend-observation.md).
+The observation adapter and pre-forward identity recording are integrated at
+`b17c8fc`/`4776e15`/`5e4f333` (83 independently passing observer/enforcement/executor
+tests). OBS-2B close-time release wiring is running locally; the live proxy has
+not been restarted. See [observer checkpoint](../agent_notes/0015-backend-observation.md).
 
 Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
@@ -25,9 +26,9 @@ before broad hardening. The overnight task labels do not establish integrated/li
 David authorized operator reconciliation of the prior-boot emergency and restored
 local dispatch. The prior resource state is preserved in the ignored build
 ledger; a validated scheduling snapshot is published and the transient
-`cointos-mvp-proxy.service` runs the admitted endpoint. All dispatched repair workers have exited;
+`cointos-mvp-proxy.service` runs the admitted endpoint. Earlier repair workers exited;
 their process/backend absence was independently observed and their leases reconciled.
-No local build worker remains active at this checkpoint. Backend
+Current worker progress is recorded above and in the ignored dispatch ledger. Backend
 normal-close observation and the production model-metadata adapter remain
 integration gaps. This checkpoint does not assert working autonomous dispatch or
 end-to-end Coin contact. The earlier implementation observations below are history.

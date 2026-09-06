@@ -14,11 +14,16 @@ Astra independently passed 43 focused tests and reviewed both diffs. The initial
 worker needed a correction for dead process state X and function-based assertions;
 the correction demonstrated the X regression red before going green.
 
-Remaining: OBS-2A records the actual backend identity before forwarding and
-retains uncertainty for the entire credential; OBS-2B performs fresh close-time
+OBS-2A is integrated: local `c712ca8` -> `5e4f333`. Actual backend identity is
+recorded before forwarding, with sticky credential uncertainty. Astra independently
+passed 83 observer/enforcement/executor tests. Qwen repaired the EOF test's
+unhashable fake upstream, which previously crashed before POST; it now verifies
+recording before the real forwarding path while still forbidding EOF-only proof.
+
+Remaining: OBS-2B performs fresh close-time
 observation/persistence and preserves reconciled_absent through R3. OBS-3 is
 combined verification and controlled live activation, not implied by commits.
-The two exact local packets are retained under ignored .superpowers/sdd/
+The exact local packets are retained under ignored .superpowers/sdd/
 2026-09-05-cointos-mvp-index/. The implementation worktree is
 /home/david/.worktrees/cointos-mvp-backend-observation; nested AGENTS are temporary
 coordinator-owned steering, excluded from worker commits.
