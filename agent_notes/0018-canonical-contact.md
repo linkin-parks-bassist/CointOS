@@ -52,3 +52,20 @@ A1 enqueue owner retains workspace/authority admission; later dispatch compositi
 must use it and never infer permissions from model role. Plan's old example lacks
 the now-required requirements field; use current A1 fixture/validator, not a weaker
 local substitute. No source changes cherry-picked to runtime root.
+48150a9 accepted in staging: Astra independently passed 21 canonical tests and
+reviewed exact intent/key/copy/no-write replay contract. Next local-c1-dispatch-once
+composes with existing A1 enqueue and requires a real temporary-filesystem test of
+job-created / turn-finalization-failed replay. Intent durability alone is not yet
+one-job composition proof; no executable contact acceptance claimed.
+cc52633 accepted in staging: Astra independently passed 33 focused tests including
+REAL A1 job creation followed by injected final turn-write failure, then replay to
+same job with exactly one job file. Conflicting concurrent finalization is refused;
+enqueue occurs outside turn lock using durable facts. No rollback deletes a job.
+
+Next local-c1-reply-link is only publication linkage. Per C3's separate semantic
+identities and its decision-only inbox acknowledgement, top reply_state describes
+the substantive decision, not an aggregate over task results. reply_links keeps
+decision/task_result ids and publication timestamps; a later task result must not
+regress an already-delivered or unknown decision. Gateway/outbox delivery records
+remain the authority. link_reply does not send or append conversation history;
+those owners compose in C3. Canonical ids are telegram-N:decision/:task_result.
