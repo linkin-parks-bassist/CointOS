@@ -286,3 +286,12 @@ ordinary, then notice arbitration; failed ordinary send does not renew heartbeat
 later tick projects unknown without repeating either transport. Normal worker
 close/release observed. Revised message lifecycle remains unimplemented; this is
 not full C3/contact acceptance.
+Astra's fresh full staging verification at7b61886: discovery ran662 tests in34.6s,
+9 failures+1 error. Independent 13-test legacy rerun identifies all ten affected
+cases in test_control_turns (9) and test_notifier (1), matching the existing old
+front/deep route closure gap. Preserve their meaningful identity/replay/authority
+requirements when rewriting callers; do not skip tests. Separate integration
+discovery passed33 tests in108.3s. Root runtime source remains unchanged.
+local-c3-lifecycle-impact is a bounded READ-ONLY source/interface map for David's
+new lifecycle, not implementation of unapproved details. Exact escalation meaning
+and final amendment remain under discussion; no semantic writer is running.
