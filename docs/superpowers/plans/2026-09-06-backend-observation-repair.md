@@ -19,13 +19,20 @@ file and edit-cycle boundaries. Runtime evidence stays append-only and ignored.
 - [x] OBS-2A: Record identity before forwarding; retain a sticky unknown flag
   for absent/changed identity. Integrated `5e4f333`; Astra independently passed
   83 observer/enforcement/executor tests. No release changes in this packet.
-- [ ] OBS-2B: Close admission and observe fresh
+- [x] OBS-2B: Close admission and observe fresh
   backend absence only after the bound runner/claims end. Persist evidence before
   returning it; preserve `reconciled_absent` through R3 release. Reuse the existing
-  enforcement fixture; retain false-EOF/forged-proof regressions.
-- [ ] OBS-3: Independently review/run combined tests, integrate reviewed commits,
-  then perform controlled live activation/smoke under the existing approval and
-  admission boundaries. A committed patch is not live acceptance.
+  enforcement fixture; retain false-EOF/forged-proof regressions. Integrated
+  `f4fc438`; reviewed by Astra, including evidence ordering and real-R3 probe.
+- [x] OBS-3 code acceptance: independently review and integrate reviewed commits.
+  Astra passed 553 discovered tests plus 33 separately invoked integration tests
+  on the integrated tree (586 total). Synthetic fresh proof -> real R3 release
+  -> proxy revocation also passed without mocking R3.
+- [ ] OBS-3 live acceptance: controlled activation/smoke under the approval and
+  admission boundaries. Await explicit approval to restart the existing transient
+  proxy with reviewed bytes and perform one bounded admitted smoke. No new service,
+  Telegram access, credentials, backend unload or broader activation implied.
+  A committed patch is not live acceptance.
 
 ## R4-PRECISE — REQUIRED, OPEN
 

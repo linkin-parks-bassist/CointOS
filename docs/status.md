@@ -6,10 +6,12 @@ hardening: track [implementation and precise-release tasks](superpowers/plans/20
 and [decision 0012](decisions/0012-temporary-conservative-backend-release.md).
 Future R4/bring-up agents must pick up that successor after conservative live
 bring-up and before claiming complete concurrent-backend release support.
-The observation adapter and pre-forward identity recording are integrated at
-`b17c8fc`/`4776e15`/`5e4f333` (83 independently passing observer/enforcement/executor
-tests). OBS-2B close-time release wiring is running locally; the live proxy has
-not been restarted. See [observer checkpoint](../agent_notes/0015-backend-observation.md).
+The adapter, pre-forward identity recording and close-time release wiring are
+integrated at `b17c8fc`/`4776e15`/`5e4f333`/`f4fc438`. Astra independently passed
+586 tests (553 discovered + 33 integration) and a synthetic real-R3 release probe.
+No worker remains active; the last lease was independently reconciled. The live
+proxy has not been restarted: OBS-3 live acceptance awaits approval for that
+restart and one bounded admitted smoke. See [observer checkpoint](../agent_notes/0015-backend-observation.md).
 
 Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
@@ -29,8 +31,8 @@ ledger; a validated scheduling snapshot is published and the transient
 `cointos-mvp-proxy.service` runs the admitted endpoint. Earlier repair workers exited;
 their process/backend absence was independently observed and their leases reconciled.
 Current worker progress is recorded above and in the ignored dispatch ledger. Backend
-normal-close observation and the production model-metadata adapter remain
-integration gaps. This checkpoint does not assert working autonomous dispatch or
+normal-close observation awaits live acceptance; the production model-metadata
+adapter remains an implementation gap. This checkpoint does not assert working autonomous dispatch or
 end-to-end Coin contact. The earlier implementation observations below are history.
 
 Implementation update, 2026-09-05 (Astra): David approved the [complete MVP bring-up
