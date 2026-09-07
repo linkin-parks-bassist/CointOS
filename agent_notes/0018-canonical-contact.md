@@ -2,6 +2,13 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Active planning after explicit approval: local-c1-lifecycle-plan (Sieve/Qwen) owns
+only docs/superpowers/plans/2026-09-07-message-lifecycle.md in contact staging.
+Sol owns separate front-admission plan, now under correction after Astra's full
+review: generation/semantic dedup fence, crash-intent phases, truthful post-inference
+failure, secret-safe errors and honest executable test fixtures. Neither plan is
+accepted for code dispatch yet. Root/runtime and legacy migration remain untouched.
+
 David requested three message stages: new (entry decision pending), open (deeper
 response pending, potentially indefinitely), and closed. Entry outcomes must
 support respond, escalate, respond+escalate, and ignore. Metadata must allow links
