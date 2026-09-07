@@ -2,6 +2,13 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+David corrected planning ownership: Qwen should receive already-elaborated subplans,
+not broad planning assignments. Astra owns concrete contracts, task decomposition
+and acceptance criteria; genuine design forks go to David. Do not dispatch the
+remaining front/lifecycle planning refinement to Qwen. The current pure-validator
+packet already follows this division. Astra acknowledged the broad-plan dispatch
+was an oversight mistake, not a reason to blame the worker for missing guidance.
+
 local-c1-lifecycle-plan finished normally; Astra read full420-line output and
 REJECTED it for proof-free lifecycle transitions, unsafe unisolated example test,
 unproven failure handling, reversed claim/context ordering and unauthorized Sol
