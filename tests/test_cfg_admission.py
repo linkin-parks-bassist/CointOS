@@ -13,9 +13,9 @@ from test_inference_capacity import (
     route,
 )
 
+from ecosystem import models
 from ecosystem.inference_capacity import (
     _load_capacity_policy,
-    realize_context_tokens,
     release_sequence,
     reserve_sequence,
 )
@@ -375,6 +375,10 @@ def test_idempotent_replay_returns_existing_lease():
         assert first["state"] == "starting"
         assert replay["lease_id"] == first["lease_id"]
         assert replay["state"] == "starting"
+        assert replay["context_mode"] == "fixed"
+        assert replay["backend_context_tokens"] == 65_536
+        assert replay["parallel_sequences"] == 2
+        assert "shared_context_accounting" not in replay
         assert set(durable_leases(root)) == {first["lease_id"]}
 
 
@@ -397,20 +401,123 @@ def test_released_slot_can_be_reused_by_new_request():
         assert second["backend_sequence"] == 1
 
 
-def test_shared_realization_is_rejected_despite_fixed_product_equality():
-    shared = {**route(), "context_mode": "shared"}
-    with unittest.TestCase().assertRaisesRegex(ValueError, "not fixed"):
-        realize_context_tokens(shared, 2)
-    unknown = {**route(), "context_mode": "batched"}
-    with unittest.TestCase().assertRaisesRegex(ValueError, "not fixed"):
-        realize_context_tokens(unknown, 2)
-    fixed = {**route(), "context_mode": "fixed"}
-    assert realize_context_tokens(fixed, 2) == {
-        "context_tokens": 32_768, "ctx_size": 65_536,
+def shared_inventory():
+    """Freshly observed shared resident pool: 262144 total over 8 sequences."""
+    base = inventory()
+    model = {
+        **base["models"][0],
+        "context": 262_144,
+        "supported_context_quantum": 262_144,
+        "parallel_sequences": 8,
+        "context_mode": "shared",
+        "context_tokens_per_sequence": 262_144,
+        "loaded_context": 262_144,
+        "preallocated_context_tokens": 262_144,
+        "residency_verified": True,
+        "provenance": (
+            "https://127.0.0.1:13307/v1/models/"
+            "Qwen3.8-27B-GGUF-observed-allocation-only"
+        ),
     }
-    assert realize_context_tokens(route(), 2) == {
-        "context_tokens": 32_768, "ctx_size": 65_536,
-    }
+    envelope = {**base["resource_envelope"],
+                "maximum_context_tokens": 262_144}
+    return {**base, "models": [model], "resource_envelope": envelope}
+
+
+def shared_worker_state(count):
+    state = work_worker_state(count)
+    for lease in state["leases"].values():
+        lease["request"]["context_tokens"] = 262_144
+    return state
+
+
+def shared_request(request_id, worker_index):
+    request = work_request(request_id, worker_index)
+    admitted = [
+        item for item in models.safe_routes(
+            shared_inventory(), resource_policy(), request,
+        ) if item.get("state") == "admitted"
+    ]
+    assert len(admitted) == 1
+    request["route"] = admitted[0]
+    return request
+
+
+def test_freshly_normalized_shared_lease_persists_pool_fields():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_cfg_root(
+            root, GLOBAL_8_1_CFG, worker_state=shared_worker_state(1),
+        )
+        lease = reserve_sequence(
+            root, shared_request("request-one", 1), shared_inventory(),
+            lambda: 10.0,
+        )
+        assert lease["state"] == "starting"
+        assert lease["backend_sequence"] == 1
+        assert lease["context_tokens"] == 262_144
+        assert lease["context_mode"] == "shared"
+        assert lease["backend_context_tokens"] == 262_144
+        assert lease["parallel_sequences"] == 8
+        assert lease["shared_context_accounting"] == \
+            "backend_enforced_pending_precise_claims"
+        evidence = lease["request"]["route"]
+        assert evidence["context_mode"] == "shared"
+        assert evidence["backend_context_tokens"] == 262_144
+        assert evidence["parallel_sequences"] == 8
+        released = release_sequence(
+            root, lease["lease_id"], ended_observation(lease, 20.0),
+            lambda: 20.0,
+        )
+    assert released["state"] == "released"
+    assert released["context_mode"] == "shared"
+    assert released["backend_context_tokens"] == 262_144
+    assert released["parallel_sequences"] == 8
+    assert released["shared_context_accounting"] == \
+        "backend_enforced_pending_precise_claims"
+
+
+def test_forged_shared_route_defers_over_fresh_fixed_facts():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_cfg_root(root, GLOBAL_8_1_CFG, workers=1)
+        forged = work_request("request-one", 1)
+        forged["route"] = {
+            **route(),
+            "context_mode": "shared",
+            "context_tokens_per_sequence": 262_144,
+            "backend_context_tokens": 262_144,
+            "parallel_sequences": 8,
+        }
+        result = reserve_sequence(
+            root, forged, inventory(), lambda: 10.0,
+        )
+    assert result["state"] == "deferred"
+    assert "route_changed:context_mode" in result["reasons"]
+    assert "route_changed:backend_context_tokens" in result["reasons"]
+    assert "route_changed:parallel_sequences" in result["reasons"]
+    assert "route_changed:context_tokens_per_sequence" in result["reasons"]
+    assert "shared_context_accounting" not in result
+
+
+def test_shared_idempotent_replay_returns_identical_lease():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_cfg_root(
+            root, GLOBAL_8_1_CFG, worker_state=shared_worker_state(1),
+        )
+        request = shared_request("request-one", 1)
+        first = reserve_sequence(
+            root, request, shared_inventory(), lambda: 10.0,
+        )
+        replay = reserve_sequence(
+            root, request, shared_inventory(), lambda: 11.0,
+        )
+        assert first["state"] == "starting"
+        assert replay == first
+        assert replay["shared_context_accounting"] == \
+            "backend_enforced_pending_precise_claims"
+        assert set(durable_leases(root)) == {first["lease_id"]}
 
 
 def load_tests(_loader, _tests, _pattern):

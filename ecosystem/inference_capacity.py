@@ -221,19 +221,28 @@ def realize_context_tokens(route: dict, parallel_sequences: int) -> dict:
     if type(route) is not dict or route.get("state") != "admitted":
         raise ValueError("route is not admitted")
     mode = route.get("context_mode")
-    if mode is not None and mode != "fixed":
-        raise ValueError(
-            f"route context mode {mode!r} is not fixed; shared realization "
-            "is not activated",
-        )
+    if mode is None:
+        mode = "fixed"
+    if mode not in ("fixed", "shared"):
+        raise ValueError(f"route context mode {mode!r} is not fixed or shared")
     parallel = _positive_integer(parallel_sequences)
     context = _positive_integer(route.get("context_tokens_per_sequence"))
     recorded_parallel = _positive_integer(route.get("parallel_sequences"))
     backend_total = _positive_integer(route.get("backend_context_tokens"))
     if (parallel is None or context is None or recorded_parallel != parallel
-            or backend_total != context * parallel):
+            or backend_total is None):
         raise ValueError("route has inconsistent context totals")
-    return {"context_tokens": context, "ctx_size": backend_total}
+    if mode == "shared":
+        if context > backend_total:
+            raise ValueError(
+                "shared route per-sequence context exceeds the backend pool",
+            )
+        return {"context_tokens": context, "ctx_size": backend_total,
+                "context_mode": "shared"}
+    if backend_total != context * parallel:
+        raise ValueError("route has inconsistent context totals")
+    return {"context_tokens": context, "ctx_size": backend_total,
+            "context_mode": "fixed"}
 
 
 def reserve_sequence(
@@ -355,6 +364,9 @@ def reserve_sequence(
             "proxy_identity": validated["proxy_identity"],
             "model_id": validated["route"]["model_id"],
             "context_tokens": realized["context_tokens"],
+            "context_mode": normalized_route["context_mode"],
+            "backend_context_tokens": normalized_route["backend_context_tokens"],
+            "parallel_sequences": normalized_route["parallel_sequences"],
             "max_output_tokens": validated["route"]["max_output_tokens"],
             "backend_sequence": sequence,
             "expires_monotonic": now + capacity_policy["lease_seconds"],
@@ -370,6 +382,10 @@ def reserve_sequence(
         }
         if preempted is not None:
             lease["preempts_lease_id"] = preempted
+        if normalized_route["context_mode"] == "shared":
+            lease["shared_context_accounting"] = (
+                "backend_enforced_pending_precise_claims"
+            )
         proposed_active = [item for item in active if item["lease_id"] != preempted]
         proposed_active.append(lease)
         envelope = resource_envelope(

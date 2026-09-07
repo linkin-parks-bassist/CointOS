@@ -383,6 +383,53 @@ def test_realized_context_maps_per_sequence_to_backend_total():
         realize_context_tokens(inconsistent, 2)
 
 
+def test_shared_realization_maps_pool_total_without_product():
+    shared = {
+        **route(),
+        "context_mode": "shared",
+        "context_tokens_per_sequence": 262_144,
+        "backend_context_tokens": 262_144,
+        "parallel_sequences": 8,
+    }
+    assert realize_context_tokens(shared, 8) == {
+        "context_tokens": 262_144,
+        "ctx_size": 262_144,
+        "context_mode": "shared",
+    }
+
+
+def test_fixed_realization_still_requires_exact_product():
+    fixed = {**route(), "context_mode": "fixed"}
+    assert realize_context_tokens(fixed, 2) == {
+        "context_tokens": 32_768,
+        "ctx_size": 65_536,
+        "context_mode": "fixed",
+    }
+    assert realize_context_tokens(route(), 2) == {
+        "context_tokens": 32_768,
+        "ctx_size": 65_536,
+        "context_mode": "fixed",
+    }
+
+
+def test_shared_realization_rejects_per_sequence_above_pool():
+    oversized = {
+        **route(),
+        "context_mode": "shared",
+        "context_tokens_per_sequence": 262_144,
+        "backend_context_tokens": 131_072,
+        "parallel_sequences": 8,
+    }
+    with unittest.TestCase().assertRaisesRegex(ValueError, "shared route"):
+        realize_context_tokens(oversized, 8)
+
+
+def test_unknown_context_mode_is_rejected():
+    unknown = {**route(), "context_mode": "batched"}
+    with unittest.TestCase().assertRaisesRegex(ValueError, "context mode"):
+        realize_context_tokens(unknown, 2)
+
+
 def test_front_proxy_cannot_be_claimed_by_survivor_or_work():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
