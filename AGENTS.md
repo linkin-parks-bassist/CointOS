@@ -12,16 +12,21 @@ does not authorize mixing personal, Avnet, AMD, partner, or customer information
   Closing the viewer must not stop the worker. Do not restart a running worker to
   add viewing, expose a LAN/public listener, or replace gated inference with a
   permanent credential-bearing server. See `docs/operations/local-worker-view.md`.
-  On David's graphical desktop, automatically open a new GNOME Terminal window
+  During an active driver-user session, automatically open a GNOME Terminal viewer
   attached to the exact new session; pass arguments directly, not via shell text.
-  Headless runs still publish the attach command. A viewer failure must not cancel
+  Explicit AFK/overnight mode suppresses automatic windows and focus changes while
+  retaining the same attachable sessions and JSONL evidence. A graphical display's
+  presence is not proof David is actively driving. A viewer failure must not cancel
   or restart the admitted worker.
 - This observable spawn path is canonical for local model agents, not an optional
-  debugging mode. Every new local agent must have its own visible oversight window
-  and exact session context. Do not use an alternative silent background runner.
-  If no graphical viewer can be opened, obtain David's explicit exception before
-  starting the agent; a printed log path alone is not equivalent. A viewer closing
-  or failing after launch is not permission to kill/restart its worker.
+  debugging mode. In driver mode, each active local agent must have a visible
+  oversight window and exact session context. AFK mode is the explicit exception
+  to window creation, not to observability or admission. Do not substitute an
+  unobservable background runner. If driver-mode viewing is unavailable, obtain
+  David's exception before dispatch. A viewer closing or failing after launch is
+  not permission to kill/restart its worker. Reuse may target only positively
+  identified agent-monitor windows, never David's unrelated terminal sessions;
+  do not accumulate a new dead window for every completed AFK run.
 - Read `docs/status.md`, relevant project notes, and decisions before changing behavior.
 - Record consequential design changes in `docs/decisions/`.
 - Never enable remote access, access credentials, program hardware, push code, or

@@ -20,11 +20,16 @@ Normal capacity release still requires existing independent backend-close eviden
 
 The private view record and a `worker_view_ready` JSONL event contain the exact
 `opencode attach ... --session ...` command. Paste that command into a terminal.
-On a graphical desktop the launcher now also requests a new GNOME Terminal window
+The current launcher implementation requests a new GNOME Terminal window
 automatically, passing the complete session ID as an argument. The viewer has no
 inherited config descriptor and is detached from the worker's process group.
-Headless launches technically retain the command for manual viewing, but David's
-canonical-spawn policy requires an explicit exception before such a dispatch.
+David subsequently clarified the policy: auto-open only during an active driver
+session; explicit AFK/overnight mode suppresses windows and focus changes, retaining
+attachability/logs. DISPLAY/WAYLAND_DISPLAY alone cannot establish driver presence.
+The existing display-only hook needs an explicit driver/AFK mode input before AFK
+dispatches; this policy amendment does not claim that hook is already implemented.
+Headless launches retain the command for manual viewing. During driver mode,
+unavailable viewing requires an explicit exception before dispatch.
 Failure to open a window
 does not interrupt work. No duplicate window is added to a run already in progress.
 The native UI is interactive, NOT a read-only security boundary: viewing needs no
@@ -66,6 +71,25 @@ syntax checked only for this small hook, no additional broad test run.
 Automatic desktop checkpoint: local-c1-publish-entry-reply launched its viewer
 as a child of the existing GNOME Terminal server, with the complete session ID
 ses_f8500f87effe90hWV24gHCaLlI. This is now the canonical local-agent spawn policy
-in AGENTS.md, as David requested. Each new agent gets its own oversight window;
-no silent alternate launch without an explicit exception. The current helper's
-headless capability is not blanket permission to use it unattended.
+in AGENTS.md, as David requested. This checkpoint is subject to the later driver/
+AFK distinction above; it does not mandate spawning windows while David is AFK.
+
+## Possible small follow-up: reusable monitor slots
+
+David asks about identifying monitor windows from creation and reusing a completed
+agent's window for the next agent, optionally focusing/centering it. Feasibility
+direction only, not an implemented or approved detailed design:
+
+- A dedicated monitor process owns its terminal from inception, with a stable
+  monitor-slot identity and explicit current worker/session association.
+- It attaches to one live worker, retains a useful ended-state display after that
+  worker closes, then attaches to the next assigned session in the same terminal.
+- Concurrent active workers need distinct slots; do not replace a live worker's
+  view or hijack unrelated terminals. View lifetime and inference lifetime remain
+  separate. AFK launches neither create slots nor raise existing windows.
+- Reuse is feasible without a window-manager subsystem. GNOME Terminal provides
+  a role tag, but does not offer a simple CLI command to replace the command in
+  an arbitrary existing window; retaining a dedicated monitor owner avoids that.
+- This desktop runs GNOME Wayland. Guaranteed external focusing/centering is a
+  separate compositor-controlled concern; keep it best-effort or omit it rather
+  than installing extensions or switching display systems just for this feature.
