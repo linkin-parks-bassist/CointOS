@@ -543,7 +543,8 @@ def _lease_allocation_bytes(lease: dict, policy: dict) -> int | None:
     route = lease.get("route", lease.get("request", {}).get("route", {}))
     if type(route) is not dict:
         return None
-    kv_bytes = _nonnegative_integer(route.get("kv_estimate_bytes"))
+    kv_bytes = _nonnegative_integer(route.get("incremental_kv_bytes",
+                                             route.get("kv_estimate_bytes")))
     token_bytes = _positive_integer(policy.get("non_kv_bytes_per_token", 4))
     token_fields = ("prompt_tokens", "tool_tokens", "max_output_tokens", "handoff_tokens")
     tokens = [_nonnegative_integer(route.get(field)) for field in token_fields]

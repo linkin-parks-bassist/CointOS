@@ -408,6 +408,7 @@ def test_snapshot_verified_resident_capacity_from_measured_backend():
         "capabilities": ["tool-calling"], "context": 131_072,
         "supported_context_quantum": 32_768, "parallel_sequences": 2,
         "loaded": True, "loaded_context": 65_536, "busy": False,
+        "preallocated_context_tokens": 65_536,
         "pinned": False, "recipe": "llamacpp",
         "metadata_verified": True, "residency_verified": True,
         "fresh": True, "stale": False, "observed_at": 1000.0,

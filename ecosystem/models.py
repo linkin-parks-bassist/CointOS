@@ -301,6 +301,17 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
         f"{root}/v1/models;{root}/props;"
         "lemonade:/api/v1/health;observed-allocation-only"
     )
+    # Explicit fixed-partition llama.cpp allocation is already in host/GTT usage.
+    # Shared/dynamic pools need their own accounting contract, not this credit.
+    fixed = record.get("recipe") == "llamacpp" and meta.get("n_ctx") == ctx_size // total_slots
+    for flag, expected in (("--parallel", total_slots), ("--ctx-size", ctx_size)):
+        fixed = fixed and launch_command.count(flag) == 1
+        if fixed:
+            index = launch_command.index(flag) + 1
+            fixed = index < len(launch_command) and launch_command[index] == str(expected)
+    if fixed and not any(argument in ("--kv-unified", "-kvu", "--kv-unified-per-slot")
+                         for argument in launch_command):
+        result["preallocated_context_tokens"] = ctx_size
     registry_context = item.get("context_length")
     if registry_context is not None:
         result["registry_context_length"] = registry_context
@@ -670,8 +681,11 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     envelope = inventory.get("resource_envelope", {})
     maximum_model_bytes = envelope.get("maximum_model_bytes")
     maximum_backend_context = envelope.get("maximum_context_tokens")
+    resident_verified = (model.get("loaded") is True
+                         and model.get("residency_verified") is True)
     if not _positive_integer(maximum_model_bytes) or (
-            _positive_integer(model_bytes) and model_bytes > maximum_model_bytes):
+            not resident_verified and _positive_integer(model_bytes)
+            and model_bytes > maximum_model_bytes):
         reasons.append("model_bytes")
     if not _positive_integer(maximum_backend_context):
         reasons.append("resource_envelope:maximum_context_tokens")
@@ -717,9 +731,14 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         reasons.append("estimated_kv_bytes_per_token")
         kv_bytes_per_token = 0
     kv_estimate = backend_context * kv_bytes_per_token
+    preallocated = model.get("preallocated_context_tokens")
+    pool_resident = (resident_verified and _positive_integer(preallocated)
+                     and preallocated == model.get("loaded_context")
+                     and 0 < backend_context <= preallocated)
+    incremental_kv = 0 if pool_resident else kv_estimate
     maximum_kv_bytes = envelope.get("maximum_kv_bytes")
     if maximum_kv_bytes is not None and (
-            not _positive_integer(maximum_kv_bytes) or kv_estimate > maximum_kv_bytes):
+            not _positive_integer(maximum_kv_bytes) or incremental_kv > maximum_kv_bytes):
         reasons.append("kv_estimate_bytes")
 
     protected_host = _policy_value(policy, "protected_host_bytes", 0)
@@ -738,7 +757,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         host_available = envelope.get("available_host_bytes")
         if host_available is not None and (
                 not _positive_integer(host_available)
-                or protected_host + coin_reserved + load_demand + kv_estimate > host_available):
+                or protected_host + coin_reserved + load_demand + incremental_kv > host_available):
             reasons.append("host_capacity")
         gtt_used = envelope.get("gtt_used_bytes")
         envelope_gtt_limit = envelope.get("gtt_limit_bytes")
@@ -747,7 +766,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         if gtt_used is not None or gtt_limit is not None:
             if (not isinstance(gtt_used, int) or isinstance(gtt_used, bool) or gtt_used < 0
                     or not _positive_integer(gtt_limit)
-                    or gtt_used + load_demand + kv_estimate > gtt_limit):
+                    or gtt_used + load_demand + incremental_kv > gtt_limit):
                 reasons.append("gtt_capacity")
 
     return {
@@ -762,6 +781,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         "context_exclusion_reasons": context_exclusion_reasons,
         **reserves,
         "kv_estimate_bytes": kv_estimate,
+        "incremental_kv_bytes": incremental_kv,
         "load_transient_bytes": load_transient,
         "protected_host_bytes": protected_host,
         "coin_reserved_bytes": coin_reserved,
