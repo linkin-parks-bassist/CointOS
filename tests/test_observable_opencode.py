@@ -13,6 +13,7 @@ import urllib.request
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'scripts/opencode_observable.py'
+sys.path.insert(0, str(SCRIPT.parent))
 OPENCODE = Path('/home/david/.local/bin/opencode')
 
 
@@ -28,7 +29,7 @@ def test_real_server_session_viewer_disconnect_and_cleanup_without_inference():
         for key in list(env):
             if key.startswith('OPENCODE_'):
                 del env[key]
-        env.update(XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
+        env.update(COINTOS_VIEW_MODE='afk', XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
                    XDG_CACHE_HOME=str(root/'cache'), XDG_STATE_HOME=str(root/'state'),
                    OPENCODE_DISABLE_PROJECT_CONFIG='true')
         fd = os.memfd_create('view-test', 0)
@@ -94,7 +95,7 @@ def test_supervisor_forwards_client_exit_and_reaps_server():
         root = Path(temporary)
         env = {key: value for key, value in os.environ.items()
                if not key.startswith('OPENCODE_')}
-        env.update(XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
+        env.update(COINTOS_VIEW_MODE='afk', XDG_CONFIG_HOME=str(root/'config'), XDG_DATA_HOME=str(root/'data'),
                    XDG_CACHE_HOME=str(root/'cache'), XDG_STATE_HOME=str(root/'state'),
                    OPENCODE_DISABLE_PROJECT_CONFIG='true',
                    OPENCODE_CONFIG_CONTENT='{"enabled_providers":[],"plugin":[],"permission":"deny"}')

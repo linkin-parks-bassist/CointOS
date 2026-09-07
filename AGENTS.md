@@ -18,6 +18,10 @@ does not authorize mixing personal, Avnet, AMD, partner, or customer information
   retaining the same attachable sessions and JSONL evidence. A graphical display's
   presence is not proof David is actively driving. A viewer failure must not cancel
   or restart the admitted worker.
+  Set `COINTOS_VIEW_MODE=afk` on launches when David explicitly goes AFK; use
+  `driver` (the default) only for an active driver session. The canonical launcher
+  assigns distinct tracked monitor slots to concurrent workers and reuses idle
+  slots. Do not launch extra ad-hoc viewer windows or attempt to adopt old ones.
 - This observable spawn path is canonical for local model agents, not an optional
   debugging mode. In driver mode, each active local agent must have a visible
   oversight window and exact session context. AFK mode is the explicit exception

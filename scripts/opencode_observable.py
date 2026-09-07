@@ -16,6 +16,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from worker_monitors import identity, show
 
 
 def stop_child(process):
@@ -88,6 +89,9 @@ def main():
     parser.add_argument('--view-record', required=True, type=Path)
     parser.add_argument('command', nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    view_mode = os.environ.get('COINTOS_VIEW_MODE', 'driver')
+    if view_mode not in ('driver', 'afk'):
+        parser.error('COINTOS_VIEW_MODE must be driver or afk')
     command = args.command[1:] if args.command[:1] == ['--'] else args.command
     if len(command) < 2 or command[1] != 'run' or '--attach' in command:
         parser.error('expected an unattached opencode run command after --')
@@ -116,18 +120,17 @@ def main():
         client_env.pop('OPENCODE_CONFIG', None)
         client_env.pop('OPENCODE_CONFIG_CONTENT', None)
         client = subprocess.Popen(command+['--attach', url], cwd=directory, env=client_env)
-        if client_env.get('DISPLAY') or client_env.get('WAYLAND_DISPLAY'):
-            try:
-                subprocess.Popen(
-                    ['gnome-terminal', '--window', '--title', title, '--',
-                     command[0], 'attach', url, '--pure', '--dir', str(directory),
-                     '--session', session], env=client_env,
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
-            except OSError:
-                print(json.dumps({'type': 'worker_view_window_unavailable',
-                                  'attach_command': record['attach_command']}),
-                      file=sys.stderr, flush=True)
+        try:
+            monitor_id = show(Path(__file__).resolve().parents[1]/'state/worker-monitors',
+                {**record, 'view_record': str(args.view_record.resolve()),
+                 'server': identity(server.pid), 'opencode': command[0], 'title': title},
+                view_mode, client_env)
+            print(json.dumps({'type': 'worker_monitor', 'monitor_id': monitor_id,
+                              'mode': view_mode}), file=sys.stderr, flush=True)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            print(json.dumps({'type': 'worker_view_window_unavailable',
+                              'attach_command': record['attach_command']}),
+                  file=sys.stderr, flush=True)
         return client.wait()
     finally:
         if client is not None:

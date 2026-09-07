@@ -20,14 +20,14 @@ Normal capacity release still requires existing independent backend-close eviden
 
 The private view record and a `worker_view_ready` JSONL event contain the exact
 `opencode attach ... --session ...` command. Paste that command into a terminal.
-The current launcher implementation requests a new GNOME Terminal window
-automatically, passing the complete session ID as an argument. The viewer has no
+The launcher assigns a reusable GNOME Terminal monitor slot automatically,
+passing the complete session ID as an argument. The viewer has no
 inherited config descriptor and is detached from the worker's process group.
 David subsequently clarified the policy: auto-open only during an active driver
 session; explicit AFK/overnight mode suppresses windows and focus changes, retaining
 attachability/logs. DISPLAY/WAYLAND_DISPLAY alone cannot establish driver presence.
-The existing display-only hook needs an explicit driver/AFK mode input before AFK
-dispatches; this policy amendment does not claim that hook is already implemented.
+Set `COINTOS_VIEW_MODE=afk` on AFK launches; `driver` is the default. The coordinator
+must choose from David's stated presence, not infer presence from display variables.
 Headless launches retain the command for manual viewing. During driver mode,
 unavailable viewing requires an explicit exception before dispatch.
 Failure to open a window
@@ -74,22 +74,22 @@ ses_f8500f87effe90hWV24gHCaLlI. This is now the canonical local-agent spawn poli
 in AGENTS.md, as David requested. This checkpoint is subject to the later driver/
 AFK distinction above; it does not mandate spawning windows while David is AFK.
 
-## Possible small follow-up: reusable monitor slots
+## Reusable monitor slots
 
-David asks about identifying monitor windows from creation and reusing a completed
-agent's window for the next agent, optionally focusing/centering it. Feasibility
-direction only, not an implemented or approved detailed design:
+Implemented by `scripts/worker_monitors.py`. Mutable, ignored bookkeeping lives in
+`state/worker-monitors/registry.json`, protected by a file lock and atomic replacement;
+this is not the append-only runtime evidence. Each slot tracks its monitor process,
+worker server identity (PID/start time/boot), session, worktree and view record.
 
 - A dedicated monitor process owns its terminal from inception, with a stable
   monitor-slot identity and explicit current worker/session association.
 - It attaches to one live worker, retains a useful ended-state display after that
   worker closes, then attaches to the next assigned session in the same terminal.
+  The ended display gives the run title and view-record path, not a full transcript.
 - Concurrent active workers need distinct slots; do not replace a live worker's
   view or hijack unrelated terminals. View lifetime and inference lifetime remain
   separate. AFK launches neither create slots nor raise existing windows.
-- Reuse is feasible without a window-manager subsystem. GNOME Terminal provides
-  a role tag, but does not offer a simple CLI command to replace the command in
-  an arbitrary existing window; retaining a dedicated monitor owner avoids that.
-- This desktop runs GNOME Wayland. Guaranteed external focusing/centering is a
-  separate compositor-controlled concern; keep it best-effort or omit it rather
-  than installing extensions or switching display systems just for this feature.
+- Closing a monitor retires its slot without stopping its worker. Dead monitors
+  are retired at the next assignment. Existing pre-pool windows are not adopted.
+- No external focusing/centering or Wayland integration is attempted. Idle windows
+  stay open for reuse; close them when unwanted. AFK launches do not populate them.
