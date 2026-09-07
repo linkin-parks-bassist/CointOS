@@ -2,12 +2,13 @@
 
 ## Current design amendment — read before new C1-C3 work
 
-David requested a pause after this checkpoint to use the GPU for KV260 HIL work.
-Astra has NOT dispatched the next packet. Do not launch inference, unload models,
-change model services, or resume GPU work until David explicitly resumes bring-up.
-Automatic goal continuations do not supersede this pause. No hardware access or
-professional HIL material belongs in this personal project. Resume point: elaborate
-the canonical four-outcome durable decision/dispatch packet, then local execution.
+David explicitly resumed implementation after the KV260 HIL pause. No hardware
+access or professional HIL material belongs in this personal project. Astra wrote
+contact plan2026-09-07-canonical-entry-migration.md: schema3 four-outcome durable
+completion, required model/policy provenance, existing dispatch/reply consumers,
+preserved real A1 replay proof. Six-file Qwen packet; no planning delegated.
+Baseline29 contact tests +6 entry-validator tests independently passed. Publication-
+evidenced lifecycle and live caller/front admission remain required successors.
 
 Accepted local-c3-disposition-notice at contact38fc5b8. Astra read the complete
 production diff and six new function tests, then independently ran6 disposition,
