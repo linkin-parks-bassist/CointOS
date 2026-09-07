@@ -1,5 +1,27 @@
 # Concurrent Qwen commissioning — Astra, 2026-09-07
 
+David is explicitly AFK/asleep from the latest conversation turn. Future launches
+MUST set COINTOS_VIEW_MODE=afk until he returns; keep attachable sessions/logs but
+do not create/focus windows. Existing driver windows need not be closed. He asks
+for continued economical local MVP bring-up, maximizing usable concurrency while
+respecting resource and decision boundaries. Old goal is still blocked; Astra
+requested /goal resume; David subsequently resumed the overnight goal. Automatic
+continuation is now active. No approval blocker remains for bounded MVP work.
+
+R4-PRECISE next evidence lead (Astra; source inspection, NOT live proof): installed
+llama.cpp commit 010be9683 tools/server/server-context.cpp explicitly selects
+task.id_slot in get_available_slot (~1542), parses id_slot from request (~4296),
+and uses oaicompat_chat_params_parse for both chat completions and apply-template
+(~4907/~5037). Slot lookup wraps out-of-range indices (~1511), so the proxy must
+validate exact bounds and never use global front-offset lease indices directly.
+Investigate parser pass-through and Lemonade forwarding before relying on pinning.
+This could establish exact backend incarnation/slot/claim ownership for independent
+release. Stream completion still precedes slot.release; EOF alone is not proof.
+Source: https://github.com/ggml-org/llama.cpp/blob/010be9683/tools/server/server-context.cpp
+The same template parser is a lead for exact request prompt accounting, including
+tool formatting, followed by /tokenize. Neither API lead is an implemented pool
+reservation or permission to send unadmitted inference.
+
 Current dispatch checkpoint: prior shared-policy/layout packets are finished.
 Astra independently passed 10 policy +12 layout tests; layout's -no-kvu typo
 was caught, demonstrated red and corrected green. Integrated through c7a325b.
