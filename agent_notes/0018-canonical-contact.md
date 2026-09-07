@@ -2,6 +2,15 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+local-c1-lifecycle-plan finished normally; Astra read full420-line output and
+REJECTED it for proof-free lifecycle transitions, unsafe unisolated example test,
+unproven failure handling, reversed claim/context ordering and unauthorized Sol
+assignments. Retained with prominent DO NOT EXECUTE header, not accepted progress.
+Next local-c1-entry-validator follows Astra's separate reviewed pure-contract plan:
+one new validator + tests only, no schema/caller/lifecycle change. Existing13
+contact-turn tests independently passed before dispatch. The old validator remains
+only until coordinated canonical replacement, not as a final compatibility route.
+
 Resource instruction: David ended the temporary Sol allowance after its current
 front-plan correction task. Let that task finish, then leave Sol idle; no further
 hosted follow-ups without new approval. Resume local Qwen plus light Astra oversight.
