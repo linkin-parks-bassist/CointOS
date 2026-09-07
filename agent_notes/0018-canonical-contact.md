@@ -2,6 +2,13 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Next concrete packet local-c3-entry-disposition: Astra specified publisher/reader
+contract in contact plan2026-09-07-entry-disposition-store.md. Two-file local task;
+immutable accepted-inbound-bound four-outcome record, exact replay and malformed-vs-
+absent reads. No gateway locks/writes or lifecycle transition. This prerequisite
+lets later consumers prove intentional silence rather than infer it from no reply.
+Baseline6 ordinary-outbox tests independently passed. No planning delegated.
+
 Accepted pure validator at contact08029d7: Astra inspected45-line addition and full
 test module, independently passed6 new function tests +13 existing contact tests.
 Exact four outcomes/nullable fields, canonical link-ID syntax, fresh list copies,
