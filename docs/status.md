@@ -1,5 +1,12 @@
 # Current status
 
+Live concurrent checkpoint, 2026-09-07: two admitted Qwen workers were observed
+processing simultaneously on two physical slots, each with 131072 context. 4B
+remains loaded. See [concurrency handoff](../agent_notes/0020-concurrent-qwen-bringup.md)
+for exact jobs, evidence and provisional accounting change 93be79e. Global `.cfg`
+caller migration, independent request release and fair model residency switching
+are still open. This is actual overlap, not complete autonomous MVP acceptance.
+
 Original-thesis reconciliation, 2026-09-07: David reaffirmed concurrent agents, physical-slot
 time-sharing and memory-governed model residency as central MVP requirements.
 [Decision 0016](decisions/0016-concurrent-inference-and-residency-timesharing.md)
