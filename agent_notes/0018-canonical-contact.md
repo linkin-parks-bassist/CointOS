@@ -2,6 +2,19 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Accepted contact313cb28: Astra checked the production diff and canonical test
+migrations and independently passed9 entry persistence +29 contact +6 pure entry
+validator tests (44). Schema3 completion/provenance and four-outcome dispatch work
+offline; real A1 retry regression retained. Worker closed normally, credential
+revoked and capacity released. No full-suite/live claim: worker reports10 existing
+legacy failures; Astra did not repeat a broad suite. Silent initial reply refusal
+currently follows not_required state; explicit outcome guard remains a small
+follow-up when strengthening publication-evidenced linkage, not a live claim.
+David asked for the next packet to be smaller: local-c1-publish-disposition is
+one function plus one test file, no caller migration. It uses the new attachable
+launcher; provide the exact view command after startup. Model speed is not a
+reason to interrupt a healthy run; David explicitly requested patience.
+
 New product input: [Telegram tasks/reminders and agent conversations](../docs/product-ideas/telegram-tasks-and-reminders.md).
 David wants any agent to reach him through the outbox and Coin to route Telegram
 replies back to the originating work. Concrete example: a shared writable task
