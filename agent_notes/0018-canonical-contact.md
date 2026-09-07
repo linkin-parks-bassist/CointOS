@@ -2,6 +2,14 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Accepted pure validator at contact08029d7: Astra inspected45-line addition and full
+test module, independently passed6 new function tests +13 existing contact tests.
+Exact four outcomes/nullable fields, canonical link-ID syntax, fresh list copies,
+text preservation; no I/O, schema bump, lifecycle/caller or old-validator change.
+Local worker finished with normal proxy revoke/R3 release. Not full-suite or live
+acceptance. Next Astra-owned contract must wire durable decision/lifecycle without
+allowing closure before owner-validated disposition/reply/dispatch evidence.
+
 David corrected planning ownership: Qwen should receive already-elaborated subplans,
 not broad planning assignments. Astra owns concrete contracts, task decomposition
 and acceptance criteria; genuine design forks go to David. Do not dispatch the
