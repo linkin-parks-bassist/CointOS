@@ -57,3 +57,13 @@ Astra next dispatch: local-r5-parent-write-map, read-only source investigation o
 whether cached executor job persistence can lose concurrently admitted child
 reservations. Deliverable is the real writer/lock sequence and smallest deterministic
 composition probe; no repair authorized in this packet. Hypothesis remains unproven.
+
+Map worker finished normally with proxy revoked/R3 released, no edits. Astra verified
+the disjoint locks and cached parent overwrite at executor.py:1296. enqueue_child
+is not yet called by managed production paths; do not claim observed live damage.
+Correction to Sieve's map: an existing child returns before debit, so replay does
+NOT re-subtract as claimed. Lost reservation/ceiling remains the relevant defect.
+Next local-r5-parent-write-red writes one deterministic composition regression:
+real child admission inside the external launch seam, real executor persistence,
+and a no-write close stub. No thread/timing race and no fake overwrite as evidence.
+Production repair remains outside this test-only packet.
