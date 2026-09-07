@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from ecosystem import models
+from ecosystem import inference_policy, models
 
 
 STATE_VERSION = 1
@@ -220,6 +220,12 @@ def realize_context_tokens(route: dict, parallel_sequences: int) -> dict:
     """Map R2's per-sequence context to the backend total exactly once."""
     if type(route) is not dict or route.get("state") != "admitted":
         raise ValueError("route is not admitted")
+    mode = route.get("context_mode")
+    if mode is not None and mode != "fixed":
+        raise ValueError(
+            f"route context mode {mode!r} is not fixed; shared realization "
+            "is not activated",
+        )
     parallel = _positive_integer(parallel_sequences)
     context = _positive_integer(route.get("context_tokens_per_sequence"))
     recorded_parallel = _positive_integer(route.get("parallel_sequences"))
@@ -242,7 +248,7 @@ def reserve_sequence(
     if type(inventory) is not dict:
         raise ValueError("invalid inference inventory")
     resource_policy = _load_json(root / "config" / "resource-policy.json")
-    capacity_policy = _validated_capacity_policy(resource_policy)
+    capacity_policy = _load_capacity_policy(root)
     scheduling_policy = _load_json(root / "state" / "scheduling-policy.json")
     scheduling_values = _validated_scheduling_snapshot(scheduling_policy)
     validated = _validate_sequence_request(request, capacity_policy, scheduling_values)
@@ -320,6 +326,22 @@ def reserve_sequence(
             sequence = victim["backend_sequence"]
             preempted = victim["lease_id"]
             lease_state = "waiting_for_preemption"
+        if preempted is None:
+            held = sum(
+                1 for lease in active
+                if lease.get("model_id") == normalized_route["model_id"]
+                and (lease.get("workload_class") == "front")
+                == (workload_class == "front")
+            )
+            limit = _model_slot_limit(
+                workload_class, capacity_policy, normalized_route,
+                _model_work_slots(root, normalized_route["model_id"]),
+            )
+            if held >= limit:
+                return {
+                    "state": "deferred",
+                    "reasons": ["model_sequence_unavailable"],
+                }
         lease = {
             "lease_id": lease_id,
             "generation": state["generation"],
@@ -616,8 +638,40 @@ def _activate_waiter(
 
 
 def _load_capacity_policy(root: Path) -> dict:
+    """Resolve slot counts from the accepted cfg and the remaining capacity fields."""
+    root = Path(root)
     document = _load_json(root / "config" / "resource-policy.json")
-    return _validated_capacity_policy(document)
+    policy = document.get("inference_capacity")
+    if type(policy) is dict:
+        for key in ("front_sequences", "total_sequences"):
+            if key in policy:
+                raise ValueError(
+                    f"resource policy must not pin {key}; slot counts come "
+                    "from inference.cfg",
+                )
+    slots = inference_policy.load_inference_policy(
+        root / "config" / "inference.cfg",
+    )
+    policy = dict(policy) if type(policy) is dict else {}
+    policy["front_sequences"] = slots["front_slots"]
+    policy["total_sequences"] = slots["front_slots"] + slots["work_slots"]
+    return _validated_capacity_policy(
+        {**document, "inference_capacity": policy},
+    )
+
+
+def _model_work_slots(root: Path, model_id: str) -> int:
+    return inference_policy.load_inference_policy(
+        Path(root) / "config" / "inference.cfg", model_id=model_id,
+    )["work_slots"]
+
+
+def _model_slot_limit(workload_class: str, capacity_policy: dict,
+                      route: dict, work_slots: int) -> int:
+    observed = route["parallel_sequences"]
+    if workload_class == "front":
+        return min(capacity_policy["front_sequences"], observed)
+    return min(work_slots, observed)
 
 
 def _validated_capacity_policy(document: dict) -> dict:

@@ -87,6 +87,10 @@ def capacity_policy():
 
 
 def resource_policy():
+    inference_capacity = {
+        key: value for key, value in capacity_policy().items()
+        if key not in ("front_sequences", "total_sequences")
+    }
     return {
         "physical_capacity": {
             "protected_host_bytes": 32 * GIB,
@@ -104,7 +108,7 @@ def resource_policy():
                 "handoff_tokens": 1_024,
             },
         },
-        "inference_capacity": capacity_policy(),
+        "inference_capacity": inference_capacity,
     }
 
 
@@ -169,11 +173,26 @@ def inventory():
     }
 
 
+def fixed_slot_cfg():
+    # Fixed-mode cfg equivalent to the old pinned counts (front 1, work 1).
+    return (
+        "[inference]\n"
+        "work_slots = 1\n"
+        "front_slots = 1\n"
+        "context_tokens_per_slot = 32768\n"
+        "backend_context_tokens = 32768\n"
+        "context_mode = fixed\n"
+    )
+
+
 def write_root(root):
     (root / "state").mkdir()
     (root / "config").mkdir()
     (root / "config" / "resource-policy.json").write_text(
         json.dumps(resource_policy()), encoding="utf-8",
+    )
+    (root / "config" / "inference.cfg").write_text(
+        fixed_slot_cfg(), encoding="utf-8",
     )
     (root / "config" / "scheduling.json").write_text(
         json.dumps(scheduling_values()), encoding="utf-8",

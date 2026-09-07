@@ -50,8 +50,6 @@
     "llamacpp_ubatch_size": 128
   },
   "inference_capacity": {
-    "front_sequences": 1,
-    "total_sequences": 3,
     "protected_host_bytes": 34359738368,
     "coin_reserved_bytes": 8589934592,
     "load_transient_bytes": 12884901888,
