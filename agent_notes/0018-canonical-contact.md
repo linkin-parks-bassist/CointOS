@@ -317,3 +317,13 @@ reasoning as escalation and proposed closure after durable final reply publicati
 with transport status separate. No implementation or live activation follows from
 the draft alone. Qwen wrote initial draft; Astra's material edits were design review,
 not a switch away from local implementation delegation.
+# Parallel C2 admission investigation — 2026-09-07
+
+David approved one temporary gpt-5.6-sol low thread. Sol produced and Astra reviewed
+`/home/david/.worktrees/cointos-mvp-contact/agent_notes/0020-front-admission-options.md`.
+Recommendation: ephemeral gated front inference child, using real R1/R3/credential
+admission and process-ended conservative close; persistent orchestrator may supervise.
+This proposed process-lifecycle/latency choice awaits David's review. No C2 code or
+live activation authorized by this note. Sol corrected replay generation/identity,
+secret-vs-durable-binding distinction and admission ordering after Astra review.
+R4-PRECISE remains required open successor; pending message semantics are unchanged.
