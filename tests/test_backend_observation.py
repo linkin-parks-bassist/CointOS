@@ -7,7 +7,8 @@ from unittest.mock import patch
 
 from ecosystem import inference_proxy
 from ecosystem.inference_proxy import (
-    _backend_json, _backend_process_identity, backend_snapshot, observe_backend_idle,
+    _backend_json, _backend_process_identity, backend_snapshot,
+    correlate_claim_slot, observe_backend_idle, observe_backend_slot_idle,
 )
 
 
@@ -360,6 +361,141 @@ def test_backend_process_identity_rejects_zombie_and_dead_states():
         suffix = [state] + ["0"] * 18 + ["42"]
         with patch.object(Path, "read_text", new=fake_read_text):
             assert _backend_process_identity(7) is None, state
+
+
+PROPS2 = {"total_slots": 2, "model_path": MODEL_PATH}
+IDENTITY2 = {**IDENTITY, "total_slots": 2}
+
+
+def slot_observation(identity, states):
+    return {"identity": identity,
+            "slots": [{"id": slot_id, "is_processing": state}
+                      for slot_id, state in states]}
+
+
+def test_slot_idle_observation_refuses_unbounded_slot_ids_without_backend_calls():
+    for identity, slot_id in ((IDENTITY, 1), (IDENTITY2, 2), (IDENTITY2, -1),
+                              (IDENTITY2, True), (IDENTITY2, False),
+                              (IDENTITY2, "0"), (IDENTITY2, None),
+                              (IDENTITY2, 0.0)):
+        result, json_calls, identity_calls = run_with_fakes(
+            observe_backend_slot_idle, dict(identity), slot_id)
+        assert result is None, (identity["total_slots"], slot_id)
+        assert json_calls == [] and identity_calls == []
+
+
+def test_slot_idle_observation_accepts_idle_target_with_busy_peer():
+    slots = [{"id": 0, "is_processing": False, "prompt": "private"},
+             {"id": 1, "is_processing": True}]
+    result, _calls, _pids = run_with_fakes(
+        observe_backend_slot_idle, dict(IDENTITY2), 0,
+        json_routes=routes(busy=True, props=PROPS2, slots=slots))
+    assert result == {"identity": IDENTITY2, "slot_id": 0,
+                      "slot": {"id": 0, "is_processing": False}}
+    assert "private" not in json.dumps(result)
+
+
+def test_slot_idle_observation_refuses_busy_target():
+    slots = [{"id": 0, "is_processing": True}, {"id": 1, "is_processing": False}]
+    result, _calls, _pids = run_with_fakes(
+        observe_backend_slot_idle, dict(IDENTITY2), 0,
+        json_routes=routes(props=PROPS2, slots=slots))
+    assert result is None
+
+
+def test_slot_idle_observation_refuses_incomplete_slot_records():
+    cases = (
+        [{"id": 0, "is_processing": False}, {"id": 0, "is_processing": False}],
+        [{"id": 0, "is_processing": False}],
+        [{"id": 0, "is_processing": False}, {"id": 5, "is_processing": False}],
+        [{"id": 0, "is_processing": False}, {"id": 1}],
+        [{"id": 0, "is_processing": False}, {"id": True, "is_processing": False}],
+    )
+    for slots in cases:
+        result, _calls, _pids = run_with_fakes(
+            observe_backend_slot_idle, dict(IDENTITY2), 0,
+            json_routes=routes(props=PROPS2, slots=slots))
+        assert result is None, slots
+    missing, _calls, _pids = run_with_fakes(
+        observe_backend_slot_idle, dict(IDENTITY2), 0,
+        json_routes=routes(props=PROPS2,
+                           unavailable=[(BACKEND_BASE, "/slots")]))
+    assert missing is None
+
+
+def test_slot_idle_observation_refuses_incarnation_drift():
+    slots = [{"id": 0, "is_processing": False}, {"id": 1, "is_processing": True}]
+    before_drift, json_calls, _pids = run_with_fakes(
+        observe_backend_slot_idle, dict(IDENTITY2), 0,
+        json_routes=routes(busy=True, props=PROPS2, slots=slots),
+        identities=[process_identity(process_start_ticks=999), process_identity()])
+    assert before_drift is None
+    assert json_calls == [(GATEWAY_BASE, "/api/v1/health"), (BACKEND_BASE, "/props")]
+    after_drift, _calls, identity_calls = run_with_fakes(
+        observe_backend_slot_idle, dict(IDENTITY2), 0,
+        json_routes=routes(busy=True, props=PROPS2, slots=slots),
+        identities=[process_identity(), process_identity(),
+                    process_identity(process_start_ticks=999)])
+    assert after_drift is None
+    assert identity_calls == [PID, PID, PID, PID]
+
+
+def test_slot_idle_observation_refuses_malformed_identity_records():
+    assert observe_backend_slot_idle(None, 0) is None
+    assert observe_backend_slot_idle({"total_slots": 2}, 0) is None
+
+
+def test_claim_correlation_names_unique_false_to_true_flip():
+    idle = [(0, False), (1, False)]
+    pre = slot_observation(IDENTITY2, idle)
+    started = slot_observation(IDENTITY2, [(0, True), (1, False)])
+    end = slot_observation(IDENTITY2, idle)
+    assert correlate_claim_slot(pre, started, end) == 0
+    busy_peer = [(0, False), (1, True)]
+    busy_peer_started = [(0, True), (1, True)]
+    assert correlate_claim_slot(
+        slot_observation(IDENTITY2, busy_peer),
+        slot_observation(IDENTITY2, busy_peer_started),
+        slot_observation(IDENTITY2, busy_peer)) == 0
+
+
+def test_claim_correlation_rejects_zero_or_multiple_transitions():
+    idle = [(0, False), (1, False)]
+    pre = slot_observation(IDENTITY2, idle)
+    end = slot_observation(IDENTITY2, idle)
+    unchanged = slot_observation(IDENTITY2, idle)
+    assert correlate_claim_slot(pre, unchanged, end) is None
+    both = slot_observation(IDENTITY2, [(0, True), (1, True)])
+    assert correlate_claim_slot(pre, both, end) is None
+    still_busy = slot_observation(IDENTITY2, [(0, True), (1, False)])
+    assert correlate_claim_slot(pre, still_busy, still_busy) is None
+
+
+def test_claim_correlation_requires_matching_complete_incarnation():
+    idle = [(0, False), (1, False)]
+    pre = slot_observation(IDENTITY2, idle)
+    started = slot_observation(IDENTITY2, [(0, True), (1, False)])
+    end = slot_observation(IDENTITY2, idle)
+    drifted = slot_observation({**IDENTITY2, "pid": 999}, idle)
+    assert correlate_claim_slot(pre, started, drifted) is None
+    broken = (
+        None, {},
+        {"identity": IDENTITY2},
+        {"identity": IDENTITY2, "slots": [{"id": 0, "is_processing": False}]},
+        {"identity": IDENTITY2, "slots": [
+            {"id": 0, "is_processing": False},
+            {"id": 0, "is_processing": False}]},
+        {"identity": IDENTITY2, "slots": [
+            {"id": 0, "is_processing": False},
+            {"id": 7, "is_processing": False}]},
+        {"identity": IDENTITY2, "slots": [
+            {"id": 0, "is_processing": "no"},
+            {"id": 1, "is_processing": False}]},
+    )
+    for broken_observation in broken:
+        assert correlate_claim_slot(pre, started, broken_observation) is None
+        assert correlate_claim_slot(broken_observation, started, end) is None
+        assert correlate_claim_slot(pre, broken_observation, end) is None
 
 
 def load_tests(_loader, _tests, _pattern):

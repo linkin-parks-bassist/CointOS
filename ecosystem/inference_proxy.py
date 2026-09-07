@@ -928,6 +928,27 @@ def backend_snapshot(gateway_base: str, model_id: str) -> dict | None:
     }
 
 
+def _normalized_slot_states(slots, total_slots):
+    """Validate one complete bounded slot list; return id -> is_processing."""
+    if type(total_slots) is not int or total_slots <= 0:
+        return None
+    if type(slots) is not list or len(slots) != total_slots:
+        return None
+    states = {}
+    for slot in slots:
+        if type(slot) is not dict:
+            return None
+        slot_id = slot.get("id")
+        if type(slot_id) is not int or not 0 <= slot_id < total_slots \
+                or slot_id in states:
+            return None
+        is_processing = slot.get("is_processing")
+        if type(is_processing) is not bool:
+            return None
+        states[slot_id] = is_processing
+    return states
+
+
 def observe_backend_idle(identity: dict) -> dict | None:
     """Prove every recorded slot is idle without exposing slot contents."""
     if type(identity) is not dict:
@@ -948,20 +969,62 @@ def observe_backend_idle(identity: dict) -> dict | None:
     if (after is None or after.get("identity") != identity
             or after.get("busy") is not False):
         return None
-    if type(slots) is not list or not slots:
+    states = _normalized_slot_states(slots, identity.get("total_slots"))
+    if states is None or any(states.values()):
         return None
-    if len(slots) != identity["total_slots"]:
+    return {"identity": dict(identity), "all_slots_idle": True,
+            "slots": [{"id": slot_id, "is_processing": False}
+                      for slot_id in states]}
+
+
+def observe_backend_slot_idle(identity: dict, slot_id) -> dict | None:
+    """Prove one exact recorded slot is idle without exposing slot contents."""
+    if type(identity) is not dict:
         return None
-    seen = set()
-    normalized = []
-    for slot in slots:
-        if type(slot) is not dict:
-            return None
-        slot_id = slot.get("id")
-        if type(slot_id) is not int or slot_id < 0 or slot_id in seen:
-            return None
-        if slot.get("is_processing") is not False:
-            return None
-        seen.add(slot_id)
-        normalized.append({"id": slot_id, "is_processing": False})
-    return {"identity": dict(identity), "all_slots_idle": True, "slots": normalized}
+    total_slots = identity.get("total_slots")
+    if (type(slot_id) is not int or type(total_slots) is not int
+            or not 0 <= slot_id < total_slots):
+        return None
+    gateway_base = identity.get("gateway_base")
+    model_id = identity.get("model_id")
+    if type(gateway_base) is not str or type(model_id) is not str:
+        return None
+    before = backend_snapshot(gateway_base, model_id)
+    if before is None or before.get("identity") != identity:
+        return None
+    try:
+        slots = _backend_json(identity["backend_base"], "/slots")
+    except Exception:
+        return None
+    after = backend_snapshot(gateway_base, model_id)
+    if after is None or after.get("identity") != identity:
+        return None
+    states = _normalized_slot_states(slots, total_slots)
+    if states is None or states.get(slot_id) is not False:
+        return None
+    return {"identity": dict(identity), "slot_id": slot_id,
+            "slot": {"id": slot_id, "is_processing": False}}
+
+
+def correlate_claim_slot(pre, start, end):
+    """Name the one slot whose false->true start flip is idle at the end."""
+    if type(pre) is not dict or type(start) is not dict or type(end) is not dict:
+        return None
+    identity = pre.get("identity")
+    if (type(identity) is not dict or start.get("identity") != identity
+            or end.get("identity") != identity):
+        return None
+    total_slots = identity.get("total_slots")
+    pre_states = _normalized_slot_states(pre.get("slots"), total_slots)
+    start_states = _normalized_slot_states(start.get("slots"), total_slots)
+    end_states = _normalized_slot_states(end.get("slots"), total_slots)
+    if pre_states is None or start_states is None or end_states is None:
+        return None
+    started = [slot_id for slot_id, was_idle in pre_states.items()
+               if was_idle is False and start_states[slot_id] is True]
+    if len(started) != 1:
+        return None
+    slot_id = started[0]
+    if end_states[slot_id] is not False:
+        return None
+    return slot_id
