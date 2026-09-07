@@ -23,7 +23,9 @@ The private view record and a `worker_view_ready` JSONL event contain the exact
 On a graphical desktop the launcher now also requests a new GNOME Terminal window
 automatically, passing the complete session ID as an argument. The viewer has no
 inherited config descriptor and is detached from the worker's process group.
-Headless launches retain the command for manual viewing; failure to open a window
+Headless launches technically retain the command for manual viewing, but David's
+canonical-spawn policy requires an explicit exception before such a dispatch.
+Failure to open a window
 does not interrupt work. No duplicate window is added to a run already in progress.
 The native UI is interactive, NOT a read-only security boundary: viewing needs no
 extra inference, but entering prompts or cancellation commands can affect the run.
@@ -60,3 +62,10 @@ attach invocation ended in --session with no ID, explaining the initial home scr
 this was not evidence of an OpenCode session-navigation bug. Direct argv launch
 removes that copy/paste failure. Automatic desktop opening awaits the next dispatch;
 syntax checked only for this small hook, no additional broad test run.
+
+Automatic desktop checkpoint: local-c1-publish-entry-reply launched its viewer
+as a child of the existing GNOME Terminal server, with the complete session ID
+ses_f8500f87effe90hWV24gHCaLlI. This is now the canonical local-agent spawn policy
+in AGENTS.md, as David requested. Each new agent gets its own oversight window;
+no silent alternate launch without an explicit exception. The current helper's
+headless capability is not blanket permission to use it unattended.

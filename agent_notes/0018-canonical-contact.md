@@ -10,6 +10,10 @@ Next local-c1-publish-entry-reply: exact optional saved reply publication + link
 one explicit silent-outcome guard, two files, no planning or broad test suite.
 Next launch exercises automatic graphical terminal creation; only then promote
 the observed path to the canonical local-agent spawn rule David requested.
+Observed: local-c1-publish-entry-reply admitted (session67679), native viewer
+PID1050045 parent GNOME Terminal server5368, exact session ID in argv. Automatic
+desktop launch works; AGENTS.md now makes observable local spawning canonical.
+Worker has the supplied two-file implementation packet, no planning assignment.
 
 Accepted contact313cb28: Astra checked the production diff and canonical test
 migrations and independently passed9 entry persistence +29 contact +6 pure entry

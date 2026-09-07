@@ -16,6 +16,12 @@ does not authorize mixing personal, Avnet, AMD, partner, or customer information
   attached to the exact new session; pass arguments directly, not via shell text.
   Headless runs still publish the attach command. A viewer failure must not cancel
   or restart the admitted worker.
+- This observable spawn path is canonical for local model agents, not an optional
+  debugging mode. Every new local agent must have its own visible oversight window
+  and exact session context. Do not use an alternative silent background runner.
+  If no graphical viewer can be opened, obtain David's explicit exception before
+  starting the agent; a printed log path alone is not equivalent. A viewer closing
+  or failing after launch is not permission to kill/restart its worker.
 - Read `docs/status.md`, relevant project notes, and decisions before changing behavior.
 - Record consequential design changes in `docs/decisions/`.
 - Never enable remote access, access credentials, program hardware, push code, or
