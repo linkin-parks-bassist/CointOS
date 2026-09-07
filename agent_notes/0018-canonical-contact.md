@@ -2,6 +2,18 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+David clarified that outbound contact MUST also support spontaneous event-driven
+updates ("if something happens"), not only replies. Do not interpret "random
+updates" as scheduled filler or impose a reply-only system. The legacy ecosystem
+outbox already accepts independent notifications; canonical replacement must not
+lose that capability. Staged ordinary_outbox currently requires trusted inbound
+linkage, so it is not a complete outbound design. Astra must elaborate event-owned
+message identity, independently authorized destination, optional context links,
+deduplication and gateway delivery without fake inbound records, alongside the
+separate intermediate/deep-final response distinction. Event selection/frequency
+policy is distinct from transport. No new external destinations, live activation,
+or extra implementation scope is assigned to the running persistence worker.
+
 David explicitly resumed implementation after the KV260 HIL pause. No hardware
 access or professional HIL material belongs in this personal project. Astra wrote
 contact plan2026-09-07-canonical-entry-migration.md: schema3 four-outcome durable
