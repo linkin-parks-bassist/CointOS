@@ -303,3 +303,17 @@ identity-preserving context projection and canonical notifier/result publication
 not merely new enum values. Existing old front/deep methods are legacy callers,
 not the chosen implementation of the new/open/closed requirement. Map used eight
 bounded reads rather than six requested; scope stayed within the six source files.
+Local lifecycle design draft committed83e878a in contact worktree, no semantic code
+changes; normal release observed. Astra reviewed and corrected it in0e3ccc0:
+publisher must not acquire gateway lock; failed deep run alone cannot close owed
+work; message lifecycle must not become delivery_unknown; history retains content
+and IDs; model cannot manufacture explicit reply-to provenance; links grant no
+read authority; disposition publication has an explicit arbitration point, not an
+impossible zero-notice promise before cross-store publication. Removed questions
+already answered by David (closed messages are searchable, silence needs evidence).
+Draft path docs/superpowers/specs/2026-09-07-message-lifecycle-design.md in
+/home/david/.worktrees/cointos-mvp-contact. Pending David's review: stronger-model
+reasoning as escalation and proposed closure after durable final reply publication,
+with transport status separate. No implementation or live activation follows from
+the draft alone. Qwen wrote initial draft; Astra's material edits were design review,
+not a switch away from local implementation delegation.
