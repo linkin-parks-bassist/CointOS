@@ -2,6 +2,15 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Accepted contactca883e2: Astra read23-line production change and full new test file;
+independently passed15 saved-disposition +9 persistence tests. Trusted identity,
+immutable saved outcome/time, replay and no unrelated effects match the contract.
+First attachable worker closed normally with credential revoke/capacity release.
+Next local-c1-publish-entry-reply: exact optional saved reply publication + link,
+one explicit silent-outcome guard, two files, no planning or broad test suite.
+Next launch exercises automatic graphical terminal creation; only then promote
+the observed path to the canonical local-agent spawn rule David requested.
+
 Accepted contact313cb28: Astra checked the production diff and canonical test
 migrations and independently passed9 entry persistence +29 contact +6 pure entry
 validator tests (44). Schema3 completion/provenance and four-outcome dispatch work
