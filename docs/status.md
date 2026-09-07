@@ -1,5 +1,12 @@
 # Current status
 
+Independent R5 repair is ready in isolated `fix/mvp-budget-reservations` through
+`896da1e`: child admission subtracts durable parent task time already spent from
+the reservation ceiling, preserving exact-fit and idempotent replay. Astra passed
+625 tests (592 discovered +33 integration). No runtime-root integration/activation
+yet. [Budget reservation handoff](../agent_notes/0019-managed-budget-reservations.md)
+tracks remaining live/concurrent accounting boundaries; this is not full R5 closure.
+
 Contact design amendment, 2026-09-07: David requests new/open/closed message states,
 four entry outcomes including no-reply escalation/ignore, and linked context across
 all message states. See [current contact note](../agent_notes/0018-canonical-contact.md)

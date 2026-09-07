@@ -32,3 +32,23 @@ child task time against reservation ceiling minus durable own consumption ONLY.
 No persistent debit for own usage (avoids double charge), no usage.children write,
 no executor/CLI protocol change. Exact-fit/replay preserved; malformed durable time
 refused. Tests must use automatic collection for added plain-function cases.
+d5feb3f implements the bounded check and corrected fixtures. Astra independently
+passed28 focused tests, then caught explicit budget_usage:null treated as absence
+despite the packet's present-dict requirement. A tiny Astra regression failed,
+896da1e distinguishes absent from malformed null, and28 focused tests passed again.
+Source review: pure admission comparison only; remaining_budget/usage unchanged,
+no CLI or executor edits; exact-fit300 allowed after600/900 spent, replay does not
+deduct twice, further1 refused with other quotas still available.
+
+Full candidate verification at896da1e:592 discovered tests passed, plus33 separately
+discovered integration tests passed (625 total). git diff --check clean; only
+task_contracts.py and test_spent_child_reservation.py differ from base source.
+The three test functions are automatically collected. Worker finished with normal
+proxy revoke/R3 release. Accepted isolated repair, NOT integrated or activated in
+runtime root. Contact worktree remains separate and lacks this repair.
+
+Remaining R5/A1 work: live in-flight usage freshness, concurrent parent record
+updates during delegation, consistent treatment of other spent shared counters,
+actual discovery-tool wiring/accounting and genuinely bound useful handoff evidence.
+These are follow-ups, not claims covered by the625-test result. Do not add usage
+counters atop already-debited reservations without a consistent representation.
