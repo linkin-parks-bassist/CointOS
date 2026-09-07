@@ -116,6 +116,7 @@ def route():
     return {
         "state": "admitted",
         "model_id": "model-a",
+        "context_mode": "fixed",
         "parameter_count": 10_000_000_000,
         "model_bytes": 30 * GIB,
         "loaded": True,
