@@ -2,12 +2,16 @@
 
 ## Current design amendment — read before new C1-C3 work
 
-Active local-c3-disposition-notice: Astra's exact two-line gateway check AFTER
-non-ready notice handling, BEFORE old decision-presence checks, inside existing
-inbound lock. New real temp-store tests cover all4 outcomes with no reply, absence,
-busy lock, malformed disposition propagation, prior terminal/stale-sending state.
-No planning delegated; explicit collector supplied to prevent framework detour.
-Baseline3 ordinary-notice tests passed. No caller or lifecycle activation in packet.
+Accepted local-c3-disposition-notice at contact38fc5b8. Astra read the complete
+production diff and six new function tests, then independently ran6 disposition,
+3 ordinary-notice and59 gateway tests:68 passed. Exact two-line reader check is
+inside the existing lock after non-ready handling and before old reply-presence
+checks. Tests exercise real temp stores, all four outcomes without reply, absence,
+busy lock, malformed-record propagation, and prior terminal/stale-sending states.
+Architectural acceptance: contact owns disposition meaning; gateway consumes its
+validated query without acquiring publication authority or duplicating validation.
+No new locks, delivery claims, caller/lifecycle activation or full-suite claim.
+Worker is terminal; no active Qwen or additional Sol assignment at this checkpoint.
 
 Disposition store accepted at contact1e0469f (worker066e457 + tiny Astra correction).
 Astra reviewed publisher/reader and relevant tests, independently passed15 new +6
@@ -16,8 +20,8 @@ unnecessary framework-search detour; no zero-test result accepted. Astra added R
 for ENOTDIR misreported as absence, replaced exists() preflight with read catching
 ONLY FileNotFoundError, reran21 GREEN. No gateway/lifecycle integration or runtime
 activation. Worker closed normally (proxy revoked/R3 released); no worker active.
-Next concrete packet should consume validated disposition under existing gateway
-inbound lock to suppress only unsent fallback, preserving prior attempt/delivery.
+Gateway consumption is now accepted above. Next is canonical four-outcome durable
+decision/dispatch migration, followed by publication-evidenced lifecycle transitions.
 
 Next concrete packet local-c3-entry-disposition: Astra specified publisher/reader
 contract in contact plan2026-09-07-entry-disposition-store.md. Two-file local task;
