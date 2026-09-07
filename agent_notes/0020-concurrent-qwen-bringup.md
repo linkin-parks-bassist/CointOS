@@ -1,5 +1,44 @@
 # Concurrent Qwen commissioning — Astra, 2026-09-07
 
+Current dispatch checkpoint: prior shared-policy/layout packets are finished.
+Astra independently passed 10 policy +12 layout tests; layout's -no-kvu typo
+was caught, demonstrated red and corrected green. Integrated through c7a325b.
+Policy worker's conservative close reconciled absent after both workers ended.
+Two implementation-only wiring packets now run in separate observable worktrees:
+local-shared-model-routing / Sieve-Routing owns models.py and three scoped tests;
+local-cfg-admission-wiring / Sieve-Admission owns inference_capacity.py, resource
+JSON and two scoped tests. Exact packets/views are in the ignored SDD ledger.
+Their base model/capacity suites passed 46 and 24 tests respectively. Do not
+cherry-pick admission packet while prior leases still need its old disk-policy
+loader: finish/reconcile both first. Routing adds shared metadata; admission
+migrates global counts and bounds work against observed backend slots. Shared
+request-pool admission remains explicitly blocked pending its own integration;
+these packets alone are NOT eight-worker activation. No broad suite was run.
+
+Latest checkpoint (supersedes running-job statements below): Sieve-Review finished
+without scoped findings; Sieve-Policy's fixed-policy reader was independently
+checked (six focused tests) and integrated at 4feb403. Both old leases are released;
+the first finisher needed conservative absence reconciliation after its peer ended.
+
+David approved eight request slots over one bounded shared context pool. A real
+metadata-only load with ctx_size=262144, --parallel 8, --kv-unified and
+--kv-unified-per-slot 262144 succeeded: all eight slots reported n_ctx=262144.
+Host available memory was 71.2 GiB, GTT used 46.8 GiB, swap/OOM unchanged at zero.
+Evidence: ignored ledger shared-eight-profile-probe.json. This proves allocation
+and metadata, NOT eight-way generation or aggregate request admission. Restored
+the two-slot 131072-per-request build profile afterward; 4B stayed loaded.
+
+Now running, implementation only, separate worktrees and reused monitor windows:
+- Sieve-Policy2 / local-shared-pool-policy: inference.cfg and its reader/tests;
+  distinguish shared aggregate capacity from per-request maximum (three files).
+- Sieve-Layout / local-shared-context-layout: pure observed-context normalizer
+  and focused tests (two files).
+Packets and exact session/view records use those names in the ignored SDD ledger.
+Neither packet migrates callers. Shared-pool aggregate admission, canonical config
+activation and precise independent physical release remain required integration
+work before eight-slot worker dispatch. Do not admit eight full-size reservations
+merely because the backend exposes eight request slots.
+
 Original thesis reconciled in spec/owning plans at 5f98116. David explicitly asks
 for actual concurrent local agents, global `.cfg` slots, memory-contended model
 time-sharing, spontaneous role work and remote contact; do not narrow MVP back to

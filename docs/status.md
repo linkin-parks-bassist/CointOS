@@ -1,5 +1,14 @@
 # Current status
 
+Shared-pool checkpoint, 2026-09-07: David approved eight Qwen request slots sharing
+262144 aggregate context tokens, with a 262144 per-request ceiling. A real backend
+allocation/metadata probe succeeded (~46.8 GiB GTT, ~71.2 GiB host available, no
+swap/OOM increase); the two-slot build profile was restored. Two bounded local
+workers now implement shared-policy validation and context-layout normalization.
+The initial config reader is integrated at 4feb403, not wired into runtime callers.
+Eight-way inference, aggregate shared-pool admission and independent release are
+not yet accepted. See the concurrency handoff below for current jobs and evidence.
+
 Deferred direction: [CointOS-native backend/runner interfaces](decisions/0017-backend-independent-cointos-interfaces.md)
 are recorded as D9. David explicitly requested documentation, not implementation:
 post-MVP local-worker migrations should remove scattered Lemonade/OpenCode and

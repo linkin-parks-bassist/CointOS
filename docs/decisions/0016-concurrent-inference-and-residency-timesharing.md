@@ -30,7 +30,8 @@ with a default and model-specific overrides. Requested slots, context per reques
 aggregate resident context/cache budget, and actual observed backend capacity are
 separate fields. One validated policy feeds loading, admission and scheduling;
 remove competing constants rather than retaining several authorities. This file
-is not yet created or consumed. Reuse the existing configuration mechanisms.
+and its initial reader exist at 4feb403 but are not yet consumed by runtime callers.
+Reuse the existing configuration mechanisms.
 
 Qwen3.8-27B is David's preferred normal model, including ordinary control work;
 4B is retained for contingency availability. Model choice remains changeable.
@@ -44,7 +45,10 @@ Preserve measured memory boundaries and contingency/desktop availability.
 The installed Qwen backend reports native `n_ctx_train=262144`, currently allocated
 131072 per request. Installed Lemonade accepts `--ctx-size`; installed llama.cpp
 advertises parallel slots, unified KV, per-slot context limits and RAM prompt cache.
-Thus 262144 is a supported configuration target, not yet a live-accepted allocation.
+An eight-slot unified-pool allocation probe subsequently reported 262144 for every
+slot with 46.8 GiB GTT used and 71.2 GiB host available. David approved this shared
+pool direction. This is metadata/allocation evidence, not eight-way inference or
+aggregate admission acceptance; the active build profile remains two fixed slots.
 Update client limits and admission representation together; do not divide a total
 262144 allocation among several slots and call each slot 262144. Shared pools must
 account for aggregate use independently of each request's permitted maximum.
