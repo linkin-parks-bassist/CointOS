@@ -2,6 +2,13 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Active local-c3-disposition-notice: Astra's exact two-line gateway check AFTER
+non-ready notice handling, BEFORE old decision-presence checks, inside existing
+inbound lock. New real temp-store tests cover all4 outcomes with no reply, absence,
+busy lock, malformed disposition propagation, prior terminal/stale-sending state.
+No planning delegated; explicit collector supplied to prevent framework detour.
+Baseline3 ordinary-notice tests passed. No caller or lifecycle activation in packet.
+
 Disposition store accepted at contact1e0469f (worker066e457 + tiny Astra correction).
 Astra reviewed publisher/reader and relevant tests, independently passed15 new +6
 existing outbox tests. Initial worker14 tests genuinely collected/passed after its
