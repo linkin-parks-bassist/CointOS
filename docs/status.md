@@ -1,5 +1,10 @@
 # Current status
 
+Product input, not implementation status: David requested
+[Telegram task capture, intelligent reminders, and two-way agent contact](product-ideas/telegram-tasks-and-reminders.md).
+Canonical outbox work must preserve unsolicited agent messages and reply routing;
+the task-list/Reminder feature is documented, not activated.
+
 David explicitly approved lifecycle and ephemeral front-admission directions on
 2026-09-07, with tunable entry-model/policy and natural acknowledgement requirements.
 See [decision0014](decisions/0014-contact-lifecycle-and-front-admission.md).

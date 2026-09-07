@@ -2,6 +2,13 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+New product input: [Telegram tasks/reminders and agent conversations](../docs/product-ideas/telegram-tasks-and-reminders.md).
+David wants any agent to reach him through the outbox and Coin to route Telegram
+replies back to the originating work. Concrete example: a shared writable task
+list for Coin/Cointelprofessional (or an authorized delegate), optional due/reminder
+times, and a periodic reasoning-capable Reminder role. Preserve these requirements
+when replacing the legacy notifier; not added to the running persistence packet.
+
 David clarified that outbound contact MUST also support spontaneous event-driven
 updates ("if something happens"), not only replies. Do not interpret "random
 updates" as scheduled filler or impose a reply-only system. The legacy ecosystem
