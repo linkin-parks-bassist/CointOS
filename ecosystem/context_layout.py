@@ -14,7 +14,7 @@ _UNIFIED_FLAG = "--kv-unified"
 _CAP_FLAG = "--kv-unified-per-slot"
 
 _VALUE_FLAGS = (_CTX_FLAG, _PARALLEL_FLAG, _CAP_FLAG)
-_REJECTED_ALIASES = frozenset({"-c", "-np", "-kvu", "--no-kvu", "--no-kv-unified"})
+_REJECTED_ALIASES = frozenset({"-c", "-np", "-kvu", "-no-kvu", "--no-kv-unified"})
 _REJECTED_EQUALS_PREFIXES = (
     "--ctx-size=",
     "--parallel=",

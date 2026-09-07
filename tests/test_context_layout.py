@@ -159,7 +159,7 @@ def test_invalid_flag_forms_are_rejected():
                  ["--ctx-size", "262144", "-np", "2", "--parallel", "2"],
                  slots=2, per_slot=131072)
     _expect_none("alias -kvu", OBSERVED_SHARED_ARGV + ["-kvu"])
-    _expect_none("alias --no-kvu", OBSERVED_SHARED_ARGV + ["--no-kvu"])
+    _expect_none("alias -no-kvu", OBSERVED_SHARED_ARGV + ["-no-kvu"])
     _expect_none("alias --no-kv-unified",
                  OBSERVED_SHARED_ARGV + ["--no-kv-unified"])
     _expect_none("equals --ctx-size",
