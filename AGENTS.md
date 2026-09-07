@@ -5,6 +5,13 @@ personal orchestration infrastructure that may coordinate professional tasks; th
 does not authorize mixing personal, Avnet, AMD, partner, or customer information.
 
 - Preserve local-only inference and filesystem/version-control as the source of truth.
+- Launch future local Qwen/OpenCode workers with a live attachable OpenCode UI by
+  default, using `scripts/opencode_observable.py` inside the existing admission
+  gate. Publish the exact per-run attach command/session to David. Keep the server
+  loopback-only, ephemeral and in the admitted process group; retain JSONL logs.
+  Closing the viewer must not stop the worker. Do not restart a running worker to
+  add viewing, expose a LAN/public listener, or replace gated inference with a
+  permanent credential-bearing server. See `docs/operations/local-worker-view.md`.
 - Read `docs/status.md`, relevant project notes, and decisions before changing behavior.
 - Record consequential design changes in `docs/decisions/`.
 - Never enable remote access, access credentials, program hardware, push code, or

@@ -1255,6 +1255,11 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                         "boundary without duplicating finished work.\n",
                     )
                     prompt_path = resume_path
+            view_path = cli.ROOT / 'state/worker-views' / f"{job['id']}-{time.time_ns()}.json"
+            view_path.parent.mkdir(parents=True, exist_ok=True)
+            command = [sys.executable,
+                       str(Path(__file__).resolve().parents[1] / 'scripts/opencode_observable.py'),
+                       '--view-record', str(view_path), '--', *command]
             try:
                 output_mode = "ab" if resume_session else "wb"
                 # Baseline before launch: a fresh (truncated) log starts at
