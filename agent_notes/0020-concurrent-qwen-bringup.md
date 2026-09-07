@@ -1,5 +1,36 @@
 # Concurrent Qwen commissioning — Astra, 2026-09-07
 
+Integrated shared routing 32fd0ad, cfg admission 50250dd and mixed-cap fix
+3dd730b after review. Fresh combined verification: model admission46, resident3,
+shared routing7 passed; cfg admission and inference_capacity then failed broadly.
+Systematic root cause reproduced: their synthetic route() fixtures omit the newly
+authoritative context_mode. models.validate_route freshly produces fixed and,
+as required, compares context_mode, returning route_changed:context_mode before
+R3 persists a lease. Production models.route returns explicit context_mode.
+This is a cross-packet test-fixture migration gap, not permission to remove mode
+identity checking. A bounded integration worker must update all still-valid fixed
+fixtures/expectations and rerun the combined set; shared realization remains the
+next production seam. Do not claim integrated green until that evidence exists.
+
+Admission candidate 791d05b finished returncode0 but awaits conservative absence
+reconciliation while Routing remains active. Astra independently passed its 24
+existing +9 new focused tests and diff check. DO NOT INTEGRATE YET: review found
+_model_slot_limit's caller counts same-model leases only within the current
+front/work class. If a single backend model serves both classes, combined active
+leases can exceed observed parallel_sequences. Required local correction/review:
+count all active leases for the same model against observed physical slots, then
+separately enforce class policy (front cap or model work cap). Add literal mixed
+front+work test; preserve current distinct-model operation. Also note logical
+global indices reserve 0 for front and 1..8 for work, while llama slot ids are
+0..7; do not pass logical backend_sequence as id_slot until a backend-qualified
+physical mapping is represented. This is a future precise-slot boundary, not a
+reason to discard canonical cfg work.
+
+Polling cadence superseded: David now explicitly requests worker checks about
+every FIFTEEN minutes, not five. Use an interruptible timer between checks;
+do not inspect worker logs/status repeatedly while waiting. User messages or
+actual completion notifications can interrupt the wait. Keep hosted usage low.
+
 David is explicitly AFK/asleep, but subsequently approved overnight reused monitor
 windows with at most eight live monitors. Use COINTOS_VIEW_MODE=driver within that
 bound; reuse idle slots and use afk if a ninth window would otherwise be needed.
