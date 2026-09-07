@@ -22,3 +22,11 @@ Approved staging spec: docs/superpowers/specs/2026-09-07-message-lifecycle-desig
 in /home/david/.worktrees/cointos-mvp-contact. Front-admission decomposition:
 agent_notes/0020-front-admission-options.md in that worktree. Code and live evidence
 remain outstanding; automatic goal continuations were not used as approval.
+
+David's subsequent refinement: silent escalation mandates a prompt response from
+the escalation model. If significant work follows, it sends an initial contextual
+response and later a separate follow-up. The intermediate response is not final
+completion and must not close the message; distinct replay-safe publication and
+timing/admission tests are required in the deep-response integration. No numerical
+response deadline has yet been specified. Silence is not authorization to queue
+unacknowledged work indefinitely.

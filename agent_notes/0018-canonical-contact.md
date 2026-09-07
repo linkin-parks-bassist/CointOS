@@ -9,6 +9,11 @@ completion, required model/policy provenance, existing dispatch/reply consumers,
 preserved real A1 replay proof. Six-file Qwen packet; no planning delegated.
 Baseline29 contact tests +6 entry-validator tests independently passed. Publication-
 evidenced lifecycle and live caller/front admission remain required successors.
+First launch was refused before job creation: production route cannot qualify
+unloaded Qwen3.8 metadata. No worker started. Investigate residency before retry;
+do not fabricate metadata or bypass admission. David also requires prompt deeper
+response after silent escalation and separate follow-up for substantial work;
+decision0014 and staging spec/packet now record that mandatory successor.
 
 Accepted local-c3-disposition-notice at contact38fc5b8. Astra read the complete
 production diff and six new function tests, then independently ran6 disposition,
