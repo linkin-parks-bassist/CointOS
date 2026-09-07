@@ -494,6 +494,13 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             snapshot = backend_snapshot(config["backend_base"], lease["model_id"])
         except Exception:
             snapshot = None
+        identity = _snapshot_identity(snapshot)
+        pre = None
+        if identity is not None:
+            try:
+                pre = observe_backend_slots(identity)
+            except Exception:
+                pre = None
         upstream_connection = http.client.HTTPConnection(
             endpoint["host"], endpoint["port"], timeout=float(config.get("backend_timeout_seconds", 180)))
         try:
@@ -505,12 +512,30 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
                                         headers={"Content-Type": "application/json",
                                                  "Connection": "close"})
             upstream = upstream_connection.getresponse()
+            start = None
+            if pre is not None:
+                try:
+                    start = _capture_start_slots(pre)
+                except Exception:
+                    start = None
+            _record_claim_slot_evidence(Path(root), lease["lease_id"],
+                                        admission["claim_id"], pre, start, clock)
             result = forward_proxy_response(connection, upstream,
                                             {**lease, "stream_chunk_bytes": config.get(
                                                 "stream_chunk_bytes", 65536)},
                                             None, clock)
-            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], False,
-                          result, clock)
+            termination = None
+            if pre is not None and start is not None:
+                try:
+                    end = observe_backend_slots(start["identity"])
+                except Exception:
+                    end = None
+                termination = _slot_ended_idle_termination(
+                    Path(root), lease["lease_id"], admission["claim_id"], end, clock)
+            if termination is not None:
+                result = {**result, "termination_observation": termination}
+            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"],
+                          termination is not None, result, clock)
         except Exception:
             _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], False,
                           {}, clock)
@@ -666,6 +691,84 @@ def _validated_backend_termination(root: Path, credential: dict, claim_id: str,
     return _durable(observation) if valid else None
 
 
+def _slot_ended_idle_termination(root: Path, lease_id: str, claim_id: str,
+                                 end, clock) -> dict | None:
+    """Prove the claim's single flipped slot is now idle; append evidence."""
+    root = Path(root)
+    with _proxy_lock(root) as (state, _save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None or credential.get("state") != "open":
+            return None
+        claim = credential["in_flight"].get(claim_id)
+        if claim is None:
+            return None
+        evidence = claim.get("slot_evidence")
+        pre = evidence.get("pre") if type(evidence) is dict else None
+        start = evidence.get("start") if type(evidence) is dict else None
+        if (type(pre) is not dict or type(start) is not dict
+                or pre.get("identity") != start.get("identity")):
+            return None
+        identity = pre.get("identity")
+    if type(end) is not dict or end.get("identity") != identity:
+        end = None
+    slot_id = correlate_claim_slot(pre, start, end)
+    if slot_id is None:
+        return None
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        claim = (None if credential is None
+                 else credential["in_flight"].get(claim_id))
+        if credential is None or credential.get("state") != "open" \
+                or claim is None:
+            return None
+        request_id = claim.get("request_id")
+        if type(request_id) is not str or not request_id:
+            return None
+        try:
+            policy = json.loads((root / "config/resource-policy.json").read_text(
+                encoding="utf-8"))["inference_capacity"]
+            observer_identity = str(policy["release_observer_identity"])
+            clock_domain_id = str(policy["clock_domain_id"])
+        except (KeyError, TypeError, ValueError, OSError, json.JSONDecodeError):
+            return None
+        now = _clock(clock)
+        generation = int(state["generation"]) + 1
+        record_id = uuid.uuid4().hex
+        evidence_id = "backend-observations.jsonl#" + record_id
+        termination = {
+            "terminated": True,
+            "binding": _durable(credential["binding"]["release_binding"]),
+            "claim_id": claim_id,
+            "request_id": request_id,
+            "observer_identity": observer_identity,
+            "observer_generation": generation,
+            "observed_monotonic": now,
+            "clock_domain_id": clock_domain_id,
+            "evidence_id": evidence_id,
+        }
+        record = {
+            "record_id": record_id,
+            "kind": "slot_ended_idle",
+            "binding": termination["binding"],
+            "claim_id": claim_id,
+            "request_id": request_id,
+            "observed_monotonic": now,
+            "evidence_id": evidence_id,
+            "identity": _durable(identity),
+            "slot_id": slot_id,
+            "pre": _durable(pre),
+            "start": _durable(start),
+            "end": _durable(end),
+        }
+        try:
+            _append_backend_observation(root, record)
+        except OSError:
+            return None
+        state["generation"] = generation
+        save()
+        return _durable(termination)
+
+
 def _snapshot_identity(snapshot):
     if type(snapshot) is not dict:
         return None
@@ -698,6 +801,40 @@ def _record_backend_identity(root: Path, lease_id: str, claim_id: str,
             "backend_sequence": backend_sequence,
             "started_monotonic": _clock(clock),
             "identity": identity,
+        }
+        save()
+
+
+def _sanitized_slot_observation(observation):
+    """Keep only the recorded identity and slot id/processing facts."""
+    if type(observation) is not dict:
+        return None
+    identity = observation.get("identity")
+    slots = observation.get("slots")
+    if type(identity) is not dict or type(slots) is not list:
+        return None
+    sanitized = []
+    for slot in slots:
+        if (type(slot) is not dict or type(slot.get("id")) is not int
+                or type(slot.get("is_processing")) is not bool):
+            return None
+        sanitized.append({"id": slot["id"], "is_processing": slot["is_processing"]})
+    return {"identity": _durable(identity), "slots": sanitized}
+
+
+def _record_claim_slot_evidence(root: Path, lease_id: str, claim_id: str,
+                                pre, start, clock) -> None:
+    """Bind sanitized pre/start slot evidence to the exact in-flight claim."""
+    now = _clock(clock)
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        claim = None if credential is None else credential["in_flight"].get(claim_id)
+        if claim is None:
+            return
+        claim["slot_evidence"] = {
+            "pre": _sanitized_slot_observation(pre),
+            "start": _sanitized_slot_observation(start),
+            "recorded_monotonic": now,
         }
         save()
 
@@ -1006,6 +1143,32 @@ def observe_backend_slot_idle(identity: dict, slot_id) -> dict | None:
             "slot": {"id": slot_id, "is_processing": False}}
 
 
+def observe_backend_slots(identity: dict) -> dict | None:
+    """Capture one incarnation-bracketed complete sanitized slot state."""
+    if type(identity) is not dict:
+        return None
+    gateway_base = identity.get("gateway_base")
+    model_id = identity.get("model_id")
+    if type(gateway_base) is not str or type(model_id) is not str:
+        return None
+    before = backend_snapshot(gateway_base, model_id)
+    if before is None or before.get("identity") != identity:
+        return None
+    try:
+        slots = _backend_json(identity["backend_base"], "/slots")
+    except Exception:
+        return None
+    after = backend_snapshot(gateway_base, model_id)
+    if after is None or after.get("identity") != identity:
+        return None
+    states = _normalized_slot_states(slots, identity.get("total_slots"))
+    if states is None:
+        return None
+    return {"identity": dict(identity),
+            "slots": [{"id": slot_id, "is_processing": states[slot_id]}
+                      for slot_id in states]}
+
+
 def correlate_claim_slot(pre, start, end):
     """Name the one slot whose false->true start flip is idle at the end."""
     if type(pre) is not dict or type(start) is not dict or type(end) is not dict:
@@ -1028,3 +1191,35 @@ def correlate_claim_slot(pre, start, end):
     if end_states[slot_id] is not False:
         return None
     return slot_id
+
+
+def _false_to_true_flips(pre, start):
+    """Return slot ids that flipped idle->busy between two complete states."""
+    identity = pre.get("identity")
+    if type(identity) is not dict or start.get("identity") != identity:
+        return None
+    total_slots = identity.get("total_slots")
+    pre_states = _normalized_slot_states(pre.get("slots"), total_slots)
+    start_states = _normalized_slot_states(start.get("slots"), total_slots)
+    if pre_states is None or start_states is None:
+        return None
+    return [slot_id for slot_id, was_idle in pre_states.items()
+            if was_idle is False and start_states[slot_id] is True]
+
+
+def _capture_start_slots(pre, attempts=3):
+    """Bounded post-accept bracket: stop at the first observed start flip."""
+    identity = pre.get("identity") if type(pre) is dict else None
+    if type(identity) is not dict:
+        return None
+    start = None
+    for _attempt in range(attempts):
+        try:
+            start = observe_backend_slots(identity)
+        except Exception:
+            return None
+        if start is None:
+            return None
+        if _false_to_true_flips(pre, start):
+            return start
+    return start

@@ -9,6 +9,7 @@ from ecosystem import inference_proxy
 from ecosystem.inference_proxy import (
     _backend_json, _backend_process_identity, backend_snapshot,
     correlate_claim_slot, observe_backend_idle, observe_backend_slot_idle,
+    observe_backend_slots,
 )
 
 
@@ -496,6 +497,81 @@ def test_claim_correlation_requires_matching_complete_incarnation():
         assert correlate_claim_slot(pre, started, broken_observation) is None
         assert correlate_claim_slot(broken_observation, started, end) is None
         assert correlate_claim_slot(pre, broken_observation, end) is None
+
+
+def two_slots():
+    return [{"id": 0, "is_processing": False, "prompt": "private"},
+            {"id": 1, "is_processing": False, "session": "private"}]
+
+
+def test_slot_state_capture_returns_complete_sanitized_state():
+    slots = [{"id": 0, "is_processing": True, "prompt": "private"},
+             {"id": 1, "is_processing": False, "session": "private"}]
+    result, json_calls, identity_calls = run_with_fakes(
+        observe_backend_slots, dict(IDENTITY2),
+        json_routes=routes(busy=True, props=PROPS2, slots=slots))
+    assert result == {"identity": IDENTITY2,
+                      "slots": [{"id": 0, "is_processing": True},
+                                {"id": 1, "is_processing": False}]}
+    assert "private" not in json.dumps(result)
+    assert json_calls == [(GATEWAY_BASE, "/api/v1/health"),
+                          (BACKEND_BASE, "/props"),
+                          (BACKEND_BASE, "/slots"),
+                          (GATEWAY_BASE, "/api/v1/health"),
+                          (BACKEND_BASE, "/props")]
+    assert identity_calls == [PID, PID, PID, PID]
+
+
+def test_slot_state_capture_refuses_incarnation_drift():
+    before, json_calls, _pids = run_with_fakes(
+        observe_backend_slots, dict(IDENTITY2),
+        json_routes=routes(props=PROPS2, slots=two_slots()),
+        identities=[process_identity(process_start_ticks=999),
+                    process_identity()])
+    assert before is None
+    assert json_calls == [(GATEWAY_BASE, "/api/v1/health"),
+                          (BACKEND_BASE, "/props")]
+    after, _calls, identity_calls = run_with_fakes(
+        observe_backend_slots, dict(IDENTITY2),
+        json_routes=routes(props=PROPS2, slots=two_slots()),
+        identities=[process_identity(), process_identity(),
+                    process_identity(),
+                    process_identity(process_start_ticks=999)])
+    assert after is None
+    assert identity_calls == [PID, PID, PID, PID]
+
+
+def test_slot_state_capture_refuses_incomplete_or_invalid_slot_lists():
+    cases = (
+        [{"id": 0, "is_processing": False}],
+        [],
+        [{"id": 0, "is_processing": False}, {"id": 0, "is_processing": True}],
+        [{"id": 0, "is_processing": False}, {"id": 2, "is_processing": False}],
+        [{"id": 0, "is_processing": False}, {"id": 1}],
+        [{"id": 0, "is_processing": "yes"}, {"id": 1, "is_processing": False}],
+    )
+    for slots in cases:
+        result, _calls, _pids = run_with_fakes(
+            observe_backend_slots, dict(IDENTITY2),
+            json_routes=routes(props=PROPS2, slots=slots))
+        assert result is None, slots
+    missing, _calls, _pids = run_with_fakes(
+        observe_backend_slots, dict(IDENTITY2),
+        json_routes=routes(props=PROPS2, unavailable=[(BACKEND_BASE, "/slots")]))
+    assert missing is None
+
+
+def test_slot_state_capture_refuses_malformed_identity_records():
+    assert observe_backend_slots(None) is None
+    assert observe_backend_slots({"model_id": MODEL_ID}) is None
+    without_backend = {key: value for key, value in IDENTITY2.items()
+                       if key != "backend_base"}
+    result, json_calls, _pids = run_with_fakes(
+        observe_backend_slots, without_backend,
+        json_routes=routes(props=PROPS2, slots=two_slots()))
+    assert result is None
+    assert json_calls == [(GATEWAY_BASE, "/api/v1/health"),
+                          (BACKEND_BASE, "/props")]
 
 
 def load_tests(_loader, _tests, _pattern):
