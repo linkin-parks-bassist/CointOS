@@ -67,3 +67,15 @@ Next local-r5-parent-write-red writes one deterministic composition regression:
 real child admission inside the external launch seam, real executor persistence,
 and a no-write close stub. No thread/timing race and no fake overwrite as evidence.
 Production repair remains outside this test-only packet.
+
+740b80b (isolated budget branch) adds one plain automatically collected regression.
+Astra inspected the full test and independently reproduced expected assertion RED:
+real enqueue_child persists300 from600, then real execute_next pre-close usage write
+restores600. Real harmless subprocess; deterministic launch hook, no race sleeps;
+close stub only reads and returns reconciliation_required, never mutates/writes.
+Worker closed normally with proxy revocation/R3 release. No production fix yet.
+Candidate now intentionally has this one failing test;625-pass baseline applies
+to896da1e, not740b80b. A repair must address executor persistence ownership across
+its other writes too, not just patch the assertion's first failing line. In-flight
+budget refresh remains a distinct enforcement requirement. Managed child dispatch
+is still unwired; do not portray this composition probe as observed live damage.
