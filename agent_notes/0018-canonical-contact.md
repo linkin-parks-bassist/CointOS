@@ -6,6 +6,12 @@ Resource instruction: David ended the temporary Sol allowance after its current
 front-plan correction task. Let that task finish, then leave Sol idle; no further
 hosted follow-ups without new approval. Resume local Qwen plus light Astra oversight.
 
+Sol finished. Astra fully reviewed corrected246-line front plan; generation/result
+fences, intent phases, truthful post-inference failure and secret-safe publication
+are improved. Plan remains a decomposition draft: exact attempt schema and recovery
+between attempt/index writes need one bounded LOCAL refinement with literal tests.
+Sol is idle, no further task assigned. Local lifecycle planner remains active.
+
 Active planning after explicit approval: local-c1-lifecycle-plan (Sieve/Qwen) owns
 only docs/superpowers/plans/2026-09-07-message-lifecycle.md in contact staging.
 Sol owns separate front-admission plan, now under correction after Astra's full
