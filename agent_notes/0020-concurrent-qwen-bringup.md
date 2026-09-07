@@ -1,8 +1,9 @@
 # Concurrent Qwen commissioning — Astra, 2026-09-07
 
-David is explicitly AFK/asleep from the latest conversation turn. Future launches
-MUST set COINTOS_VIEW_MODE=afk until he returns; keep attachable sessions/logs but
-do not create/focus windows. Existing driver windows need not be closed. He asks
+David is explicitly AFK/asleep, but subsequently approved overnight reused monitor
+windows with at most eight live monitors. Use COINTOS_VIEW_MODE=driver within that
+bound; reuse idle slots and use afk if a ninth window would otherwise be needed.
+This supersedes his earlier blanket AFK window suppression. He asks
 for continued economical local MVP bring-up, maximizing usable concurrency while
 respecting resource and decision boundaries. Old goal is still blocked; Astra
 requested /goal resume; David subsequently resumed the overnight goal. Automatic

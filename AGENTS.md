@@ -31,6 +31,13 @@ does not authorize mixing personal, Avnet, AMD, partner, or customer information
   not permission to kill/restart its worker. Reuse may target only positively
   identified agent-monitor windows, never David's unrelated terminal sessions;
   do not accumulate a new dead window for every completed AFK run.
+- David explicitly permits overnight/AFK monitor windows when using the tracked,
+  reusable pool, capped at eight monitoring windows. For this approved mode use
+  COINTOS_VIEW_MODE=driver even while AFK; this is explicit viewing permission,
+  not inferred user presence. Reuse idle slots and count existing tracked live
+  monitors before dispatch; if eight are already live and none reusable, retain
+  attachable sessions/logs with COINTOS_VIEW_MODE=afk instead of opening a ninth.
+  This supersedes blanket AFK window suppression for this bounded pool only.
 - Read `docs/status.md`, relevant project notes, and decisions before changing behavior.
 - Record consequential design changes in `docs/decisions/`.
 - Never enable remote access, access credentials, program hardware, push code, or
