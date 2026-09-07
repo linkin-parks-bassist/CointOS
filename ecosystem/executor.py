@@ -958,6 +958,34 @@ def _close_usage(budget: dict, usage: dict, output_path: Path,
     return usage
 
 
+def _adopt_durable_reservation_state(job: dict, job_path: Path) -> None:
+    """Re-adopt the parent's authoritative reservation state from disk.
+
+    enqueue_child durably deducts the child's budget from remaining_budget
+    and records child_reservations under task-enqueue.lock while the runner
+    round is in flight. The executor's cached parent copy goes stale;
+    re-adopt the authoritative fields before persisting so the write-back
+    cannot clobber the reservation.
+    """
+    try:
+        durable = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if type(durable) is not dict or durable.get("id") != job.get("id"):
+        return
+    if "remaining_budget" in durable:
+        job["remaining_budget"] = durable["remaining_budget"]
+    if "child_reservations" in durable:
+        job["child_reservations"] = durable["child_reservations"]
+
+
+def _persist_parent_job(job: dict, job_path: Path) -> None:
+    """Persist the cached parent without clobbering its durable reservation
+    state written under task-enqueue.lock."""
+    _adopt_durable_reservation_state(job, job_path)
+    cli.atomic_json(job_path, job)
+
+
 def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
                      output_path: Path, before_stop, scheduling: dict,
                      initial_output_bytes: int | None = None) -> dict:
@@ -994,6 +1022,7 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
     usage.pop("task_started", None)
     usage.pop("run_seconds", None)
     usage["attempts"] = int(job.get("attempts", 0))
+    usage["output_bytes"] = usage.get("output_bytes", 0)
     usage = execution_budget.account_usage(
         budget, usage, {"kind": "run_started", "at": started})
     usage = execution_budget.account_usage(
@@ -1298,7 +1327,7 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                     # no later branch (including reconciliation_required) can
                     # discard accounting.
                     job["budget_usage"] = outcome["usage"]
-                    cli.atomic_json(path, job)
+                    _persist_parent_job(job, path)
                     child_outcome = gated_child_wait(context["launch"], 0)
                     closed = close_runner_round(job, path, context, child_outcome)
                     if closed["state"] == "reconciliation_required":
@@ -1445,7 +1474,7 @@ artifact preserves the recoverable boundaries without pretending to summarize wo
                 print(f"{job['id']} context rolled over; handoff "
                       f"{'attested' if handoff else 'missing, degraded artifact written'}")
                 return True
-            cli.atomic_json(path, job)
+            _persist_parent_job(job, path)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))
             if job.get("verifies"):
                 from ecosystem.verification import finalize
