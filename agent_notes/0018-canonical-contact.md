@@ -323,7 +323,8 @@ David approved one temporary gpt-5.6-sol low thread. Sol produced and Astra revi
 `/home/david/.worktrees/cointos-mvp-contact/agent_notes/0020-front-admission-options.md`.
 Recommendation: ephemeral gated front inference child, using real R1/R3/credential
 admission and process-ended conservative close; persistent orchestrator may supervise.
-This proposed process-lifecycle/latency choice awaits David's review. No C2 code or
-live activation authorized by this note. Sol corrected replay generation/identity,
+David subsequently approved this process-lifecycle choice and message lifecycle in
+decision0014, including tunable entry policy. Implementation may proceed through
+reviewed bounded plans; live activation remains separate. Sol corrected replay generation/identity,
 secret-vs-durable-binding distinction and admission ordering after Astra review.
 R4-PRECISE remains required open successor; pending message semantics are unchanged.
