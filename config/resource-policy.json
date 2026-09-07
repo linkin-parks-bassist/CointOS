@@ -45,7 +45,7 @@
       "handoff_tokens": 8192
     },
     "rollover_fraction": 0.75,
-    "parallel_requests": 2,
+    "parallel_requests": 8,
     "llamacpp_batch_size": 512,
     "llamacpp_ubatch_size": 128
   },
