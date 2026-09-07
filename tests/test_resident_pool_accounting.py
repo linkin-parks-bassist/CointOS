@@ -10,7 +10,8 @@ GIB = 1024 ** 3
 
 def observed(shared=False):
     values = realistic_resident_inputs('qwen', 8002, 262144, 262144, 2,
-                                      131072, 262144, 27000000000, 17 * GIB)
+                                      262144 if shared else 131072, 262144,
+                                      27000000000, 17 * GIB)
     if shared:
         values[1]['launch_command'].append('--kv-unified')
     return _observed_model_record(*values, '2026-09-07T00:00:00Z')
@@ -30,8 +31,18 @@ def admitted():
 
 
 def test_observed_fixed_pool_is_credited_but_shared_mode_is_not_guessed():
-    assert observed().get('preallocated_context_tokens') == 262144
-    assert observed(True).get('preallocated_context_tokens') is None
+    fixed = observed()
+    assert fixed.get('context_mode') == 'fixed'
+    assert fixed.get('preallocated_context_tokens') == 262144
+    proven = observed(True)
+    assert proven is not None
+    assert proven.get('context_mode') == 'shared'
+    assert proven.get('context_tokens_per_sequence') == 262144
+    assert proven.get('preallocated_context_tokens') == 262144
+    guessed = realistic_resident_inputs('qwen', 8002, 262144, 262144, 2,
+                                        131072, 262144, 27000000000, 17 * GIB)
+    guessed[1]['launch_command'].append('--kv-unified')
+    assert _observed_model_record(*guessed, '2026-09-07T00:00:00Z') is None
 
 
 def test_resident_weights_and_pool_are_not_charged_as_new_allocations():

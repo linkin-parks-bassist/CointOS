@@ -3,6 +3,8 @@ from __future__ import annotations
 import glob, http.client, ipaddress, json, os, re, shlex, subprocess, time, urllib.request
 from pathlib import Path
 
+from ecosystem import context_layout
+
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 RESOURCE_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/resource-policy.json"
 
@@ -152,6 +154,7 @@ def _health_parallel_sequences(resident: dict):
 
 def _verified_model_record(
     item: dict, resident: dict | None, health_fresh: bool, observed_at: float,
+    layout: dict | None = None,
 ) -> dict:
     model_id = item.get("id")
     parameter_count = item.get("parameter_count")
@@ -178,11 +181,17 @@ def _verified_model_record(
         options = resident.get("recipe_options")
         loaded_context = options.get("ctx_size") if isinstance(options, dict) else None
         parallel = _health_parallel_sequences(resident)
-        residency_verified = (
-            _positive_integer(loaded_context)
-            and _positive_integer(parallel)
-            and loaded_context % parallel == 0
-        )
+        if layout is not None:
+            residency_verified = all(_positive_integer(layout.get(field)) for field in (
+                "backend_context_tokens", "parallel_sequences",
+                "context_tokens_per_sequence", "preallocated_context_tokens",
+            ))
+        else:
+            residency_verified = (
+                _positive_integer(loaded_context)
+                and _positive_integer(parallel)
+                and loaded_context % parallel == 0
+            )
     return {
         "id": model_id,
         "parameter_count": parameter_count if _positive_integer(parameter_count) else None,
@@ -256,9 +265,7 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
     if not isinstance(options, dict):
         return None
     ctx_size = options.get("ctx_size")
-    if not _positive_integer(ctx_size) or ctx_size % total_slots != 0:
-        return None
-    if ctx_size // total_slots > n_ctx_train:
+    if not _positive_integer(ctx_size):
         return None
     health_parallel = _health_parallel_sequences(resident)
     if health_parallel is not None and health_parallel != total_slots:
@@ -284,16 +291,20 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
         if declared is not None and not (
                 _positive_integer(declared) and declared == measured):
             return None
+    layout = context_layout.observed_context_layout(
+        launch_command, ctx_size, total_slots, meta.get("n_ctx"), n_ctx_train)
+    if layout is None:
+        return None
     record = dict(item)
     record["parameter_count"] = n_params
     record["size_bytes"] = size
     record["context_length"] = n_ctx_train
     record["capabilities"] = capabilities
     record["parallel_sequences"] = total_slots
-    record["supported_context_quantum"] = ctx_size // total_slots
+    record["supported_context_quantum"] = layout["context_tokens_per_sequence"]
     observed_resident = dict(resident)
     observed_resident["parallel_sequences"] = total_slots
-    result = _verified_model_record(record, observed_resident, True, observed_at)
+    result = _verified_model_record(record, observed_resident, True, observed_at, layout)
     if result.get("metadata_verified") is not True or result.get("residency_verified") is not True:
         return None
     root = backend_url.removesuffix("/v1").rstrip("/")
@@ -301,17 +312,12 @@ def _observed_model_record(item, resident, backend_document, props, observed_at)
         f"{root}/v1/models;{root}/props;"
         "lemonade:/api/v1/health;observed-allocation-only"
     )
-    # Explicit fixed-partition llama.cpp allocation is already in host/GTT usage.
-    # Shared/dynamic pools need their own accounting contract, not this credit.
-    fixed = record.get("recipe") == "llamacpp" and meta.get("n_ctx") == ctx_size // total_slots
-    for flag, expected in (("--parallel", total_slots), ("--ctx-size", ctx_size)):
-        fixed = fixed and launch_command.count(flag) == 1
-        if fixed:
-            index = launch_command.index(flag) + 1
-            fixed = index < len(launch_command) and launch_command[index] == str(expected)
-    if fixed and not any(argument in ("--kv-unified", "-kvu", "--kv-unified-per-slot")
-                         for argument in launch_command):
-        result["preallocated_context_tokens"] = ctx_size
+    # The layout normalizer proves the allocation shape. Both explicit
+    # fixed partitions and proven shared pools are already in host/GTT
+    # usage, so the aggregate preallocation is credited for either mode.
+    result["context_mode"] = layout["context_mode"]
+    result["context_tokens_per_sequence"] = layout["context_tokens_per_sequence"]
+    result["preallocated_context_tokens"] = layout["preallocated_context_tokens"]
     registry_context = item.get("context_length")
     if registry_context is not None:
         result["registry_context_length"] = registry_context
@@ -484,9 +490,21 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
         model = model_by_id.get(model_id)
         total_context = model.get("loaded_context") if isinstance(model, dict) else None
         parallel = model.get("parallel_sequences") if isinstance(model, dict) else None
+        context_mode = model.get("context_mode") if isinstance(model, dict) else None
+        if context_mode not in ("fixed", "shared"):
+            context_mode = "fixed"
+        per_sequence = model.get("context_tokens_per_sequence") \
+            if isinstance(model, dict) else None
         work_model = resident.get("work_model")
         if not isinstance(work_model, bool) and isinstance(control_model, str) and control_model:
             work_model = model_id != control_model
+        shared_facts = (
+            _positive_integer(per_sequence) and per_sequence <= total_context
+        ) if context_mode == "shared" else (
+            _positive_integer(total_context)
+            and _positive_integer(parallel)
+            and total_context % parallel == 0
+        )
         complete = (
             isinstance(model, dict)
             and model.get("metadata_verified") is True
@@ -494,7 +512,7 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
             and model.get("fresh") is True
             and _positive_integer(model.get("size_bytes"))
             and _positive_integer(total_context) and _positive_integer(parallel)
-            and total_context % parallel == 0 and isinstance(work_model, bool)
+            and shared_facts and isinstance(work_model, bool)
         )
         if not complete:
             resident_facts_complete = False
@@ -510,7 +528,9 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
             "work_model": work_model,
             "backend_context_tokens": total_context,
             "parallel_sequences": parallel,
-            "context_tokens_per_sequence": total_context // parallel,
+            "context_mode": context_mode,
+            "context_tokens_per_sequence": per_sequence if context_mode == "shared"
+                else total_context // parallel,
             "fresh": True,
             "observed_at": now,
             "provenance": provenance,
@@ -633,6 +653,12 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     advertised = model.get("context", model.get("advertised_context_tokens"))
     quantum = model.get("supported_context_quantum")
     parallel = model.get("parallel_sequences", _policy_value(policy, "parallel_sequences", 1))
+    context_mode = model.get("context_mode")
+    if context_mode is None:
+        context_mode = "fixed"
+    elif context_mode not in ("fixed", "shared"):
+        reasons.append("context_mode:unknown")
+        context_mode = None
     capabilities = model.get("capabilities")
     requirements = request.get("requirements", {})
     if not isinstance(requirements, dict):
@@ -683,6 +709,16 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     maximum_backend_context = envelope.get("maximum_context_tokens")
     resident_verified = (model.get("loaded") is True
                          and model.get("residency_verified") is True)
+    shared_verified = (
+        context_mode == "shared"
+        and resident_verified
+        and model.get("fresh") is True
+        and model.get("stale") is not True
+        and isinstance(model.get("provenance"), str)
+        and model["provenance"].endswith("observed-allocation-only")
+    )
+    if context_mode == "shared" and not shared_verified:
+        reasons.append("context:shared_unverified")
     if not _positive_integer(maximum_model_bytes) or (
             not resident_verified and _positive_integer(model_bytes)
             and model_bytes > maximum_model_bytes):
@@ -702,25 +738,49 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     context_exclusion_reasons = []
     if (_positive_integer(advertised) and _positive_integer(quantum)
             and _positive_integer(parallel) and _positive_integer(maximum_backend_context)):
-        envelope_per_sequence = maximum_backend_context // parallel
-        upper = min(advertised, envelope_per_sequence)
-        if envelope_per_sequence < advertised:
-            context_exclusion_reasons.append("context:resource_envelope")
-        if model.get("loaded"):
-            loaded_total = model.get("loaded_context", model.get("backend_context_tokens"))
-            if loaded_total is not None:
-                if not _positive_integer(loaded_total):
-                    reasons.append("loaded_context")
+        if context_mode == "shared":
+            loaded_total = model.get("loaded_context")
+            observed_per_sequence = model.get("context_tokens_per_sequence")
+            if (not shared_verified
+                    or not _positive_integer(loaded_total)
+                    or not _positive_integer(observed_per_sequence)
+                    or observed_per_sequence > loaded_total):
+                reasons.append("context:shared_unverified")
+            else:
+                if loaded_total > maximum_backend_context:
+                    reasons.append("context:loaded_allocation")
+                upper = min(advertised, observed_per_sequence, maximum_backend_context)
+                if maximum_backend_context < advertised:
+                    context_exclusion_reasons.append("context:resource_envelope")
+                if observed_per_sequence < advertised:
+                    context_exclusion_reasons.append("context:loaded_allocation")
+                per_sequence = upper - upper % quantum
+                if per_sequence != upper:
+                    context_exclusion_reasons.append("context:backend_quantum")
+                if per_sequence == 0:
+                    reasons.append("context:unsupported")
                 else:
-                    if loaded_total // parallel < upper:
-                        context_exclusion_reasons.append("context:loaded_allocation")
-                    upper = min(upper, loaded_total // parallel)
-        per_sequence = upper - upper % quantum
-        if per_sequence != upper:
-            context_exclusion_reasons.append("context:backend_quantum")
-        if per_sequence == 0:
-            reasons.append("context:unsupported")
-        backend_context = per_sequence * parallel
+                    backend_context = loaded_total
+        else:
+            envelope_per_sequence = maximum_backend_context // parallel
+            upper = min(advertised, envelope_per_sequence)
+            if envelope_per_sequence < advertised:
+                context_exclusion_reasons.append("context:resource_envelope")
+            if model.get("loaded"):
+                loaded_total = model.get("loaded_context", model.get("backend_context_tokens"))
+                if loaded_total is not None:
+                    if not _positive_integer(loaded_total):
+                        reasons.append("loaded_context")
+                    else:
+                        if loaded_total // parallel < upper:
+                            context_exclusion_reasons.append("context:loaded_allocation")
+                        upper = min(upper, loaded_total // parallel)
+            per_sequence = upper - upper % quantum
+            if per_sequence != upper:
+                context_exclusion_reasons.append("context:backend_quantum")
+            if per_sequence == 0:
+                reasons.append("context:unsupported")
+            backend_context = per_sequence * parallel
         reserve_total = minimum + sum(value for value in reserves.values()
                                       if isinstance(value, int) and not isinstance(value, bool))
         if per_sequence < reserve_total:
@@ -777,6 +837,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         "advertised_context_tokens": advertised,
         "backend_context_tokens": backend_context,
         "parallel_sequences": parallel,
+        "context_mode": context_mode,
         "context_tokens_per_sequence": per_sequence,
         "context_exclusion_reasons": context_exclusion_reasons,
         **reserves,
@@ -840,7 +901,8 @@ def validate_route(route: dict, fresh_inventory: dict, policy: dict, request: di
                 "exclusion_reasons": ["model:disappeared"]}
     if fresh.get("state") != "admitted":
         return fresh
-    allocation_fields = ("parameter_count", "model_bytes", "backend_context_tokens",
+    allocation_fields = ("parameter_count", "model_bytes", "context_mode",
+                         "backend_context_tokens",
                          "parallel_sequences", "context_tokens_per_sequence")
     changed = [field for field in allocation_fields if fresh.get(field) != route.get(field)]
     if changed:
@@ -877,7 +939,25 @@ def realize(decision: dict, inventory: dict) -> dict:
     context = decision.get("context_tokens_per_sequence")
     backend_context = decision.get("backend_context_tokens")
     parallel = decision.get("parallel_sequences")
-    if (not _positive_integer(context) or not _positive_integer(backend_context)
+    mode = decision.get("context_mode")
+    if mode is None:
+        mode = "fixed"
+    if mode not in ("fixed", "shared"):
+        raise ValueError("route has an unknown context mode")
+    if mode == "shared":
+        candidate_cap = candidate.get("context_tokens_per_sequence")
+        if (not _positive_integer(context) or not _positive_integer(backend_context)
+                or not _positive_integer(parallel)
+                or context > backend_context
+                or candidate.get("loaded") is not True
+                or candidate.get("residency_verified") is not True
+                or candidate.get("fresh") is not True
+                or candidate.get("context_mode") != "shared"
+                or not _positive_integer(candidate_cap) or context > candidate_cap
+                or candidate.get("loaded_context") != backend_context
+                or candidate.get("parallel_sequences") != parallel):
+            raise ValueError("route does not match a coherent shared resident pool")
+    elif (not _positive_integer(context) or not _positive_integer(backend_context)
             or not _positive_integer(parallel) or backend_context != context * parallel):
         raise ValueError("route has inconsistent per-sequence and backend context allocation")
     control_model = inventory.get("scheduling_policy", {}).get("control_plane", {}).get("model")

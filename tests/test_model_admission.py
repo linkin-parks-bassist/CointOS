@@ -189,7 +189,8 @@ def test_snapshot_produces_verified_r2_and_r3_capacity_records():
     assert current["resident_models"] == [{
         "model_id": "model-a", "model_bytes": 30 * GIB,
         "work_model": False, "backend_context_tokens": 65_536,
-        "parallel_sequences": 2, "context_tokens_per_sequence": 32_768,
+        "parallel_sequences": 2, "context_mode": "fixed",
+        "context_tokens_per_sequence": 32_768,
         "fresh": True, "observed_at": 1000.0,
         "provenance": "lemonade:/api/v1/health;policy:config/model-policy.json",
     }]
@@ -366,7 +367,7 @@ def complete_resident_inputs():
         "id": "/models/model-a.gguf",
         "meta": {
             "n_params": 10_000_000_000, "size": 30 * GIB,
-            "n_ctx_train": 131_072,
+            "n_ctx": 32_768, "n_ctx_train": 131_072,
         },
     }]}
     props = {
@@ -409,6 +410,7 @@ def test_snapshot_verified_resident_capacity_from_measured_backend():
         "supported_context_quantum": 32_768, "parallel_sequences": 2,
         "loaded": True, "loaded_context": 65_536, "busy": False,
         "preallocated_context_tokens": 65_536,
+        "context_mode": "fixed", "context_tokens_per_sequence": 32_768,
         "pinned": False, "recipe": "llamacpp",
         "metadata_verified": True, "residency_verified": True,
         "fresh": True, "stale": False, "observed_at": 1000.0,
@@ -421,7 +423,8 @@ def test_snapshot_verified_resident_capacity_from_measured_backend():
     assert current["resident_models"] == [{
         "model_id": name, "model_bytes": 18 * GIB, "work_model": True,
         "backend_context_tokens": 65_536, "parallel_sequences": 2,
-        "context_tokens_per_sequence": 32_768, "fresh": True,
+        "context_mode": "fixed", "context_tokens_per_sequence": 32_768,
+        "fresh": True,
         "observed_at": 1000.0,
         "provenance": (
             "http://127.0.0.1:13306/v1/models;"
@@ -456,6 +459,7 @@ def test_snapshot_resident_capacity_uses_props_slots_without_explicit_parallel()
         "pid": 4242, "backend_url": "http://127.0.0.1:13307/v1",
         "launch_command": [
             "/usr/bin/llama-server", "--model", path, "--ctx-size", "65536",
+            "--parallel", "2",
         ],
         "recipe_options": {"ctx_size": 65_536},
         "is_busy": False, "pinned": False,
@@ -463,7 +467,7 @@ def test_snapshot_resident_capacity_uses_props_slots_without_explicit_parallel()
     models_document = {"data": [{
         "id": path,
         "meta": {"n_params": 4_000_000_000, "size": 2 * GIB,
-                 "n_ctx_train": 262_144},
+                 "n_ctx": 32_768, "n_ctx_train": 262_144},
     }]}
     props = {"model_path": path, "total_slots": 2,
              "chat_template_caps": {"supports_tools": True}}
@@ -495,7 +499,8 @@ def test_snapshot_resident_capacity_uses_props_slots_without_explicit_parallel()
     assert current["resident_models"] == [{
         "model_id": name, "model_bytes": 2 * GIB, "work_model": True,
         "backend_context_tokens": 65_536, "parallel_sequences": 2,
-        "context_tokens_per_sequence": 32_768, "fresh": True,
+        "context_mode": "fixed", "context_tokens_per_sequence": 32_768,
+        "fresh": True,
         "observed_at": 1000.0,
         "provenance": (
             "http://127.0.0.1:13307/v1/models;"
@@ -688,7 +693,8 @@ def test_snapshot_busy_change_keeps_measured_metadata_verified():
     assert current["resident_models"] == [{
         "model_id": "model-a", "model_bytes": 30 * GIB, "work_model": False,
         "backend_context_tokens": 65_536, "parallel_sequences": 2,
-        "context_tokens_per_sequence": 32_768, "fresh": True,
+        "context_mode": "fixed", "context_tokens_per_sequence": 32_768,
+        "fresh": True,
         "observed_at": 1000.0,
         "provenance": (
             "http://127.0.0.1:13306/v1/models;"
@@ -952,7 +958,7 @@ def observed_inputs():
             "launch_command": [
                 "/usr/bin/llama-server",
                 "--model", "/models/qwen3-coder-30b.gguf",
-                "--ctx-size", "65536",
+                "--ctx-size", "65536", "--parallel", "2",
             ],
             "recipe_options": {"ctx_size": 65_536},
             "is_busy": False,
@@ -964,6 +970,7 @@ def observed_inputs():
                 "meta": {
                     "n_params": 30_000_000_000,
                     "size": 18 * GIB,
+                    "n_ctx": 32_768,
                     "n_ctx_train": 131_072,
                 },
             }]
@@ -1045,6 +1052,9 @@ def test_observed_record_normalizes_realistic_4b_and_27b_residents():
         assert result["context"] == spec["n_ctx_train"]
         assert result["loaded_context"] == spec["ctx_size"]
         assert result["supported_context_quantum"] == spec["ctx_size"] // spec["slots"]
+        assert result["context_mode"] == "fixed"
+        assert result["context_tokens_per_sequence"] == spec["ctx_size"] // spec["slots"]
+        assert result["preallocated_context_tokens"] == spec["ctx_size"]
         assert result["registry_context_length"] == spec["registry_context"]
         root = f"http://127.0.0.1:{spec['port']}"
         assert result["provenance"] == (
@@ -1065,6 +1075,9 @@ def test_observed_record_normalizes_registry_gaps_and_keeps_inputs_immutable():
     assert result["capabilities"] == ["tool-calling"]
     assert result["parallel_sequences"] == 2
     assert result["supported_context_quantum"] == 32_768
+    assert result["context_mode"] == "fixed"
+    assert result["context_tokens_per_sequence"] == 32_768
+    assert result["preallocated_context_tokens"] == 65_536
     assert "registry_context_length" not in result
     assert result["loaded"] is True
     assert result["loaded_context"] == 65_536
@@ -1127,6 +1140,8 @@ def test_observed_record_rejects_missing_or_bool_numeric_facts():
         ("props", "total_slots", True),
         ("props", "total_slots", 0),
         ("resident", "ctx_size", None),
+        ("backend", "n_ctx", None),
+        ("backend", "n_ctx", True),
     )
     for target, name, value in cases:
         item, resident, backend_document, props = observed_inputs()
