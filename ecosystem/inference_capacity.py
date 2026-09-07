@@ -327,17 +327,21 @@ def reserve_sequence(
             preempted = victim["lease_id"]
             lease_state = "waiting_for_preemption"
         if preempted is None:
-            held = sum(
-                1 for lease in active
+            model_active = [
+                lease for lease in active
                 if lease.get("model_id") == normalized_route["model_id"]
-                and (lease.get("workload_class") == "front")
+            ]
+            held = sum(
+                1 for lease in model_active
+                if (lease.get("workload_class") == "front")
                 == (workload_class == "front")
             )
             limit = _model_slot_limit(
                 workload_class, capacity_policy, normalized_route,
                 _model_work_slots(root, normalized_route["model_id"]),
             )
-            if held >= limit:
+            if (len(model_active) >= normalized_route["parallel_sequences"]
+                    or held >= limit):
                 return {
                     "state": "deferred",
                     "reasons": ["model_sequence_unavailable"],

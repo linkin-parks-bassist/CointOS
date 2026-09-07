@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from test_inference_capacity import (
+    GIB,
     accepted_scheduling_policy,
     ended_observation,
     inventory,
@@ -110,7 +111,65 @@ def work_request(request_id, worker_index):
     }
 
 
-def write_cfg_root(root, cfg, workers=3, policy=None):
+def front_worker_lease(model_id="model-a"):
+    return {
+        "worker-front": {
+            "lease_id": "worker-front",
+            "state": "active",
+            "request": {
+                "workload_class": "front",
+                "owner_identity": "coin:one",
+                "request_id": "worker-request-front",
+                "role": "coin",
+                "model_id": model_id,
+                "context_tokens": 32_768,
+                "max_output_tokens": 2_048,
+                "stop_method": "process_group",
+                "requirements": {"required_capabilities": ["coding"],
+                                 "minimum_context_tokens": 16_384},
+                "prompt_tokens": 1_024,
+                "tool_tokens": 1_024,
+                "handoff_tokens": 1_024,
+                "authority_profile": "coin",
+                "execution_profile": None,
+            },
+            "acquired_monotonic": 0.0,
+        }
+    }
+
+
+def front_request(request_id, model_id="model-a"):
+    route_facts = {
+        **route(),
+        "model_id": model_id,
+        "parameter_count": 3_000_000_000,
+        "model_bytes": 20 * GIB,
+        "backend_context_tokens": 32_768,
+        "parallel_sequences": 1,
+        "context_tokens_per_sequence": 32_768,
+    } if model_id == "model-b" else route()
+    return {
+        "request_id": request_id,
+        "worker_lease_id": "worker-front",
+        "worker_request_id": "worker-request-front",
+        "owner_identity": "coin:one",
+        "workload_class": "front",
+        "proxy_identity": "proxy:coin-front",
+        "route": route_facts,
+        "role": "coin",
+        "execution_profile": None,
+        "authority_profile": "coin",
+        "preemption_method": "process_group",
+        "requirements": {"required_capabilities": ["coding"],
+                         "minimum_context_tokens": 16_384},
+        "prompt_tokens": 1_024,
+        "tool_tokens": 1_024,
+        "max_output_tokens": 2_048,
+        "handoff_tokens": 1_024,
+    }
+
+
+def write_cfg_root(root, cfg, workers=3, policy=None, worker_state=None):
     (root / "state").mkdir()
     (root / "config").mkdir()
     (root / "config" / "resource-policy.json").write_text(
@@ -123,7 +182,9 @@ def write_cfg_root(root, cfg, workers=3, policy=None):
         json.dumps(accepted_scheduling_policy()), encoding="utf-8",
     )
     (root / "state" / "workload-control.json").write_text(
-        json.dumps(work_worker_state(workers)), encoding="utf-8",
+        json.dumps(worker_state if worker_state is not None
+                   else work_worker_state(workers)),
+        encoding="utf-8",
     )
 
 
@@ -178,6 +239,78 @@ def test_observed_two_backend_defers_third_same_model_lease():
         leases = durable_leases(root)
         assert set(leases) == {first["lease_id"], second["lease_id"]}
         assert leases[second["lease_id"]]["state"] == "starting"
+
+
+def test_front_and_work_leases_together_fill_observed_parallel_cap():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        worker_state = work_worker_state(2)
+        worker_state["leases"].update(front_worker_lease())
+        write_cfg_root(root, GLOBAL_8_1_CFG, worker_state=worker_state)
+        front = reserve_sequence(
+            root, front_request("front-one"), inventory(), lambda: 10.0,
+        )
+        first = reserve_sequence(
+            root, work_request("request-one", 1), inventory(), lambda: 11.0,
+        )
+        second = reserve_sequence(
+            root, work_request("request-two", 2), inventory(), lambda: 12.0,
+        )
+        assert front["state"] == "starting"
+        assert front["backend_sequence"] == 0
+        assert first["state"] == "starting"
+        assert first["backend_sequence"] == 1
+        assert second == {
+            "state": "deferred", "reasons": ["model_sequence_unavailable"],
+        }
+        leases = durable_leases(root)
+        assert set(leases) == {front["lease_id"], first["lease_id"]}
+        assert leases[front["lease_id"]]["state"] == "starting"
+        assert leases[first["lease_id"]]["state"] == "starting"
+
+
+def test_distinct_model_front_lease_keeps_model_a_physical_cap():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        inventory_with_b = inventory()
+        inventory_with_b["models"].append({
+            "id": "model-b",
+            "parameter_count": 3_000_000_000,
+            "size_bytes": 20 * GIB,
+            "capabilities": ["coding"],
+            "context": 32_768,
+            "supported_context_quantum": 32_768,
+            "parallel_sequences": 1,
+            "loaded": True,
+            "loaded_context": 32_768,
+            "metadata_verified": True,
+            "fresh": True,
+            "provenance": "registry:test",
+        })
+        inventory_with_b["resident_models"].append(
+            {"model_id": "model-b", "model_bytes": 20 * GIB},
+        )
+        worker_state = work_worker_state(2)
+        worker_state["leases"].update(front_worker_lease("model-b"))
+        write_cfg_root(root, GLOBAL_8_1_CFG, worker_state=worker_state)
+        front = reserve_sequence(
+            root, front_request("front-b", model_id="model-b"),
+            inventory_with_b, lambda: 10.0,
+        )
+        first = reserve_sequence(
+            root, work_request("request-one", 1), inventory_with_b, lambda: 11.0,
+        )
+        second = reserve_sequence(
+            root, work_request("request-two", 2), inventory_with_b, lambda: 12.0,
+        )
+        assert front["state"] == "starting"
+        assert front["backend_sequence"] == 0
+        assert first["state"] == "starting"
+        assert second["state"] == "starting"
+        assert second["backend_sequence"] == 2
+        assert set(durable_leases(root)) == {
+            front["lease_id"], first["lease_id"], second["lease_id"],
+        }
 
 
 def test_model_override_shrinks_work_cap():
