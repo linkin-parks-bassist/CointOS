@@ -1,5 +1,10 @@
 # Current status
 
+Deferred direction: [CointOS-native backend/runner interfaces](decisions/0017-backend-independent-cointos-interfaces.md)
+are recorded as D9. David explicitly requested documentation, not implementation:
+post-MVP local-worker migrations should remove scattered Lemonade/OpenCode and
+deployment assumptions. Current inference stays local-only; no active packet changes.
+
 Live concurrent checkpoint, 2026-09-07: two admitted Qwen workers were observed
 processing simultaneously on two physical slots, each with 131072 context. 4B
 remains loaded. See [concurrency handoff](../agent_notes/0020-concurrent-qwen-bringup.md)

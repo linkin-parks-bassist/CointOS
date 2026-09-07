@@ -191,5 +191,6 @@ These are separate bounded follow-ups, not prerequisites which grow unnoticed. A
 | D6 | Voice/attachments or another workspace / separate product plan | David approves its provenance, authority and user-facing scope before implementation |
 | D7 | Broad code/test/record-format cleanup / Gardener or Refactorer | One evidenced cleanup changes no required behavior; no whole-repository campaign |
 | D8 | Release-manager self-upgrade / operator-led plan | Independent recovery owner survives an explicitly approved manager replacement |
+| D9 | Backend/runner/environment decoupling / Astra contracts, bounded local migration workers | [CointOS-native interfaces](../../decisions/0017-backend-independent-cointos-interfaces.md) select adapters by configuration; core roles/scheduling/communication survive substitution without backend-specific edits. Post-MVP, not a new bringup gate; remote use requires separate approval. |
 
 Unscheduled ideas remain grounded notes. Speculator is allowed to think without manufacturing executable backlog; Innovator proposals require a separate accepted implementation task. The MVP stops at G2 with a compact operational handoff, not at exhaustion of everything agents can imagine.
