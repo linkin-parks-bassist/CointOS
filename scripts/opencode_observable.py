@@ -116,6 +116,18 @@ def main():
         client_env.pop('OPENCODE_CONFIG', None)
         client_env.pop('OPENCODE_CONFIG_CONTENT', None)
         client = subprocess.Popen(command+['--attach', url], cwd=directory, env=client_env)
+        if client_env.get('DISPLAY') or client_env.get('WAYLAND_DISPLAY'):
+            try:
+                subprocess.Popen(
+                    ['gnome-terminal', '--window', '--title', title, '--',
+                     command[0], 'attach', url, '--pure', '--dir', str(directory),
+                     '--session', session], env=client_env,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True)
+            except OSError:
+                print(json.dumps({'type': 'worker_view_window_unavailable',
+                                  'attach_command': record['attach_command']}),
+                      file=sys.stderr, flush=True)
         return client.wait()
     finally:
         if client is not None:

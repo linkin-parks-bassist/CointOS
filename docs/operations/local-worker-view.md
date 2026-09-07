@@ -20,6 +20,11 @@ Normal capacity release still requires existing independent backend-close eviden
 
 The private view record and a `worker_view_ready` JSONL event contain the exact
 `opencode attach ... --session ...` command. Paste that command into a terminal.
+On a graphical desktop the launcher now also requests a new GNOME Terminal window
+automatically, passing the complete session ID as an argument. The viewer has no
+inherited config descriptor and is detached from the worker's process group.
+Headless launches retain the command for manual viewing; failure to open a window
+does not interrupt work. No duplicate window is added to a run already in progress.
 The native UI is interactive, NOT a read-only security boundary: viewing needs no
 extra inference, but entering prompts or cancellation commands can affect the run.
 Use normal UI quit/close to leave; do not use a task-cancellation command merely
@@ -48,3 +53,10 @@ Verification checkpoint: both focused real-process tests passed. The broad suite
 was interrupted at David's request and is NOT claimed passing. David subsequently
 approved finishing only the small wiring/review/commit remainder, with no broad
 test rerun. Commissioned dispatch uses the same wrapper via bringup_bootstrap.py.
+
+First live-view observation: David successfully viewed local-c1-publish-disposition
+after selecting it via /sessions. Process inspection subsequently showed the manual
+attach invocation ended in --session with no ID, explaining the initial home screen;
+this was not evidence of an OpenCode session-navigation bug. Direct argv launch
+removes that copy/paste failure. Automatic desktop opening awaits the next dispatch;
+syntax checked only for this small hook, no additional broad test run.

@@ -12,6 +12,10 @@ does not authorize mixing personal, Avnet, AMD, partner, or customer information
   Closing the viewer must not stop the worker. Do not restart a running worker to
   add viewing, expose a LAN/public listener, or replace gated inference with a
   permanent credential-bearing server. See `docs/operations/local-worker-view.md`.
+  On David's graphical desktop, automatically open a new GNOME Terminal window
+  attached to the exact new session; pass arguments directly, not via shell text.
+  Headless runs still publish the attach command. A viewer failure must not cancel
+  or restart the admitted worker.
 - Read `docs/status.md`, relevant project notes, and decisions before changing behavior.
 - Record consequential design changes in `docs/decisions/`.
 - Never enable remote access, access credentials, program hardware, push code, or
