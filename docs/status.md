@@ -1,5 +1,12 @@
 # Current status
 
+David explicitly approved lifecycle and ephemeral front-admission directions on
+2026-09-07, with tunable entry-model/policy and natural acknowledgement requirements.
+See [decision0014](decisions/0014-contact-lifecycle-and-front-admission.md).
+The older pending-review statements below are superseded; implementation and live
+acceptance are still outstanding. Local Qwen is writing the independent R5 parent
+reservation persistence regression; Sol's front admission handoff is reviewed.
+
 Independent R5 repair is ready in isolated `fix/mvp-budget-reservations` through
 `896da1e`: child admission subtracts durable parent task time already spent from
 the reservation ceiling, preserving exact-fit and idempotent replay. Astra passed
