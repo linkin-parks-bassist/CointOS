@@ -9,9 +9,12 @@ completion, required model/policy provenance, existing dispatch/reply consumers,
 preserved real A1 replay proof. Six-file Qwen packet; no planning delegated.
 Baseline29 contact tests +6 entry-validator tests independently passed. Publication-
 evidenced lifecycle and live caller/front admission remain required successors.
-First launch was refused before job creation: production route cannot qualify
-unloaded Qwen3.8 metadata. No worker started. Investigate residency before retry;
-do not fabricate metadata or bypass admission. David also requires prompt deeper
+First launch was refused before job creation because Qwen3.8 was unloaded. With
+David's resume instruction, Astra verified healthy resources/no OOM/no pause,
+over88GiB available host and over48GiB GTT headroom, then loaded the previous27B
+configuration (131072 context, one sequence, batch512/ubatch128). Production
+metadata qualification then admitted local-c1-entry-persistence normally; worker
+is running (session26435). No service restart or fabricated metadata. David also requires prompt deeper
 response after silent escalation and separate follow-up for substantial work;
 decision0014 and staging spec/packet now record that mandatory successor.
 
