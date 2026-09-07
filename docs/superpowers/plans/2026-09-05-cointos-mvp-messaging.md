@@ -1,4 +1,16 @@
 # CointOS MVP Live Messaging Implementation Plan
+
+## Original-thesis acceptance — 2026-09-07
+
+B1–B3 preserve logical agent/conversation origin across slot waits and model swaps.
+Internal delivery to a completed exact run remains unavailable: do not silently
+reassign that address. Separately, C3/Coin may authorize a new continuation tied to
+the original work/conversation when David replies after completion. B4 must prove
+that unsolicited outbound contact and this admitted continuation compose without
+keeping the old inference process alive. Telegram remains a transport fingertip;
+roles and scheduler consume transport-independent identities. A5/G2 consumes this
+evidence alongside slot oversubscription and memory-contended model turnover.
+
 > **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans for the assigned task only. Follow the swarm contract's ownership, worker-lease, test, and review rules.
 **Goal:** Give live CointOS agents durable direct, role, global, and Coin communication with truthful low-latency observation and authorized control.
 **Architecture:** A transport-independent mailbox stores immutable envelopes and publish-time recipient snapshots derived from existing jobs plus R1 leases. Runner, inference-proxy, and tool adapters expose messages at real asynchronous boundaries; plain reducers apply status/wrap-up/cancel without OOP actors, while this typed mailbox is the one real live-message bus.

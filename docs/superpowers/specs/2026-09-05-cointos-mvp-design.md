@@ -9,6 +9,14 @@ autonomous work. Professional/customer material is outside the initial scope.
 
 ## Outcome and authority
 
+The underlying thesis is a local population of role-directed agents: concurrent
+inference where capacity permits, fair GPU time-sharing under contention,
+spontaneous grounded work generation, and two-way remote contact through Coin.
+Telegram is the initial transport, not the meaning of an agent conversation.
+These are constitutive MVP capabilities, not enhancements to a serial maintenance
+bot. The 2026-09-07 reconciliation restores that intent; it does not introduce a
+new project. See [intent reconciliation](../../decisions/0016-concurrent-inference-and-residency-timesharing.md).
+
 Bring up a useful local agent system with responsive Cointelprofessional contact,
 mechanical resource protection, dynamic model/context scheduling, continuing tasks,
 spontaneous useful maintenance, independent verification, and approval through
@@ -46,6 +54,11 @@ be postponed until the other two are satisfied.
    activate after that exact approval, and roll back after failed startup checks.
 9. Basic tests and live evidence show the whole loop, including actual useful GPU work.
 10. Live agent-to-agent communication survives context turnover, with direct/role/global/Coin addressing and truthful delivery/acknowledgement states.
+11. Multiple agents infer concurrently on available backend slots; excess requests
+    make fair progress through time-sharing. Memory-contended model demand causes
+    eligible model eviction/load and durable agent resumption, not permanent defer.
+12. Any authorized role can initiate remote contact through the shared outbox;
+    Coin can route David's reply to the originating work without a resident runner.
 
 ## Distilled structure
 
@@ -117,14 +130,35 @@ be completed outputs even when they do not request implementation.
 
 ## Model and resource policy
 
-The operating model is a protected small front plus replaceable work inference.
-Initially one local work invocation runs at once; the limit is validated policy,
-not an architectural maximum. Multiple logical agents may be queued/resumable.
+Qwen3.8-27B is the current preferred normal model, including ordinary Coin work;
+the resident 4B supplies contingency availability. Preferences remain changeable.
+Protected contact capacity is a scheduling/resource obligation, not a permanent
+requirement that ordinary Coin decisions use the smaller model.
 
-For local implementation workers, select the largest task-qualified model whose
-verified model size, supported context, load transient and current allocation fit
-the measured envelope. Then select its largest safe per-sequence context. Record
-why larger alternatives were excluded. Parameter count, file bytes, available RAM,
+Keep agent/session lifetime, request execution, backend slot ownership and model
+residency separate. Available slots on resident models execute concurrently.
+Oversubscribed requests queue with priority and fair bounded time-sharing; tool
+execution and waiting agents need not retain inference slots. Backend incarnation
+and model qualify slot identity. Completion releases that request independently
+of unrelated busy slots. A one-worker bootstrap is not complete MVP acceptance.
+
+When a required model is absent, load it if memory permits. Otherwise drain and
+checkpoint eligible work, observe affected request release, evict selected models,
+load the requested model and resume waiting work. Do not evict unrelated models
+that still fit or repeatedly alternate loads when useful batching is possible;
+aging prevents resident-model affinity from starving another model's requests.
+Explicit operator protections below remain exceptions to ordinary eviction, not
+the default for every visible agent window. No fixed one-work-model restriction.
+
+Reuse Lemonade/backend concurrency and load/unload mechanisms. CointOS owns their
+admission, dispatch, release and eviction boundaries; do not build a second model
+server. Durable session/handoff state supplies continuity; backend KV preservation
+is an optimization only where the installed model/backend contract supports it.
+
+Select a task-qualified model under explicit preference and verified resource
+policy. Choose context capacity accounting for concurrent demand and the task,
+not by unconditionally awarding all spare memory to the first arrival. Record
+selection and exclusion reasons. Parameter count, file bytes, available RAM,
 GTT use, and KV demand are separate quantities; model names and registry size alone
 are insufficient admission evidence. Unknown or stale facts produce explicit defer,
 or an explicitly reported smaller verified choice; never an optimistic guess.
@@ -133,6 +167,11 @@ Capacity is not prompt length. A 131072-token allocation does not authorize read
 131072 tokens of irrelevant material. Leave room for output, tool results and
 handoff. Read actual backend allocation per sequence, not just an advertised model
 maximum or total context shared across sequences. Recheck loaded models too.
+For fixed partitions, total context equals slot count times context per slot.
+For a shared KV pool, maximum request context and aggregate resident capacity are
+distinct limits; do not reuse equal-division arithmetic as a universal law.
+Qwen's reported native 262144 context is the configuration target to qualify;
+update backend, admission and client limits together before claiming it usable.
 Choose any supported allocation quantum within the measured envelope; the existing
 `context_candidates` list is not the new architecture. A task may move between
 models and larger or smaller context allocations. Prepare a destination-sized
@@ -196,10 +235,12 @@ capacity goes to ordinary work. Higher priority affects queued selection, bounde
 preemption of running work and resource reclamation, not just displayed ordering.
 
 The 32 GiB protected host reserve and 12 GiB model-load transient remain initial
-policy. Live S0/R3 measurement confirmed David's deliberately configured
-107374182400-byte (100 GiB) GTT pool; admission may use that capacity while fresh
-host availability still preserves the separate reserves. Actual pressure can
-invalidate an earlier admission.
+policy. David deliberately configured a 107374182400-byte (100 GiB) GTT target.
+Retain the provenance of fresh allocation measurements separately from configured
+limits; conflicting readings require reconciliation, not silently changing the
+target or relabeling one reading as the hardware maximum. Host availability and
+the separate reserves still constrain an allocation; pressure invalidates stale
+admission evidence.
 
 Normal -> pressure drains work before OOM; pressure -> normal requires sustained
 healthy samples. An OOM increment immediately closes ordinary work, preserves
@@ -309,6 +350,29 @@ described below; ordinary intra-process collaboration remains direct functions.
 
 ## Live agent communication
 
+### Remote contact and spontaneous egress
+
+The canonical contact contract is decision 0014: entry handling then new/open/closed
+lifecycle, with respond, escalate, respond+escalate or ignore. Silent escalation
+owes a prompt model-authored response and a later follow-up if substantial work
+continues. Decision model/policy is configurable; acknowledgements are not canned.
+
+The gateway owns transport delivery for both replies and unsolicited messages from
+authorized agents. Replies use authenticated inbound context; spontaneous messages
+use installed contact authorization, never fabricated inbound records or a model's
+unchecked chat ID. Preserve originating agent/work/conversation and causal IDs.
+Coin correlates replies, asks when ambiguous, and admits continuation when the
+originating runner has ended. Delivery, acknowledgement and work completion remain
+different facts. Transport expansion should replace the fingertip adapter, not
+require role/scheduler redesign.
+
+The task-list/Reminder example in `docs/product-ideas/telegram-tasks-and-reminders.md`
+is a composition probe: roles, authorized shared read/write data, scheduling,
+outbox and reply routing must suffice. Its application content is not a new MVP
+subsystem. Ambient discovery and unsolicited contact are separate capabilities.
+
+### Internal agent communication
+
 Carry forward the contract in `agent_notes/0003-control-plane-presence-and-live-messaging.md`:
 direct exact-run messages, role-local announcements, global announcements and a
 Coin address. Initial kinds are `information`, `request_status`, `wrap_up`, `cancel`,
@@ -350,7 +414,7 @@ delivery, a role/global announcement, exact ACK semantics and a context rollover
 
 ## Configuration and policy ownership
 
-Use standard-library `configparser` for the existing `config/time.cfg` and `json`
+Use standard-library `configparser` for `config/time.cfg`, `config/inference.cfg`, and `json`
 through the strict JSON decoder for structured families. `survival/time_policy.py`
 already uses ConfigParser; preserve its semantic validation and accepted-policy
 recovery. Do not write another configuration language or add a parsing dependency.
@@ -359,7 +423,8 @@ recovery. Do not write another configuration language or add a parsing dependenc
 | --- | --- | --- |
 | `time.cfg` | Poll/probe periods, deadlines, wrap-up, leases, approval lifetime | Timing owner; complete validated reload, new operation deadlines only. |
 | `resource-policy.json` | Host/GTT reserves, pressure/hysteresis, load/transient estimates | Resource owner; tighter policy closes admission and arranges handover before reallocating. |
-| `model-policy.json` | Qualified model preferences, slot counts, context/output policy | Admission owner; new leases only, actual backend facts still required. |
+| `inference.cfg` | Global slot defaults/model overrides, per-request context and aggregate KV/cache allocation policy | Admission/loading owner; validate against backend facts; drain affected allocations before resizing; remove duplicate slot settings elsewhere. |
+| `model-policy.json` | Qualified model preferences, capabilities and output policy | Admission owner; new requests only, actual backend facts still required. |
 | `scheduling.json` | Role/profile priorities, bounded age boosts, default role rank | Scheduler; recompute ready order and bounded preemption without stealing Coin reserve. |
 | `autonomy.json` | Role scopes, enabled state, weights, cadence and discovery budgets | Selector; next tick, no missed-tick spawn storm. |
 | `subsystems.json` | Implemented owners, checks, lease ages, repair policy | Health owner; no invented healthy defaults. |
@@ -421,6 +486,17 @@ discovery produces useful work or a grounded contribution; Coin approval activat
 one verified change; a failed candidate rolls back; new spawning resumes only after
 the smoke fence and all other restrictive states permit it. Observe two autonomous
 cycles and record real latency, resource and job evidence. No deliberate host OOM.
+
+The same complete-MVP gate must also show: two Qwen requests genuinely overlap;
+one releases while its peer remains busy; more agents than physical slots all make
+progress without loss of session identity; memory-contended demand swaps an eligible
+model and later resumes displaced work; and a spontaneously generated role task
+initiates an unsolicited Telegram conversation whose reply reaches its originating
+work. Coin/contingency contact remains available throughout. A serial successful
+task, a context-overflow rollover, or a fake monitor session does not prove these
+respective obligations. Controlled smaller memory budgets may exercise eviction
+without attempting host exhaustion. Observe loading/concurrency under real backend
+execution, not only mocked selectors.
 
 Defer exhaustive hostile-spool/permission/crash-matrix tests, every-subsystem model
 monitors, voice/attachments, other projects, hardware

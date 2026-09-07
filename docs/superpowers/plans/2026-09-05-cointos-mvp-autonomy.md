@@ -1,5 +1,17 @@
 # CointOS MVP Spontaneous Work Implementation Plan
 
+## Original-thesis acceptance — 2026-09-07
+
+A1–A3 remain the owners of extensible roles and spontaneous grounded discovery;
+no separate scheduler per role or compulsory manufactured backlog. Role definitions,
+validated access and schedule configuration should suffice for new applications.
+A5/G2 must exercise the full composition: a role discovers useful work without a
+fresh user task, runs under concurrent/contended admission, initiates authorized
+remote contact via C3, and receives a reply through B4/Coin after its runner ends.
+Generation and unsolicited egress are separate capabilities; neither is proven by
+an ordinary reply or a prewritten task. The Reminder example probes the general
+interfaces, not an additional bespoke MVP service. See the canonical spec/index.
+
 > **For agentic workers:** Use superpowers:subagent-driven-development or superpowers:executing-plans for the assigned task only.
 
 **Goal:** Let local agents discover useful work, contribute within distinct roles, and hand off results without waiting for a user task.

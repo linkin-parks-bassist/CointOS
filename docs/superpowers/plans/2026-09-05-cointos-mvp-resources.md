@@ -12,6 +12,9 @@
 
 ## Global Constraints
 
+- Concurrent agents and contention-driven slot/model time-sharing are core MVP.
+  Reuse backend slots, batching and load/unload; no second model server, fixed
+  one-work-model rule or blanket busy check in place of admission.
 - Coin stays available; no OOM; context handover is independently mandatory and never becomes a terminal context-overflow result.
 - Software is functions over plain data. Add no classes, hidden mutable object state, actor framework, or new database.
 - Use lowercase `snake_case`; preserve external API spelling only where required.
@@ -21,7 +24,8 @@
 - Parameter count, model bytes, host RAM, GTT, KV, prompt, tool, output, and handoff demand remain distinct facts.
 - Unknown or stale safety evidence defers explicitly. Preserve the 32 GiB protected
   host reserve and 12 GiB load-transient reserve. The configured GTT capacity is the
-  live measured 100 GiB pool; do not substitute the superseded 64 GiB TTM cap.
+  configured 100 GiB target. Reconcile conflicting allocation readings and preserve
+  their provenance; do not silently change the target or guess unreadable values.
 - Interrupt a local run only when a GPU-involving smoke test is ready and competing for the GPU; then require a durable completion/checkpoint handoff and observed process/request exit before smoke. Resource guardians retain authority to stop a run to prevent OOM or loss of host responsiveness. The execution budget specified below governs managed CointOS task slicing after R5; it is not a limit on local implementation workers during bring-up.
 - Sol implementation/review work uses `gpt-5.6-sol`, `reasoning_effort: medium`, isolated context, and one 15–25 minute bounded objective.
 - Hosted read-only analysis may continue during smoke. Every hosted writer touching smoke-covered files/services must finish and be observed before smoke.
@@ -32,6 +36,31 @@
 - Tests are module-level functions with `load_tests`/`unittest.FunctionTestCase`; run `python3 -m unittest discover -s tests -p 'test_*.py'`.
 
 ## File Map and Dependency Order
+
+### Reconciled obligations at the existing owners
+
+These qualify the task contracts below. Fixed-partition examples are valid for
+that backend mode, not the complete concurrent interface. Astra binds revised
+implementation-only packets to real source/interfaces; local workers do not plan
+cross-owner changes. Existing accepted components remain usable, not blanket closure.
+
+| Owner | Required contract and evidence |
+| --- | --- |
+| Q1/R2/R3 | One `config/inference.cfg` slot/context policy using existing configparser, global defaults and model overrides; remove duplicate slot authorities at activation. Requested policy and observed capacity stay distinct. |
+| R2: `ecosystem/models.py` | Qualify native 262144 Qwen context and align `config/executor-opencode.json` with actual allocation. Separate per-request context from aggregate KV/cache; equal division applies only to fixed partitions. Prefer Qwen normally, 4B for contingency. |
+| R3: `ecosystem/inference_capacity.py` | Atomic reservation keyed by backend incarnation/model/slot; numeric slot IDs on different backends do not collide. Count resident weights/pools once, not once per agent. |
+| R4: `ecosystem/inference_proxy.py` | Complete R4-PRECISE: release one request while another remains busy. Handler capacity follows supported concurrency/control needs, not a hidden four-handler ceiling. |
+| R1/R5: worker gate, scheduler, executor | Agent/session lifetime differs from inference-slot lifetime; tool/queue waits do not monopolize slots. N+1 agents on N slots all progress under priority, aging and bounded quanta. |
+| R2–R6: selection, admission, execution, continuation | Ordinary memory contention triggers eligible checkpoint/drain, observed request release, unload/load and later resumption. Prefer reuse without starving nonresident demand. Honor explicit operator protection and contingency capacity; do not globally pause unrelated backends. R6 supplies durable continuation where KV restore is unsupported. |
+| R7 | Pressure/emergency containment composes with these paths; ordinary model replacement is not a fabricated pressure incident. |
+
+Parent acceptance includes focused overlap, independent release, same-number slots
+on distinct backends, oversubscription progress, memory-contended eviction/resume,
+and policy resizing that does not mutate live allocations underneath their owners.
+G2 requires bounded live overlap and model-turnover evidence too. Controlled smaller
+memory budgets exercise contention without host OOM. This is a contract revision;
+the historical function examples below are not already a complete implementation
+packet for these additional cases.
 
 | Task | Files | Responsibility | Depends on |
 | --- | --- | --- | --- |
@@ -534,4 +563,9 @@ git commit -m "feat: compose worker leases with survival recovery"
 - [ ] **State-machine scan (local, 2 minutes):** run `rg -n 'context_overflow|handoff_requested|continuation_ready|partial_handoff_ready' ecosystem tests` and verify overflow is assertion/input evidence, never a terminal task state.
 - [ ] **Diff review (Sol-medium, 15 minutes):** run `git diff --check` and `git status --short`; inspect only R1–R7 files and reject unrelated changes.
 
-Stop this resource slice when R1–R7 tests and the full collector pass and the exact diff has independent review. Do not install services, load/unload models, run live inference, touch credentials/Telegram, activate releases, or perform the complete-MVP smoke here. The main coordinator consumes these contracts for health, autonomy, approval, deployment, and the later globally fenced smoke.
+Stop each implementation packet at its scoped checks and independent diff review.
+Parent closure also requires the reconciled obligations above; historical tests
+alone cannot close it. Live loading and acceptance are separately scoped,
+operator-authorized runs, not unit-test effects. The coordinator carries their
+evidence into G2. Services, credentials, Telegram and release activation do not
+change merely because a worker implements this plan.

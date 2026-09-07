@@ -1,5 +1,29 @@
 # CointOS MVP Bring-up Implementation Plan
 
+## Thesis and acceptance reconciliation — 2026-09-07
+
+The MVP is concurrent/time-shared agents plus spontaneous generation, extensible
+roles and two-way remote contact. This restores the original thesis, not new scope.
+The canonical spec's model/resource and remote-contact sections are authoritative.
+Retain the existing owners and task IDs; do not create a second scheduler or plan
+suite. Parent acceptance is not inferred from a completed narrow worker packet.
+
+| Requirement | Owning tasks | Required evidence |
+| --- | --- | --- |
+| Global `.cfg` slot/context policy and backend qualification | Q1, R2, R3 | One policy owner; native 262K target distinguished from actual allocation; fixed/shared KV accounting explicit |
+| Concurrent inference and independent slot release | R3, R4 including R4-PRECISE | Two busy Qwen requests; one releases without awaiting the other |
+| More agents than slots, fair time-sharing | R1, R3, R5, R6 | All contending agents progress with stable sessions and bounded resource ownership |
+| Memory-contended model residency | R2, R3, R4, R5, R6; R7 pressure constraints | Eligible model drain/evict/load/resume while contingency survives; no fabricated pressure incident |
+| Spontaneous work and extensible roles | A1–A3, A5 | Grounded work without a new human task; new role requires data/config, not scheduler branches |
+| Unsolicited remote contact and reply continuation | C1–C3, B1–B4, A5 | Agent-originated Telegram message and a reply routed to original work after runner exit |
+
+R2–R6 completion must include these resource obligations; R4's temporary
+all-slots-idle release is not final concurrency acceptance. Before further resource
+dispatch, Astra supplies bounded implementation-only packets matching these owning
+contracts and real existing interfaces. This reconciliation is not a claim that
+legacy code samples below already implement the revised interfaces. Contact's
+superseded detailed C1–C3 examples remain quarantined until their packet revision.
+
 ## Cross-cutting extensibility requirement — David, 2026-09-07
 
 Design the general mechanisms so new applications are principally role definitions,
@@ -44,7 +68,7 @@ deployment evidence is still pending. Merge and publication remain separately co
 - Sole Survivor > Coin > active user-driven agent session > small health inspectors > large health inspectors > other roles. Scheduling rank never steals Coin's physical reserve. An admitted user-driven session prevents ordinary eviction, unload and context resizing; Coin may preempt it only when Coin's reserved capacity cannot otherwise be realized. This covers independently launched tools such as `lemonade opencode launch`, not only bare inference clients.
 - Functions and plain data only; lowercase snake_case; no new class-based framework, database or configuration language.
 - Personal CointOS scope only. Preserve dirty work, credentials, professional/customer boundaries and append-only runtime records.
-- Registered local tasks use the largest safely feasible qualified model, then its largest safe context. Interrupt them only when a GPU-involving smoke test is ready and competing for the GPU; first obtain a completion/checkpoint handoff and observe process/request exit. Resource guardians may still terminate a run to prevent OOM or loss of host responsiveness. Codex waits for completion/checkpoint **and process/request exit** before smoke tests.
+- Qwen is the preferred qualified normal model; 4B is contingency capacity. Allocate context under global policy and concurrent demand. Managed task slicing/eviction follows R3–R6; the commissioning rule against interrupting a healthy implementation worker is not a universal prohibition on GPU time-sharing. Smoke still requires completion/checkpoint and observed process/request exit; resource guardians retain emergency authority.
 - Worker kind follows the dispatcher: a hosted coordinator may run GPT-5.6 Sol medium workers; a local agent dispatches local workers only and never spawns or enqueues hosted-model workers. Owner/budget lines naming Sol name the hosted-coordinator scenario; under local dispatch the same task goes to the largest safely feasible qualified local model/context.
 - Agent changes activate only after tests, independent verification and authenticated approval through Cointelprofessional. Installed emergency containment does not wait for a new approval.
 - No installation, service change, credential access, Telegram transmission, publication or merge is authorized by writing this plan. S0 starts after David approves the execution scope.
@@ -83,7 +107,7 @@ Dependencies below refer to accepted task outputs, not merely agent completion. 
 | R6 | Destination-sized durable continuation across contexts/models | R5 | Resources |
 | R7 | Pressure prevention, independent gates and exclusive OOM recovery | R6 | Resources |
 | A1 | Validated inherited task contracts and extensible role contexts | R1 | [Autonomy](2026-09-05-cointos-mvp-autonomy.md) |
-| C1 | Canonical respond/dispatch turn with durable single task identity | A1 | [Contact](2026-09-05-cointos-mvp-contact.md) |
+| C1 | Canonical four-outcome contact lifecycle and durable task/conversation identity | A1 | [Contact](2026-09-05-cointos-mvp-contact.md) |
 | C2 | Reserved fast Coin decision and factual status view | C1, R4 | Contact |
 | C3 | Ordinary inbox worker and gateway-owned ordinary result egress | C2 | Contact |
 | C4 | Offline full contact/lifecycle composition and safe cutover | C3, R7 | Contact |
@@ -146,6 +170,10 @@ No second roster, hidden status database, scheduler-specific role switch, compat
 **G1 — independent survival and communication (H4/H5/B4/R7):** busy work does not occupy Coin's slot; synthetic pressure stops admissions and preserves continuation; incident repair produces a fresh independent recovery observation; small inspectors outrank large and both outrank ordinary work. Bidirectional live delivery, role/global announcement, explicit ACK, authorized wrap-up and context turnover work without a second big inference process. Model-free controls continue if inference/messages fail.
 
 **G2 — complete autonomous MVP (P4/A5):** actual environment discovery produces a grounded contribution and useful independently verified work; a new role can be added without scheduler/executor changes; a task completes across smaller context/model turnover; Coin approval controls exact candidate activation; failed startup restores the prior observed healthy release; two autonomous cycles survive restart. Protected self-update is advertised only after its unchanged-release continuity/rollback rehearsal passes. Worker admission resumes only if every independent gate permits it.
+
+G2 additionally requires every evidence row in the thesis reconciliation above.
+Neither G0 early contact nor serial autonomous cycles close the complete MVP.
+Use controlled capacity limits for the contention cases, not deliberate host OOM.
 
 Run focused tests at each task and the integrated offline suite at milestone boundaries, not a full-repository audit after every small edit. Every evidence record names agent, exact source/release, scenario, time/boot, asserted observation, result and remaining blocker. Unit tests, offline composition and live evidence prove different claims. No deployed/stable/OOM-proof claim follows merely from this design.
 

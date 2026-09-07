@@ -1,6 +1,7 @@
-# 0016: Concurrent inference and residency time-sharing
+# 0016: Reconciliation of the original concurrency thesis
 
-Status: direction approved by David, 2026-09-07. Astra records the contract;
+Status: original intent reaffirmed by David, 2026-09-07. Not a new product decision.
+Astra records the correction to its narrowed MVP translation;
 implementation and activation remain outstanding.
 
 ## Product contract

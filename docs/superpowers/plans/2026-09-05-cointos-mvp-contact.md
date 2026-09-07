@@ -6,8 +6,8 @@
 > the superseded contract. See [current contact note](../../../agent_notes/0018-canonical-contact.md).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-**Goal:** Replace the mixed Telegram/deep-control route with one responsive, resource-reserved, durable respond-or-dispatch path whose ordinary egress is owned by the permanent gateway.
-**Architecture:** The gateway remains the only Telegram fingertip and writes authenticated inbound records. A user-owned worker reduces each record through the existing control-turn identity into one structured response or dispatch using R4 inference; it publishes immutable ordinary reply intents which the gateway authenticates against inbound identity and delivers separately from root-owned critical messages.
+**Goal:** Canonical four-outcome inbound handling, unsolicited authorized agent contact, and replies routed to originating work.
+**Architecture:** The gateway owns Telegram delivery. Contact reduction owns lifecycle and conversation identity; the shared outbox carries replies and spontaneous messages. Authorization comes from authenticated inbound state or installed contact authorization, not a model-supplied destination.
 **Tech Stack:** Python 3 standard library, atomic JSON, `fcntl`, filesystem spools, systemd system/user units, R1 worker leases, R4 inference requests, existing survival guardian/reducer, and `unittest`.
 **Spec:** `docs/superpowers/specs/2026-09-05-cointos-mvp-design.md`
 ## Global constraints
@@ -15,12 +15,15 @@
 - Use functions and plain data; no classes, actors, generic bus, or second task database.
 - Preserve exact `RESTART`/`RESET`, the survival reducer/guardian, central timing, protected gateway identity, append-only events, and critical-outbox ownership unless a focused defect proves otherwise.
 - After cutover the permanent gateway is the sole poller and Telegram egress adapter. `agent-telegram.service` and unconditional `agent-control-worker.service` are inactive rollback artifacts, never concurrent semantic routes.
-- Reuse `control_turns` identity/delivery and `conversation` source-id idempotency, but convert once to canonical `respond|dispatch`; no active `deep_state` compatibility path remains.
+- Reuse `control_turns` identity and `conversation` idempotency; implement decision
+  0014's four outcomes and lifecycle. No active `deep_state` compatibility route.
 - Every inference uses R4 `inference.request(request, root, clock) -> dict`. The `front` class owns its reserved physical sequence; direct HTTP is forbidden.
 - R4 owns a configurable local inference endpoint; preserve `http://127.0.0.1:13305` only as the historical initial value, never a new hard-coded health/request port.
 - Scheduler rank is trusted validated policy: Sole Survivor > Coin > small health inspectors > big health inspectors > other roles. Rank never lets the survivor or an inspector consume Coin's exclusive front sequence; capacity reservation and relative priority are distinct facts, and code roles cannot switch them.
 - One dispatch creates at most one durable job. Role is nullable advice; `task_contract` owns authority.
-- User-written ordinary intents are immutable and contain no trusted destination. The gateway derives chat/user/update identity from authenticated inbound state.
+- Ordinary intents are immutable and contain no self-authorizing destination.
+  Replies use authenticated inbound identity; unsolicited intents reference
+  installed contact authorization and need no fabricated inbound record.
 - Root-written `outbox/critical` remains separately owned; ordinary code cannot create, rename, mutate, or acknowledge it.
 - Persist send intent before Telegram; delivery uncertainty is terminal for automatic replay.
 - R1 owns drain/smoke exclusion. R7 pressure, emergency, lifecycle, and operator pauses remain stronger.
@@ -31,6 +34,17 @@
 - `COINTELPROFESSIONAL_INSTALL_ROOT` is not hermetic because account operations remain unconditional. Never invoke the installer in host tests; use injected account/systemd fingertips or a disposable container.
 - C5 may run when C1-C4 and R1-R4/R7 prerequisites pass; exhaustive health/autonomy and hostile-spool/crash review do not gate early contact.
 ## File ownership and dependency map
+- C1 owns four-outcome lifecycle, continuing-chain links and conversation/origin
+  metadata. C2 owns tunable entry-model/policy and truthful natural responses;
+  silent escalation owes a prompt response and later follow-up if work continues.
+  Qwen is preferred normally, 4B contingency; model choice is not fixed by role.
+- C3's ordinary outbox/gateway accepts any authorized role's unsolicited updates
+  and questions. Coin correlates David's replies with originating work, asking when
+  ambiguous. B1–B4 provide admitted continuation after runner exit, not permanently
+  resident inference. C4/C5 exercise transport composition; B4/A5 close the actual
+  spontaneous-contact/reply loop at G2. Inbound-only C5 is an early milestone.
+- The detailed C1–C3 examples below remain historical pending exact packet revision;
+  do not copy their superseded two-outcome or inbound-only assumptions into new work.
 - `ecosystem/control_turns.py`: sole contact identity and state reducer.
 - `ecosystem/fast_control.py`, `ecosystem/contact_status.py`: strict decision and factual input.
 - `ecosystem/contact_worker.py`: inbound reduction, dispatch, reply publication.

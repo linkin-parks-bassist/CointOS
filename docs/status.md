@@ -1,12 +1,17 @@
 # Current status
 
-Priority correction, 2026-09-07: David reaffirmed concurrent agents, physical-slot
+Original-thesis reconciliation, 2026-09-07: David reaffirmed concurrent agents, physical-slot
 time-sharing and memory-governed model residency as central MVP requirements.
 [Decision 0016](decisions/0016-concurrent-inference-and-residency-timesharing.md)
 supersedes temporary single-worker/single-work-model policy as the target design.
 Qwen is the preferred normal model; 4B remains contingency capacity. Global `.cfg`
 slot policy and native 262144-context activation are pending implementation, not
 claimed live. This resource work takes priority over the next contact packet.
+The canonical spec, index and owning resource/contact/autonomy/messaging plans now
+carry that thesis and explicit complete-MVP evidence. Existing task IDs/owners are
+retained. Detailed revised resource and historical contact implementation packets
+still need coordinator binding to actual interfaces; documentation is not runtime
+activation or acceptance. Decision 0016 records recovered intent, not new scope.
 
 Product input, not implementation status: David requested
 [Telegram task capture, intelligent reminders, and two-way agent contact](product-ideas/telegram-tasks-and-reminders.md).
