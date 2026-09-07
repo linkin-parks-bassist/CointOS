@@ -1,5 +1,29 @@
 # CointOS MVP Bring-up Implementation Plan
 
+## Cross-cutting extensibility requirement — David, 2026-09-07
+
+Design the general mechanisms so new applications are principally role definitions,
+data and access/schedule configuration, not new scheduler, executor, gateway or Coin
+controllers. [Telegram tasks and reminders](../../product-ideas/telegram-tasks-and-reminders.md)
+is the concrete design probe, not a bespoke subsystem or an additional MVP gate.
+Its role content can follow bring-up; the enabling channels must be in the MVP
+contracts from the start:
+
+- A1–A3: real configurable role/tool authority, shared authorized read/write data,
+  and bounded periodic/event-driven admission without application-specific branches.
+- C1–C3: escalated Coin's commissioned tools/delegation, unsolicited messages from
+  any role via the shared gateway-owned outbox, and Telegram replies correlated to
+  their originating agent/work context. No fake inbound record for outbound events.
+- B1–B4: durable agent communication and admitted continuation after a run ends;
+  do not require an originating inference process to remain resident for a reply.
+- G2/new-role acceptance: exercise this composition, not just role-name discovery.
+
+Preserve existing approval, data-provenance and resource boundaries. Role prose is
+not authority, and this requirement does not grant uncommissioned system access.
+No new plugin framework, separate Reminder service or generic intra-process
+message system is requested. Owners must carry this constraint into their concrete
+packets; a running packet is not silently expanded.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans for the assigned task only. Read the design and swarm contract before the owning task.
 
 **Status:** approved by David for implementation and activation on 2026-09-05;

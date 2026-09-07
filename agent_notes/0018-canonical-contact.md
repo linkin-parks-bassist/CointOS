@@ -8,6 +8,11 @@ replies back to the originating work. Concrete example: a shared writable task
 list for Coin/Cointelprofessional (or an authorized delegate), optional due/reminder
 times, and a periodic reasoning-capable Reminder role. Preserve these requirements
 when replacing the legacy notifier; not added to the running persistence packet.
+David clarified that Reminder is an example, not a bespoke subsystem request:
+role definitions plus correctly configured Coin access and existing channels should
+make it easy. General role/tool access, shared data, scheduling, unsolicited outbox
+and reply continuation must be designed into MVP now. The MVP index records this
+cross-cutting constraint; defer example role content, not its enabling mechanisms.
 
 David clarified that outbound contact MUST also support spontaneous event-driven
 updates ("if something happens"), not only replies. Do not interpret "random

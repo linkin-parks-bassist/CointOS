@@ -3,7 +3,10 @@
 Product input, not implementation status: David requested
 [Telegram task capture, intelligent reminders, and two-way agent contact](product-ideas/telegram-tasks-and-reminders.md).
 Canonical outbox work must preserve unsolicited agent messages and reply routing;
-the task-list/Reminder feature is documented, not activated.
+the task-list/Reminder example is documented, not activated. Its purpose is to test
+that general roles, access, scheduling, shared data and messaging compose easily;
+those enabling contracts are an explicit requirement in the MVP plan index now,
+not a future application-specific retrofit.
 
 David explicitly approved lifecycle and ephemeral front-admission directions on
 2026-09-07, with tunable entry-model/policy and natural acknowledgement requirements.
