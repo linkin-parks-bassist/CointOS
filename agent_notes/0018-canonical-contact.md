@@ -9,10 +9,10 @@ to earlier messages in a continuing chain; entry inference identifies clear link
 or asks deeper work to investigate recent new/open/closed history.
 The prior forced-nonblank-reply/respond-or-dispatch schema and role/content-only
 history are NOT the final target. Do not keep implementing them merely to make
-the old plan green. New semantic implementation dispatches are paused while the
-amendment is specified; transport primitives remain staged, not activated.
-Astra asked whether escalation includes stronger-model reasoning without an
-actionable background task; no answer recorded yet. Open waiting messages must
+the old plan green. David approved the amendment and ephemeral front bearer in
+decision0014; proceed via bounded reviewed plans. Transport remains staged, not
+activated. Escalation includes stronger-model reasoning without an actionable
+background task; final durable reply publication permits closure. Open waiting messages must
 not imply an indefinitely occupied inference lease. Closed history remains
 available as context; model-suggested links are not facts or new task authority.
 
