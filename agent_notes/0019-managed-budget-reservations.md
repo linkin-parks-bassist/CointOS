@@ -52,3 +52,8 @@ updates during delegation, consistent treatment of other spent shared counters,
 actual discovery-tool wiring/accounting and genuinely bound useful handoff evidence.
 These are follow-ups, not claims covered by the625-test result. Do not add usage
 counters atop already-debited reservations without a consistent representation.
+
+Astra next dispatch: local-r5-parent-write-map, read-only source investigation of
+whether cached executor job persistence can lose concurrently admitted child
+reservations. Deliverable is the real writer/lock sequence and smallest deterministic
+composition probe; no repair authorized in this packet. Hypothesis remains unproven.
