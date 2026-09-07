@@ -2,6 +2,16 @@
 
 ## Current design amendment — read before new C1-C3 work
 
+Disposition store accepted at contact1e0469f (worker066e457 + tiny Astra correction).
+Astra reviewed publisher/reader and relevant tests, independently passed15 new +6
+existing outbox tests. Initial worker14 tests genuinely collected/passed after its
+unnecessary framework-search detour; no zero-test result accepted. Astra added RED
+for ENOTDIR misreported as absence, replaced exists() preflight with read catching
+ONLY FileNotFoundError, reran21 GREEN. No gateway/lifecycle integration or runtime
+activation. Worker closed normally (proxy revoked/R3 released); no worker active.
+Next concrete packet should consume validated disposition under existing gateway
+inbound lock to suppress only unsent fallback, preserving prior attempt/delivery.
+
 Next concrete packet local-c3-entry-disposition: Astra specified publisher/reader
 contract in contact plan2026-09-07-entry-disposition-store.md. Two-file local task;
 immutable accepted-inbound-bound four-outcome record, exact replay and malformed-vs-
