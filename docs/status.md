@@ -1,5 +1,15 @@
 # Current status
 
+Lease-contract correction, 2026-09-08: decision 0018 makes current agent liveness,
+not cause-specific close handshakes, authoritative for ownership. An independently
+ended bound process with no in-flight proxy request relinquishes its inference and
+worker occupancy even when completion classification, backend telemetry or revival
+work remains pending. Stale starting/dead records no longer globally block unrelated
+worker acquisition. Completion/death/revival evidence remains durable but is not a
+resource lock. The focused workload/capacity/proxy suite passes 87/87. Three live
+timeout casualties were then released from only their exact bindings and correctly
+classified failed from their durable error packets; other Qwens remained active.
+
 Documentation-only architecture clarification, 2026-09-08: logical worker/execution
 leases are intended to outnumber physical inference slots. Under contention, a
 configurable/tunable quantum (ideally quick, initially measured in minutes) will

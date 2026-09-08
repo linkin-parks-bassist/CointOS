@@ -4,6 +4,10 @@ Status: original intent reaffirmed by David, 2026-09-07. Not a new product decis
 Astra records the correction to its narrowed MVP translation;
 implementation and activation remain outstanding.
 
+Lease ownership and reuse follow [decision 0018](0018-liveness-owned-leases.md):
+current bound-agent liveness is authoritative, while completion, death cause and
+revival evidence are separate from the ability to reuse capacity.
+
 ## Product contract
 
 CointOS schedules many durable agents over concurrent model-server capacity.

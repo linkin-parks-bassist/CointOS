@@ -40,18 +40,17 @@ def test_gate_cannot_clear_pressure_or_lifecycle_pause():
     assert reasons == ["resource:pressure", "lifecycle:paused"]
 
 
-def test_starting_and_dead_unreconciled_leases_defer_new_acquisition():
+def test_starting_and_dead_unreconciled_leases_do_not_block_other_acquisitions():
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         clock = lambda: 10.0
         first = workload_control.acquire_worker(root, worker_request(), clock)
-        starting_blocked = workload_control.acquire_worker(
+        starting_peer = workload_control.acquire_worker(
             root,
             worker_request(request_id="request-two", job_id="task-two"),
             clock,
         )
-        assert starting_blocked["state"] == "deferred"
-        assert "lease:starting" in starting_blocked["reasons"]
+        assert starting_peer["state"] == "starting"
 
         workload_control.register_process(root, first["lease_id"], 100, 200, clock)
         workload_control.observe_workers(root, [{
@@ -62,13 +61,12 @@ def test_starting_and_dead_unreconciled_leases_defer_new_acquisition():
             "backend_request_active": False,
             "inference_lease_active": False,
         }], clock)
-        dead_blocked = workload_control.acquire_worker(
+        dead_peer = workload_control.acquire_worker(
             root,
             worker_request(request_id="request-three", job_id="task-three"),
             clock,
         )
-        assert dead_blocked["state"] == "deferred"
-        assert "lease:dead_unreconciled" in dead_blocked["reasons"]
+        assert dead_peer["state"] == "starting"
 
 
 def test_observed_exit_without_recorded_outcome_cannot_admit_smoke():
@@ -464,7 +462,7 @@ def load_tests(_loader, _tests, _pattern):
     functions = (
         test_drain_closes_acquisition_before_snapshot,
         test_gate_cannot_clear_pressure_or_lifecycle_pause,
-        test_starting_and_dead_unreconciled_leases_defer_new_acquisition,
+        test_starting_and_dead_unreconciled_leases_do_not_block_other_acquisitions,
         test_observed_exit_without_recorded_outcome_cannot_admit_smoke,
         test_admission_preserves_lifecycle_operator_and_deployment_restrictions,
         test_starting_lease_blocks_smoke_and_inference_until_pid_registration,

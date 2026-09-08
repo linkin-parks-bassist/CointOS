@@ -742,7 +742,9 @@ def _valid_release_attestation(
     except ValueError:
         return False
     kind = observed.get("kind")
-    sequence_state_is_valid = kind in {"sequence_end", "reconciled_absent"}
+    sequence_state_is_valid = kind in {
+        "sequence_end", "reconciled_absent", "owner_process_ended",
+    }
     return (
         backend_sequence is not None
         and observed.get("schema_version") == 1

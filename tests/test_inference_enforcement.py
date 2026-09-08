@@ -125,7 +125,7 @@ def test_backend_crash_does_not_fabricate_sequence_end():
         assert credential["in_flight"] == {} and credential["last_backend_termination"] is None
 
 
-def test_later_crash_invalidates_prior_round_termination():
+def test_later_crash_uses_dead_owner_evidence_after_prior_end_is_invalidated():
     with fixture() as value:
         secret = issue(value)
         metadata = {"authorization": "Bearer " + secret.hex()}
@@ -147,7 +147,8 @@ def test_later_crash_invalidates_prior_round_termination():
         credential["binding"]["process"] = {"pid": 2 ** 30,
                                                 "process_start_ticks": 1}
         proxy_path.write_text(json.dumps(state))
-        assert completed_run_termination(value["root"], value["lease_id"]) is None
+        evidence = completed_run_termination(value["root"], value["lease_id"])
+        assert evidence["kind"] == "owner_process_ended"
 
 
 def test_missing_backend_response_is_not_termination_evidence():
@@ -506,29 +507,29 @@ def test_close_without_recorded_identity_returns_only_stored_evidence():
         assert stored_credential(value)["state"] == "closing"
 
 
-def test_close_without_identity_or_trusted_end_returns_none():
+def test_close_without_identity_uses_dead_owner_evidence():
     with fixture() as value:
         issue(value)
         dead_process(value)
         with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
-            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            evidence = completed_run_termination(value["root"], value["lease_id"])
             probe.assert_not_called()
-        assert stored_credential(value)["last_backend_termination"] is None
-        assert not (value["root"] / "state/backend-observations.jsonl").exists()
+        assert evidence["kind"] == "owner_process_ended"
+        assert stored_credential(value)["last_backend_termination"] == evidence
 
 
-def test_sticky_backend_unknown_close_never_probes():
+def test_sticky_backend_unknown_close_uses_dead_owner_evidence_without_probe():
     with fixture() as value:
         issue(value)
         dead_process(value, backend_identity=snapshot()["identity"],
                      backend_observation_unknown=True)
         with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
-            assert completed_run_termination(value["root"], value["lease_id"]) is None
+            evidence = completed_run_termination(value["root"], value["lease_id"])
             probe.assert_not_called()
-        assert stored_credential(value)["last_backend_termination"] is None
+        assert evidence["kind"] == "owner_process_ended"
 
 
-def test_unreliable_idle_probe_yields_no_proof():
+def test_unreliable_idle_probe_falls_back_to_dead_owner_evidence():
     for kwargs in (
         {"return_value": None},
         {"return_value": {"identity": snapshot()["identity"],
@@ -544,10 +545,9 @@ def test_unreliable_idle_probe_yields_no_proof():
             issue(value)
             dead_process(value, backend_identity=snapshot()["identity"])
             with patch("ecosystem.inference_proxy.observe_backend_idle", **kwargs):
-                assert completed_run_termination(
-                    value["root"], value["lease_id"]) is None
-            assert stored_credential(value)["last_backend_termination"] is None
-            assert not (value["root"] / "state/backend-observations.jsonl").exists()
+                evidence = completed_run_termination(value["root"], value["lease_id"])
+            assert evidence["kind"] == "owner_process_ended"
+            assert stored_credential(value)["last_backend_termination"] == evidence
 
 
 def test_changed_credential_during_probe_yields_no_proof():

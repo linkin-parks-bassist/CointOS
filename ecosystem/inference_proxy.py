@@ -309,7 +309,8 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
 
 def completed_run_termination(root: Path, lease_id: str,
                               clock=time.monotonic) -> dict | None:
-    """Persist fresh reconciled_absent proof only after the bound runner ended."""
+    """End ownership when the bound runner is gone and has no live request."""
+    root = Path(root)
     with _proxy_lock(Path(root)) as (state, save):
         credential = state["credentials"].get(lease_id)
         if credential is None:
@@ -325,28 +326,30 @@ def completed_run_termination(root: Path, lease_id: str,
             termination = credential.get("last_backend_termination")
             return _durable(termination) if termination is not None else None
         credential["state"] = "closing"
-        save()
-        if credential.get("backend_observation_unknown"):
-            return None
         identity = credential.get("backend_identity")
-        if type(identity) is not dict:
-            termination = credential.get("last_backend_termination")
-            return _durable(termination) if termination is not None else None
-        snapshot_credential = _durable(credential)
-        snapshot_identity = _durable(identity)
-    try:
-        observation = observe_backend_idle(snapshot_identity)
-    except Exception:
-        observation = None
-    if not _idle_observation_matches(observation, snapshot_identity):
-        return None
-    with _proxy_lock(Path(root)) as (state, save):
+        should_probe = (not credential.get("backend_observation_unknown")
+                        and type(identity) is dict)
+        save()
+        termination = credential.get("last_backend_termination")
+        if not should_probe and termination is not None:
+            return _durable(termination)
+    observation = None
+    if should_probe:
+        try:
+            candidate = observe_backend_idle(_durable(identity))
+            if _idle_observation_matches(candidate, identity):
+                observation = candidate
+        except Exception:
+            pass
+    with _proxy_lock(root) as (state, save):
         credential = state["credentials"].get(lease_id)
-        if (credential is None or _durable(credential) != snapshot_credential
-                or credential["in_flight"]
+        if (credential is None or credential["in_flight"]
                 or _bound_process_ended(
                     credential["binding"]["process"]) is not True):
             return None
+        termination = credential.get("last_backend_termination")
+        if observation is None and termination is not None:
+            return _durable(termination)
         now = _clock(clock)
         try:
             policy = json.loads((root / "config/resource-policy.json").read_text(
@@ -358,9 +361,10 @@ def completed_run_termination(root: Path, lease_id: str,
         generation = int(state["generation"]) + 1
         record_id = uuid.uuid4().hex
         evidence_id = "backend-observations.jsonl#" + record_id
+        kind = "reconciled_absent" if observation is not None else "owner_process_ended"
         termination = {
             "terminated": True,
-            "kind": "reconciled_absent",
+            "kind": kind,
             "binding": _durable(credential["binding"]["release_binding"]),
             "observer_identity": observer_identity,
             "observer_generation": generation,
@@ -370,15 +374,17 @@ def completed_run_termination(root: Path, lease_id: str,
         }
         record = {
             "record_id": record_id,
-            "kind": "reconciled_absent",
+            "kind": kind,
             "binding": termination["binding"],
             "observed_monotonic": now,
             "evidence_id": evidence_id,
-            "identity": snapshot_identity,
-            "all_slots_idle": True,
-            "slots": [{"id": slot["id"], "is_processing": False}
-                      for slot in observation["slots"]],
         }
+        if observation is None:
+            record.update(process=_durable(credential["binding"]["process"]), in_flight=0)
+        else:
+            record.update(identity=_durable(identity), all_slots_idle=True,
+                          slots=[{"id": slot["id"], "is_processing": False}
+                                 for slot in observation["slots"]])
         try:
             _append_backend_observation(Path(root), record)
         except OSError:

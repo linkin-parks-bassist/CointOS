@@ -35,19 +35,6 @@ def acquire_worker(root: Path, request: dict, clock: Callable[[], float]) -> dic
         if state["mode"] != "open":
             reason = "drain" if state["mode"] == "draining" else state["mode"]
             return {"state": "deferred", "reasons": [reason]}
-        unresolved_states = {
-            lease["state"] for lease in state["leases"].values()
-            if lease["state"] in {"starting", "dead_unreconciled"}
-        }
-        if unresolved_states:
-            return {
-                "state": "deferred",
-                "reasons": [
-                    f"lease:{lease_state}"
-                    for lease_state in ("starting", "dead_unreconciled")
-                    if lease_state in unresolved_states
-                ],
-            }
         lease_id = _lease_id(validated["request_id"], state["generation"])
         lease = {
             "lease_id": lease_id,
