@@ -2,8 +2,10 @@
 
 ## Thesis and acceptance reconciliation — 2026-09-07
 
-The MVP is concurrent/time-shared agents plus spontaneous generation, extensible
-roles and two-way remote contact. This restores the original thesis, not new scope.
+The MVP is concurrent agents plus spontaneous generation, extensible roles and
+two-way remote contact. David's 2026-09-08 POC-first amendment (decision 0019)
+defers scheduled saved-state timesharing to D10, a top post-MVP priority with D9.
+Slow operation is acceptable; durable continuity and resource correctness remain.
 The canonical spec's model/resource and remote-contact sections are authoritative.
 Retain the existing owners and task IDs; do not create a second scheduler or plan
 suite. Parent acceptance is not inferred from a completed narrow worker packet.
@@ -12,7 +14,7 @@ suite. Parent acceptance is not inferred from a completed narrow worker packet.
 | --- | --- | --- |
 | Global `.cfg` slot/context policy and backend qualification | Q1, R2, R3 | One policy owner; native 262K target distinguished from actual allocation; fixed/shared KV accounting explicit |
 | Concurrent inference and independent slot release | R3, R4 including R4-PRECISE | Two busy Qwen requests; one releases without awaiting the other |
-| More logical leases than physical slots, fair time-sharing | R1, R3, R5, R6 | Configured/tuned quanta checkpoint an occupant to disk, release its physical sequence, and admit clean or reconstructed context; all eligible agents gain useful progress with stable identity and cumulative budgets |
+| Scheduled saved-state timesharing (post-MVP) | D10 using R1, R3, R5, R6 | Difficulty review, then KV/required-state save and restore with overlapping I/O staging, fair useful progress and preserved identity/budgets; excluded from G2 |
 | Memory-contended model residency | R2, R3, R4, R5, R6; R7 pressure constraints | Eligible model drain/evict/load/resume while contingency survives; no fabricated pressure incident |
 | Spontaneous work and extensible roles | A1–A3, A5 | Grounded work without a new human task; new role requires data/config, not scheduler branches |
 | Unsolicited remote contact and reply continuation | C1–C3, B1–B4, A5 | Agent-originated Telegram message and a reply routed to original work after runner exit |
@@ -169,15 +171,20 @@ No second roster, hidden status database, scheduler-specific role switch, compat
 
 **G1 — independent survival and communication (H4/H5/B4/R7):** busy work does not occupy Coin's slot; synthetic pressure stops admissions and preserves continuation; incident repair produces a fresh independent recovery observation; small inspectors outrank large and both outrank ordinary work. Bidirectional live delivery, role/global announcement, explicit ACK, authorized wrap-up and context turnover work without a second big inference process. Model-free controls continue if inference/messages fail.
 
-**G2 — complete autonomous MVP (P4/A5):** actual environment discovery produces a grounded contribution and useful independently verified work; a new role can be added without scheduler/executor changes; oversubscribed logical leases make useful progress across repeated physical-slot turnovers, with a clean first slice and disk-reconstructed resumed slice preserving identity and cumulative budget; measured turnover overhead supports the configured quantum or produces an explicit longer tuned quantum; a task completes across smaller context/model turnover; Coin approval controls exact candidate activation; failed startup restores the prior observed healthy release; two autonomous cycles survive restart. Protected self-update is advertised only after its unchanged-release continuity/rollback rehearsal passes. Worker admission resumes only if every independent gate permits it.
+**G2 — complete autonomous MVP (P4/A5):** actual environment discovery produces a grounded contribution and useful independently verified work; a new role can be added without scheduler/executor changes; concurrent workers make useful progress and freed capacity can be reused; a task completes across smaller context/model turnover; Coin approval controls exact candidate activation; failed startup restores the prior observed healthy release; two autonomous cycles survive restart. Protected self-update is advertised only after its unchanged-release continuity/rollback rehearsal passes. Worker admission resumes only if every independent gate permits it. Slow POC operation is acceptable. Scheduled quantum switching, saved-state restoration and its performance/overlap proofs belong to post-MVP D10.
 
-G2 additionally requires every evidence row in the thesis reconciliation above.
+G2 additionally requires the MVP evidence rows above, excluding post-MVP D10.
 Neither G0 early contact nor serial autonomous cycles close the complete MVP.
 Use controlled capacity limits for the contention cases, not deliberate host OOM.
 
 Run focused tests at each task and the integrated offline suite at milestone boundaries, not a full-repository audit after every small edit. Every evidence record names agent, exact source/release, scenario, time/boot, asserted observation, result and remaining blocker. Unit tests, offline composition and live evidence prove different claims. No deployed/stable/OOM-proof claim follows merely from this design.
 
 ## One deferred hardening queue
+
+First improvement phase after POC: D9 and D10 share top priority. D10 begins with
+a bounded difficulty review; select implementation order and packets from that
+evidence. Other improvements David may recall are a review reminder, not invented
+requirements. No current worker's scope is expanded by these documentation changes.
 
 These are separate bounded follow-ups, not prerequisites which grow unnoticed. A finding is promoted into the MVP only when evidence shows failure of ordinary operation, contact, resource safety, durable continuation, authority isolation or rollback.
 
@@ -191,6 +198,7 @@ These are separate bounded follow-ups, not prerequisites which grow unnoticed. A
 | D6 | Voice/attachments or another workspace / separate product plan | David approves its provenance, authority and user-facing scope before implementation |
 | D7 | Broad code/test/record-format cleanup / Gardener or Refactorer | One evidenced cleanup changes no required behavior; no whole-repository campaign |
 | D8 | Release-manager self-upgrade / operator-led plan | Independent recovery owner survives an explicitly approved manager replacement |
-| D9 | Backend/runner/environment decoupling / Astra contracts, bounded local migration workers | [CointOS-native interfaces](../../decisions/0017-backend-independent-cointos-interfaces.md) select adapters by configuration; core roles/scheduling/communication survive substitution without backend-specific edits. Post-MVP, not a new bringup gate; remote use requires separate approval. |
+| D9 (top post-MVP) | Central backend/runner compatibility boundaries / coordinator contracts, bounded local migration workers | Small centralized adapters initially support Lemonade/OpenCode only; new compatibility details remain localized. [Decision 0017](../../decisions/0017-backend-independent-cointos-interfaces.md). No second production provider or remote activation required. |
+| D10 (top post-MVP) | Saved inference-state timesharing / bounded difficulty review, then local implementation packets | [Decision 0019](../../decisions/0019-saved-state-timesharing-after-poc.md): snapshot KV plus required state, stage disk-to-DDR while peers generate, restore with demonstrated prefill reuse, bounded memory/waiting and correct continuation. Measure elapsed I/O separately from GPU stalls. |
 
 Unscheduled ideas remain grounded notes. Speculator is allowed to think without manufacturing executable backlog; Innovator proposals require a separate accepted implementation task. The MVP stops at G2 with a compact operational handoff, not at exhaustion of everything agents can imagine.

@@ -4,6 +4,11 @@ Status: original intent reaffirmed by David, 2026-09-07. Not a new product decis
 Astra records the correction to its narrowed MVP translation;
 implementation and activation remain outstanding.
 
+Delivery and mechanism amended by David, 2026-09-08: decision 0019 is authoritative.
+Computed inference-state snapshot/restore is the canonical scheduled switching
+path; its difficulty review and implementation are top post-MVP work with D9.
+A slow POC is acceptable. Scheduled quantum-turnover proofs are not MVP gates.
+
 Lease ownership and reuse follow [decision 0018](0018-liveness-owned-leases.md):
 current bound-agent liveness is authoritative, while completion, death cause and
 revival evidence are separate from the ability to reuse capacity.
@@ -35,9 +40,10 @@ references. Only an attested durable checkpoint permits ordinary slot release.
 
 The next waiting logical lease receives the physical slot with clean context on
 its first run, or with its saved continuation reconstructed on a later slice. The
-preferred correctness path is to capture and re-inject the full usable context
-when it fits the destination. A destination-sized semantic handoff remains the
-fallback when full replay cannot fit. Yield and resume preserve `job_id`, logical
+canonical scheduled-resume path restores saved KV and all other required inference
+state, staging disk-to-DDR transfers while peers continue GPU work where supported.
+Full-context replay or destination-sized handoff supplies recovery when a snapshot
+is unavailable or incompatible. Yield and resume preserve `job_id`, logical
 lease identity, `agent_generation` and cumulative budgets; they are not new task
 attempts. Physical context/KV is cleared or replaced independently of that durable
 identity.
@@ -47,9 +53,11 @@ minutes, so several logical agents make visible progress over an unattended
 workstation interval. This is a performance hypothesis to measure, not a claim
 about the installed backend. If safe checkpoint/reconstruction overhead makes a
 short quantum inefficient or unreliable, increase the quantum rather than weaken
-durability, fairness or resource accounting. Backend KV-cache save/restore may
-accelerate swapping only after model/backend-specific qualification; it is never
-the sole copy of continuation state.
+durability, fairness or resource accounting. Saved inference-state restore is the
+intended normal mechanism, subject to model/backend-specific qualification; it is
+never the sole copy of durable agent/task state. Long I/O staging is acceptable
+when other agents remain productive. Measure its GPU stall separately from elapsed
+transfer time and shared DDR contention.
 
 Prefill is a material turnover cost even with resident model weights. Replaying
 saved text can require rebuilding its KV state, consuming GPU compute and slowing
@@ -127,18 +135,17 @@ changing kernel settings or describing one reading as the hardware maximum.
 
 First qualify 262K context and a multi-slot Qwen profile against actual memory;
 make slot policy canonical and remove accounting assumptions that reject valid
-concurrency. Implement independent request release and slot admission, then
-contention time-sharing and memory-driven model eviction/resumption. Backend KV
-save/restore is an optimization requiring model-specific evidence; durable sessions
-and replayable continuation are the correctness boundary, not an invented KV API.
+concurrency. Implement independent request release and slot admission for the POC.
+Keep required durable context/model continuation. After MVP, review difficulty and
+implement saved-state contention timesharing through the centralized compatibility
+boundaries of decision 0017, as specified in decision 0019.
 
-Acceptance must demonstrate overlapping Qwen requests, release while a peer remains
-busy, more logical leases than slots making progress across at least two physical
-slot turnovers, and a memory-contended model switch with preserved agent state and
-contingency availability. Evidence must distinguish queue time, useful running
-time, checkpoint/reconstruction latency and failed/extended quanta, and must show
-that a resumed slice retains identity and cumulative budget. These are central MVP
-requirements, not post-MVP polish. The monitor-window demonstration and review of
+MVP acceptance must demonstrate overlapping Qwen requests, release while a peer
+remains busy, and required model-change continuity with contingency availability.
+D10 post-MVP acceptance adds more logical leases than slots progressing across
+repeated saved-state turnovers. Measure queue time, snapshot/staging/import time,
+GPU stall, peer slowdown and useful generation separately, preserving identity
+and cumulative budget. The monitor-window demonstration and review of
 contact worker commit 1fa88d2 remain pending, not superseded or silently accepted.
 Crash acceptance additionally kills a bound runner, observes its request end and
 physical release independently, and finds the durable revival artifact through the

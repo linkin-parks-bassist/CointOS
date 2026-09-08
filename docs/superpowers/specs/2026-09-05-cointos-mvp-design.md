@@ -13,9 +13,11 @@ The underlying thesis is a local population of role-directed agents: concurrent
 inference where capacity permits, fair GPU time-sharing under contention,
 spontaneous grounded work generation, and two-way remote contact through Coin.
 Telegram is the initial transport, not the meaning of an agent conversation.
-These are constitutive MVP capabilities, not enhancements to a serial maintenance
-bot. The 2026-09-07 reconciliation restores that intent; it does not introduce a
-new project. See [intent reconciliation](../../decisions/0016-concurrent-inference-and-residency-timesharing.md).
+David's 2026-09-08 amendment prioritizes a working POC and accepts slow operation.
+Concurrency remains MVP; scheduled saved-state GPU timesharing moves to top
+post-MVP item D10 alongside central backend/runner compatibility boundaries D9.
+See [decision 0019](../../decisions/0019-saved-state-timesharing-after-poc.md) for
+the canonical mechanism and the superseded quantum-turnover acceptance gates.
 
 Bring up a useful local agent system with responsive Cointelprofessional contact,
 mechanical resource protection, dynamic model/context scheduling, continuing tasks,
@@ -55,7 +57,8 @@ be postponed until the other two are satisfied.
 9. Basic tests and live evidence show the whole loop, including actual useful GPU work.
 10. Live agent-to-agent communication survives context turnover, with direct/role/global/Coin addressing and truthful delivery/acknowledgement states.
 11. Multiple agents infer concurrently on available backend slots; excess requests
-    make fair progress through time-sharing. Memory-contended model demand causes
+    queue and progress as capacity opens. Scheduled physical-slot timesharing is
+    post-MVP D10. Memory-contended model demand causes
     eligible model eviction/load and durable agent resumption, not permanent defer.
 12. Any authorized role can initiate remote contact through the shared outbox;
     Coin can route David's reply to the originating work without a resident runner.
@@ -137,7 +140,7 @@ requirement that ordinary Coin decisions use the smaller model.
 
 Keep agent/session lifetime, request execution, backend slot ownership and model
 residency separate. Available slots on resident models execute concurrently.
-Oversubscribed requests queue with priority and fair bounded time-sharing; tool
+Oversubscribed requests queue with priority; post-MVP D10 adds fair bounded time-sharing. Tool
 execution and waiting agents need not retain inference slots. Backend incarnation
 and model qualify slot identity. Completion releases that request independently
 of unrelated busy slots. A one-worker bootstrap is not complete MVP acceptance.
@@ -152,12 +155,14 @@ clean context; a later slice reconstructs its saved context before useful work.
 This turnover preserves job, logical lease and agent-generation identity and all
 cumulative budgets. It is a pause/resume of one attempt, not a replacement run.
 
-Full usable-context capture and replay is the preferred baseline when it fits the
-destination context. If it does not fit, R6 produces a destination-sized semantic
-handoff plus durable artifact/evidence references. Backend KV-cache persistence is
-an optional measured accelerator, never the correctness boundary or only durable
-copy. Optimize for quick turnover, but lengthen the configured quantum when real
-checkpoint/replay latency makes shorter slices inefficient or unsafe. Over an
+The canonical post-MVP D10 switch saves/restores KV plus all other required model
+inference state. Durable conversation/task records remain available for recovery;
+text replay or R6 semantic handoff is used when saved state is absent/incompatible.
+Stage snapshots from disk into DDR while other agents perform useful GPU work.
+Long I/O latency is acceptable if it overlaps that work; distinguish staging from
+backend import and final switching. Qualify actual model-state reuse, API blocking,
+shared DDR contention and transient allocation in the later difficulty review.
+Lengthen configured quanta when measured switch cost warrants it. Over an
 unattended interval, priority plus aging must still give every eligible lease
 useful progress; repeated swapping with no useful work is not fairness.
 
@@ -523,11 +528,8 @@ the smoke fence and all other restrictive states permit it. Observe two autonomo
 cycles and record real latency, resource and job evidence. No deliberate host OOM.
 
 The same complete-MVP gate must also show: two Qwen requests genuinely overlap;
-one releases while its peer remains busy; more agents than physical slots all make
-progress across repeated configured slot turnovers without loss of session identity
-or cumulative budget; clean first admission and durable resumed-context admission
-are distinguishable; measured checkpoint/reconstruction overhead either supports
-the configured quantum or causes an explicit longer accepted quantum; memory-contended demand swaps an eligible
+one releases while its peer remains busy; waiting work uses freed capacity;
+memory-contended demand swaps an eligible
 model and later resumes displaced work; and a spontaneously generated role task
 initiates an unsolicited Telegram conversation whose reply reaches its originating
 work. Coin/contingency contact remains available throughout. A serial successful
@@ -535,6 +537,13 @@ task, a context-overflow rollover, or a fake monitor session does not prove thes
 respective obligations. Controlled smaller memory budgets may exercise eviction
 without attempting host exhaustion. Observe loading/concurrency under real backend
 execution, not only mocked selectors.
+
+Scheduled physical-slot turnover, state snapshot/restore, overlapping I/O staging
+and performance tuning are top post-MVP D10 acceptance, not G2 prerequisites.
+A slow/clunky POC is acceptable. Review D10 feasibility first, alongside D9's small
+central compatibility modules initially supporting Lemonade/OpenCode. No additional
+provider implementation is needed for that initial boundary. Existing durable
+context/model rollover requirements remain in G2.
 
 The gate also injects catastrophic runner death: dead-runner authority ends,
 independent evidence releases the bound request/sequence without disturbing peers,

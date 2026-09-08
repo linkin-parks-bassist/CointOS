@@ -12,14 +12,23 @@
 
 ## Global Constraints
 
-- Concurrent agents and contention-driven slot/model time-sharing are core MVP.
+Authoritative phase boundary (David, 2026-09-08; decision 0019): POC first, slow
+operation acceptable. Sections below describing quantum rotation, snapshot restore
+and rotation-specific R5/R6 tests are D10 design inputs for post-MVP, not current
+implementation packets or G2 blockers. Keep existing R1–R8 IDs for their MVP
+admission, budget, continuity and recovery work. D9 and D10 are the first improvement
+priorities after POC; D10 starts with a bounded difficulty review.
+
+- Concurrent agents are core MVP; scheduled physical-slot time-sharing is D10.
   Reuse backend slots, batching and load/unload; no second model server, fixed
   one-work-model rule or blanket busy check in place of admission.
 - Logical worker/execution leases may exceed physical sequence capacity. A waiting
   or checkpointed logical lease holds no R3 sequence; configured/tuned quanta rotate
   eligible occupants only after reconstructible disk state is durably attested.
-  Prefer quick full-context replay when it fits, lengthening the quantum when
-  measured turnover overhead requires it. KV-cache restore is optional acceleration.
+  The canonical post-MVP path saves/restores computed inference state, including KV
+  and model-required companion state; text replay is recovery. Stage disk-to-DDR
+  transfers alongside useful peer generation. Long staging latency is acceptable;
+  measure GPU stalls, DDR contention and transient memory separately (decision 0019).
 - Coin stays available; no OOM; context handover is independently mandatory and never becomes a terminal context-overflow result.
 - Software is functions over plain data. Add no classes, hidden mutable object state, actor framework, or new database.
 - Use lowercase `snake_case`; preserve external API spelling only where required.
@@ -55,12 +64,12 @@ cross-owner changes. Existing accepted components remain usable, not blanket clo
 | R2: `ecosystem/models.py` | Qualify native 262144 Qwen context and align `config/executor-opencode.json` with actual allocation. Separate per-request context from aggregate KV/cache; equal division applies only to fixed partitions. Prefer Qwen normally, 4B for contingency. |
 | R3: `ecosystem/inference_capacity.py` | Atomic reservation keyed by backend incarnation/model/slot; numeric slot IDs on different backends do not collide. Count resident weights/pools once, not once per agent. |
 | R4: `ecosystem/inference_proxy.py` | Complete R4-PRECISE: release one request while another remains busy. Handler capacity follows supported concurrency/control needs, not a hidden four-handler ceiling. |
-| R1/R5: worker gate, scheduler, executor | Agent/session lifetime differs from inference-slot lifetime; tool/queue waits do not monopolize slots. N+1 agents on N slots all progress under priority, aging and bounded quanta. |
+| R1/R5: worker gate, scheduler, executor | Agent/session lifetime differs from inference-slot lifetime; work progresses as capacity opens. N+1-on-N scheduled snapshot/restore rotation and bounded quanta belong to post-MVP D10. |
 | R2–R6: selection, admission, execution, continuation | Ordinary memory contention triggers eligible checkpoint/drain, observed request release, unload/load and later resumption. Prefer reuse without starving nonresident demand. Honor explicit operator protection and contingency capacity; do not globally pause unrelated backends. R6 supplies durable continuation where KV restore is unsupported. |
 | R7 | Pressure/emergency containment composes with these paths; ordinary model replacement is not a fabricated pressure incident. |
 
-Parent acceptance includes focused overlap, independent release, same-number slots
-on distinct backends, oversubscription progress, memory-contended eviction/resume,
+Parent MVP acceptance includes focused overlap, independent release, same-number slots
+on distinct backends, progress on freed capacity, memory-contended eviction/resume,
 and policy resizing that does not mutate live allocations underneath their owners.
 G2 requires bounded live overlap and model-turnover evidence too. Controlled smaller
 memory budgets exercise contention without host OOM. This is a contract revision;
@@ -427,7 +436,7 @@ def load_tests(_loader, _tests, _pattern):
 
 Require A1-validated contracts at dispatch and account all six fields without re-parsing. Charge `task_seconds` only for observed `running` intervals; approval, queue, drain and pause waits cost no running budget. Consume R3's trusted priority helper; unknown roles stay below 700 and aging cannot cross bands.
 
-Own the configurable physical-slot quantum and rotation decision here. Its initial
+Post-MVP D10 only: own the configurable physical-slot quantum and rotation decision here. Its initial
 scale is minutes, but no duration is hard-coded as architecture: record useful
 running time and checkpoint/reconstruction overhead, then permit validated policy
 to lengthen the quantum when turnover is too costly. On oversubscription, priority,
@@ -499,18 +508,18 @@ def load_tests(_loader, _tests, _pattern):
 
 Implement `running -> handoff_requested -> handoff_durable -> continuation_ready`. Preserve `job_id` and `agent_generation` through context/model change, process restart and `paused_for_resources`; increment only context generation. A genuinely new A1 attempt increments agent generation. Reserve destination prompt/output/tool/handoff before handoff; archive evidence by reference. Missing semantic handoff remains visibly continuable.
 
-For ordinary same- or compatible-context time slices, persist and replay the full
-usable conversation/context, tool results, task/authority contract, cumulative
-budget, mailbox state and artifact/evidence references when that fits. Start the
-first slice clean; reconstruct later slices from the attested disk checkpoint
-before reporting them running. If full replay cannot fit, use the destination-sized
-handoff path above. Treat backend KV-cache save/restore solely as a qualified fast
-path: durable backend-neutral state must remain sufficient after process restart,
-model change or missing KV support.
+Persist usable conversation/context, tool results, task/authority contract,
+cumulative budget, mailbox state and artifact/evidence references for recovery.
+Full replay when it fits and destination-sized handoff when it does not remain
+MVP continuation paths. Post-MVP D10 adds scheduled slices: first admission starts
+clean; later slices normally restore KV and required inference state, staged from
+disk while peers generate. Qualify that path in the difficulty review. Durable
+backend-neutral records must remain sufficient for recovery after process restart,
+model change or unavailable/incompatible saved inference state.
 
 - [ ] **Step 4: Add arbitrary-window/crash tests (local, small and simple)**
 
-Add `test_rollover_precedes_backend_limit`, `test_handoff_fits_destination_prompt_budget`, `test_model_switch_preserves_agent_generation`, `test_process_restart_preserves_agent_generation`, `test_new_attempt_increments_agent_generation`, `test_paused_for_resources_remains_addressable_without_lease`, `test_first_slice_starts_clean`, `test_resumed_slice_replays_full_context_when_it_fits`, `test_quantum_turnover_preserves_budget_and_logical_identity`, `test_missing_handoff_is_visible_and_continues`, and `test_context_overflow_is_never_terminal`.
+Add `test_rollover_precedes_backend_limit`, `test_handoff_fits_destination_prompt_budget`, `test_model_switch_preserves_agent_generation`, `test_process_restart_preserves_agent_generation`, `test_new_attempt_increments_agent_generation`, `test_paused_for_resources_remains_addressable_without_lease`, `test_missing_handoff_is_visible_and_continues`, and `test_context_overflow_is_never_terminal`. D10 later owns clean-first-slice, computed-state restore, overlapping staging, avoided-prefill and quantum identity/budget tests; those do not block MVP R6.
 
 - [ ] **Step 5: Remove monolithic duplicate transitions and verify R6 (Sol-medium, 15 minutes)**
 

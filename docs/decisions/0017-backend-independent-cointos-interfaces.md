@@ -4,6 +4,13 @@ Status: direction recorded from David, 2026-09-07, by Astra. Deferred until afte
 MVP unless David explicitly reprioritizes. Documentation only; no refactor or
 backend activation authorized by this record.
 
+Priority clarified by David, 2026-09-08: D9 is a top first-post-MVP improvement
+alongside saved-state timesharing D10, after POC bringup. Initially support only
+Lemonade/OpenCode through small centralized compatibility modules. Additional
+implementations should fill in those bounded adapter details without spreading
+vendor knowledge through core logic. A second production backend is not required
+to finish this initial extraction. See decision 0019 for delivery order.
+
 ## Intent
 
 CointOS is an orchestration system in its own right, not a Lemonade extension.

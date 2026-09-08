@@ -1,5 +1,16 @@
 # Current status
 
+Authoritative priority update, David 2026-09-08: POC bringup first; a slow/clunky
+working MVP is acceptable. [Decision 0019](decisions/0019-saved-state-timesharing-after-poc.md)
+makes computed inference-state snapshot/restore the canonical timesharing model,
+with disk-to-DDR staging intended to overlap peers' useful GPU work. D10 difficulty
+review and implementation move to the top post-MVP improvement queue alongside D9
+central Lemonade/OpenCode compatibility boundaries (initially those implementations
+only). Text replay remains recovery, not the normal switching target. Repeated
+scheduled slot-turnover and performance proofs no longer block G2; older statements
+below calling them central MVP gates are superseded. Concurrent useful inference,
+reclaimable occupancy and durable continuation remain required. No runtime changes.
+
 Lease-contract correction, 2026-09-08: decision 0018 makes current agent liveness,
 not cause-specific close handshakes, authoritative for ownership. An independently
 ended bound process with no in-flight proxy request relinquishes its inference and
@@ -280,8 +291,10 @@ suite. The currently running user services are not that permanent survival plane
   recorded as `delivery_unknown` and is not replayed automatically.
 - General live direct, role-local, and global inter-agent messaging remains specified
   but unimplemented.
-- Lemonade exposes no serializable live backend KV cache; continuity therefore uses
-  OpenCode sessions, exact prompts, logs, handoff artifacts, and filesystem state.
+- CointOS does not yet integrate computed-state save/restore. Installed llama.cpp
+  advertises slot-cache persistence and RAM caching; exact-model restore and
+  overlapping staging need D10 qualification. MVP continuity uses durable sessions,
+  prompts, logs, handoffs and filesystem state; see decision 0019.
 - Context KV cost is conservatively estimated rather than read from a backend lease
   API; the guard remains authoritative if observed pressure exceeds the estimate.
 - Active user-unit status alone does not prove Telegram reachability, model health,

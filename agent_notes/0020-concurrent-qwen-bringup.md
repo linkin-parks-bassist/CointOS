@@ -1,5 +1,30 @@
 # Concurrent Qwen commissioning — Astra, 2026-09-07
 
+## Current direction — David, recorded by Sol, 2026-09-08
+
+[Decision 0019](../docs/decisions/0019-saved-state-timesharing-after-poc.md)
+supersedes earlier full-text-first switching and mandatory MVP quantum-turnover
+claims in this historical commissioning note. David is dedicated to POC bringup;
+a slow/clunky working MVP is acceptable. Preserve concurrency and reclaimable
+capacity, but defer scheduled physical-slot timesharing to D10 after MVP.
+
+Canonical D10: save computed KV plus required companion inference state; stage it
+from disk into DDR while other agents keep using the GPU; restore for a later slice
+without normally repeating full-model prefill. Long staging time is acceptable.
+The relevant cost is useful GPU service lost, including memory-bandwidth and final
+import/synchronization interference, not just wall-clock disk latency. RAM staging
+and transient copies must fit the resource budget. Actual asynchronous overlap and
+complete state reuse require a bounded model/backend difficulty review first.
+
+D10 and D9 (central backend/runner compatibility modules) are the top first
+post-MVP improvements. D9 initially need only support Lemonade/OpenCode; future
+compatibility should require filling in small centralized adapter details. Other
+improvements David may remember are explicitly unspecified; revisit with him after
+POC rather than creating speculative tasks. These are documentation decisions;
+no running packet, service, GPU setting or deployment changes here.
+
+## Historical commissioning evidence
+
 Integrated shared routing 32fd0ad, cfg admission 50250dd and mixed-cap fix
 3dd730b after review. Fresh combined verification: model admission46, resident3,
 shared routing7 passed; cfg admission and inference_capacity then failed broadly.
@@ -159,10 +184,10 @@ David clarified that logical worker/execution leases should be able to outnumber
 physical inference slots. On a configurable/tunable cadence, ideally quick and
 initially on the order of minutes, an eligible physical occupant should reach a
 safe boundary, persist reconstructible state to disk, release/clear the slot, and
-let a waiting lease enter with clean context or saved resume context. Prefer full
-usable-context replay when it fits; fall back to destination-sized handoff when it
-does not. KV-cache preservation may become a qualified optimization, but is not
-assumed and cannot be the only durable state. If measured swapping overhead makes
+let a waiting lease enter with clean context or saved resume context. The initial
+text-replay preference below was superseded by decision 0019: saved computed state
+is now the canonical post-MVP path, with durable text retained for recovery.
+If measured swapping overhead makes
 short slices impractical, lengthen them; an unattended workstation must still give
 all eligible leases useful eventual progress. Logical identity, agent generation
 and cumulative budget survive turnover; a waiting logical lease owns no physical
