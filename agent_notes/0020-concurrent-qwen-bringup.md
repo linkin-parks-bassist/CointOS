@@ -144,6 +144,17 @@ acceptance; its next subtask remains pending, not forgotten or falsely reviewed.
 
 ## Timesharing architecture clarification, 2026-09-08
 
+Prefill observation (Sol, 2026-09-08): with Qwen weights resident, a roughly
+five-second sample showed GPU busy at 98–100%, three decoding requests advancing
+5–8 tokens each, and a fourth processing about 1,000 prompt tokens within a roughly
+22K-token prompt. The 4B backend was idle and swap unused. David subsequently
+observed all four workers reasoning at a reasonable pace after prefill finished.
+This supports prefill interference as a scheduling concern, but is not a controlled
+benchmark or a proven request-to-session mapping. Full context replay may incur
+this cost on every resume unless reusable KV/prefix state is actually retained.
+Decision 0016, the spec and resource plan now require restoration and peer-slowdown
+measurements when tuning quanta. No runtime policy or timesharing code changed.
+
 David clarified that logical worker/execution leases should be able to outnumber
 physical inference slots. On a configurable/tunable cadence, ideally quick and
 initially on the order of minutes, an eligible physical occupant should reach a

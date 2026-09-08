@@ -161,6 +161,12 @@ checkpoint/replay latency makes shorter slices inefficient or unsafe. Over an
 unattended interval, priority plus aging must still give every eligible lease
 useful progress; repeated swapping with no useful work is not fairness.
 
+Resident weights do not eliminate context-prefill cost. Full-context replay can
+rebuild KV state and interfere with peers decoding on other slots. Measure restore
+and prefill latency, time to first useful output, useful decode time and peer
+slowdown separately from model loading. Tune quanta to amortize restoration while
+bounding waiting; qualify actual KV/prefix reuse independently of text replay.
+
 Catastrophic runner death is an explicit recovery transition, not a reason to
 retain an opaque active lease. Matching process-generation death revokes the dead
 runner's authority and requests cleanup; the R3 physical sequence is released only

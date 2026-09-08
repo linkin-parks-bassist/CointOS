@@ -435,6 +435,13 @@ aging and recent service select an eligible occupant at a safe request boundary;
 protected operator/front/emergency allocations retain their explicit exceptions.
 A rotation that repeatedly performs only reconstruction is not useful progress.
 
+Include prefill under resident weights in the later timesharing measurements:
+compare cold context replay with qualified cache reuse, record restoration latency
+and time to first useful output, and measure the slowdown imposed on decoding
+peers. Tune quanta against useful work after restoration, not weight residency
+alone. Evaluate staggered/chunked prefill only where the backend supports it.
+This measurement requirement does not authorize timesharing implementation yet.
+
 - [ ] **Step 4: Extract process enforcement from executor (Sol-medium, 20 minutes)**
 
 Replace fixed 1800 seconds with task budget. At 300 seconds request 30-second wrap-up, then SIGTERM and observe matching PID/start identity for 15 seconds before SIGKILL. Exhaustion first persists `checkpoint_required`; only `record_budget_handoff` may produce `partial_handoff_ready`, after verifying a nonempty durable artifact bound to job/generation. A timer never proves completion.

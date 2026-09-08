@@ -51,6 +51,16 @@ durability, fairness or resource accounting. Backend KV-cache save/restore may
 accelerate swapping only after model/backend-specific qualification; it is never
 the sole copy of continuation state.
 
+Prefill is a material turnover cost even with resident model weights. Replaying
+saved text can require rebuilding its KV state, consuming GPU compute and slowing
+other slots that are decoding. Quantum tuning must measure context reconstruction,
+time to first useful output, useful decode time and peer slowdown separately from
+weight loading. Evaluate cold replay and actual cache reuse independently; full
+text capture guarantees reconstructibility, not cheap resumption. Choose quanta
+that amortize measured restoration cost while preserving bounded waiting. Consider
+staggered or backend-supported chunked prefill during later performance experiments.
+These are documentation requirements; timesharing implementation remains deferred.
+
 Catastrophic runner death must not strand a lease indefinitely. Detecting the
 matching process generation's death ends that runner's authority and initiates
 release/recovery automatically. Physical capacity becomes reusable after the
