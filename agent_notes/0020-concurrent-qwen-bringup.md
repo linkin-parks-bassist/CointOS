@@ -1,6 +1,6 @@
 # Concurrent Qwen commissioning — Astra, 2026-09-07
 
-## Current direction — David, recorded by Sol, 2026-09-08
+## Current direction — David, recorded by Aster (Astra), 2026-09-08
 
 [Decision 0019](../docs/decisions/0019-saved-state-timesharing-after-poc.md)
 supersedes earlier full-text-first switching and mandatory MVP quantum-turnover
@@ -169,7 +169,7 @@ acceptance; its next subtask remains pending, not forgotten or falsely reviewed.
 
 ## Timesharing architecture clarification, 2026-09-08
 
-Prefill observation (Sol, 2026-09-08): with Qwen weights resident, a roughly
+Prefill observation (Aster, Astra; initially misattributed to Sol, 2026-09-08): with Qwen weights resident, a roughly
 five-second sample showed GPU busy at 98–100%, three decoding requests advancing
 5–8 tokens each, and a fourth processing about 1,000 prompt tokens within a roughly
 22K-token prompt. The 4B backend was idle and swap unused. David subsequently

@@ -1,5 +1,15 @@
 # Current status
 
+Prepared-knowledge direction, David/Aster 2026-09-08: decision 0020 and post-MVP
+D11 now specify maintained repository orientation, fresh task-specific dispatch
+briefs, searchable audited topic lectures, Lecturer and Adviser roles. Adviser
+was named by this Astra instance (Aster) and selected by David. An inactive Adviser
+remains addressable with saved knowledge and no physical inference slot. Specialized
+Auditor tasks review exact lecture versions and stale-source changes. The bounded
+D11 plan is linked from the index and autonomy plan; this is documented intended
+work, not a new POC gate or role activation. See agent note 0021 for coordinator
+rationale, attribution and handoff guidance.
+
 Authoritative priority update, David 2026-09-08: POC bringup first; a slow/clunky
 working MVP is acceptable. [Decision 0019](decisions/0019-saved-state-timesharing-after-poc.md)
 makes computed inference-state snapshot/restore the canonical timesharing model,

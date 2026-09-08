@@ -375,6 +375,19 @@ they cannot manufacture capabilities or bypass an authority profile. Documenter
 records what is observed; Speculator may explore what might be; Janitor maintains
 the existing material. None requires a separate software execution mechanism.
 
+Post-MVP D11 makes prepared context first-class: a maintained repo orientation,
+fresh revision/time-bound dispatch briefing injected through the runner adapter,
+and searchable topic lectures. Workers use scoped supplied facts without repeating
+orientation; changed or action-critical facts still receive targeted checks.
+Lecturer produces narrative sourced explanations; specialized Auditor tasks verify
+exact lecture versions and detect source-driven staleness. Adviser (the approved
+name proposed by Aster, an Astra instance) learns a bounded topic's applicable
+lectures and answers agents through the existing mailbox. Its durable identity and
+knowledge survive idle periods without occupying a physical inference slot; D10
+state restore may accelerate resumption. See [decision 0020](../../decisions/0020-context-briefings-lecturers-and-advisers.md)
+and [D11](../plans/2026-09-08-cointos-context-knowledge.md) for coverage, authority,
+freshness, acceptance and phase boundaries. No role activation or POC gate added.
+
 An agent may inspect, identify a task, perform authorized bounded work, leave partial
 progress, or write a note/proposal. A result states sources, observation versus
 inference, changed artifacts, checks and next action when one exists. No useful work

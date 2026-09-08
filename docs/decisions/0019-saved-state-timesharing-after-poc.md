@@ -1,6 +1,7 @@
 # 0019: Saved inference state is the canonical post-MVP timesharing model
 
-Status: accepted by David, 2026-09-08. Recorded by Sol (Codex `/root`).
+Status: accepted by David, 2026-09-08. Recorded by Aster (Astra, Codex `/root`;
+initially misidentified as Sol, attribution corrected).
 Documentation and prioritization only; no runtime activation or implementation.
 This supersedes the text-replay-first timesharing direction and mandatory MVP
 quantum-turnover gates in decision 0016 and its dependent plans/specification.

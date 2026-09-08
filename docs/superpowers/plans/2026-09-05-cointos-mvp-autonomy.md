@@ -34,6 +34,13 @@ interfaces, not an additional bespoke MVP service. See the canonical spec/index.
 
 ## A1 — Explicit task contract and extensible role contexts
 
+Post-MVP successor D11 builds on this context boundary: maintained repo orientation,
+fresh trusted-within-scope dispatch briefs, Lecturer topic artifacts, independent
+lecture audit tasks and durable topic Advisers. See [the bounded D11 plan](2026-09-08-cointos-context-knowledge.md)
+and decision 0020. These are explicit intended work, not additions to A1 acceptance.
+Use existing role/job/mailbox/budget contracts and D9 adapters; do not add special
+scheduler branches or recurring role schedules during this documentation phase.
+
 **Owner/budget:** Sol medium, 20 minutes. Local jobs: one role file or one specified validator/test.
 **Depends on:** R1. R5 consumes this task's budget validator; do not create a reverse dependency.
 **Files:** create `ecosystem/task_contracts.py`, `roles/janitor.md`, `roles/gardener.md`,
