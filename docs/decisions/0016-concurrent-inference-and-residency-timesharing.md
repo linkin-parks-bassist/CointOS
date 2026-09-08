@@ -19,9 +19,58 @@ resume displaced work. Preserve priority, aging and bounded quanta so neither
 continuous arrivals nor model-local batching starve other work. Never unload a
 model underneath an unaccounted active request or lose agent continuation state.
 
+Logical worker/execution leases may therefore outnumber physical backend slots.
+An R3 sequence lease represents only the interval in which a logical run actually
+occupies a physical slot; a queued or paused logical lease must not retain that
+sequence allocation. Under oversubscription, the scheduler periodically selects
+an eligible occupant to yield at a configurable, tunable time quantum. Before the
+slot is cleared, it reaches a safe request boundary and durably records enough
+state on disk to reconstruct the run: conversation/context, task and authority
+contract, cumulative budget, tool results, mailbox state, artifacts and evidence
+references. Only an attested durable checkpoint permits ordinary slot release.
+
+The next waiting logical lease receives the physical slot with clean context on
+its first run, or with its saved continuation reconstructed on a later slice. The
+preferred correctness path is to capture and re-inject the full usable context
+when it fits the destination. A destination-sized semantic handoff remains the
+fallback when full replay cannot fit. Yield and resume preserve `job_id`, logical
+lease identity, `agent_generation` and cumulative budgets; they are not new task
+attempts. Physical context/KV is cleared or replaced independently of that durable
+identity.
+
+The target is fast context turnover, initially on the order of configurable
+minutes, so several logical agents make visible progress over an unattended
+workstation interval. This is a performance hypothesis to measure, not a claim
+about the installed backend. If safe checkpoint/reconstruction overhead makes a
+short quantum inefficient or unreliable, increase the quantum rather than weaken
+durability, fairness or resource accounting. Backend KV-cache save/restore may
+accelerate swapping only after model/backend-specific qualification; it is never
+the sole copy of continuation state.
+
+Catastrophic runner death must not strand a lease indefinitely. Detecting the
+matching process generation's death ends that runner's authority and initiates
+release/recovery automatically. Physical capacity becomes reusable after the
+owning observer confirms that the bound backend request has also terminated; PID
+death alone must not release a still-running request or somebody else's slot. The
+transition writes an append-only, steward-discoverable revival artifact containing
+the logical identity, last durable continuation/checkpoint references, cumulative
+budget, mailbox/artifact references, death and release evidence, and any uncertainty.
+The minimum MVP behavior is a visible recoverable/pending-revival record. The
+eventual behavior is a bounded revival protocol which safely reacquires resources
+and resumes from that record without treating the crash as successful completion.
+
 Backend slot identity includes model/backend incarnation; slot 0 on two different
 backends is not one resource. Releasing one request must not await unrelated slots
 becoming idle. Implement the precise-release successor in decision 0012.
+
+Queue residence and paused time are ordinary operation, not request failure. A
+CointOS-launched inference client must not impose a fixed total, response-header,
+or inter-stream-chunk deadline which can expire merely because admitted work is
+waiting for its turn. Keep connection establishment, malformed input and health
+probes bounded. Once connected and admitted, explicit cancellation, lease/budget
+policy, verified runner death or transport/backend failure owns termination; elapsed
+queue time alone does not. This applies to the OpenCode adapter and the proxy's
+backend connection independently.
 
 ## Policy ownership
 
@@ -70,7 +119,14 @@ save/restore is an optimization requiring model-specific evidence; durable sessi
 and replayable continuation are the correctness boundary, not an invented KV API.
 
 Acceptance must demonstrate overlapping Qwen requests, release while a peer remains
-busy, more agents than slots making progress, and a memory-contended model switch
-with preserved agent state and contingency availability. These are central MVP
+busy, more logical leases than slots making progress across at least two physical
+slot turnovers, and a memory-contended model switch with preserved agent state and
+contingency availability. Evidence must distinguish queue time, useful running
+time, checkpoint/reconstruction latency and failed/extended quanta, and must show
+that a resumed slice retains identity and cumulative budget. These are central MVP
 requirements, not post-MVP polish. The monitor-window demonstration and review of
 contact worker commit 1fa88d2 remain pending, not superseded or silently accepted.
+Crash acceptance additionally kills a bound runner, observes its request end and
+physical release independently, and finds the durable revival artifact through the
+ordinary Steward discovery path; absence of an automatic reviver must remain an
+explicit pending-revival limitation rather than an invisible orphan.

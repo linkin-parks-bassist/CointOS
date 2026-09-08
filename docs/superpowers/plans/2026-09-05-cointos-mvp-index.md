@@ -12,7 +12,7 @@ suite. Parent acceptance is not inferred from a completed narrow worker packet.
 | --- | --- | --- |
 | Global `.cfg` slot/context policy and backend qualification | Q1, R2, R3 | One policy owner; native 262K target distinguished from actual allocation; fixed/shared KV accounting explicit |
 | Concurrent inference and independent slot release | R3, R4 including R4-PRECISE | Two busy Qwen requests; one releases without awaiting the other |
-| More agents than slots, fair time-sharing | R1, R3, R5, R6 | All contending agents progress with stable sessions and bounded resource ownership |
+| More logical leases than physical slots, fair time-sharing | R1, R3, R5, R6 | Configured/tuned quanta checkpoint an occupant to disk, release its physical sequence, and admit clean or reconstructed context; all eligible agents gain useful progress with stable identity and cumulative budgets |
 | Memory-contended model residency | R2, R3, R4, R5, R6; R7 pressure constraints | Eligible model drain/evict/load/resume while contingency survives; no fabricated pressure incident |
 | Spontaneous work and extensible roles | A1–A3, A5 | Grounded work without a new human task; new role requires data/config, not scheduler branches |
 | Unsolicited remote contact and reply continuation | C1–C3, B1–B4, A5 | Agent-originated Telegram message and a reply routed to original work after runner exit |
@@ -100,11 +100,11 @@ Dependencies below refer to accepted task outputs, not merely agent completion. 
 | Q1 | Standard parsing, whole-policy validation and last-known-good reload | S0 | [Swarm](2026-09-05-cointos-mvp-swarm.md#q1--standard-parsing-owned-validation-and-safe-configuration-reload) |
 | R1 | Atomic worker registration, drain and exclusive smoke admission | Q1 | [Resources](2026-09-05-cointos-mvp-resources.md) |
 | R2 | Measured model/context selection without resident bypass | R1 | Resources |
-| R3 | Trusted role priority and actual sequence reservations | R2 | Resources |
+| R3 | Trusted role priority and temporary actual sequence reservations; waiting logical leases own no physical slot | R2 | Resources |
 | R4 | Every inference caller, including OpenCode, passes admitted boundary | R3 | Resources |
 | R8 | David's independently launched user-driven agents hold explicit operator leases that ordinary management cannot evict | R4 | Resources |
-| R5 | Enforced execution/output/attempt budgets and real partial handoff | R4, R8, A1 | Resources |
-| R6 | Destination-sized durable continuation across contexts/models | R5 | Resources |
+| R5 | Enforced execution/output/attempt budgets, configurable slot quanta and fair rotation | R4, R8, A1 | Resources |
+| R6 | Full-context replay where it fits, with destination-sized durable continuation across contexts/models | R5 | Resources |
 | R7 | Pressure prevention, independent gates and exclusive OOM recovery | R6 | Resources |
 | A1 | Validated inherited task contracts and extensible role contexts | R1 | [Autonomy](2026-09-05-cointos-mvp-autonomy.md) |
 | C1 | Canonical four-outcome contact lifecycle and durable task/conversation identity | A1 | [Contact](2026-09-05-cointos-mvp-contact.md) |
@@ -169,7 +169,7 @@ No second roster, hidden status database, scheduler-specific role switch, compat
 
 **G1 — independent survival and communication (H4/H5/B4/R7):** busy work does not occupy Coin's slot; synthetic pressure stops admissions and preserves continuation; incident repair produces a fresh independent recovery observation; small inspectors outrank large and both outrank ordinary work. Bidirectional live delivery, role/global announcement, explicit ACK, authorized wrap-up and context turnover work without a second big inference process. Model-free controls continue if inference/messages fail.
 
-**G2 — complete autonomous MVP (P4/A5):** actual environment discovery produces a grounded contribution and useful independently verified work; a new role can be added without scheduler/executor changes; a task completes across smaller context/model turnover; Coin approval controls exact candidate activation; failed startup restores the prior observed healthy release; two autonomous cycles survive restart. Protected self-update is advertised only after its unchanged-release continuity/rollback rehearsal passes. Worker admission resumes only if every independent gate permits it.
+**G2 — complete autonomous MVP (P4/A5):** actual environment discovery produces a grounded contribution and useful independently verified work; a new role can be added without scheduler/executor changes; oversubscribed logical leases make useful progress across repeated physical-slot turnovers, with a clean first slice and disk-reconstructed resumed slice preserving identity and cumulative budget; measured turnover overhead supports the configured quantum or produces an explicit longer tuned quantum; a task completes across smaller context/model turnover; Coin approval controls exact candidate activation; failed startup restores the prior observed healthy release; two autonomous cycles survive restart. Protected self-update is advertised only after its unchanged-release continuity/rollback rehearsal passes. Worker admission resumes only if every independent gate permits it.
 
 G2 additionally requires every evidence row in the thesis reconciliation above.
 Neither G0 early contact nor serial autonomous cycles close the complete MVP.

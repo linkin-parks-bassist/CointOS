@@ -79,3 +79,13 @@ to896da1e, not740b80b. A repair must address executor persistence ownership acro
 its other writes too, not just patch the assertion's first failing line. In-flight
 budget refresh remains a distinct enforcement requirement. Managed child dispatch
 is still unwired; do not portray this composition probe as observed live damage.
+
+David's scope correction, 2026-09-08: `local-budget-parent-writeback-fix` was too
+broad for one Qwen worker despite its two-file write limit. It coupled executor
+persistence ownership, cumulative budget semantics, scheduler/time policy and child
+admission evidence, causing a long context-heavy investigation before any edit.
+Future local packets must bound necessary evidence as tightly as write scope: one
+owner function or transition, one already-reproduced invariant, exact named source
+spans/tests, and an explicit prohibition on surveying adjacent accounting policy.
+Split mapping, RED reproduction, the smallest owner repair and review into separate
+durable packets when those steps require different semantic context.

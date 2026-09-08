@@ -141,3 +141,40 @@ the temporary active slot source until the cfg caller migration is accepted.
 Then scale measured slots/context and model eviction/resumption; don't call the
 two-slot checkpoint complete MVP. Contact worker 1fa88d2 still awaits independent
 acceptance; its next subtask remains pending, not forgotten or falsely reviewed.
+
+## Timesharing architecture clarification, 2026-09-08
+
+David clarified that logical worker/execution leases should be able to outnumber
+physical inference slots. On a configurable/tunable cadence, ideally quick and
+initially on the order of minutes, an eligible physical occupant should reach a
+safe boundary, persist reconstructible state to disk, release/clear the slot, and
+let a waiting lease enter with clean context or saved resume context. Prefer full
+usable-context replay when it fits; fall back to destination-sized handoff when it
+does not. KV-cache preservation may become a qualified optimization, but is not
+assumed and cannot be the only durable state. If measured swapping overhead makes
+short slices impractical, lengthen them; an unattended workstation must still give
+all eligible leases useful eventual progress. Logical identity, agent generation
+and cumulative budget survive turnover; a waiting logical lease owns no physical
+R3 sequence. This entry and the canonical decision/spec/plans are documentation
+only. Do not infer runtime implementation or disturb the eight live Qwen runs.
+
+Catastrophic-death clarification, 2026-09-08: a dead runner must not strand opaque
+lease ownership. Matching process-generation death should revoke runner authority
+and trigger cleanup; reuse the physical sequence only after independent evidence
+that the bound backend request ended. Always leave an append-only revival artifact
+with logical identity, last durable state, cumulative budget, mailbox/artifact
+references, crash/release evidence and uncertainty. At minimum a Steward must find
+and triage it; eventually a bounded revival protocol should reacquire resources and
+resume the same logical work. Never infer completion from death. Documentation only.
+
+Timeout correction, 2026-09-08: the failed `local-r4-slot-wiring-review3` request
+ended after roughly 609 seconds with OpenCode's `CURL error: Timeout was reached`
+and zero tokens. OpenCode 1.18.29 exposes provider `timeout`, `headerTimeout` and
+`chunkTimeout`, each accepting `false`. CointOS-generated anonymous configs now
+disable all three. The proxy retains a bounded 10-second backend connect but removes
+the post-connect total/read deadline so normal queue residence cannot kill admitted
+work. Do not restart the live proxy or existing workers solely to activate this;
+activate at the next independently safe drain/restart boundary. Focused R4 tests:
+41/41 pass. A broader 123-test selection exposed five existing executor-fixture
+errors about obsolete `front_sequences` policy ownership; they are not attributed
+to this timeout change and remain separate reconciliation work.

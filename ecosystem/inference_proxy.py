@@ -57,6 +57,11 @@ def opencode_environment(root: Path, inference_lease: dict, credential: bytes) -
     provider["options"] = {
         "apiKey": credential.hex(),
         "baseURL": proxy_base,
+        # Admission and backend scheduling may intentionally leave a request
+        # queued for longer than an SDK's ordinary request deadline.
+        "timeout": False,
+        "headerTimeout": False,
+        "chunkTimeout": False,
     }
     model = provider.setdefault("models", {}).setdefault(inference_lease["model_id"], {})
     model["limit"] = {
@@ -502,7 +507,8 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             except Exception:
                 pre = None
         upstream_connection = http.client.HTTPConnection(
-            endpoint["host"], endpoint["port"], timeout=float(config.get("backend_timeout_seconds", 180)))
+            endpoint["host"], endpoint["port"],
+            timeout=float(config.get("backend_connect_timeout_seconds", 10)))
         try:
             _register_upstream(Path(root), lease["lease_id"], upstream_connection)
             _record_backend_identity(Path(root), lease["lease_id"], admission["claim_id"],
@@ -511,6 +517,9 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
                                         body=json.dumps(body, separators=(",", ":")),
                                         headers={"Content-Type": "application/json",
                                                  "Connection": "close"})
+            # A connected, admitted request may wait indefinitely for its
+            # scheduled turn. Explicit cancellation and lease policy end it.
+            upstream_connection.sock.settimeout(None)
             upstream = upstream_connection.getresponse()
             start = None
             if pre is not None:

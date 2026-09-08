@@ -184,8 +184,11 @@ def test_opencode_memfd_contains_secret_but_environment_does_not():
             assert (b"x" * 32).hex() not in json.dumps(environment)
             assert environment["pass_fds"] == (environment["fd"],)
             config = json.loads(os.pread(environment["fd"], 65536, 0))
-            assert config["provider"]["Lemonade"]["options"]["baseURL"] == \
-                "http://127.0.0.1:13306/v1"
+            options = config["provider"]["Lemonade"]["options"]
+            assert options["baseURL"] == "http://127.0.0.1:13306/v1"
+            assert options["timeout"] is False
+            assert options["headerTimeout"] is False
+            assert options["chunkTimeout"] is False
         finally:
             os.close(environment["fd"])
 
@@ -721,12 +724,14 @@ def test_production_eof_close_proves_absence_only_from_fresh_probe():
         backend = MagicMock()
         backend.getresponse.return_value = upstream
         with patch("ecosystem.inference_proxy.http.client.HTTPConnection",
-                   return_value=backend), \
+                   return_value=backend) as connection_factory, \
              patch("ecosystem.inference_proxy.backend_snapshot",
                    return_value=snapshot()):
             serve_one_connection(connection, value["root"], {
                 "backend_base": "http://127.0.0.1:13305/v1",
             }, lambda: 11.0)
+        connection_factory.assert_called_once_with("127.0.0.1", 13305, timeout=10.0)
+        backend.sock.settimeout.assert_called_once_with(None)
         assert stored_credential(value)["last_backend_termination"] is None
         assert stored_credential(value)["backend_identity"] == snapshot()["identity"]
         dead_process(value)

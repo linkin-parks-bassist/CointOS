@@ -1,5 +1,27 @@
 # Current status
 
+Documentation-only architecture clarification, 2026-09-08: logical worker/execution
+leases are intended to outnumber physical inference slots. Under contention, a
+configurable/tunable quantum (ideally quick, initially measured in minutes) will
+checkpoint an eligible occupant's reconstructible state to disk, release and clear
+its physical sequence, then admit a waiting lease with clean context or restore a
+previous lease's saved context. Full-context replay is the preferred correctness
+baseline when it fits; destination-sized handoff is the fallback and backend KV
+save/restore is only an evidence-qualified accelerator. If turnover overhead is too
+high, lengthen the quantum while retaining fairness and eventual useful progress
+over unattended operation. Decision 0016, the canonical spec, resource plan and
+index now agree. No runtime code, policy, service or live lease was changed for
+this clarification; timesliced checkpoint/eject/resume remains unimplemented.
+
+Queued-request timeout correction, 2026-09-08: OpenCode 1.18.29 supports disabling
+provider total, response-header and inter-chunk timeouts. CointOS's generated
+anonymous per-run OpenCode configuration now disables all three, because admitted
+queue residence is expected operation. The proxy change keeps backend connection
+establishment bounded at 10 seconds and removes its post-connect elapsed-time kill
+switch; explicit cancellation and lease policy remain authoritative. Focused R4
+tests pass 41/41. Existing workers were not restarted, and the running proxy still
+requires a safe later restart before its post-connect behavior changes.
+
 Shared-pool checkpoint, 2026-09-07: David approved eight Qwen request slots sharing
 262144 aggregate context tokens, with a 262144 per-request ceiling. A real backend
 allocation/metadata probe succeeded (~46.8 GiB GTT, ~71.2 GiB host available, no

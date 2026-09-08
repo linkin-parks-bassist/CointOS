@@ -142,6 +142,35 @@ execution and waiting agents need not retain inference slots. Backend incarnatio
 and model qualify slot identity. Completion releases that request independently
 of unrelated busy slots. A one-worker bootstrap is not complete MVP acceptance.
 
+A durable logical worker/execution lease may remain runnable or paused while it
+holds no physical sequence lease. When runnable logical leases outnumber physical
+slots, the scheduler uses a configurable/tunable time quantum, initially expected
+to be measured in minutes. At a safe request boundary it checkpoints an eligible
+occupant to disk, attests that the reconstructible state is durable, releases and
+clears that physical slot, and admits a waiting lease. A first slice starts with
+clean context; a later slice reconstructs its saved context before useful work.
+This turnover preserves job, logical lease and agent-generation identity and all
+cumulative budgets. It is a pause/resume of one attempt, not a replacement run.
+
+Full usable-context capture and replay is the preferred baseline when it fits the
+destination context. If it does not fit, R6 produces a destination-sized semantic
+handoff plus durable artifact/evidence references. Backend KV-cache persistence is
+an optional measured accelerator, never the correctness boundary or only durable
+copy. Optimize for quick turnover, but lengthen the configured quantum when real
+checkpoint/replay latency makes shorter slices inefficient or unsafe. Over an
+unattended interval, priority plus aging must still give every eligible lease
+useful progress; repeated swapping with no useful work is not fairness.
+
+Catastrophic runner death is an explicit recovery transition, not a reason to
+retain an opaque active lease. Matching process-generation death revokes the dead
+runner's authority and requests cleanup; the R3 physical sequence is released only
+after independent observation that its bound backend request ended. Persist an
+append-only revival artifact with logical identity, last reconstructible state,
+budget and mailbox/artifact references, crash/release evidence and unresolved
+uncertainty. A Steward must be able to discover and triage that artifact even before
+automatic revival exists. The eventual reviver reacquires resources under ordinary
+admission and resumes the same logical work; it never labels the crash completion.
+
 When a required model is absent, load it if memory permits. Otherwise drain and
 checkpoint eligible work, observe affected request release, evict selected models,
 load the requested model and resume waiting work. Do not evict unrelated models
@@ -421,7 +450,7 @@ recovery. Do not write another configuration language or add a parsing dependenc
 
 | File/family | Adjustable values | Owner/application boundary |
 | --- | --- | --- |
-| `time.cfg` | Poll/probe periods, deadlines, wrap-up, leases, approval lifetime | Timing owner; complete validated reload, new operation deadlines only. |
+| `time.cfg` | Poll/probe periods, deadlines, wrap-up, leases, physical-slot time quantum and checkpoint/reconstruction bounds | Timing owner; complete validated reload, new operation deadlines only; tune quanta upward when measured turnover overhead is excessive. |
 | `resource-policy.json` | Host/GTT reserves, pressure/hysteresis, load/transient estimates | Resource owner; tighter policy closes admission and arranges handover before reallocating. |
 | `inference.cfg` | Global slot defaults/model overrides, per-request context and aggregate KV/cache allocation policy | Admission/loading owner; validate against backend facts; drain affected allocations before resizing; remove duplicate slot settings elsewhere. |
 | `model-policy.json` | Qualified model preferences, capabilities and output policy | Admission owner; new requests only, actual backend facts still required. |
@@ -489,7 +518,10 @@ cycles and record real latency, resource and job evidence. No deliberate host OO
 
 The same complete-MVP gate must also show: two Qwen requests genuinely overlap;
 one releases while its peer remains busy; more agents than physical slots all make
-progress without loss of session identity; memory-contended demand swaps an eligible
+progress across repeated configured slot turnovers without loss of session identity
+or cumulative budget; clean first admission and durable resumed-context admission
+are distinguishable; measured checkpoint/reconstruction overhead either supports
+the configured quantum or causes an explicit longer accepted quantum; memory-contended demand swaps an eligible
 model and later resumes displaced work; and a spontaneously generated role task
 initiates an unsolicited Telegram conversation whose reply reaches its originating
 work. Coin/contingency contact remains available throughout. A serial successful
@@ -497,6 +529,12 @@ task, a context-overflow rollover, or a fake monitor session does not prove thes
 respective obligations. Controlled smaller memory budgets may exercise eviction
 without attempting host exhaustion. Observe loading/concurrency under real backend
 execution, not only mocked selectors.
+
+The gate also injects catastrophic runner death: dead-runner authority ends,
+independent evidence releases the bound request/sequence without disturbing peers,
+and the ordinary Steward path discovers a durable pending-revival artifact carrying
+the same logical identity and cumulative budget. Automated revival may mature in
+stages, but silent orphaning and indefinite stale ownership are not acceptable.
 
 Defer exhaustive hostile-spool/permission/crash-matrix tests, every-subsystem model
 monitors, voice/attachments, other projects, hardware

@@ -15,6 +15,11 @@
 - Concurrent agents and contention-driven slot/model time-sharing are core MVP.
   Reuse backend slots, batching and load/unload; no second model server, fixed
   one-work-model rule or blanket busy check in place of admission.
+- Logical worker/execution leases may exceed physical sequence capacity. A waiting
+  or checkpointed logical lease holds no R3 sequence; configured/tuned quanta rotate
+  eligible occupants only after reconstructible disk state is durably attested.
+  Prefer quick full-context replay when it fits, lengthening the quantum when
+  measured turnover overhead requires it. KV-cache restore is optional acceleration.
 - Coin stays available; no OOM; context handover is independently mandatory and never becomes a terminal context-overflow result.
 - Software is functions over plain data. Add no classes, hidden mutable object state, actor framework, or new database.
 - Use lowercase `snake_case`; preserve external API spelling only where required.
@@ -66,11 +71,11 @@ packet for these additional cases.
 | --- | --- | --- | --- |
 | R1 | create `ecosystem/workload_control.py`, `tests/test_workload_control.py`; modify `config/time.cfg` | Global gate, caller/process identity, leases, drain, smoke fence | Q1 configuration |
 | R2 | modify `ecosystem/models.py`, `config/model-policy.json`, `config/resource-policy.json`; create `tests/test_model_admission.py` | Verified task-qualified model/context routes | R1 request schema |
-| R3 | create `ecosystem/inference_capacity.py`, `tests/test_inference_capacity.py`, `config/scheduling.json`; modify `config/resource-policy.json` | Physical capacity and trusted priority policy | R1, R2 only |
+| R3 | create `ecosystem/inference_capacity.py`, `tests/test_inference_capacity.py`, `config/scheduling.json`; modify `config/resource-policy.json` | Temporary physical capacity allocation and trusted priority policy; queued logical leases own no sequence | R1, R2 only |
 | R4 | create `ecosystem/inference_proxy.py`, proxy script/unit, `tests/test_inference_enforcement.py`; modify consumers, model policy and lifecycle allowlist | Sole authenticated backend HTTP/SSE authority | R1–R3 |
 | R8 | create `ecosystem/operator_session.py`, `scripts/cointos-opencode`, `tests/test_operator_session.py`; modify R1/R3/resource policy | Explicit lease for user-driven agent sessions, protected model/context ownership and Coin-only preemption | R1–R4 |
-| R5 | create `ecosystem/execution_budget.py`, `tests/test_execution_budget.py`; modify `ecosystem/executor.py`, `ecosystem/scheduler.py`, `config/time.cfg` | Budgets, priority consumption, stoppability, fairness | A1 task contracts, R4, R8 |
-| R6 | create `ecosystem/continuation.py`, `tests/test_continuation.py`; modify `ecosystem/executor.py` | Destination-sized, backend-neutral context continuation | R2–R5 |
+| R5 | create `ecosystem/execution_budget.py`, `tests/test_execution_budget.py`; modify `ecosystem/executor.py`, `ecosystem/scheduler.py`, `config/time.cfg` | Budgets, priority consumption, stoppability, configurable physical-slot quanta and fair rotation | A1 task contracts, R4, R8 |
+| R6 | create `ecosystem/continuation.py`, `tests/test_continuation.py`; modify `ecosystem/executor.py` | Full-context replay where it fits, destination-sized fallback and backend-neutral continuation | R2–R5 |
 | R7 | modify `ecosystem/resource_control.py`, `tests/test_resource_control.py` | Pressure/OOM/recovery composition | R1–R6 |
 
 ---
@@ -255,6 +260,11 @@ def reserve_sequence(root: Path, request: dict, inventory: dict, clock) -> dict
 def release_sequence(root: Path, lease_id: str, observed: dict, clock) -> dict
 ```
 The Coin front sequence remains an exclusive physical allocation even when Sole Survivor has higher scheduler priority. A lease records class, proxy identity, model/context/output allocation, backend sequence, expiry, preemption method, and observed release.
+R3 sequence leases are physical occupancy records, not aliases for logical worker
+leases. A logical run waiting for its first slice or paused between slices owns no
+sequence. Ordinary quantum turnover releases an incumbent sequence only after R6
+has supplied an attested durable checkpoint; the resumed logical identity is stable
+even if it later receives another backend sequence number.
 **Worker allocation:** Sol-medium owns the envelope/front isolation review. Local workers write arithmetic tests only.
 
 - [ ] **Step 1: Write physical-capacity tests (local, 5 minutes)**
@@ -417,6 +427,14 @@ def load_tests(_loader, _tests, _pattern):
 
 Require A1-validated contracts at dispatch and account all six fields without re-parsing. Charge `task_seconds` only for observed `running` intervals; approval, queue, drain and pause waits cost no running budget. Consume R3's trusted priority helper; unknown roles stay below 700 and aging cannot cross bands.
 
+Own the configurable physical-slot quantum and rotation decision here. Its initial
+scale is minutes, but no duration is hard-coded as architecture: record useful
+running time and checkpoint/reconstruction overhead, then permit validated policy
+to lengthen the quantum when turnover is too costly. On oversubscription, priority,
+aging and recent service select an eligible occupant at a safe request boundary;
+protected operator/front/emergency allocations retain their explicit exceptions.
+A rotation that repeatedly performs only reconstruction is not useful progress.
+
 - [ ] **Step 4: Extract process enforcement from executor (Sol-medium, 20 minutes)**
 
 Replace fixed 1800 seconds with task budget. At 300 seconds request 30-second wrap-up, then SIGTERM and observe matching PID/start identity for 15 seconds before SIGKILL. Exhaustion first persists `checkpoint_required`; only `record_budget_handoff` may produce `partial_handoff_ready`, after verifying a nonempty durable artifact bound to job/generation. A timer never proves completion.
@@ -474,9 +492,18 @@ def load_tests(_loader, _tests, _pattern):
 
 Implement `running -> handoff_requested -> handoff_durable -> continuation_ready`. Preserve `job_id` and `agent_generation` through context/model change, process restart and `paused_for_resources`; increment only context generation. A genuinely new A1 attempt increments agent generation. Reserve destination prompt/output/tool/handoff before handoff; archive evidence by reference. Missing semantic handoff remains visibly continuable.
 
+For ordinary same- or compatible-context time slices, persist and replay the full
+usable conversation/context, tool results, task/authority contract, cumulative
+budget, mailbox state and artifact/evidence references when that fits. Start the
+first slice clean; reconstruct later slices from the attested disk checkpoint
+before reporting them running. If full replay cannot fit, use the destination-sized
+handoff path above. Treat backend KV-cache save/restore solely as a qualified fast
+path: durable backend-neutral state must remain sufficient after process restart,
+model change or missing KV support.
+
 - [ ] **Step 4: Add arbitrary-window/crash tests (local, small and simple)**
 
-Add `test_rollover_precedes_backend_limit`, `test_handoff_fits_destination_prompt_budget`, `test_model_switch_preserves_agent_generation`, `test_process_restart_preserves_agent_generation`, `test_new_attempt_increments_agent_generation`, `test_paused_for_resources_remains_addressable_without_lease`, `test_missing_handoff_is_visible_and_continues`, and `test_context_overflow_is_never_terminal`.
+Add `test_rollover_precedes_backend_limit`, `test_handoff_fits_destination_prompt_budget`, `test_model_switch_preserves_agent_generation`, `test_process_restart_preserves_agent_generation`, `test_new_attempt_increments_agent_generation`, `test_paused_for_resources_remains_addressable_without_lease`, `test_first_slice_starts_clean`, `test_resumed_slice_replays_full_context_when_it_fits`, `test_quantum_turnover_preserves_budget_and_logical_identity`, `test_missing_handoff_is_visible_and_continues`, and `test_context_overflow_is_never_terminal`.
 
 - [ ] **Step 5: Remove monolithic duplicate transitions and verify R6 (Sol-medium, 15 minutes)**
 
