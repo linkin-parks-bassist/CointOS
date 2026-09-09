@@ -31,18 +31,15 @@ resource lock. The focused workload/capacity/proxy suite passes 87/87. Three liv
 timeout casualties were then released from only their exact bindings and correctly
 classified failed from their durable error packets; other Qwens remained active.
 
-Documentation-only architecture clarification, 2026-09-08: logical worker/execution
-leases are intended to outnumber physical inference slots. Under contention, a
-configurable/tunable quantum (ideally quick, initially measured in minutes) will
-checkpoint an eligible occupant's reconstructible state to disk, release and clear
-its physical sequence, then admit a waiting lease with clean context or restore a
-previous lease's saved context. Full-context replay is the preferred correctness
-baseline when it fits; destination-sized handoff is the fallback and backend KV
-save/restore is only an evidence-qualified accelerator. If turnover overhead is too
-high, lengthen the quantum while retaining fairness and eventual useful progress
-over unattended operation. Decision 0016, the canonical spec, resource plan and
-index now agree. No runtime code, policy, service or live lease was changed for
-this clarification; timesliced checkpoint/eject/resume remains unimplemented.
+Scheduling intent clarified by David, 2026-09-09, recorded by Codex `/root`:
+[decision 0019](decisions/0019-saved-state-timesharing-after-poc.md) now explicitly
+describes the operating-system analogy: CPU scheduling of preemptible GPU work,
+priorities governing service, and independently preserved agent state paged between
+disk and working memory. Agent count must not silently divide per-agent context
+capacity. Safe points during generation, complete continuation state and measured
+switching costs are required; waiting for whole responses is insufficient. This
+consolidates the older text-replay clarification into its authoritative saved-state
+successor. Implementation remains post-MVP D10; no live behavior changed.
 
 Queued-request timeout correction, 2026-09-08: OpenCode 1.18.29 supports disabling
 provider total, response-header and inter-chunk timeouts. CointOS's generated

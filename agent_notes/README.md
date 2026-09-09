@@ -6,3 +6,8 @@ accumulating transcripts. Never record credentials or professional/customer data
 
 Workspace and repository instructions are authoritative; notes capture experience
 and context, not exceptions to those rules.
+
+For David's agent/GPU scheduling intent, start with
+[decision 0019](../docs/decisions/0019-saved-state-timesharing-after-poc.md), clarified
+2026-09-09 by Codex `/root`: CPU-directed preemption, priority-based GPU service,
+complete saved state and disk paging; agent count must not divide context capacity.
