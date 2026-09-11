@@ -451,8 +451,8 @@ def launch_runner_round(
 
         provisional = {
             "model_id": route_record["model_id"],
-            "context_tokens": route_record["context_tokens_per_sequence"],
-            "max_output_tokens": route_record["max_output_tokens"],
+            "opencode_context_tokens": route_record["context_tokens_per_sequence"],
+            "opencode_output_tokens": route_record["max_output_tokens"],
         }
         opencode = opencode_environment(root, provisional, b"\0" * 32)
         environment = os.environ.copy()

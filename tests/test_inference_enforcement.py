@@ -15,6 +15,7 @@ from ecosystem.inference_proxy import (
     issue_proxy_credential, opencode_environment, populate_opencode_credential,
     read_proxy_request, revoke_proxy_credential, serve_one_connection,
 )
+from ecosystem.opencode_capacity import effective_inference_capacity, launch_fingerprint
 
 
 def process_start_ticks(pid):
@@ -62,6 +63,37 @@ def issue(value):
     issue_proxy_credential(value["root"], value["lease"], delivered.append, lambda: 10.0)
     assert len(delivered) == 1
     return delivered[0]
+
+
+def effective_record(model_id="model-a", context=4096, output_reserve=2048, prompt=128):
+    command = ["opencode", "serve", "--port", "13308"]
+    incarnation = {
+        "backend_url": "http://127.0.0.1:13308/v1",
+        "pid": 4243,
+        "launch_command": command,
+        "launch_fingerprint": launch_fingerprint(command),
+    }
+    layout = {
+        "context_mode": "fixed",
+        "backend_context_tokens": context,
+        "parallel_sequences": 1,
+        "context_tokens_per_sequence": context,
+        "preallocated_context_tokens": context,
+    }
+    observation = {
+        "selected_model_id": model_id,
+        "observed_model_id": model_id,
+        "backend_incarnation": incarnation,
+        "observed_at": 1000.0,
+        "evidence": "observation:backend:one",
+        "prompt_estimate_tokens": prompt,
+        "backend_output_ceiling": None,
+        "layout": layout,
+    }
+    client = {"version": "1.18.30", "qualified": True, "maximum_output_tokens": 32000}
+    policy = {"output_reserve_tokens": output_reserve, "rollover_fraction": 0.75,
+              "max_age_seconds": 300}
+    return effective_inference_capacity(observation, client, policy, 1050.0)
 
 
 def trusted_result(request, now, evidence_id):
@@ -180,7 +212,7 @@ def test_unregistered_process_cannot_receive_credential():
 
 def test_opencode_memfd_contains_secret_but_environment_does_not():
     with fixture() as value:
-        environment = opencode_environment(value["root"], value["lease"], b"x" * 32)
+        environment = opencode_environment(value["root"], effective_record(), b"x" * 32)
         try:
             assert (b"x" * 32).hex() not in json.dumps(environment)
             assert environment["pass_fds"] == (environment["fd"],)
@@ -196,7 +228,7 @@ def test_opencode_memfd_contains_secret_but_environment_does_not():
 
 def test_placeholder_is_populated_in_the_existing_memfd():
     with fixture() as value:
-        environment = opencode_environment(value["root"], value["lease"], b"\0" * 32)
+        environment = opencode_environment(value["root"], effective_record(), b"\0" * 32)
         try:
             descriptor = environment["fd"]
             populate_opencode_credential(environment, b"z" * 32)
@@ -206,6 +238,86 @@ def test_placeholder_is_populated_in_the_existing_memfd():
             assert environment["fd"] == descriptor
         finally:
             os.close(environment["fd"])
+
+
+def _excessive_base(root):
+    base = {
+        "provider": {"Lemonade": {
+            "name": "Lemonade Server (local)",
+            "npm": "@ai-sdk/openai-compatible",
+            "models": {
+                "model-a": {"name": "A",
+                            "limit": {"context": 999999, "output": 999999}},
+                "model-b": {"name": "B",
+                            "limit": {"context": 888888, "output": 888888}},
+            },
+        }},
+        "permission": {"*": "allow", "webfetch": "deny", "websearch": "deny"},
+    }
+    (root / "config/executor-opencode.json").write_text(json.dumps(base),
+                                                        encoding="utf-8")
+
+
+def test_opencode_memfd_encodes_only_the_effective_record():
+    with fixture() as value:
+        _excessive_base(value["root"])
+        record = effective_record("model-a", context=4096, output_reserve=2048)
+        environment = opencode_environment(value["root"], record, b"x" * 32)
+        try:
+            config = json.loads(os.pread(environment["fd"], 65536, 0))
+            models = config["provider"]["Lemonade"]["models"]
+            assert models["model-a"]["limit"] == {"context": 4096, "output": 2048}
+            serialized = json.dumps(config)
+            assert "999999" not in serialized
+            assert "888888" not in serialized
+            options = config["provider"]["Lemonade"]["options"]
+            assert options["baseURL"] == "http://127.0.0.1:13306/v1"
+            assert config["permission"] == {"*": "allow", "webfetch": "deny",
+                                            "websearch": "deny"}
+        finally:
+            os.close(environment["fd"])
+
+
+def test_opencode_encoder_consumes_validated_record_limits():
+    with fixture() as value:
+        record = effective_record("model-a", context=4096, output_reserve=2048)
+        environment = opencode_environment(value["root"], record, b"x" * 32)
+        try:
+            config = json.loads(os.pread(environment["fd"], 65536, 0))
+            assert config["provider"]["Lemonade"]["models"]["model-a"]["limit"] == \
+                {"context": record["opencode_context_tokens"],
+                 "output": record["opencode_output_tokens"]}
+        finally:
+            os.close(environment["fd"])
+
+
+def _raises_value_error(fn):
+    try:
+        fn()
+    except ValueError:
+        return True
+    return False
+
+
+def test_opencode_encoder_rejects_independent_lease_values():
+    with fixture() as value:
+        lease = {"model_id": "model-a", "context_tokens": 4096,
+                 "max_output_tokens": 128}
+        assert _raises_value_error(
+            lambda: opencode_environment(value["root"], lease, b"x" * 32))
+
+
+def test_opencode_encoder_rejects_invalid_record():
+    with fixture() as value:
+        good = effective_record("model-a", context=4096, output_reserve=2048)
+        for key, bad in (("model_id", None),
+                         ("opencode_context_tokens", "4096"),
+                         ("opencode_output_tokens", -1)):
+            record = dict(good)
+            record[key] = bad
+            assert _raises_value_error(
+                lambda record=record: opencode_environment(value["root"], record,
+                                                           b"x" * 32))
 
 
 def test_completed_run_termination_requires_ended_bound_process():

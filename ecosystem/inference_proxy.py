@@ -34,14 +34,25 @@ DEFAULT_LIMITS = {
 }
 
 
-def opencode_environment(root: Path, inference_lease: dict, credential: bytes) -> dict:
-    """Create one anonymous OpenCode configuration; the caller owns the returned fd."""
+def opencode_environment(root: Path, capacity_record: dict, credential: bytes) -> dict:
+    """Create one anonymous OpenCode configuration; the caller owns the returned fd.
+
+    The selected model's limits are the one validated effective capacity record
+    (``opencode_context_tokens`` / ``opencode_output_tokens``). Static capacity
+    claims from the base catalogue never reach the memfd: every model's
+    ``limit`` is stripped before the selected model's limit is written, so only
+    the validated record's values can be present.
+    """
     if type(credential) is not bytes or len(credential) != 32:
         raise ValueError("proxy credential must contain exactly 32 bytes")
-    if (type(inference_lease) is not dict or type(inference_lease.get("model_id")) is not str
-            or type(inference_lease.get("context_tokens")) is not int
-            or type(inference_lease.get("max_output_tokens")) is not int):
-        raise ValueError("invalid inference lease")
+    if (type(capacity_record) is not dict
+            or type(capacity_record.get("model_id")) is not str
+            or not capacity_record.get("model_id")
+            or type(capacity_record.get("opencode_context_tokens")) is not int
+            or capacity_record.get("opencode_context_tokens") <= 0
+            or type(capacity_record.get("opencode_output_tokens")) is not int
+            or capacity_record.get("opencode_output_tokens") <= 0):
+        raise ValueError("invalid effective inference capacity record")
     root = Path(root)
     source = root / "config/executor-opencode.json"
     config = json.loads(source.read_text(encoding="utf-8")) if source.exists() else {
@@ -63,10 +74,16 @@ def opencode_environment(root: Path, inference_lease: dict, credential: bytes) -
         "headerTimeout": False,
         "chunkTimeout": False,
     }
-    model = provider.setdefault("models", {}).setdefault(inference_lease["model_id"], {})
+    models = provider.setdefault("models", {})
+    if type(models) is not dict:
+        models = provider["models"] = {}
+    for entry in models.values():
+        if type(entry) is dict:
+            entry.pop("limit", None)
+    model = models.setdefault(capacity_record["model_id"], {})
     model["limit"] = {
-        "context": inference_lease["context_tokens"],
-        "output": inference_lease["max_output_tokens"],
+        "context": capacity_record["opencode_context_tokens"],
+        "output": capacity_record["opencode_output_tokens"],
     }
     descriptor = os.memfd_create("cointos-opencode", os.MFD_CLOEXEC)
     try:
