@@ -27,7 +27,7 @@ Use a capable local coding model through Lemonade. Default maximum: two attempts
 
 Record validation status, completion criteria assessment, handoff requirements fulfillment, and approval/rejection decisions. When work is incomplete or needs revision, clearly specify what's missing and what needs to be done.
 
-Relay consequential findings through `/home/david/agent-ecosystem/scripts/tell-david`. Use structured severity and `--needs-response` for actual questions or approvals. Do not spam routine healthy ticks; periodic completion summaries already exist.
+Relay consequential findings through `~/agent-ecosystem/scripts/tell-david`. Use structured severity and `--needs-response` for actual questions or approvals. Do not spam routine healthy ticks; periodic completion summaries already exist.
 
 ## Success and failure
 

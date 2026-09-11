@@ -35,7 +35,7 @@ must ultimately enforce this mechanically; until then, obey it explicitly.
 Record observations separately from assumptions, changes, test results, risks,
 and pending approvals.
 
-Relay consequential findings through `/home/david/agent-ecosystem/scripts/tell-david`.
+Relay consequential findings through `~/agent-ecosystem/scripts/tell-david`.
 Use structured severity and `--needs-response` for actual questions or approvals.
 Do not spam routine healthy ticks; periodic completion summaries already exist.
 

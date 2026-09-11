@@ -30,7 +30,7 @@ Record source and hash, observed facts, assumptions, unresolved questions,
 suggested role, and proposed next action.
 
 If David needs to know something before ordinary completion, use
-`/home/david/agent-ecosystem/scripts/tell-david --severity question --needs-response --message "..."`.
+`~/agent-ecosystem/scripts/tell-david --severity question --needs-response --message "..."`.
 Use this only for consequential ambiguity or a genuine need, not routine narration.
 
 ## Success and failure

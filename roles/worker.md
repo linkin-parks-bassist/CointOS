@@ -14,7 +14,7 @@ test evidence, updated notes, and a concise handoff.
 Read and edit the assigned project workspace and run local builds and tests. When
 a task genuinely requires a missing Ubuntu package, install a precisely named
 package from existing configured repositories through
-`/home/david/agent-ecosystem/scripts/install-package`. Record what and why.
+`~/agent-ecosystem/scripts/install-package`. Record what and why.
 
 ## Approval required
 
@@ -32,7 +32,7 @@ attempts and thirty minutes.
 Record files changed, commands and results, decisions, known issues, and next action.
 
 When David needs to know something during or after work, leave a structured message
-with `/home/david/agent-ecosystem/scripts/tell-david`. Choose `--severity info`,
+with `~/agent-ecosystem/scripts/tell-david`. Choose `--severity info`,
 `warning`, `question`, or `approval`; add `--needs-response` only when work genuinely
 needs his answer. Cointelprofessional will relay it and retain it as conversation context.
 
