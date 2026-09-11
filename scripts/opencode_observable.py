@@ -121,7 +121,9 @@ def main():
         client_env.pop('OPENCODE_CONFIG_CONTENT', None)
         client = subprocess.Popen(command+['--attach', url], cwd=directory, env=client_env)
         try:
-            monitor_id = show(Path(__file__).resolve().parents[1]/'state/worker-monitors',
+            runtime_root = Path(os.environ.get(
+                'COINTOS_RUNTIME_ROOT', Path.home()/'.CointOS'))
+            monitor_id = show(runtime_root/'state/worker-monitors',
                 {**record, 'view_record': str(args.view_record.resolve()),
                  'server': identity(server.pid), 'opencode': command[0], 'title': title},
                 view_mode, client_env)

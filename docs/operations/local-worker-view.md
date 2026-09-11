@@ -42,8 +42,9 @@ processes can access it; this is not isolation from hostile local users. Do not
 enable mDNS, sharing, remote binding or a persistent server as part of this feature.
 Do not put inference bearer credentials in logs, view records or attach arguments.
 
-Executor view records live under ignored `state/worker-views/`; commissioned MVP
-dispatches use their ignored per-packet ledger. Records/logs remain for evidence
+Executor view records live under `~/.CointOS/state/worker-views/`; commissioned MVP
+dispatches use their per-packet ledger under `~/.CointOS/development/sdd/`.
+Records/logs remain for evidence
 after completion; their recorded endpoint is no longer live once the run exits.
 Never overwrite a prior view record, restart a worker because attachment failed,
 or silently fall back to an invisible launch. Report an attachment/startup failure.
@@ -76,8 +77,8 @@ AFK distinction above; it does not mandate spawning windows while David is AFK.
 
 ## Reusable monitor slots
 
-Implemented by `scripts/worker_monitors.py`. Mutable, ignored bookkeeping lives in
-`state/worker-monitors/registry.json`, protected by a file lock and atomic replacement;
+Implemented by `scripts/worker_monitors.py`. Mutable bookkeeping lives in
+`~/.CointOS/state/worker-monitors/registry.json`, protected by a file lock and atomic replacement;
 this is not the append-only runtime evidence. Each slot tracks its monitor process,
 worker server identity (PID/start time/boot), session, worktree and view record.
 
