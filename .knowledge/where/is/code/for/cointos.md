@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T15:40:39+10:00'
 verified_by: codex /root
 scope: project local
-source: current repository paths; git show fe92546:docs/system-map.md; git show fe92546:docs/architecture-assessment.md
+source: current repository paths; pre-99318d9 Git history
 verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping.
 review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
 ---

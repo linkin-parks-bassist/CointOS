@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: git show fe92546:docs/operations.md; current scripts and runtime-root decision
+source: current scripts and runtime-root knowledge; pre-99318d9 Git history
 verification: Checked named repository entry points; commands affecting stopped or root-owned services were not executed.
 review_when: Recheck when CLI commands, service installation, or runtime layout changes.
 ---

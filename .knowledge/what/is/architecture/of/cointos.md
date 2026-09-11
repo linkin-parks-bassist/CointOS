@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: git show fe92546:docs/system-map.md; current source tree
+source: current source tree; pre-99318d9 Git history
 verification: Reconciled the former system map with current module and service entry points; live state is explicitly excluded.
 review_when: Recheck when component ownership or durable flow changes.
 ---

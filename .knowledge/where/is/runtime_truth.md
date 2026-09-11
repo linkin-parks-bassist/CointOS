@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T16:08:00+10:00'
 verified_by: codex /root
 scope: project local
-source: live service and filesystem checks 2026-09-11; git show fe92546:docs/status.md; git show fe92546:docs/decisions/0021-runtime-state-home.md
+source: live service and filesystem checks 2026-09-11; pre-99318d9 Git history
 verification: Verified the physical trees remain under ~/.CointOS, the former repo compatibility links are absent, and affected user services are stopped pending an explicit runtime-root refactor.
 review_when: Recheck after persisted-state layout, service names, or backend endpoints change.
 ---

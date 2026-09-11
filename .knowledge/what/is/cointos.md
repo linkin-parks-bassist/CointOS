@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T15:40:39+10:00'
 verified_by: codex /root
 scope: project local
-source: README.md; current project knowledge; git show fe92546:docs/system-map.md
+source: README.md; current project knowledge; pre-99318d9 Git history
 verification: Read the current overview, status, and system map; checked the named top-level source and runtime directories exist.
 review_when: Recheck when the product boundary, repository location, or first live vertical slice changes.
 ---

@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: git show fe92546:docs/specs/2026-09-04-cointelprofessional-survival-control-design.md; git show fe92546:docs/specs/2026-09-05-cointelprofessional-survival-closure-design.md; current survival code
+source: current survival code; pre-99318d9 Git history
 verification: Distilled stable boundaries and excluded historical incident chronology and unaccepted deployment claims.
 review_when: Recheck after survival-plane activation, lifecycle-schema changes, or resource-control redesign.
 ---

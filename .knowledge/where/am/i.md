@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: README.md; git show fe92546:docs/status.md; git show fe92546:docs/decisions/0021-runtime-state-home.md; current project knowledge; David amendments 2026-09-11
+source: README.md; pre-99318d9 Git history; current project knowledge; David amendments 2026-09-11
 verification: Checked repository purpose, current branch, runtime relocation,
   code/test entry points, and the replacement of agent notes with semantic knowledge.
 review_when: Recheck when project purpose, runtime layout, service activation,

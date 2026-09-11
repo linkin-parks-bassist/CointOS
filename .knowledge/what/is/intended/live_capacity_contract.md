@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: git show fe92546:docs/specs/2026-09-10-opencode-live-capacity-contract-design.md; git show fe92546:docs/plans/2026-09-10-opencode-live-capacity-contract.md
+source: pre-99318d9 Git history
 verification: Distilled the accepted contract and immediate implementation seam; no implementation or activation claimed.
 review_when: Recheck after each accepted live-capacity implementation stage.
 ---
