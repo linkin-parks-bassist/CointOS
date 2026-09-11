@@ -5,7 +5,7 @@ from unittest import mock
 
 from ecosystem import paths
 
-DEFAULT_ROOT = Path("/home/david/.CointOS")
+DEFAULT_ROOT = Path.home() / ".CointOS"
 OVERRIDE_ROOT = Path("/srv/cointos-runtime")
 RELATIVE_OVERRIDE = "relative/cointos"
 
