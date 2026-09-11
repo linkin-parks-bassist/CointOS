@@ -1,10 +1,10 @@
 ---
-verified_at: '2026-09-11T16:50:00+10:00'
+verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
 source: README.md; docs/status.md; docs/decisions/0021-runtime-state-home.md; existing project knowledge leaves; David amendments 2026-09-11
 verification: Checked repository purpose, current branch, runtime relocation,
-  service state, code/test entry points, and knowledge layout.
+  code/test entry points, and the replacement of agent notes with semantic knowledge.
 review_when: Recheck when project purpose, runtime layout, service activation,
   current priority, or primary development workflow changes.
 ---
@@ -19,6 +19,11 @@ Source lives primarily in `ecosystem/` and `survival/`; launch adapters are in
 `scripts/` and `services/`; policy/configuration is in `config/`; standard-library
 tests are in `tests/`; current project orientation continues through
 `what/is/current/project_priority.md` and `where/is/code/for/cointos.md`.
+
+Reusable project knowledge belongs in this semantic tree, not an `agent_notes/`
+chronology. The reason and disposition are recorded in
+[`why/are/agent_notes/deprecated.md`](../../why/are/agent_notes/deprecated.md); Git
+retains removed historical notes.
 
 Mutable runtime data is physically under `/home/david/.CointOS`, not this checkout.
 There are intentionally no repo compatibility paths for `state/` or `logs/`.

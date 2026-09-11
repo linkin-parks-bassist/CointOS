@@ -258,8 +258,8 @@ Telegram/systemd acceptance remains the explicitly prohibited Plan 5 gate.
   benchmark note had independently lost its trailing blank before this repair wave;
   it was deliberately not staged or rewritten. Final whole-worktree
   `git diff --check` produced no output.
-- Files: `agent_notes/0010-cointos-survival-invariants.md`; the unrelated dirty
-  `agent_notes/power-profile-benchmarks.md` was preserved.
+- Files: one now-removed survival-invariants working note; an unrelated dirty
+  power-profile benchmark note was preserved at the time. Git retains both.
 - Coverage: final `git diff --check`.
 
 ## Binding interpretations

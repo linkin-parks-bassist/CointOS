@@ -268,7 +268,7 @@ storm or misleading completion, and the next agent has enough evidence to contin
 are stopped before the smoke fence is acquired, then only test-owned jobs are admitted.
 **Depends on:** A1-A4, C5, H4-H5, P4, R7, B4 live communication.
 **Files:** extend `tests/integration/test_mvp_flow.py` and `scripts/mvp_smoke` (owned by C5/P4);
-record sanitized evidence in `agent_notes/mvp_acceptance.md` and factual `docs/status.md`.
+record sanitized evidence in factual `docs/status.md` and applicable semantic knowledge leaves.
 **Interfaces:** smoke scenarios `autonomy`, `handoff`, `approval`, `rollback` consume existing
 job/incident/candidate identities. They do not mutate arbitrary queued work.
 

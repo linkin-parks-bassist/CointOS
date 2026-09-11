@@ -303,7 +303,7 @@ git commit -m "fix: preserve opencode length stops as incomplete"
 **Files:**
 - Modify: `docs/operations.md`
 - Modify: `docs/status.md`
-- Modify: `agent_notes/0024-opencode-live-capacity-contract.md`
+- Modify: applicable semantic knowledge leaves
 
 **Interfaces:**
 - Consumes: all prior task results and a deliberately bounded live backend observation.
@@ -340,6 +340,6 @@ Record observed versions, active command resolution, live capacity evidence, acc
 - [ ] **Step 8: Commit activation documentation separately**
 
 ```bash
-git add docs/operations.md docs/status.md agent_notes/0024-opencode-live-capacity-contract.md
+git add docs/operations.md docs/status.md .knowledge
 git commit -m "docs: record live opencode capacity activation"
 ```

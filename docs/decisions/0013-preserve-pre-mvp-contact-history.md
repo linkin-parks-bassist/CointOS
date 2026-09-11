@@ -39,5 +39,5 @@ live record migration, or bypassing the offline composition and rollback gate.
 Keep the archived original evidence inspectable after cutover. No conversion has
 been performed at this checkpoint.
 
-See [contact work and evidence](../../agent_notes/0018-canonical-contact.md) and
-the [approved contact plan](../plans/2026-09-05-cointos-mvp-contact.md).
+See the [approved contact plan](../plans/2026-09-05-cointos-mvp-contact.md); removed
+working notes remain available through Git history.

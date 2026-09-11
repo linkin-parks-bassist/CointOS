@@ -1,15 +1,16 @@
 ---
-verified_at: '2026-09-11T15:47:59+10:00'
+verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: 'git show 8edeadd^:AGENTS.md; docs/status.md; agent_notes/README.md; David policy clarifications 2026-09-11; ~/.knowledge/how/to/use/git/for/agent_work.md'
-verification: Compared quarantined repository guidance with current status and agent-note policy; applied David's non-work Git-policy reversal and repository-copy invariant.
+source: 'git show 8edeadd^:AGENTS.md; docs/status.md; David policy clarifications 2026-09-11; ~/.knowledge/how/to/use/git/for/agent_work.md'
+verification: Reconciled repository guidance with current status, semantic knowledge ownership, David's non-work Git-policy reversal, and repository-copy invariant.
 review_when: Recheck when repository policy, activation authority, or project scope changes.
 ---
 
 Treat this repository as personal, local-only orchestration infrastructure. Do not
 mix in professional, partner, or customer information. Before changing behaviour,
-read `docs/status.md`, the relevant agent notes, and applicable decisions. Preserve
+read the applicable semantic knowledge, current `docs/status.md`, and relevant
+decisions. Preserve
 append-only runtime JSONL; keep generated runtime state out of Git; record
 consequential design changes in `docs/decisions/`.
 

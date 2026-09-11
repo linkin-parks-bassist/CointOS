@@ -27,7 +27,7 @@
 **Owner/budget:** coordinator, 15 minutes; no model or service changes.
 **Depends on:** David approving this concrete plan for execution.
 **Files:** assigned implementation worktrees; ignored `state/mvp_build/` ledger;
-`agent_notes/mvp_execution.md` for sanitized durable milestones only.
+`docs/status.md` and applicable semantic knowledge leaves for sanitized durable facts only.
 **Interfaces:** each ledger assignment records `task_id`, `agent_name`, `worker_kind`,
 `base_revision`, `workspace`, `write_paths`, `depends_on`, `deadline`, `lease_id`,
 `state`, `handoff_path`, `review_result`.

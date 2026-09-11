@@ -426,7 +426,7 @@ subsystem. Ambient discovery and unsolicited contact are separate capabilities.
 
 ### Internal agent communication
 
-Carry forward the contract in `agent_notes/0003-control-plane-presence-and-live-messaging.md`:
+Carry forward the internal agent-communication contract:
 direct exact-run messages, role-local announcements, global announcements and a
 Coin address. Initial kinds are `information`, `request_status`, `wrap_up`, `cancel`,
 `handoff`, `announcement`. Resolve recipients when publishing, preserve sender and

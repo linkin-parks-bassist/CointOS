@@ -15,7 +15,7 @@ evidence alongside slot oversubscription and memory-contended model turnover.
 **Goal:** Give live CointOS agents durable direct, role, global, and Coin communication with truthful low-latency observation and authorized control.
 **Architecture:** A transport-independent mailbox stores immutable envelopes and publish-time recipient snapshots derived from existing jobs plus R1 leases. Runner, inference-proxy, and tool adapters expose messages at real asynchronous boundaries; plain reducers apply status/wrap-up/cancel without OOP actors, while this typed mailbox is the one real live-message bus.
 **Tech Stack:** Python standard library, atomic JSON/JSONL, `fcntl`, existing jobs, R1 leases, R4 inference proxy, R5 budgets, R6 handoffs, and `unittest`.
-**Spec:** `docs/specs/2026-09-05-cointos-mvp-design.md`; live-bus evidence: `agent_notes/0003-control-plane-presence-and-live-messaging.md`; execution rules: `docs/plans/2026-09-05-cointos-mvp-swarm.md`.
+**Spec:** `docs/specs/2026-09-05-cointos-mvp-design.md`; execution rules: `docs/plans/2026-09-05-cointos-mvp-swarm.md`; historical working evidence remains in Git.
 ## Global constraints
 - Coin available, no OOM, and seamless dynamic—including smaller—context handover remain binding.
 - The mailbox is justified at process/inference/tool boundaries. Ordinary in-process collaboration remains direct functions over plain data; do not grow the one typed live bus into actor objects or autonomous message entities.
@@ -223,7 +223,7 @@ git diff --cached --check && git commit -m "Integrate authorized live message co
 **Files:**
 - Create: `tests/integration/messaging_flow.py`, `tests/integration/test_mvp_messaging_flow.py`
 - Modify: shared `ecosystem/mvp_smoke.py`, `scripts/mvp_smoke` and `tests/integration/test_mvp_flow.py` through C4's `extend_scenarios`/`run_scenario` contract.
-- Modify: `docs/operations.md`, `agent_notes/mvp_acceptance.md` with sanitized facts only.
+- Modify: `docs/operations.md`, `docs/status.md`, and applicable semantic knowledge leaves with sanitized facts only.
 **Interfaces:**
 - Smoke scenario: `messaging` consumes R1 fence, R2/R3 route, R4 requests, R5 budgets, R6 continuation, C3 Coin address, and B1-B3.
 - Result fields: `scenario`, `sender_run_id`, `recipient_snapshot`, `observed_message_ids`, `acknowledged_at`, `control_outcomes`, `context_transitions`, `resource_before`, `resource_after`, `state`.
@@ -256,7 +256,7 @@ def load_tests(loader, tests, pattern):
 - [ ] Continue one logical run through a smaller safe context allocation and verify the same task/generation address receives pending mail exactly once. Confirm Coin remains responsive, no unmanaged inference, no OOM increment, bounds honored, and final health known; release only smoke fence.
 - [ ] Record sanitized IDs/timings/outcomes. B4 passes before A5 final autonomous cycles but does not delay C5 early contact. Any ordinary-operation/OOM/contact/continuity failure returns to its owner; deferred transport/security hardening enters the single queue.
 ```bash
-git add tests/integration/messaging_flow.py tests/integration/test_mvp_messaging_flow.py ecosystem/mvp_smoke.py scripts/mvp_smoke tests/integration/test_mvp_flow.py docs/operations.md agent_notes/mvp_acceptance.md
+git add tests/integration/messaging_flow.py tests/integration/test_mvp_messaging_flow.py ecosystem/mvp_smoke.py scripts/mvp_smoke tests/integration/test_mvp_flow.py docs/operations.md docs/status.md .knowledge
 git diff --cached --check && git commit -m "Prove bounded live agent messaging"
 ```
 **Acceptance/stop:** Live agents and Coin exchange all address classes; actual observations and control outcomes are distinct; wrap-up/cancel preserve recoverable work; context swap preserves logical identity; resource/contact invariants hold. Stop after one bounded successful flow, not exhaustive adversarial transport review.

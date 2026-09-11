@@ -3,7 +3,8 @@
 > lifecycle, respond/escalate/respond+escalate/ignore outcomes, and linked context
 > across message states. C1-C3 decision/history interfaces below are historical
 > implementation targets pending revision, not authorization to keep building
-> the superseded contract. See [current contact note](../../../agent_notes/0018-canonical-contact.md).
+> the superseded contract. See the accepted contact decisions and current semantic
+> knowledge before resuming it.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 **Goal:** Canonical four-outcome inbound handling, unsolicited authorized agent contact, and replies routed to originating work.

@@ -66,8 +66,8 @@ deployment assumptions. Current inference stays local-only; no active packet cha
 
 Live concurrent checkpoint, 2026-09-07: two admitted Qwen workers were observed
 processing simultaneously on two physical slots, each with 131072 context. 4B
-remains loaded. See [concurrency handoff](../agent_notes/0020-concurrent-qwen-bringup.md)
-for exact jobs, evidence and provisional accounting change 93be79e. Global `.cfg`
+remains loaded. Git history retains the exact jobs and evidence; provisional
+accounting change 93be79e is the code checkpoint. Global `.cfg`
 caller migration, independent request release and fair model residency switching
 are still open. This is actual overlap, not complete autonomous MVP acceptance.
 
@@ -103,13 +103,12 @@ Independent R5 repair is ready in isolated `fix/mvp-budget-reservations` through
 `896da1e`: child admission subtracts durable parent task time already spent from
 the reservation ceiling, preserving exact-fit and idempotent replay. Astra passed
 625 tests (592 discovered +33 integration). No runtime-root integration/activation
-yet. [Budget reservation handoff](../agent_notes/0019-managed-budget-reservations.md)
-tracks remaining live/concurrent accounting boundaries; this is not full R5 closure.
+yet. Remaining live/concurrent accounting boundaries are not full R5 closure.
 
 Contact design amendment, 2026-09-07: David requests new/open/closed message states,
 four entry outcomes including no-reply escalation/ignore, and linked context across
-all message states. See [current contact note](../agent_notes/0018-canonical-contact.md)
-before any new C1-C3 implementation. Prior forced-reply/respond-or-dispatch contract
+all message states. See the accepted contact decisions before any new C1-C3
+implementation. Prior forced-reply/respond-or-dispatch contract
 is being revised, not treated as final. Transport staging through `7b61886` passed
 84 focused tests independently, but no-reply disposition/arbitration is a new
 required seam. Pre-MVP history archive/replay-fence direction is approved in
@@ -121,13 +120,13 @@ passed 613 tests and compared real snapshot/model-selection results with backend
 facts. The commissioning metadata override is removed from dispatch. The next
 local packet, `local-r8-launch-review`, was admitted using production snapshot
 alone and completed with normal automatic release, finishing the scoped metadata
-live checkpoint. [Operator launch cleanup](../agent_notes/0017-operator-launch.md)
-is now integrated through `faae7ad`: registered-before-exec gate, truthful cleanup
+live checkpoint. Operator launch cleanup is now integrated through `faae7ad`:
+registered-before-exec gate, truthful cleanup
 and durable setup-failure evidence. Astra independently passed 622 tests
 (589 discovered + 33 integration), plus a real-child gate-release failure probe.
 This is bounded R8 launch acceptance, not complete operator inference admission.
-Active: [isolated canonical contact work](../agent_notes/0018-canonical-contact.md)
-through staging `fae839a`: canonical decision/dispatch/reply linkage, pure prompt,
+Canonical contact work through staging `fae839a` established decision/dispatch/reply
+linkage, pure prompt,
 immutable ordinary intent publication, and gateway-owned delivery/attempt records,
 per-inbound lock, authorized send and ordinary outbox drain. These changes are NOT
 in the runtime root. Astra's latest accepted focused send/record/gateway set passed 76
@@ -141,8 +140,7 @@ truthful failed-run close and lease release. Smaller private notice-helper packe
 is running; scan migration remains separate. See the contact note for evidence.
 C1 historical representation, C2 admitted front-request lifecycle, C3 wiring and
 C4 canonical caller/cutover closure remain open. No live sender/cutover or services
-changed. See
-[metadata checkpoint](../agent_notes/0016-model-metadata.md).
+changed.
 
 Conservative backend-close observation is live-accepted as David's temporary
 MVP path. **R4-PRECISE remains a required open successor**, not optional
@@ -157,8 +155,7 @@ David then approved the existing proxy restart and one admitted live smoke.
 `local-r4-live-observer-smoke` returned one response and automatically reached
 proxy revoked / R3 released / R1 quiescent using persisted `reconciled_absent`
 evidence, with no manual reconciliation. Resources were healthy afterward;
-subsequent metadata packets also use the working normal-close path. See
-[observer checkpoint](../agent_notes/0015-backend-observation.md).
+subsequent metadata packets also use the working normal-close path.
 
 Bring-up checkpoint, 2026-09-06 (Astra): reviewed local Qwen repairs are
 integrated: `99170fb` fixes active attempt/child quota boundaries; `d113c2a`
@@ -169,8 +166,8 @@ counts final output, and saves usage before backend-close reconciliation.
 reviewed both diffs and independently passed 511 tests. Earlier verification also
 covered a carried-output/wrap-up accounting probe. This does not close all R5/R6
 requirements or implement a retry scheduler. David prioritizes MVP existence and plan fidelity
-before broad hardening. The overnight task labels do not establish integrated/live acceptance. See
-`agent_notes/0014-overnight-review.md` for the bounded review.
+before broad hardening. The overnight task labels do not establish integrated/live acceptance;
+Git history retains the bounded review.
 
 David authorized operator reconciliation of the prior-boot emergency and restored
 local dispatch. The prior resource state is preserved in the ignored build

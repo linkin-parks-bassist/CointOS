@@ -195,7 +195,7 @@ targets are admitted only after their separate continuity rehearsal succeeds, ne
 **Owner/budget:** coordinator, 15 minutes plus time waiting for David's actual approval.
 **Depends on:** P3, C5, R7, H1. Does not depend on A4/A5; use a test-owned candidate.
 **Files:** extend C5's `scripts/mvp_smoke`, `tests/integration/test_mvp_flow.py`;
-update `docs/operations.md`, `agent_notes/mvp_acceptance.md` with sanitized evidence.
+update `docs/operations.md`, `docs/status.md`, and applicable semantic knowledge leaves with sanitized evidence.
 **Interfaces:** smoke scenario names `approval`, `rollback`, `protected_release_rehearsal`;
 outputs contain approval/candidate/activation IDs, old/new release digests and observed checks.
 

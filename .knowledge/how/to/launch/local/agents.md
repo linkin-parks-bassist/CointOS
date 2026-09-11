@@ -1,33 +1,22 @@
 ---
-verified_at: '2026-09-11T17:34:01+10:00'
+verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: 'git show 8edeadd^:AGENTS.md; docs/operations/local-worker-view.md; agent_notes/0022-aster-packet-audit-and-timeout.md; local-opencode-capacity-canonical-test JSONL 2026-09-11'
-verification: Checked launch policy and dispatch preference; renamed this project
-  refinement to the canonical semantic path and reconciled it with the global
-  general/local launch split.
-review_when: Recheck when the admission gate, observable launcher, viewer pool, or concurrency policy changes.
+source: 'git show 8edeadd^:AGENTS.md; docs/operations/local-worker-view.md; local-opencode-capacity-canonical-test JSONL 2026-09-11'
+verification: Reconciled this project refinement with the incident-corrected global
+  launch procedure and current manually managed Qwen slot.
+review_when: Recheck when the observable launcher, viewer pool, scheduler, or concurrency practice changes.
 ---
 
 This project-local leaf refines
-`~/.knowledge/how/to/launch/local/agents.md`. Launch local Qwen/OpenCode workers
-through the existing admission gate with
-`scripts/opencode_observable.py`; do not use a naked background inference command.
+`~/.knowledge/how/to/launch/local/agents.md`. For now, manually manage the single
+local Qwen worker slot and launch through `scripts/opencode_observable.py`; do not
+make the unfinished CointOS admission path a prerequisite for authorized local work.
 The worker must remain locally attachable with retained JSONL evidence. In an
 active driver session, use the canonical tracked viewer pool and publish the exact
 session/attach command. Closing or losing a viewer must not stop or restart its
 worker. Keep listeners loopback-only and ephemeral.
 
-Make each local-agent task as small as possible. Capacity is not a utilization
-target. Bound each run by one small deliverable, exact write scope, necessary
-evidence, authority, and task-derived stopping conditions. Never give local agents
-elapsed-time limits or arbitrary time budgets; reduce scope instead. Read
-`docs/operations/local-worker-view.md`
-before dispatch because driver/AFK window handling and the bounded reusable monitor
-pool are operational policy, not general desktop-presence inference.
-
-Orient with the smallest relevant `.knowledge` leaves and exact source excerpts.
-Do not point a small worker at an entire large plan or ask it to rediscover field
-names across the plan corpus. A forbidden broad glob is still possible under
-`--auto`; monitor actual tool use and stop on demonstrated scope expansion. That
-stopping condition is tied to authority/scope, not elapsed time.
+Read `docs/operations/local-worker-view.md` before dispatch for driver/AFK window
+handling and the reusable monitor pool. The global launch and briefing leaves own
+the remaining procedure.
