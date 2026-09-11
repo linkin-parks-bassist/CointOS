@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
+verified_at: '2026-09-11T23:07:00+10:00'
+verified_by: opencode /home/david
 scope: project local
-source: pre-99318d9 Git history
-verification: Distilled the accepted contract and immediate implementation seam; no implementation or activation claimed.
+source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; tests/test_opencode_capacity.py
+verification: Distilled the accepted contract and immediate implementation seam; the pure record seam is now implemented and test-verified, no activation claimed.
 review_when: Recheck after each accepted live-capacity implementation stage.
 ---
 
@@ -15,8 +15,12 @@ unknown inputs fail closed. OpenCode compaction and CointOS continuation must us
 the same effective denominator; `finish: length` is incomplete even after HTTP 200
 and process exit zero.
 
-The next implementation seam is the pure effective-capacity record and focused
-tests. Do not begin by editing user OpenCode configuration, replacing the executable
-symlink, restarting services, or changing live model allocation. Observation,
-anonymous per-launch config construction, wrapper integration, and activation are
-later independently verified stages.
+The pure record seam is implemented in `ecosystem/opencode_capacity.py`
+(`effective_inference_capacity`, `launch_fingerprint`); effective output is the
+smallest of the qualified client ceiling, any observed backend output ceiling, and
+the policy reserve, and the effective context is the observed per-sequence cap
+verbatim. The next seam is the version-qualified OpenCode capability
+(catalogue + `ecosystem/opencode_client.py`). Do not begin by editing user OpenCode
+configuration, replacing the executable symlink, restarting services, or changing
+live model allocation. Observation, anonymous per-launch config construction,
+wrapper integration, and activation are later independently verified stages.

@@ -14,6 +14,9 @@ Start at the narrow owner for the concern; do not read all modules.
   `ecosystem/continuation.py`, `ecosystem/verification.py`.
 - Model facts and routing: `ecosystem/models.py`,
   `ecosystem/inference_policy.py`.
+- Live OpenCode capacity record (pure derivation from fresh incarnation-bound
+  evidence): `ecosystem/opencode_capacity.py`, tests
+  `tests/test_opencode_capacity.py`.
 - Physical inference admission and proxying: `ecosystem/inference_capacity.py`,
   `ecosystem/inference_proxy.py`, `ecosystem/inference.py`.
 - Host/resource and worker ownership: `ecosystem/resource_control.py`,
