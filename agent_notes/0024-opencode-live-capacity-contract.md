@@ -60,9 +60,9 @@ plugins, MCP, names, and presentation; it must not independently own live capaci
 ## Owning documents and next safe move
 
 The approved design is
-`docs/superpowers/specs/2026-09-10-opencode-live-capacity-contract-design.md`.
+`docs/specs/2026-09-10-opencode-live-capacity-contract-design.md`.
 The unexecuted plan is
-`docs/superpowers/plans/2026-09-10-opencode-live-capacity-contract.md`.
+`docs/plans/2026-09-10-opencode-live-capacity-contract.md`.
 
 Implementation should begin with the pure effective-capacity record and tests. Do
 not first edit the user JSON or replace the `opencode` symlink: that would conceal

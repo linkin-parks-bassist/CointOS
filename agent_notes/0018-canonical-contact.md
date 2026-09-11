@@ -131,7 +131,7 @@ between attempt/index writes need one bounded LOCAL refinement with literal test
 Sol is idle, no further task assigned. Local lifecycle planner remains active.
 
 Active planning after explicit approval: local-c1-lifecycle-plan (Sieve/Qwen) owns
-only docs/superpowers/plans/2026-09-07-message-lifecycle.md in contact staging.
+only docs/plans/2026-09-07-message-lifecycle.md in contact staging.
 Sol owns separate front-admission plan, now under correction after Astra's full
 review: generation/semantic dedup fence, crash-intent phases, truthful post-inference
 failure, secret-safe errors and honest executable test fixtures. Neither plan is
@@ -446,7 +446,7 @@ and IDs; model cannot manufacture explicit reply-to provenance; links grant no
 read authority; disposition publication has an explicit arbitration point, not an
 impossible zero-notice promise before cross-store publication. Removed questions
 already answered by David (closed messages are searchable, silence needs evidence).
-Draft path docs/superpowers/specs/2026-09-07-message-lifecycle-design.md in
+Draft path docs/specs/2026-09-07-message-lifecycle-design.md in
 /home/david/.worktrees/cointos-mvp-contact. Pending David's review: stronger-model
 reasoning as escalation and proposed closure after durable final reply publication,
 with transport status separate. No implementation or live activation follows from

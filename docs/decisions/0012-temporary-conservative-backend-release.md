@@ -27,7 +27,7 @@ broader service activation is authorized by this record alone.
 
 **Open follow-up R4-PRECISE; not optional cleanup or already-completed work.**
 The next R4 integration owner must consult the tracked task in
-`docs/superpowers/plans/2026-09-06-backend-observation-repair.md` and report its
+`docs/plans/2026-09-06-backend-observation-repair.md` and report its
 state at bring-up/acceptance checkpoints. Keep it linked from `docs/status.md`
 until verified and integrated. Trigger implementation after conservative live
 bring-up, before claiming complete concurrent-backend release support. This is

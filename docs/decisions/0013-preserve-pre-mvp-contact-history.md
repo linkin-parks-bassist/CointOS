@@ -40,4 +40,4 @@ Keep the archived original evidence inspectable after cutover. No conversion has
 been performed at this checkpoint.
 
 See [contact work and evidence](../../agent_notes/0018-canonical-contact.md) and
-the [approved contact plan](../superpowers/plans/2026-09-05-cointos-mvp-contact.md).
+the [approved contact plan](../plans/2026-09-05-cointos-mvp-contact.md).

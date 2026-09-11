@@ -146,7 +146,7 @@ changed. See
 
 Conservative backend-close observation is live-accepted as David's temporary
 MVP path. **R4-PRECISE remains a required open successor**, not optional
-hardening: track [implementation and precise-release tasks](superpowers/plans/2026-09-06-backend-observation-repair.md)
+hardening: track [implementation and precise-release tasks](plans/2026-09-06-backend-observation-repair.md)
 and [decision 0012](decisions/0012-temporary-conservative-backend-release.md).
 Future R4/bring-up agents must pick up that successor after conservative live
 bring-up and before claiming complete concurrent-backend release support.
@@ -183,7 +183,7 @@ is integrated as recorded above. This checkpoint does not assert working autonom
 end-to-end Coin contact. The earlier implementation observations below are history.
 
 Implementation update, 2026-09-05 (Astra): David approved the [complete MVP bring-up
-suite](superpowers/plans/2026-09-05-cointos-mvp-index.md) for implementation and
+suite](plans/2026-09-05-cointos-mvp-index.md) for implementation and
 activation. S0 is preserving the exact dirty planning/source snapshot before the
 first worker writes code. No deployment or runtime behavior has changed yet. The
 dated implementation observations below are historical, not live telemetry.

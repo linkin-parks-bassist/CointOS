@@ -261,7 +261,7 @@ their harnesses running.
 - `tests/test_survival_records.py`
 - `tests/test_survival_gateway.py`
 - `docs/operations.md`
-- `.superpowers/sdd/2026-09-04-cointelprofessional-02-survival-plane-lifecycle/task-5-report.md`
+- `docs/reports/sdd/2026-09-04-cointelprofessional-02-survival-plane-lifecycle/task-5-report.md`
 
 ## Fix round 1/5 — atomic installer deployment boundary
 

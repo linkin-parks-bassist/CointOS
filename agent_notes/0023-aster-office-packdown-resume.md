@@ -20,7 +20,7 @@ process state must be checked separately before resuming any one of them.
 | local-contact-projection-review2 | ses_f80974d56ffeJG07CyE1JOdiuc | cointos-next-contact-review |
 
 Original prompts, logs and view records are in the ignored ledger
-`.superpowers/sdd/2026-09-05-cointos-mvp-index/`, named after each packet.
+`/home/david/.CointOS/development/sdd/2026-09-05-cointos-mvp-index/`, named after each packet.
 Contact review has a final report already audited in note 0022: do not rerun it.
 
 Resume through the canonical admitted observable launcher, supplying the exact

@@ -93,7 +93,7 @@ suggestion to preserve the unconditional front/deep route behind a bridge. David
 respond-or-dispatch route in C1-C3. Reuse identity/persistence, not the rejected
 controller decomposition. This is a maintained evidence note, not another plan.
 
-The [MVP index](../../docs/superpowers/plans/2026-09-05-cointos-mvp-index.md) owns
+The [MVP index](../../docs/plans/2026-09-05-cointos-mvp-index.md) owns
 all task order and deferred work. C3 must distinguish a bounded degraded notice
 from a later substantive answer; unknown delivery never permits replaying the same
 message. C4/C5 own cross-UID access, one-poller cutover and actual contact proof.

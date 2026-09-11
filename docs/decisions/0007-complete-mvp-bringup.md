@@ -10,8 +10,8 @@ must support autonomous/spontaneous role work, real agent-agent communication,
 configurable mechanically enforced priorities, and ongoing verified improvement.
 David selected Cointelprofessional for approval before activating such changes.
 
-The [new design](../superpowers/specs/2026-09-05-cointos-mvp-design.md) and
-[execution index](../superpowers/plans/2026-09-05-cointos-mvp-index.md) replace the
+The [new design](../specs/2026-09-05-cointos-mvp-design.md) and
+[execution index](../plans/2026-09-05-cointos-mvp-index.md) replace the
 old delivery sequence for review. Retain protocol laws, evidence and sound narrow
 mechanisms; replace incompatible controllers, resident-resource bypasses and
 diffuse role generation without permanent compatibility paths. Early contact is

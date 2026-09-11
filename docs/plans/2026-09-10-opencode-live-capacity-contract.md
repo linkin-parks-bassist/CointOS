@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 standard library, plain data/functions, Bash launcher fingertip, OpenCode 1.18.x, Lemonade 11.9.x, unittest/pytest-compatible function tests.
 
-**Spec:** `docs/superpowers/specs/2026-09-10-opencode-live-capacity-contract-design.md`
+**Spec:** `docs/specs/2026-09-10-opencode-live-capacity-contract-design.md`
 
 ## Global Constraints
 

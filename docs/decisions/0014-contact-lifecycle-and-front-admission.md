@@ -18,7 +18,7 @@ contextual ACKs, not canned instant replies or fake substantive answers. Trivial
 authorized information fetches and intentional silence remain valid. Do not force
 every message through deeper reasoning. No policy choice grants new tool authority.
 
-Approved staging spec: docs/superpowers/specs/2026-09-07-message-lifecycle-design.md
+Approved staging spec: docs/specs/2026-09-07-message-lifecycle-design.md
 in /home/david/.worktrees/cointos-mvp-contact. Front-admission decomposition:
 agent_notes/0020-front-admission-options.md in that worktree. Code and live evidence
 remain outstanding; automatic goal continuations were not used as approval.

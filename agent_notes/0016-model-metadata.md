@@ -13,7 +13,7 @@ The map changed no code; its worker lease closed automatically.
 
 Worktree /home/david/.worktrees/cointos-mvp-model-metadata, branch
 fix/mvp-model-metadata, base 1ab3e7b. Baseline: 19 model-admission tests pass.
-Packets/transcripts: ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
+Packets/transcripts: ignored /home/david/.CointOS/development/sdd/2026-09-05-cointos-mvp-index/.
 
 - R2-M1 code accepted: local 881e7e1/3a1c3a4 -> 34456c8/dcd1add. Pure
   _observed_model_record verifies measured parameters/bytes/context, exact

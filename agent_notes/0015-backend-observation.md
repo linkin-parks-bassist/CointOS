@@ -46,7 +46,7 @@ and healthy resources. Proof: `state/backend-observations.jsonl` record
 and smoke transcript remain in the ignored SDD ledger. No worker remains active.
 This accepts conservative release, not autonomous MVP, production model metadata,
 precise concurrent release or broader protected service activation.
-The exact local packets are retained under ignored .superpowers/sdd/
+The exact local packets are retained under ignored /home/david/.CointOS/development/sdd/
 2026-09-05-cointos-mvp-index/. The implementation worktree is
 /home/david/.worktrees/cointos-mvp-backend-observation; temporary coordinator-owned
 nested AGENTS were excluded from worker commits and removed after acceptance.

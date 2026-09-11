@@ -45,7 +45,7 @@ unchanged. Only operator_session.py and new tests/test_operator_launch.py.
 Do not silently change detached-session interruption semantics, preemption policy,
 dead-session reconciliation authority or add an autonomous repair loop.
 
-Packets/logs remain in ignored .superpowers/sdd/2026-09-05-cointos-mvp-index/.
+Packets/logs remain in ignored /home/david/.CointOS/development/sdd/2026-09-05-cointos-mvp-index/.
 Read-only work used the clean metadata worktree. Writer worktree now exists at
 /home/david/.worktrees/cointos-mvp-operator-launch, branch fix/mvp-operator-launch,
 base 05723b0. Current worker base includes accepted R8-G1 commits above.

@@ -9,7 +9,7 @@
 **Goal:** Canonical four-outcome inbound handling, unsolicited authorized agent contact, and replies routed to originating work.
 **Architecture:** The gateway owns Telegram delivery. Contact reduction owns lifecycle and conversation identity; the shared outbox carries replies and spontaneous messages. Authorization comes from authenticated inbound state or installed contact authorization, not a model-supplied destination.
 **Tech Stack:** Python 3 standard library, atomic JSON, `fcntl`, filesystem spools, systemd system/user units, R1 worker leases, R4 inference requests, existing survival guardian/reducer, and `unittest`.
-**Spec:** `docs/superpowers/specs/2026-09-05-cointos-mvp-design.md`
+**Spec:** `docs/specs/2026-09-05-cointos-mvp-design.md`
 ## Global constraints
 - Personal CointOS only; professional/customer material is outside scope.
 - Use functions and plain data; no classes, actors, generic bus, or second task database.

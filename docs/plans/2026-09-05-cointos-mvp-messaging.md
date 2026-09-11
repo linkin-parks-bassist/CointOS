@@ -15,7 +15,7 @@ evidence alongside slot oversubscription and memory-contended model turnover.
 **Goal:** Give live CointOS agents durable direct, role, global, and Coin communication with truthful low-latency observation and authorized control.
 **Architecture:** A transport-independent mailbox stores immutable envelopes and publish-time recipient snapshots derived from existing jobs plus R1 leases. Runner, inference-proxy, and tool adapters expose messages at real asynchronous boundaries; plain reducers apply status/wrap-up/cancel without OOP actors, while this typed mailbox is the one real live-message bus.
 **Tech Stack:** Python standard library, atomic JSON/JSONL, `fcntl`, existing jobs, R1 leases, R4 inference proxy, R5 budgets, R6 handoffs, and `unittest`.
-**Spec:** `docs/superpowers/specs/2026-09-05-cointos-mvp-design.md`; live-bus evidence: `agent_notes/0003-control-plane-presence-and-live-messaging.md`; execution rules: `docs/superpowers/plans/2026-09-05-cointos-mvp-swarm.md`.
+**Spec:** `docs/specs/2026-09-05-cointos-mvp-design.md`; live-bus evidence: `agent_notes/0003-control-plane-presence-and-live-messaging.md`; execution rules: `docs/plans/2026-09-05-cointos-mvp-swarm.md`.
 ## Global constraints
 - Coin available, no OOM, and seamless dynamic—including smaller—context handover remain binding.
 - The mailbox is justified at process/inference/tool boundaries. Ordinary in-process collaboration remains direct functions over plain data; do not grow the one typed live bus into actor objects or autonomous message entities.

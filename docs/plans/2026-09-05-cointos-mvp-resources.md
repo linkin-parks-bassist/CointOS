@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3 standard library, JSON/JSONL durable records, `fcntl`, `/proc`, systemd observations, Lemonade OpenAI-compatible HTTP, OpenCode JSON events, `unittest`.
 
-**Spec:** `docs/superpowers/specs/2026-09-05-cointos-mvp-design.md`
+**Spec:** `docs/specs/2026-09-05-cointos-mvp-design.md`
 
 ## Global Constraints
 

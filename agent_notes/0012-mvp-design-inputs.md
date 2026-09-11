@@ -49,8 +49,8 @@ planned roles. Neither currently has a role file.
 
 ## Proposed resolution for David's review
 
-The [complete design](../docs/superpowers/specs/2026-09-05-cointos-mvp-design.md)
-and [task index](../docs/superpowers/plans/2026-09-05-cointos-mvp-index.md) now own
+The [complete design](../docs/specs/2026-09-05-cointos-mvp-design.md)
+and [task index](../docs/plans/2026-09-05-cointos-mvp-index.md) now own
 the proposal. Janitor maintains notes/artifact organization; Gardener handles small
 code cleanup; Refactorer handles larger accepted structural work. Steward has no
 recurring MVP assignment. Discovery records distinct observations/proposals/patches
@@ -64,7 +64,7 @@ plans and bounded task packets for GPT-5.6 Sol at medium effort and local worker
 Local workers use the largest safely feasible model/context, short stoppable tasks,
 and observed completion before Codex begins smoke tests. Preserve existing
 uncommitted implementation work. The new proposed specification is
-`docs/superpowers/specs/2026-09-05-cointos-mvp-design.md`. The old seven plan pages
+`docs/specs/2026-09-05-cointos-mvp-design.md`. The old seven plan pages
 are compact obligation-to-task mappings, not parallel execution checklists. Only
 planning documents changed; no code, runtime state, services or model allocations
 were changed. Bounded local extraction used the already loaded model; it did not
