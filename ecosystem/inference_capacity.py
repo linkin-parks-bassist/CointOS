@@ -21,6 +21,63 @@ LEASE_STATES = frozenset((
     "starting", "active", "preemption_requested", "waiting_for_preemption",
     "ready_for_revalidation", "release_requested", "released",
 ))
+
+
+def validate_launch_capacity(lease, record):
+    """Validate one admitted inference lease against one live effective record.
+
+    Pure function: returns the effective record when the lease's model identity
+    and its context and output lease terms all fit the live per-request
+    capacity, or raises ValueError naming the single disagreeing lease term.
+    The record must be the validated effective capacity record produced by
+    `ecosystem.opencode_capacity.effective_inference_capacity`; its context and
+    output caps are the live per-request facts the lease must never exceed.
+    """
+    if not isinstance(lease, dict):
+        raise ValueError("lease must be a dictionary")
+    if not isinstance(record, dict):
+        raise ValueError("record must be a dictionary")
+    for key in ("model_id", "context_tokens_per_sequence", "max_output_tokens"):
+        if key not in lease:
+            raise ValueError(f"lease is missing required key {key!r}")
+    for key in ("model_id", "opencode_context_tokens", "opencode_output_tokens"):
+        if key not in record:
+            raise ValueError(f"record is missing required key {key!r}")
+    lease_model = lease["model_id"]
+    if not isinstance(lease_model, str) or not lease_model:
+        raise ValueError("lease model_id must be a non-empty string")
+    record_model = record["model_id"]
+    if not isinstance(record_model, str) or not record_model:
+        raise ValueError("record model_id must be a non-empty string")
+    if lease_model != record_model:
+        raise ValueError(
+            f"lease model {lease_model!r} differs from the live observed model "
+            f"{record_model!r}; launch stays closed")
+    lease_context = lease["context_tokens_per_sequence"]
+    if type(lease_context) is not int or lease_context <= 0:
+        raise ValueError(
+            "lease context_tokens_per_sequence must be a positive integer")
+    live_context = record["opencode_context_tokens"]
+    if type(live_context) is not int or live_context <= 0:
+        raise ValueError(
+            "record opencode_context_tokens must be a positive integer")
+    if lease_context > live_context:
+        raise ValueError(
+            f"lease context {lease_context} exceeds the live effective context "
+            f"{live_context}; launch stays closed")
+    lease_output = lease["max_output_tokens"]
+    if type(lease_output) is not int or lease_output <= 0:
+        raise ValueError("lease max_output_tokens must be a positive integer")
+    live_output = record["opencode_output_tokens"]
+    if type(live_output) is not int or live_output <= 0:
+        raise ValueError("record opencode_output_tokens must be a positive integer")
+    if lease_output > live_output:
+        raise ValueError(
+            f"lease output {lease_output} exceeds the live effective output "
+            f"{live_output}; launch stays closed")
+    return record
+
+
 def resource_envelope(
     host: dict,
     resident_models: list[dict],

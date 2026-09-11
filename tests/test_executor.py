@@ -25,6 +25,65 @@ from ecosystem.executor import (
     process_identity,
     recover_abandoned_jobs,
 )
+from ecosystem.opencode_capacity import launch_fingerprint
+
+
+def _capacity_observation(model_id, observed_at):
+    command = ["llama-server", "--ctx-size", "4096", "--parallel", "1"]
+    return {
+        "selected_model_id": model_id,
+        "observed_model_id": model_id,
+        "backend_incarnation": {
+            "backend_url": "http://127.0.0.1:9000/v1",
+            "pid": 4242,
+            "launch_command": command,
+            "launch_fingerprint": launch_fingerprint(command),
+        },
+        "layout": {
+            "context_mode": "fixed",
+            "backend_context_tokens": 4096,
+            "parallel_sequences": 1,
+            "context_tokens_per_sequence": 4096,
+            "preallocated_context_tokens": 4096,
+        },
+        "observed_at": observed_at,
+        "evidence": "lemonade:/v1/models;/api/v1/health;backend:/v1/models;/props",
+        "prompt_estimate_tokens": 0,
+        "backend_output_ceiling": None,
+    }
+
+
+def _capacity_capability():
+    return {"version": "1.18.30", "qualified": True,
+            "maximum_output_tokens": 32000}
+
+
+def _capacity_policy():
+    return {"output_reserve_tokens": 2048, "rollover_fraction": 0.75,
+            "max_age_seconds": 300}
+
+
+def _capacity_producers(observation=None, capability=None, policy=None):
+    """Build the three mockable capacity producers for a launch test.
+
+    Any argument may be omitted to use the default consistent value that makes
+    the preflight agree. `observation` may be a dict or a callable
+    `(model_id, clock) -> dict`; `capability` and `policy` may be dicts.
+    """
+    def observe_capacity(_root, model_id, *, refresh_inventory, clock):
+        if observation is None:
+            return _capacity_observation(model_id, observed_at=clock())
+        if callable(observation):
+            return observation(model_id, clock)
+        return observation
+
+    def qualify_capability(_root, *, refresh_inventory, clock):
+        return capability if capability is not None else _capacity_capability()
+
+    def capacity_policy(_root):
+        return policy if policy is not None else _capacity_policy()
+
+    return observe_capacity, qualify_capability, capacity_policy
 
 
 class ExecutorTest(IntakeTest):
@@ -91,8 +150,9 @@ class ExecutorTest(IntakeTest):
             return gated_child_release(record)
 
         child = [sys.executable, "-c",
-                 "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran')",
-                 str(marker)]
+                  "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran')",
+                  str(marker)]
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
         context = launch_runner_round(
             job, job_path, route, {}, child,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -100,6 +160,8 @@ class ExecutorTest(IntakeTest):
             acquire=acquire, launch=launch, register=register, reserve=reserve,
             issue=issue, populate=populate, release_gate=release,
             release=lambda *_args: None, observe=lambda *_args: None,
+            observe_capacity=obs_cap, qualify_capability=qual_cap,
+            capacity_policy=pol_cap,
         )
         outcome = gated_child_wait(context["launch"], 2.0)
         self.assertEqual(outcome["returncode"], 0)
@@ -185,12 +247,15 @@ class ExecutorTest(IntakeTest):
         }
         route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
                  "max_output_tokens": 128}
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
         result = launch_runner_round(
             job, job_path, route, {}, ["must-not-spawn"],
             stdin=None, stdout=None, stderr=None,
             acquire=lambda *_args: {"state": "deferred", "reasons": ["drain"]},
             launch=lambda *_args, **_kwargs: self.fail("drain must prevent spawn"),
             issue=lambda *_args: self.fail("drain must prevent credential"),
+            observe_capacity=obs_cap, qualify_capability=qual_cap,
+            capacity_policy=pol_cap,
         )
         self.assertEqual(result["state"], "deferred")
         saved = json.loads(job_path.read_text(encoding="utf-8"))
@@ -289,6 +354,7 @@ class ExecutorTest(IntakeTest):
             os.close(record["config_fd"])
             record["config_fd"] = -1
 
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
         for _round in range(2):
             launch_runner_round(
                 job, job_path, route, {}, ["fake-child"],
@@ -297,6 +363,8 @@ class ExecutorTest(IntakeTest):
                 reserve=reserve,
                 issue=lambda _root, _lease, sink, _clock: sink(b"r" * 32),
                 release_gate=release_gate,
+                observe_capacity=obs_cap, qualify_capability=qual_cap,
+                capacity_policy=pol_cap,
             )
             job.update(state="ready")
         self.assertNotEqual(worker_requests[0]["request_id"],
@@ -339,6 +407,7 @@ class ExecutorTest(IntakeTest):
             launch_record["config_fd"] = -1
             raise RuntimeError("after credential")
 
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
         with self.assertRaisesRegex(RuntimeError, "after credential"):
             launch_runner_round(
                 job, job_path, route, {}, ["fake-child"],
@@ -358,6 +427,8 @@ class ExecutorTest(IntakeTest):
                 cancel=lambda *_args: events.append("cancel"),
                 release=lambda *_args: self.fail("must not release R1"),
                 observe=lambda *_args: self.fail("must not observe R1 quiescent"),
+                observe_capacity=obs_cap, qualify_capability=qual_cap,
+                capacity_policy=pol_cap,
             )
         saved = json.loads(job_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["state"], "reconciliation_required")
@@ -402,6 +473,7 @@ class ExecutorTest(IntakeTest):
             os.close(record["config_fd"])
             record["config_fd"] = -1
 
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
         result = launch_runner_round(
             job, job_path, route, {"generation": 1}, ["fake-child"],
             stdin=None, stdout=None, stderr=None,
@@ -413,6 +485,8 @@ class ExecutorTest(IntakeTest):
             release_gate=release_gate,
             refresh_inventory=lambda: {"generation": 2},
             sleeper=lambda _seconds: calls.append("wait"), clock=lambda: 1.0,
+            observe_capacity=obs_cap, qualify_capability=qual_cap,
+            capacity_policy=pol_cap,
         )
         self.assertEqual(result["state"], "running")
         self.assertEqual(calls.count("spawn"), 1)
@@ -589,6 +663,7 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         }
         route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
                  "max_output_tokens": 128}
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
         with patch("ecosystem.executor.opencode_environment",
                    side_effect=OSError("memfd unavailable")):
             with self.assertRaisesRegex(OSError, "memfd unavailable"):
@@ -601,6 +676,8 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
                         self.fail("pre-spawn failure must not spawn")),
                     release=workload_control.release_worker,
                     observe=workload_control.observe_workers,
+                    observe_capacity=obs_cap, qualify_capability=qual_cap,
+                    capacity_policy=pol_cap,
                 )
         saved = json.loads(job_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["state"], "ready")
@@ -625,6 +702,7 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         }
         route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
                  "max_output_tokens": 128}
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
 
         def launch_after_spawn_crash(*_args, **_kwargs):
             error = RuntimeError("injected identity failure after spawn")
@@ -645,6 +723,8 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
                 launch=launch_after_spawn_crash,
                 release=workload_control.release_worker,
                 observe=workload_control.observe_workers,
+                observe_capacity=obs_cap, qualify_capability=qual_cap,
+                capacity_policy=pol_cap,
             )
         saved = json.loads(job_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["state"], "ready")
@@ -668,6 +748,7 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         }
         route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
                  "max_output_tokens": 128}
+        obs_cap, qual_cap, pol_cap = _capacity_producers()
 
         def launch_unreaped_crash(*_args, **_kwargs):
             error = RuntimeError("injected unresolved spawn")
@@ -690,6 +771,8 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
                     self.fail("unresolved spawn crash must not release R1")),
                 observe=lambda *_args: (
                     self.fail("unresolved spawn crash must not quiesce R1")),
+                observe_capacity=obs_cap, qualify_capability=qual_cap,
+                capacity_policy=pol_cap,
             )
         saved = json.loads(job_path.read_text(encoding="utf-8"))
         self.assertEqual(saved["state"], "reconciliation_required")
@@ -701,6 +784,121 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
             (self.root / "state/workload-control.json").read_text(encoding="utf-8"))
         lease = control["leases"][saved["worker_lease_id"]]
         self.assertEqual(lease["state"], "starting")
+
+    def _capacity_defer(self, job_id, producers, expect_reason, route=None):
+        """Drive one launch round that must defer at the capacity preflight.
+
+        Asserts the round returns deferred, never calls acquire or launch, the
+        job is returned to ready, and exactly one sanitized deferred reason
+        contains `expect_reason`.
+        """
+        if route is None:
+            route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                     "max_output_tokens": 128}
+        job_path = self.root / f"state/jobs/{job_id}.json"
+        job = {
+            "id": job_id, "state": "ready", "agent_generation": 1,
+            "workload_class": "work",
+            "owner_identity": f"executor:{job_id}",
+            "caller_handle": "executor:local", "deadline_monotonic": 100.0,
+            "role": "worker", "authority_profile": "ordinary",
+        }
+        called = []
+
+        def refuse_acquire(*_args):
+            called.append("acquire")
+            self.fail(f"{job_id}: preflight must defer before acquire")
+
+        def refuse_launch(*_args, **_kwargs):
+            called.append("spawn")
+            self.fail(f"{job_id}: preflight must defer before spawn")
+
+        obs_cap, qual_cap, pol_cap = producers
+        result = launch_runner_round(
+            job, job_path, route, {}, ["must-not-spawn"],
+            stdin=None, stdout=None, stderr=None,
+            acquire=refuse_acquire, launch=refuse_launch,
+            observe_capacity=obs_cap, qualify_capability=qual_cap,
+            capacity_policy=pol_cap,
+        )
+        self.assertEqual(result["state"], "deferred")
+        self.assertEqual(called, [])
+        saved = json.loads(job_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["state"], "ready")
+        reasons = saved["runner_deferred_reasons"]
+        self.assertEqual(len(reasons), 1)
+        self.assertIn(expect_reason, reasons[0])
+        return saved
+
+    def test_capacity_preflight_defers_on_stale_observation(self):
+        producers = _capacity_producers(
+            observation=lambda model_id, clock: _capacity_observation(
+                model_id, observed_at=clock() - 400))
+        self._capacity_defer(
+            "task-cap-stale", producers, "observation is stale")
+
+    def test_capacity_preflight_defers_on_changed_incarnation(self):
+        def changed_incarnation(model_id, clock):
+            observation = _capacity_observation(model_id, observed_at=clock())
+            observation["backend_incarnation"]["launch_fingerprint"] = (
+                "0" * 64)
+            return observation
+
+        producers = _capacity_producers(observation=changed_incarnation)
+        self._capacity_defer(
+            "task-cap-incarnation", producers,
+            "launch_command no longer matches its launch_fingerprint")
+
+    def test_capacity_preflight_defers_on_model_mismatch(self):
+        producers = _capacity_producers(
+            observation=lambda model_id, clock: _capacity_observation(
+                "model-y", observed_at=clock()))
+        self._capacity_defer(
+            "task-cap-model", producers,
+            "lease model 'model-x' differs from the live observed model")
+
+    def test_capacity_preflight_defers_when_lease_context_exceeds_live(self):
+        def small_context(model_id, clock):
+            observation = _capacity_observation(model_id, observed_at=clock())
+            observation["layout"] = {
+                "context_mode": "fixed",
+                "backend_context_tokens": 2048,
+                "parallel_sequences": 1,
+                "context_tokens_per_sequence": 2048,
+                "preallocated_context_tokens": 2048,
+            }
+            return observation
+
+        producers = _capacity_producers(
+            observation=small_context,
+            policy={"output_reserve_tokens": 1024, "rollover_fraction": 0.75,
+                    "max_age_seconds": 300})
+        self._capacity_defer(
+            "task-cap-context", producers,
+            "lease context 4096 exceeds the live effective context 2048")
+
+    def test_capacity_preflight_defers_when_lease_output_exceeds_live(self):
+        def large_pool(model_id, clock):
+            observation = _capacity_observation(model_id, observed_at=clock())
+            observation["layout"] = {
+                "context_mode": "fixed",
+                "backend_context_tokens": 65536,
+                "parallel_sequences": 1,
+                "context_tokens_per_sequence": 65536,
+                "preallocated_context_tokens": 65536,
+            }
+            return observation
+
+        producers = _capacity_producers(
+            observation=large_pool,
+            policy={"output_reserve_tokens": 64000, "rollover_fraction": 0.75,
+                    "max_age_seconds": 300})
+        route = {"model_id": "model-x", "context_tokens_per_sequence": 4096,
+                 "max_output_tokens": 40000}
+        self._capacity_defer(
+            "task-cap-output", producers,
+            "lease output 40000 exceeds the live effective output 32000",
+            route=route)
 
     def test_reaped_leader_does_not_claim_a_live_or_unknown_process_group_ended(self):
         config_fd = os.memfd_create("gated-child-group", os.MFD_CLOEXEC)

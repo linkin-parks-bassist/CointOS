@@ -14,8 +14,9 @@ from pathlib import Path
 from ecosystem import cli
 from ecosystem import continuation
 from ecosystem import evidence
+from ecosystem import opencode_client
 from ecosystem import task_contracts
-from ecosystem.inference_capacity import reserve_sequence
+from ecosystem.inference_capacity import reserve_sequence, validate_launch_capacity
 from ecosystem.inference_proxy import (
     cancel as cancel_proxy,
     completed_run_termination,
@@ -24,7 +25,8 @@ from ecosystem.inference_proxy import (
     populate_opencode_credential,
     revoke_proxy_credential,
 )
-from ecosystem.models import realize, route, snapshot
+from ecosystem.models import realize, route, snapshot, observe_opencode_backend_capacity
+from ecosystem.opencode_capacity import effective_inference_capacity
 from ecosystem import scheduler
 from ecosystem.scheduler import choose, policy as scheduling_policy, priority
 from ecosystem.resource_control import job_admitted_in_current_mode, mode as resource_mode, opencode_session_id
@@ -378,6 +380,132 @@ def _observe_stopped_worker(root: Path, worker_lease: dict, launch_record: dict,
     observe(root, [observation], clock)
 
 
+def _observe_worker_capacity(root, model_id, *, refresh_inventory, clock):
+    """Default observation producer: re-derive one routed model's raw facts.
+
+    Reads the registry item, the residency (incarnation), and the loopback
+    backend documents for exactly one routed model, then projects them into the
+    incarnation-bound capacity observation. Any missing or contradictory fact
+    returns None so the launch stays closed instead of guessing.
+    """
+    from ecosystem import models
+    try:
+        registry_document = models._get("/v1/models")
+        health_document = models._get("/api/v1/health")
+    except Exception:
+        return None
+    registry = (registry_document.get("data")
+                if isinstance(registry_document, dict) else None)
+    if not isinstance(registry, list):
+        return None
+    item = next(
+        (entry for entry in registry
+         if isinstance(entry, dict)
+         and entry.get("id") == model_id
+         and entry.get("downloaded") is True), None)
+    if item is None:
+        return None
+    health = (health_document.get("all_models_loaded")
+              if isinstance(health_document, dict) else None)
+    if not isinstance(health, list):
+        return None
+    resident = next(
+        (entry for entry in health
+         if isinstance(entry, dict)
+         and entry.get("model_name") == model_id
+         and "backend_url" in entry), None)
+    if resident is None:
+        return None
+    try:
+        backend_document = models._get_backend(resident["backend_url"], "/v1/models")
+        props = models._get_backend(resident["backend_url"], "/props")
+    except Exception:
+        return None
+    return observe_opencode_backend_capacity(
+        item, resident, backend_document, props, clock())
+
+
+def _qualify_worker_capability(root, *, refresh_inventory, clock):
+    """Default capability producer: qualify the installed OpenCode version.
+
+    Probes the exact installed version and resolves it against the checked-in
+    qualification catalogue. There is no default capability: an unknown,
+    changed, or unprobeable version raises so the launch stays closed until the
+    version is requalified.
+    """
+    binary = Path.home() / ".local/bin/opencode"
+    try:
+        probe = subprocess.run(
+            [str(binary), "--version"], capture_output=True, text=True, timeout=15)
+    except Exception:
+        raise ValueError(
+            "OpenCode version probe failed; launch stays closed until the "
+            "installed version is requalified")
+    if probe.returncode != 0:
+        raise ValueError(
+            "OpenCode version probe failed; launch stays closed until the "
+            "installed version is requalified")
+    catalogue = opencode_client.load_capability_catalogue(
+        Path(root) / "config/opencode-capabilities.json")
+    return opencode_client.qualified_opencode_capability(probe.stdout, catalogue)
+
+
+def _load_capacity_policy(root):
+    """Default policy producer: read the checked-in capacity policy.
+
+    The policy is an explicit, checked-in fact: the output reserve, the
+    rollover fraction, and the observation freshness window. A missing or
+    incomplete policy fails closed so no launch can rely on an implicit default.
+    """
+    from ecosystem.opencode_capacity import POLICY_KEYS
+    source = Path(root) / "config/opencode-capacity.json"
+    try:
+        policy = json.loads(source.read_text(encoding="utf-8"))
+    except Exception:
+        raise ValueError(
+            "capacity policy is missing or unreadable; launch stays closed")
+    if not isinstance(policy, dict):
+        raise ValueError(
+            "capacity policy must be a dictionary; launch stays closed")
+    missing = [key for key in POLICY_KEYS if key not in policy]
+    if missing:
+        raise ValueError(
+            f"capacity policy is missing required keys {missing}; "
+            "launch stays closed")
+    return {key: policy[key] for key in POLICY_KEYS}
+
+
+def _validate_worker_capacity(
+        route_record, root, *, observe_capacity, qualify_capability,
+        capacity_policy, refresh_inventory, clock):
+    """Validate one admitted route against one fresh live capacity record.
+
+    Produces the incarnation-bound observation and the version-qualified
+    OpenCode capability, derives the one effective record for the routed model,
+    and checks that the admitted lease's model identity and its context and
+    output lease terms fit that live record. Any disagreement, contradiction,
+    staleness, or missing fact raises ValueError so the caller keeps the job
+    ready and never spawns OpenCode.
+    """
+    model_id = route_record["model_id"]
+    observation = observe_capacity(
+        root, model_id, refresh_inventory=refresh_inventory, clock=clock)
+    if observation is None:
+        raise ValueError(
+            f"no live backend capacity observation for routed model {model_id!r}; "
+            "launch stays closed")
+    capability = qualify_capability(
+        root, refresh_inventory=refresh_inventory, clock=clock)
+    policy = capacity_policy(root)
+    record = effective_inference_capacity(observation, capability, policy, clock())
+    lease = {
+        "model_id": route_record["model_id"],
+        "context_tokens_per_sequence": route_record["context_tokens_per_sequence"],
+        "max_output_tokens": route_record["max_output_tokens"],
+    }
+    return validate_launch_capacity(lease, record)
+
+
 def launch_runner_round(
     job: dict,
     job_path: Path,
@@ -399,6 +527,9 @@ def launch_runner_round(
     observe=observe_workers,
     cancel=cancel_proxy,
     refresh_inventory=snapshot,
+    observe_capacity=_observe_worker_capacity,
+    qualify_capability=_qualify_worker_capability,
+    capacity_policy=_load_capacity_policy,
     sleeper=time.sleep,
     clock=time.monotonic,
 ) -> dict:
@@ -431,6 +562,20 @@ def launch_runner_round(
         job["runner_worker_request"] = worker_request
     elif type(worker_request) is not dict:
         raise ValueError("invalid durable runner worker request")
+    job["runner_phase"] = "capacity_preflight"
+    cli.atomic_json(job_path, job)
+    try:
+        capacity_record = _validate_worker_capacity(
+            route_record, root, observe_capacity=observe_capacity,
+            qualify_capability=qualify_capability,
+            capacity_policy=capacity_policy,
+            refresh_inventory=refresh_inventory, clock=clock)
+    except Exception as error:
+        job.update(
+            state="ready", updated_at=cli.now(),
+            runner_deferred_reasons=[f"{type(error).__name__}: {error}"])
+        cli.atomic_json(job_path, job)
+        return {"state": "deferred", "job": job}
     job["runner_phase"] = "r1_acquire_intent"
     cli.atomic_json(job_path, job)
     worker_lease = None
@@ -449,12 +594,7 @@ def launch_runner_round(
         job["runner_phase"] = "r1_acquired"
         cli.atomic_json(job_path, job)
 
-        provisional = {
-            "model_id": route_record["model_id"],
-            "opencode_context_tokens": route_record["context_tokens_per_sequence"],
-            "opencode_output_tokens": route_record["max_output_tokens"],
-        }
-        opencode = opencode_environment(root, provisional, b"\0" * 32)
+        opencode = opencode_environment(root, capacity_record, b"\0" * 32)
         environment = os.environ.copy()
         environment.update(opencode["environment"])
         environment["AGENT_JOB_ID"] = job["id"]

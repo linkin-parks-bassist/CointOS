@@ -11,6 +11,7 @@ from ecosystem.inference_capacity import (
     release_sequence,
     reserve_sequence,
     resource_envelope,
+    validate_launch_capacity,
 )
 
 
@@ -829,6 +830,100 @@ def test_release_requires_observed_sequence_end():
         )["leases"][lease["lease_id"]]
         assert durable["observed_release"]["binding"] \
             == lease["expected_release_binding"]
+
+
+def _lease(model_id="model-a", context=32_768, output=2_048):
+    return {
+        "model_id": model_id,
+        "context_tokens_per_sequence": context,
+        "max_output_tokens": output,
+    }
+
+
+def _record(model_id="model-a", context=32_768, output=32_000):
+    return {
+        "model_id": model_id,
+        "opencode_context_tokens": context,
+        "opencode_output_tokens": output,
+    }
+
+
+def test_validate_launch_capacity_passes_agreement():
+    record = _record()
+    assert validate_launch_capacity(_lease(), record) is record
+
+
+def test_validate_launch_capacity_accepts_boundary_equality():
+    # Lease terms exactly equal to the live caps are permitted.
+    assert validate_launch_capacity(
+        _lease(context=32_768, output=32_000), _record()
+    ) == _record()
+
+
+def test_validate_launch_capacity_rejects_model_mismatch():
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "differs from the live observed model"):
+        validate_launch_capacity(_lease(model_id="model-b"), _record())
+
+
+def test_validate_launch_capacity_rejects_context_above_live():
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "exceeds the live effective context"):
+        validate_launch_capacity(
+            _lease(context=32_769), _record(context=32_768)
+        )
+
+
+def test_validate_launch_capacity_rejects_output_above_live():
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "exceeds the live effective output"):
+        validate_launch_capacity(
+            _lease(output=32_001), _record(output=32_000)
+        )
+
+
+def test_validate_launch_capacity_requires_dict_and_keys():
+    with unittest.TestCase().assertRaisesRegex(ValueError, "lease must be a dictionary"):
+        validate_launch_capacity("not-a-dict", _record())
+    with unittest.TestCase().assertRaisesRegex(ValueError, "record must be a dictionary"):
+        validate_launch_capacity(_lease(), "not-a-dict")
+    for missing_lease_key in (
+        "model_id", "context_tokens_per_sequence", "max_output_tokens",
+    ):
+        lease = _lease()
+        del lease[missing_lease_key]
+        with unittest.TestCase().assertRaisesRegex(
+                ValueError, f"missing required key {missing_lease_key!r}"):
+            validate_launch_capacity(lease, _record())
+    for missing_record_key in (
+        "model_id", "opencode_context_tokens", "opencode_output_tokens",
+    ):
+        record = _record()
+        del record[missing_record_key]
+        with unittest.TestCase().assertRaisesRegex(
+                ValueError, f"missing required key {missing_record_key!r}"):
+            validate_launch_capacity(_lease(), record)
+
+
+def test_validate_launch_capacity_rejects_invalid_types():
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "lease model_id must be a non-empty string"):
+        validate_launch_capacity(_lease(model_id=""), _record())
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "lease context_tokens_per_sequence must be a positive integer"):
+        validate_launch_capacity(_lease(context=0), _record())
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "lease context_tokens_per_sequence must be a positive integer"):
+        validate_launch_capacity(_lease(context=32.0), _record())
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "lease max_output_tokens must be a positive integer"):
+        validate_launch_capacity(_lease(output=-1), _record())
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "record opencode_context_tokens must be a positive integer"):
+        validate_launch_capacity(_lease(), _record(context=0))
+    with unittest.TestCase().assertRaisesRegex(
+            ValueError, "record opencode_output_tokens must be a positive integer"):
+        validate_launch_capacity(_lease(), _record(output="many"))
 
 
 def load_tests(_loader, _tests, _pattern):
