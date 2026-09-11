@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: git history for the former safe-powerdown agent note; docs/operations.md; current source inspection
+source: git history for the former safe-powerdown agent note; current source inspection
 verification: Confirmed the desired lifecycle boundary was documented but no single accepted safe-powerdown command is present.
 review_when: Recheck when shutdown/drain lifecycle work is implemented.
 ---

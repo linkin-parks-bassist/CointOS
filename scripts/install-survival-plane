@@ -284,7 +284,6 @@ install -d -o root -g root -m 0700 "$staging_directory"
 install -d -o root -g root -m 0755 \
     "$staging_directory/survival" \
     "$staging_directory/scripts" \
-    "$staging_directory/docs" \
     "$staging_directory/config" \
     "$staging_directory/services" \
     "$staging_directory/services/system"
@@ -328,9 +327,6 @@ for entry_point in "${entry_points[@]}"; do
         "$source_path" "$staging_directory/scripts/$entry_point"
 done
 
-install -o root -g root -m 0644 \
-    "$repository_directory/docs/operations.md" \
-    "$staging_directory/docs/operations.md"
 install -o root -g root -m 0644 \
     "$repository_directory/config/survival-lifecycle.json" \
     "$staging_directory/config/survival-lifecycle.json"

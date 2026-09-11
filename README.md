@@ -15,7 +15,7 @@ cp examples/idea.md inbox/new/my-idea.md
 
 The default CLI path does not contact the network, start an agent model, or change
 user services. The optional Telegram gateway is the sole networked component in
-this milestone. See `docs/operations.md` for setup and the pause switch.
+this milestone. Operational knowledge is under `.knowledge/how/to/operate/`.
 
 Roles live as readable Markdown in `roles/`. `enqueue` plus `prepare-next` compiles
 a role and task into the exact context packet a future local executor will receive.

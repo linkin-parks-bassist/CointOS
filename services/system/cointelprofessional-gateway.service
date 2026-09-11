@@ -2,7 +2,6 @@
 Description=Cointelprofessional permanent Telegram gateway
 After=network-online.target
 Wants=network-online.target
-Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
 StartLimitIntervalSec=0
 
 [Service]

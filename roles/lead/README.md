@@ -25,8 +25,5 @@ The Lead agent integrates with other roles in the ecosystem:
 4. Approve or reject task completion
 5. Provide feedback for revisions when needed
 
-## Documentation
-
-- [Lead Agent Integration](../docs/lead-agent-integration.md)
-- [Lead Agent Workflow](../docs/lead-workflow.md)
-- [Lead Agent Integration with Other Roles](../docs/lead-integration.md)
+Current project procedure and architecture are discovered through the repository
+knowledge tree; historical role documents remain in Git.

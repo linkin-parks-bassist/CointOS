@@ -37,7 +37,6 @@ installer_source_paths = (
     "survival/systemd_notify.py",
     "survival/telegram_api.py",
     "survival/time_policy.py",
-    "docs/operations.md",
     "config/time.cfg",
     "config/survival-lifecycle.json",
     "services/system/cointelprofessional-survival.slice",
@@ -242,14 +241,11 @@ def test_units_execute_only_the_installed_snapshot():
         assert f"ExecStart=/home/" not in text
 
 
-def test_units_use_systemd_notification_and_local_documentation_paths():
+def test_units_use_systemd_notification_without_remote_documentation():
     for path in unit_directory.glob("cointelprofessional-*"):
         text = path.read_text(encoding="utf-8")
         assert "Environment=NOTIFY_SOCKET=" not in text
         assert "github.com" not in text
-    assert "Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md" in load_unit(
-        "cointelprofessional-gateway.service",
-    )
 
 
 def test_units_project_task_3_and_4_paths_and_groups():
@@ -801,7 +797,6 @@ if name == "systemd-analyze":
         "scripts/cointelprofessional-checkpoint",
         "scripts/cointelprofessional-gateway",
         "scripts/cointelprofessional-guardian",
-        "docs/operations.md",
         "config/survival-lifecycle.json",
         "services/system/cointelprofessional-checkpoint.service",
         "services/system/cointelprofessional-survival.slice",
@@ -1036,7 +1031,6 @@ def test_installer_realizes_exact_snapshot_modes_paths_and_dynamic_uids():
         assert (snapshot / "current/scripts/cointelprofessional-gateway").read_bytes() == (
             base / "scripts/cointelprofessional-gateway"
         ).read_bytes()
-        assert (snapshot / "current/docs/operations.md").read_bytes() == (base / "docs/operations.md").read_bytes()
         assert (snapshot / "current/scripts/cointelprofessional-gateway").stat().st_mode & 0o777 == 0o755
         assert (snapshot / "current/scripts/cointelprofessional-checkpoint").stat().st_mode & 0o777 == 0o755
         store = image / "var/lib/cointelprofessional"

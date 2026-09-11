@@ -1,6 +1,5 @@
 [Unit]
 Description=Cointelprofessional guardian socket activation
-Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
 
 [Socket]
 ListenStream=/run/cointelprofessional/guardian.sock

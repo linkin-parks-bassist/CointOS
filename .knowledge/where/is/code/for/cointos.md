@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T15:40:39+10:00'
 verified_by: codex /root
 scope: project local
-source: docs/system-map.md; docs/architecture-assessment.md; repository paths checked 2026-09-11
+source: current repository paths; git show fe92546:docs/system-map.md; git show fe92546:docs/architecture-assessment.md
 verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping.
 review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
 ---
@@ -28,5 +28,6 @@ Start at the narrow owner for the concern; do not read all modules.
 - Matching tests: `tests/test_<owner>.py`; process-level survival checks are under
   `tests/integration/`.
 
-Use `docs/system-map.md` for flow and `docs/architecture-assessment.md` for known
-boundary debt. Confirm an exact function/interface in source before changing it.
+Use `what/is/architecture/of/cointos.md` for flow and
+`what/is/current/technical_debt.md` for known boundary debt. Confirm an exact
+function/interface in source before changing it.

@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: docs/specs/2026-09-05-cointos-mvp-design.md; docs/decisions/0013-preserve-pre-mvp-contact-history.md; docs/status.md
+source: git show fe92546:docs/specs/2026-09-05-cointos-mvp-design.md; git show fe92546:docs/decisions/0013-preserve-pre-mvp-contact-history.md
 verification: Reconciled durable design documents with current status; no live deployment claim made.
 review_when: Recheck when contact, messaging, or control-plane implementation changes.
 ---

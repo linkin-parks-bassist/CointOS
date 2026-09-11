@@ -2,17 +2,16 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: 'git show 8edeadd^:AGENTS.md; docs/status.md; David policy clarifications 2026-09-11; ~/.knowledge/how/to/use/git/for/agent_work.md'
+source: 'git show 8edeadd^:AGENTS.md; current project knowledge; David policy clarifications 2026-09-11; ~/.knowledge/how/to/use/git/for/agent_work.md'
 verification: Reconciled repository guidance with current status, semantic knowledge ownership, David's non-work Git-policy reversal, and repository-copy invariant.
 review_when: Recheck when repository policy, activation authority, or project scope changes.
 ---
 
 Treat this repository as personal, local-only orchestration infrastructure. Do not
 mix in professional, partner, or customer information. Before changing behaviour,
-read the applicable semantic knowledge, current `docs/status.md`, and relevant
-decisions. Preserve
+read the applicable semantic knowledge and its current source owner. Preserve
 append-only runtime JSONL; keep generated runtime state out of Git; record
-consequential design changes in `docs/decisions/`.
+consequential reusable knowledge in the semantic tree; Git owns superseded history.
 
 Use small functions, plain data, explicit state transitions, and narrow module
 interfaces. Object-oriented implementation is forbidden, including classes and

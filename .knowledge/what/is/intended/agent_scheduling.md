@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T18:43:14+10:00'
 verified_by: codex /root
 scope: project local
-source: docs/decisions/0016-concurrent-inference-and-residency-timesharing.md; docs/decisions/0019-saved-state-timesharing-after-poc.md; David clarifications 2026-09-11
+source: git show fe92546:docs/decisions/0016-concurrent-inference-and-residency-timesharing.md; git show fe92546:docs/decisions/0019-saved-state-timesharing-after-poc.md; David clarifications 2026-09-11
 verification: Read both accepted decisions and separated intended architecture from current runtime practice.
 review_when: Recheck when scheduling architecture changes or an implementation is accepted.
 ---

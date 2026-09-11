@@ -2,7 +2,7 @@
 verified_at: '2026-09-11T15:40:39+10:00'
 verified_by: codex /root
 scope: project local
-source: docs/operations.md; docs/core-engineering-principles.md; python3 --version; python3 -m pytest --version; focused unittest command run 2026-09-11
+source: current test layout; python3 --version; python3 -m pytest --version; focused unittest command run 2026-09-11; git show fe92546:docs/core-engineering-principles.md
 verification: Confirmed /usr/bin/python3 is 3.12.3, pytest is not installed for it, and test_context_layout.py passes 12/12 through unittest discovery.
 review_when: Recheck after Python environment/dependency changes or test-runner policy changes.
 ---

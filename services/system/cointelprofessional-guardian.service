@@ -1,6 +1,5 @@
 [Unit]
 Description=Cointelprofessional guardian - peer-authenticated lifecycle controller
-Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
 StartLimitIntervalSec=0
 
 [Service]

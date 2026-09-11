@@ -1,6 +1,5 @@
 [Unit]
 Description=Cointelprofessional permanent survival plane
-Documentation=file:///usr/local/lib/cointelprofessional-survival/current/docs/operations.md
 
 [Slice]
 CPUWeight=1000
