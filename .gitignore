@@ -1,5 +1,5 @@
-state/
-logs/
+/state
+/logs
 inbox/new/*
 inbox/triaged/*
 projects/*
@@ -7,4 +7,3 @@ projects/*
 !inbox/triaged/.gitkeep
 !projects/.gitkeep
 __pycache__/
-
