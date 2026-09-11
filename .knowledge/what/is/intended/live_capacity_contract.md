@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-11T23:07:00+10:00'
+verified_at: '2026-09-11T23:40:30+10:00'
 verified_by: opencode /home/david
 scope: project local
-source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; tests/test_opencode_capacity.py
-verification: Distilled the accepted contract and immediate implementation seam; the pure record seam is now implemented and test-verified, no activation claimed.
+source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; ecosystem/opencode_client.py; config/opencode-capabilities.json
+verification: Distilled the accepted contract and immediate implementation seam; the pure record and the version-qualified capability seams are implemented and test-verified, no activation claimed.
 review_when: Recheck after each accepted live-capacity implementation stage.
 ---
 
@@ -19,8 +19,11 @@ The pure record seam is implemented in `ecosystem/opencode_capacity.py`
 (`effective_inference_capacity`, `launch_fingerprint`); effective output is the
 smallest of the qualified client ceiling, any observed backend output ceiling, and
 the policy reserve, and the effective context is the observed per-sequence cap
-verbatim. The next seam is the version-qualified OpenCode capability
-(catalogue + `ecosystem/opencode_client.py`). Do not begin by editing user OpenCode
-configuration, replacing the executable symlink, restarting services, or changing
-live model allocation. Observation, anonymous per-launch config construction,
-wrapper integration, and activation are later independently verified stages.
+verbatim. The version-qualified capability seam is implemented in
+`ecosystem/opencode_client.py` against `config/opencode-capabilities.json`
+(1.18.30 -> 32000); an unknown version has no default and closes launch. The next
+seam is the fresh backend-capacity observation adapter in the current observation
+owners. Do not begin by editing user OpenCode configuration, replacing the
+executable symlink, restarting services, or changing live model allocation.
+Observation, anonymous per-launch config construction, wrapper integration, and
+activation are later independently verified stages.

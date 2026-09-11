@@ -17,6 +17,9 @@ Start at the narrow owner for the concern; do not read all modules.
 - Live OpenCode capacity record (pure derivation from fresh incarnation-bound
   evidence): `ecosystem/opencode_capacity.py`, tests
   `tests/test_opencode_capacity.py`.
+- Version-qualified OpenCode capability (exact version -> observed output
+  ceiling, checked-in catalogue): `ecosystem/opencode_client.py`,
+  `config/opencode-capabilities.json`, tests `tests/test_opencode_client.py`.
 - Physical inference admission and proxying: `ecosystem/inference_capacity.py`,
   `ecosystem/inference_proxy.py`, `ecosystem/inference.py`.
 - Host/resource and worker ownership: `ecosystem/resource_control.py`,
