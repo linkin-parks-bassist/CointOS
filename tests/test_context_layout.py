@@ -1,6 +1,7 @@
 import unittest
 
 from ecosystem import context_layout
+from ecosystem.opencode_capacity import LAYOUT_KEYS
 
 OBSERVED_SHARED_ARGV = [
     "--ctx-size", "262144",
@@ -98,6 +99,19 @@ def test_shared_layout_without_cap_uses_trained_minimum():
 
 def test_success_record_has_exactly_documented_keys():
     assert set(_layout(OBSERVED_SHARED_ARGV)) == RECORD_KEYS
+
+
+def test_layout_record_matches_capacity_constructor_contract():
+    # The observation boundary passes this record through unchanged as the
+    # capacity constructor's `layout`, so its keys must stay exactly the
+    # constructor's LAYOUT_KEYS and its per-request context must stay separate
+    # from the aggregate pool.
+    shared = _layout(OBSERVED_SHARED_ARGV)
+    assert set(shared) == set(LAYOUT_KEYS)
+    assert shared["context_tokens_per_sequence"] == shared["backend_context_tokens"]
+    fixed = _layout(OBSERVED_FIXED_ARGV, slots=2, per_slot=131072)
+    assert set(fixed) == set(LAYOUT_KEYS)
+    assert fixed["context_tokens_per_sequence"] != fixed["backend_context_tokens"]
 
 
 def test_invalid_numeric_inputs_are_rejected():

@@ -4,6 +4,7 @@ import glob, http.client, ipaddress, json, os, re, shlex, subprocess, time, urll
 from pathlib import Path
 
 from ecosystem import context_layout
+from ecosystem.opencode_capacity import launch_fingerprint
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 RESOURCE_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/resource-policy.json"
@@ -364,6 +365,59 @@ def _observed_resident_record(item, resident, now):
     if record is None:
         return None, "inconsistent"
     return record, None
+
+
+def observe_opencode_backend_capacity(item, resident, backend_document, props,
+                                      observed_at):
+    """Project one verified resident observation into the capacity record.
+
+    Pure: reuses `_observed_model_record` (and thus `observed_context_layout`)
+    for every identity, consistency, and allocation-shape check, then binds the
+    result to exactly one backend incarnation (url, pid, launch command and its
+    fingerprint) with the observed-at time and the measured provenance. The
+    per-request context, the aggregate pool, and the mode come verbatim from the
+    incarnation-bound layout; they are never re-divided or defaulted. The backend
+    reports no output ceiling, so that field is absent, and the observer has no
+    prompt, so the prompt estimate is zero until the launcher supplies it.
+    Returns None for any missing, contradictory, or stale fact rather than
+    choosing a convenient source.
+    """
+    record = _observed_model_record(item, resident, backend_document, props, observed_at)
+    if record is None:
+        return None
+    resident_pid = resident.get("pid")
+    resident_url = resident.get("backend_url")
+    launch_command = resident.get("launch_command")
+    if not (_positive_integer(resident_pid)
+            and isinstance(resident_url, str) and resident_url
+            and isinstance(launch_command, list)
+            and launch_command
+            and all(isinstance(argument, str) and argument
+                    for argument in launch_command)):
+        return None
+    return {
+        "selected_model_id": item.get("id"),
+        "observed_model_id": record.get("id"),
+        "backend_incarnation": {
+            "backend_url": resident_url,
+            "pid": resident_pid,
+            "launch_command": list(launch_command),
+            "launch_fingerprint": launch_fingerprint(launch_command),
+        },
+        "layout": {
+            "context_mode": record.get("context_mode"),
+            "backend_context_tokens": record.get("preallocated_context_tokens"),
+            "parallel_sequences": record.get("parallel_sequences"),
+            "context_tokens_per_sequence":
+                record.get("context_tokens_per_sequence"),
+            "preallocated_context_tokens":
+                record.get("preallocated_context_tokens"),
+        },
+        "observed_at": observed_at,
+        "evidence": record.get("provenance"),
+        "prompt_estimate_tokens": 0,
+        "backend_output_ceiling": None,
+    }
 
 
 def snapshot(root: Path | None = None, clock=None) -> dict:

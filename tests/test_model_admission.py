@@ -7,9 +7,14 @@ from unittest.mock import patch
 
 from ecosystem.inference_capacity import resource_envelope
 from ecosystem.models import (
-    _get_backend, _observed_model_record, choose_route, realize, safe_routes,
-    snapshot, validate_route,
+    _get_backend, _observed_model_record, choose_route,
+    observe_opencode_backend_capacity, realize, safe_routes, snapshot,
+    validate_route,
 )
+from ecosystem.opencode_capacity import (
+    effective_inference_capacity, launch_fingerprint,
+)
+from ecosystem.opencode_client import qualified_opencode_capability
 
 
 GIB = 1024 ** 3
@@ -1395,6 +1400,174 @@ def test_get_backend_propagates_transport_error_and_closes():
         else:
             raise AssertionError("expected transport error to propagate")
         instance.close.assert_called_once()
+
+
+OBSERVATION_AT = 1000.0
+CAPABILITY_CATALOGUE = {
+    "versions": {
+        "1.18.30": {
+            "maximum_output_tokens": 32_000,
+            "qualified_at": "2026-09-10",
+            "evidence": "opencode --version probe;output ceiling verified",
+        },
+    },
+}
+
+
+def _shared_resident_inputs():
+    name = "qwen3.5-27b"
+    path = "/models/qwen3.5-27b.gguf"
+    item = {"id": name, "downloaded": True, "recipe": "llamacpp"}
+    resident = {
+        "model_name": name, "loaded": True, "backend_alive": True,
+        "pid": 4243, "backend_url": "http://127.0.0.1:13308/v1",
+        "launch_command": [
+            "/usr/bin/llama-server", "--model", path,
+            "--ctx-size", "262144", "--parallel", "8",
+            "--kv-unified", "--kv-unified-per-slot", "262144",
+        ],
+        "recipe_options": {"ctx_size": 262_144},
+        "parallel_sequences": 8,
+        "is_busy": False, "pinned": False,
+    }
+    backend_document = {"data": [{
+        "id": path,
+        "meta": {"n_params": 27_000_000_000, "size": 16 * GIB,
+                 "n_ctx": 262_144, "n_ctx_train": 262_144},
+    }]}
+    props = {"model_path": path, "total_slots": 8,
+             "chat_template_caps": {"supports_tools": True}}
+    return item, resident, backend_document, props
+
+
+def test_observe_opencode_backend_capacity_fixed_layout_projection():
+    item, resident, backend_document, props = observed_inputs()
+    launch = list(resident["launch_command"])
+    record = observe_opencode_backend_capacity(
+        item, resident, backend_document, props, OBSERVATION_AT)
+    assert record is not None
+    # Per-request context (32768) is asserted separately from the aggregate
+    # pool (65536) and the trained maximum (131072, used only to validate).
+    assert record == {
+        "selected_model_id": "Qwen3-Coder-30B-131K-GGUF",
+        "observed_model_id": "Qwen3-Coder-30B-131K-GGUF",
+        "backend_incarnation": {
+            "backend_url": "http://127.0.0.1:13306/v1",
+            "pid": 4242,
+            "launch_command": launch,
+            "launch_fingerprint": launch_fingerprint(launch),
+        },
+        "layout": {
+            "context_mode": "fixed",
+            "backend_context_tokens": 65_536,
+            "parallel_sequences": 2,
+            "context_tokens_per_sequence": 32_768,
+            "preallocated_context_tokens": 65_536,
+        },
+        "observed_at": OBSERVATION_AT,
+        "evidence": (
+            "http://127.0.0.1:13306/v1/models;"
+            "http://127.0.0.1:13306/props;"
+            "lemonade:/api/v1/health;observed-allocation-only"),
+        "prompt_estimate_tokens": 0,
+        "backend_output_ceiling": None,
+    }
+    layout = record["layout"]
+    assert layout["context_tokens_per_sequence"] == 32_768
+    assert layout["backend_context_tokens"] == 65_536
+    assert layout["context_tokens_per_sequence"] != 65_536
+
+
+def test_observe_opencode_backend_capacity_shared_layout_projection():
+    item, resident, backend_document, props = _shared_resident_inputs()
+    launch = list(resident["launch_command"])
+    record = observe_opencode_backend_capacity(
+        item, resident, backend_document, props, OBSERVATION_AT)
+    assert record is not None
+    assert record["selected_model_id"] == "qwen3.5-27b"
+    assert record["observed_model_id"] == "qwen3.5-27b"
+    assert record["backend_incarnation"]["backend_url"] == "http://127.0.0.1:13308/v1"
+    assert record["backend_incarnation"]["pid"] == 4243
+    assert record["backend_incarnation"]["launch_fingerprint"] == launch_fingerprint(launch)
+    # Shared: the per-request context equals the whole pool (262144), 8 sequences.
+    assert record["layout"] == {
+        "context_mode": "shared",
+        "backend_context_tokens": 262_144,
+        "parallel_sequences": 8,
+        "context_tokens_per_sequence": 262_144,
+        "preallocated_context_tokens": 262_144,
+    }
+    assert record["observed_at"] == OBSERVATION_AT
+    assert record["prompt_estimate_tokens"] == 0
+    assert record["backend_output_ceiling"] is None
+
+
+def test_observe_opencode_backend_capacity_is_bound_to_one_incarnation():
+    item, resident, backend_document, props = observed_inputs()
+    record = observe_opencode_backend_capacity(
+        item, resident, backend_document, props, OBSERVATION_AT)
+    assert record is not None
+    # The observation carries exactly the constructor's keys and no more.
+    assert set(record) == {
+        "selected_model_id", "observed_model_id", "backend_incarnation",
+        "layout", "observed_at", "evidence",
+        "prompt_estimate_tokens", "backend_output_ceiling",
+    }
+    assert set(record["backend_incarnation"]) == {
+        "backend_url", "pid", "launch_command", "launch_fingerprint"}
+    # A different launch command binds a different fingerprint.
+    other = list(resident["launch_command"])
+    other[-1] = "3"
+    assert launch_fingerprint(other) != record["backend_incarnation"]["launch_fingerprint"]
+
+
+def test_observe_opencode_backend_capacity_fails_closed_on_contradiction():
+    item, resident, backend_document, props = observed_inputs()
+    for label, broken in (
+        ("loaded False", dict(resident, loaded=False)),
+        ("backend_alive False", dict(resident, backend_alive=False)),
+        ("model_name mismatch", dict(resident, model_name="other")),
+        ("pid zero", dict(resident, pid=0)),
+        ("missing pid", {k: v for k, v in resident.items() if k != "pid"}),
+    ):
+        record = observe_opencode_backend_capacity(
+            item, broken, backend_document, props, OBSERVATION_AT)
+        assert record is None, f"{label}: expected None, got {record!r}"
+    for label, broken_props in (
+        ("total_slots contradicts launch", dict(props, total_slots=3)),
+        ("model_path mismatch", dict(props, model_path="/models/other.gguf")),
+    ):
+        record = observe_opencode_backend_capacity(
+            item, resident, backend_document, broken_props, OBSERVATION_AT)
+        assert record is None, f"{label}: expected None, got {record!r}"
+    for label, broken_resident in (
+        ("ctx_size contradicts launch",
+         dict(resident, recipe_options={"ctx_size": 65_535})),
+        ("non-dict resident", "not-a-dict"),
+    ):
+        record = observe_opencode_backend_capacity(
+            item, broken_resident, backend_document, props, OBSERVATION_AT)
+        assert record is None, f"{label}: expected None, got {record!r}"
+
+
+def test_observe_opencode_backend_capacity_feeds_the_pure_constructor():
+    item, resident, backend_document, props = observed_inputs()
+    observation = observe_opencode_backend_capacity(
+        item, resident, backend_document, props, OBSERVATION_AT)
+    assert observation is not None
+    # The launcher supplies the request's prompt estimate; the adapter has none.
+    observation = dict(observation, prompt_estimate_tokens=2_000)
+    client = qualified_opencode_capability("1.18.30\n", CAPABILITY_CATALOGUE)
+    policy = {"output_reserve_tokens": 30_000, "rollover_fraction": 0.75,
+              "max_age_seconds": 300}
+    record = effective_inference_capacity(observation, client, policy, 1_050.0)
+    assert record["model_id"] == "Qwen3-Coder-30B-131K-GGUF"
+    assert record["effective_context_tokens"] == 32_768
+    assert record["effective_output_tokens"] == 30_000
+    assert record["opencode_version"] == "1.18.30"
+    assert record["prompt_estimate_tokens"] == 2_000
+    assert record["backend_incarnation"]["launch_fingerprint"] == \
+        record["backend_incarnation"]["launch_fingerprint"]
 
 
 def load_tests(_loader, _tests, _pattern):
