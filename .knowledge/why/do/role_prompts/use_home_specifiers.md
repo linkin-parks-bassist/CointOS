@@ -1,5 +1,5 @@
 ---
-verified_at: '2026-09-11T20:35:21+10:00'
+verified_at: '2026-09-11T21:04:42+10:00'
 verified_by: opencode
 scope: project local
 source: roles/*.md; tests/test_role_path_portability.py; David task instruction 2026-09-11
@@ -21,3 +21,7 @@ different checkout or home layout.
 `/home/david/` path reappears in `roles/*.md` and checks the portable spelling
 stays in the six roles that reference helper scripts. Keep new role-prompt script
 references in the `~/` spelling so the test keeps them honest.
+
+The same convention extends to Python-generated task instructions in
+`ecosystem/*.py`; see
+[`../agent_facing_strings/use_home_specifiers.md`](../agent_facing_strings/use_home_specifiers.md).

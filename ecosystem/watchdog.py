@@ -97,8 +97,8 @@ Selected Steward assignment (`{task_id}`):
 
 {task_card}
 
-Work from `/home/david/agent-ecosystem`. Read the last 30 conversational entries
-in `/home/david/agent-ecosystem/state/conversations` without copying secrets into
+Work from `~/agent-ecosystem`. Read the last 30 conversational entries
+in `~/agent-ecosystem/state/conversations` without copying secrets into
 durable notes. Review recent audit events, failed/running jobs, executor output
 tails, model choices and rationales, systemd user-service state, and
 the project knowledge tree's current-priority and runtime-truth leaves.

@@ -955,7 +955,7 @@ chatbot state. Do not load a larger model during this incident.
 
 When and only when recovery is safe, run:
 
-`/home/david/agent-ecosystem/scripts/resource-control recover`
+`~/agent-ecosystem/scripts/resource-control recover`
 
 That transition validates your `AGENT_JOB_ID` and the live health gate. If it
 refuses, keep dispatch halted and report the exact blocker. Write the incident
