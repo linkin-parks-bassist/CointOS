@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-11T15:03:56+10:00'
+verified_at: '2026-09-11T15:46:24+10:00'
 verified_by: codex /root
 scope: project local
-source: 'git show HEAD:AGENTS.md; docs/status.md; agent_notes/README.md; David clarification 2026-09-11'
-verification: Compared the quarantined repository instructions with the current status and agent-note policy.
+source: 'git show 8edeadd^:AGENTS.md; docs/status.md; agent_notes/README.md; David policy clarifications 2026-09-11; ~/.knowledge/how/to/use/git/for/agent_work.md'
+verification: Compared quarantined repository guidance with current status and agent-note policy; applied David's explicit non-work Git-policy reversal.
 review_when: Recheck when repository policy, activation authority, or project scope changes.
 ---
 
@@ -19,5 +19,8 @@ hidden mutable object state. Scope every run to one deliverable with bounded
 evidence, authority, resources, and a stopping condition; record adjacent findings
 as follow-ups.
 
-Never enable remote access, install credentials, program hardware, push code,
-enable services, or activate runtime changes without David's explicit approval.
+Never enable remote access, install credentials, program hardware, enable services,
+or activate runtime changes without David's explicit approval. This is a personal,
+non-work repository, so ordinary topic-branch pushes to its verified configured
+personal remote are allowed under the global Git policy; merging and force-pushing
+are not implied.
