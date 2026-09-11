@@ -8,6 +8,7 @@ CPUWeight=10
 IOWeight=10
 IOSchedulingClass=idle
 WorkingDirectory=%h/agent-ecosystem
+Environment=COINTOS_RUNTIME_ROOT=/home/david/.CointOS
 ExecStart=%h/agent-ecosystem/scripts/watchdog
 NoNewPrivileges=true
 PrivateTmp=true
