@@ -15,6 +15,9 @@ session/attach command. Closing or losing a viewer must not stop or restart its
 worker. Keep listeners loopback-only and ephemeral.
 
 Dispatch only 1–3 genuinely independent, bounded jobs by default; eight slots are
-capacity, not a utilization target. Read `docs/operations/local-worker-view.md`
+capacity, not a utilization target. Bound jobs by a small deliverable, exact write
+scope, necessary evidence, authority, and task-derived stopping conditions. Never
+give local agents elapsed-time limits or arbitrary time budgets; reduce scope
+instead. Read `docs/operations/local-worker-view.md`
 before dispatch because driver/AFK window handling and the bounded reusable monitor
 pool are operational policy, not general desktop-presence inference.
