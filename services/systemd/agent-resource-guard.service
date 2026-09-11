@@ -7,7 +7,7 @@ Wants=network-online.target
 Slice=control.slice
 ExecStart=%h/agent-ecosystem/scripts/resource-control run
 WorkingDirectory=%h/agent-ecosystem
-Environment=COINTOS_RUNTIME_ROOT=/home/david/.CointOS
+Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
 Restart=always
 RestartSec=1
 CPUWeight=1000

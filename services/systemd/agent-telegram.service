@@ -8,7 +8,7 @@ ExecStart=%h/agent-ecosystem/scripts/telegram-gateway
 WorkingDirectory=%h/agent-ecosystem
 EnvironmentFile=%h/.config/agent-ecosystem/telegram.env
 Environment=AGENT_TELEGRAM_FIRST_RESPONSE_MODEL=Qwen3.5-4B-GGUF
-Environment=COINTOS_RUNTIME_ROOT=/home/david/.CointOS
+Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
 Restart=on-failure
 RestartSec=5
 CPUWeight=1000
