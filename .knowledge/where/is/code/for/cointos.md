@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-12T02:10:00+10:00'
+verified_at: '2026-09-12T09:42:22+10:00'
 verified_by: opencode /home/david
 scope: project local
-source: current repository paths; pre-99318d9 Git history; ecosystem/inference_proxy.py opencode_environment
-verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping; confirmed the observation-adapter and config-encoder owner functions in source.
+source: current repository paths; pre-99318d9 Git history; ecosystem/inference_proxy.py opencode_environment; ecosystem/executor.py launch_runner_round capacity preflight; ecosystem/inference_capacity.py validate_launch_capacity; config/opencode-capacity.json
+verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping; confirmed the observation-adapter, config-encoder, and pre-spawn validation owner functions in source.
 review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
 ---
 
@@ -30,6 +30,15 @@ Start at the narrow owner for the concern; do not read all modules.
   `ecosystem/inference_proxy.py` `opencode_environment`, base catalogue
   `config/executor-opencode.json` (names only, no limits), tests
   `tests/test_inference_enforcement.py`.
+- Final pre-spawn managed-launch capacity validation (derives the effective record
+  for the routed model and fails the job back to `ready` on any disagreement, no
+  spawn or inference request): `ecosystem/executor.py` `launch_runner_round`
+  `capacity_preflight` phase + `_validate_worker_capacity` (mockable
+  `observe_capacity`/`qualify_capability`/`capacity_policy` producers with
+  fail-closed defaults), the pure lease-vs-record check
+  `ecosystem/inference_capacity.py` `validate_launch_capacity`, checked-in policy
+  `config/opencode-capacity.json`, tests `tests/test_executor.py` and
+  `tests/test_inference_capacity.py`.
 - Physical inference admission and proxying: `ecosystem/inference_capacity.py`,
   `ecosystem/inference_proxy.py`, `ecosystem/inference.py`.
 - Host/resource and worker ownership: `ecosystem/resource_control.py`,

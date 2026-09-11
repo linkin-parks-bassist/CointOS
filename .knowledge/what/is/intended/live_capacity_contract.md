@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-12T02:10:00+10:00'
+verified_at: '2026-09-12T09:42:22+10:00'
 verified_by: opencode /home/david
 scope: project local
-source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; ecosystem/opencode_client.py; config/opencode-capabilities.json; ecosystem/models.py observe_opencode_backend_capacity; ecosystem/inference_proxy.py opencode_environment
-verification: Distilled the accepted contract and immediate implementation seam; the pure record, version-qualified capability, observation adapter, and ephemeral config encoder seams are implemented and test-verified, no activation claimed.
+source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; ecosystem/opencode_client.py; config/opencode-capabilities.json; ecosystem/models.py observe_opencode_backend_capacity; ecosystem/inference_proxy.py opencode_environment; ecosystem/executor.py launch_runner_round capacity preflight; ecosystem/inference_capacity.py validate_launch_capacity; config/opencode-capacity.json
+verification: Distilled the accepted contract and implementation seams; the pure record, version-qualified capability, observation adapter, ephemeral config encoder, and pre-spawn managed-launch validation are implemented and test-verified (focused suites pass; full suite 747 tests shows the same 19 pre-existing failures as the tree without the new files), no activation claimed.
 review_when: Recheck after each accepted live-capacity implementation stage.
 ---
 
@@ -35,8 +35,21 @@ model's static `limit` from the base catalogue so capacity claims cannot escape,
 and writes only the selected model's `opencode_context_tokens` /
 `opencode_output_tokens`; the base catalogue `config/executor-opencode.json` now
 carries names and non-capacity options only, and independent lease values are
-rejected. The next seam is validating managed launches against live capacity at the
-final pre-spawn boundary (no child process or inference request on disagreement).
+rejected. The final pre-spawn validation seam is implemented in
+`ecosystem/executor.py` `launch_runner_round`: a `capacity_preflight` phase runs
+before `r1_acquire_intent` and, through three mockable producers
+(`observe_capacity`, `qualify_capability`, `capacity_policy`, each with a
+fail-closed default), derives the one effective record for the routed model and
+checks the admitted lease against it via
+`ecosystem/inference_capacity.py` `validate_launch_capacity` (lease model,
+context, and output must fit the live record); the checked-in policy lives in
+`config/opencode-capacity.json` (output reserve, rollover fraction, freshness
+window). Any stale observation, changed incarnation, model mismatch, lease context
+above the live cap, or lease output above the qualified ceiling raises, the job is
+returned to `ready` with a `runner_deferred_reasons` entry, and no child process or
+inference request is started; `opencode_environment` then consumes the validated
+record. The next independently verified stage is wrapper integration and
+activation.
 Do not begin by editing user OpenCode configuration, replacing the executable
 symlink, restarting services, or changing live model allocation.
 Wrapper integration and activation are later independently verified stages.
