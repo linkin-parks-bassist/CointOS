@@ -19,9 +19,15 @@ material), explicit contracts, and recovery-friendly changes.
 ## Scope, decomposition, and delegation
 
 Scope is a resource and authority boundary, not merely a prompt suggestion. Every
-run has one explicit deliverable, a necessary-evidence boundary, authority, a
-time/resource budget, acceptance criteria, and a stopping condition. Continuing to
-inspect merely relevant material after enough evidence exists is a malfunction.
+run has one explicit deliverable, a necessary-evidence boundary, authority,
+resource limits where relevant, acceptance criteria, and a stopping condition.
+Continuing to inspect merely relevant material after enough evidence exists is a
+malfunction.
+
+Do not give local agents elapsed-time limits, deadlines, or countdowns. Make their
+deliverables smaller and their file/interface/evidence boundaries sharper instead.
+Host-level safety mechanisms may still terminate unhealthy or abandoned processes;
+that is lifecycle protection, not a task-completion clock.
 
 Test every substantial request for decomposition before execution. Split independent
 concerns into the smallest meaningful, independently verifiable tasks and delegate
@@ -30,9 +36,10 @@ coordinator task; the coordinator must not redo each child's work. Do not create
 ceremonial subtasks, recursive delegation loops, or swarms for atomic operations.
 Adjacent discoveries become prioritized follow-ups rather than implicit expansion.
 
-Budgets must become scheduler facts. Prompts may explain them, but the control plane
-and executor must enforce wall-time, attempt, item, output, and concurrency limits,
-request a compact checkpoint or handoff at the boundary, and make overruns visible.
+Resource limits must become scheduler facts. Prompts may explain them, but the
+control plane and executor must enforce attempt, item, output, context, and
+concurrency limits, request a compact checkpoint or handoff at the boundary, and
+make overruns visible. Do not convert scope control into arbitrary agent wall-time.
 
 ## No object-oriented programming
 

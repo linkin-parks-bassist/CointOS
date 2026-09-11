@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-11T15:03:56+10:00'
+verified_at: '2026-09-11T15:47:00+10:00'
 verified_by: codex /root
 scope: project local
-source: 'git show HEAD:AGENTS.md; docs/operations/local-worker-view.md; agent_notes/0022-aster-packet-audit-and-timeout.md'
-verification: Checked the quarantined launch policy against the current operational guide and latest dispatch preference.
+source: 'git show 8edeadd^:AGENTS.md; docs/operations/local-worker-view.md; agent_notes/0022-aster-packet-audit-and-timeout.md; local-opencode-capacity-canonical-test JSONL 2026-09-11'
+verification: Checked launch policy and dispatch preference; observed a narrowly briefed worker broaden into a 100-result plan search and consume about 39k context without producing its one-file deliverable.
 review_when: Recheck when the admission gate, observable launcher, viewer pool, or concurrency policy changes.
 ---
 
@@ -21,3 +21,9 @@ give local agents elapsed-time limits or arbitrary time budgets; reduce scope
 instead. Read `docs/operations/local-worker-view.md`
 before dispatch because driver/AFK window handling and the bounded reusable monitor
 pool are operational policy, not general desktop-presence inference.
+
+Orient with the smallest relevant `.knowledge` leaves and exact source excerpts.
+Do not point a small worker at an entire large plan or ask it to rediscover field
+names across the plan corpus. A forbidden broad glob is still possible under
+`--auto`; monitor actual tool use and stop on demonstrated scope expansion. That
+stopping condition is tied to authority/scope, not elapsed time.
