@@ -6,11 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = ROOT / "config" / "workspaces.json"
 KNOWLEDGE = str(ROOT / ".knowledge")
-PRESERVED_READ_PATHS = (
+EXPECTED_READ_PATHS = (
+    KNOWLEDGE,
     str(ROOT / "ecosystem"),
     str(ROOT / "roles"),
     str(ROOT / "tests"),
 )
+EXPECTED_WRITE_PATHS = (KNOWLEDGE,)
 
 
 def _cointos_entry():
@@ -41,18 +43,16 @@ def test_cointos_ambient_read_paths_match_current_tree():
     entry = _cointos_entry()
     read_paths = entry["ambient_read_paths"]
     _assert_ambient_paths(entry, read_paths, "read")
-    assert KNOWLEDGE in read_paths, "ambient reads do not include .knowledge"
-    for path in PRESERVED_READ_PATHS:
-        assert path in read_paths, f"ambient reads lost the {path} read path"
+    assert read_paths == list(EXPECTED_READ_PATHS), (
+        f"unexpected cointos ambient read paths: {read_paths}")
 
 
 def test_cointos_ambient_write_paths_match_current_tree():
     entry = _cointos_entry()
     write_paths = entry["ambient_write_paths"]
     _assert_ambient_paths(entry, write_paths, "write")
-    assert KNOWLEDGE in write_paths, "ambient writes do not include .knowledge"
-    assert str(ROOT / "agent_notes") not in write_paths, \
-        "deprecated agent_notes is still an ambient write path"
+    assert write_paths == list(EXPECTED_WRITE_PATHS), (
+        f"unexpected cointos ambient write paths: {write_paths}")
 
 
 def load_tests(_loader, _tests, _pattern):

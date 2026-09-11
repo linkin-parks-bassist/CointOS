@@ -45,18 +45,8 @@
       "mode": "active",
       "ambient_read_paths": [
         "/home/david/agent-ecosystem/.knowledge",
-        "/home/david/agent-ecosystem/config",
         "/home/david/agent-ecosystem/ecosystem",
-        "/home/david/agent-ecosystem/examples",
-        "/home/david/agent-ecosystem/inbox",
-        "/home/david/agent-ecosystem/infrastructure",
-        "/home/david/agent-ecosystem/projects",
         "/home/david/agent-ecosystem/roles",
-        "/home/david/agent-ecosystem/scripts",
-        "/home/david/agent-ecosystem/services",
-        "/home/david/agent-ecosystem/state",
-        "/home/david/agent-ecosystem/steward-tasks",
-        "/home/david/agent-ecosystem/survival",
         "/home/david/agent-ecosystem/tests"
       ],
       "ambient_write_paths": [
