@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-11T15:40:39+10:00'
-verified_by: codex /root
+verified_at: '2026-09-12T01:52:04+10:00'
+verified_by: opencode /home/david
 scope: project local
-source: current repository paths; pre-99318d9 Git history
-verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping.
+source: current repository paths; pre-99318d9 Git history; ecosystem/models.py observe_opencode_backend_capacity
+verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping; confirmed the observation-adapter owner function in source.
 review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
 ---
 
@@ -20,6 +20,11 @@ Start at the narrow owner for the concern; do not read all modules.
 - Version-qualified OpenCode capability (exact version -> observed output
   ceiling, checked-in catalogue): `ecosystem/opencode_client.py`,
   `config/opencode-capabilities.json`, tests `tests/test_opencode_client.py`.
+- Fresh backend-capacity observation adapter (incarnation-bound projection of one
+  verified resident observation into the capacity constructor's record):
+  `ecosystem/models.py` `observe_opencode_backend_capacity` (reuses
+  `_observed_model_record` and `context_layout.observed_context_layout`), tests
+  `tests/test_model_admission.py` and `tests/test_context_layout.py`.
 - Physical inference admission and proxying: `ecosystem/inference_capacity.py`,
   `ecosystem/inference_proxy.py`, `ecosystem/inference.py`.
 - Host/resource and worker ownership: `ecosystem/resource_control.py`,

@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-11T23:40:30+10:00'
+verified_at: '2026-09-12T01:52:04+10:00'
 verified_by: opencode /home/david
 scope: project local
-source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; ecosystem/opencode_client.py; config/opencode-capabilities.json
-verification: Distilled the accepted contract and immediate implementation seam; the pure record and the version-qualified capability seams are implemented and test-verified, no activation claimed.
+source: pre-99318d9 Git history; ecosystem/opencode_capacity.py; ecosystem/opencode_client.py; config/opencode-capabilities.json; ecosystem/models.py observe_opencode_backend_capacity
+verification: Distilled the accepted contract and immediate implementation seam; the pure record, the version-qualified capability, and the incarnation-bound observation adapter seams are implemented and test-verified, no activation claimed.
 review_when: Recheck after each accepted live-capacity implementation stage.
 ---
 
@@ -21,9 +21,15 @@ smallest of the qualified client ceiling, any observed backend output ceiling, a
 the policy reserve, and the effective context is the observed per-sequence cap
 verbatim. The version-qualified capability seam is implemented in
 `ecosystem/opencode_client.py` against `config/opencode-capabilities.json`
-(1.18.30 -> 32000); an unknown version has no default and closes launch. The next
-seam is the fresh backend-capacity observation adapter in the current observation
-owners. Do not begin by editing user OpenCode configuration, replacing the
-executable symlink, restarting services, or changing live model allocation.
-Observation, anonymous per-launch config construction, wrapper integration, and
-activation are later independently verified stages.
+(1.18.30 -> 32000); an unknown version has no default and closes launch. The
+fresh backend-capacity observation adapter is implemented in `ecosystem/models.py`
+(`observe_opencode_backend_capacity`), a pure incarnation-bound projection of one
+verified resident observation (reusing `_observed_model_record` and
+`context_layout.observed_context_layout`) into the constructor's record: the
+per-request context, aggregate pool, and mode come verbatim from the layout, the
+backend reports no output ceiling, the prompt estimate is zero until the launcher
+supplies it, and contradictions return explicit absence (None). The next seam is
+the one ephemeral OpenCode configuration encoder. Do not begin by editing user
+OpenCode configuration, replacing the executable symlink, restarting services, or
+changing live model allocation.
+Wrapper integration and activation are later independently verified stages.
