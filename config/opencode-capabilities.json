@@ -1,0 +1,9 @@
+{
+  "versions": {
+    "1.18.30": {
+      "maximum_output_tokens": 32000,
+      "qualified_at": "2026-09-10",
+      "evidence": "/home/david/.opencode/bin/opencode --version; commissioning request-capture probe against the loopback Lemonade backend observed the installed client enforcing its 32000-token output ceiling"
+    }
+  }
+}
