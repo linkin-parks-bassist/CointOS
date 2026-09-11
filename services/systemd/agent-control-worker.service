@@ -20,7 +20,7 @@ ManagedOOMPreference=avoid
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=%h/agent-ecosystem %h/.CointOS
+ReadWritePaths=%h/.CointOS
 
 [Install]
 WantedBy=default.target

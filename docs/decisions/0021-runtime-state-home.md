@@ -5,12 +5,11 @@ Date: 2026-09-11
 ## Decision
 
 Store the populated CointOS runtime trees at `/home/david/.CointOS/state` and
-`/home/david/.CointOS/logs`. Keep `state` and `logs` in the source checkout as
-compatibility symlinks so existing code, durable relative artifact paths, and
-operator commands continue to work without rewriting historical records.
+`/home/david/.CointOS/logs`. Do not keep compatibility symlinks or other runtime
+path shims in the source checkout. Code and operator interfaces must distinguish
+the immutable source root from the mutable runtime root explicitly.
 
-Systemd path watches name the physical state path directly. Sandboxed user units
-allow writes to both the source checkout and `%h/.CointOS`. New runtime data must
+Systemd path watches name the physical state path directly. New runtime data must
 not be accumulated in a Git checkout.
 
 `inbox/` and `projects/` remain repository directories for now because they contain
@@ -19,14 +18,15 @@ location before either begins retaining live data.
 
 ## Migration
 
-Writers and watchers were stopped before moving the trees, then restarted after
-the links and installed unit changes were in place. Existing JSONL was moved
-byte-for-byte and not rewritten. The transient inference proxy was recreated after
-the cutover.
+Writers and watchers were stopped before moving the trees. Existing JSONL was
+moved byte-for-byte and not rewritten. A temporary compatibility-link cutover was
+rejected and removed at David's direction. Services remain stopped until their
+runtime paths are explicitly refactored to use `~/.CointOS`.
 
 ## Consequences
 
 - Branch switches and checkout cleanup no longer put the live state or logs at risk.
-- Repo-relative interfaces remain compatible during a later explicit path refactor.
-- Removing either compatibility symlink does not remove its target, but operators
-  must resolve the link before backup, migration, or deletion work.
+- Repo-relative runtime interfaces are intentionally broken rather than retained as
+  permanent compatibility cruft.
+- The next implementation step is an explicit source-root/runtime-root split,
+  including durable artifact-path semantics and tests, before services restart.

@@ -12,4 +12,4 @@ ExecStart=%h/agent-ecosystem/scripts/watchdog
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=%h/agent-ecosystem %h/.CointOS
+ReadWritePaths=%h/.CointOS
