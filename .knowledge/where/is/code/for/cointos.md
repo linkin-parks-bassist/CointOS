@@ -1,9 +1,9 @@
 ---
-verified_at: '2026-09-12T01:52:04+10:00'
+verified_at: '2026-09-12T02:10:00+10:00'
 verified_by: opencode /home/david
 scope: project local
-source: current repository paths; pre-99318d9 Git history; ecosystem/models.py observe_opencode_backend_capacity
-verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping; confirmed the observation-adapter owner function in source.
+source: current repository paths; pre-99318d9 Git history; ecosystem/inference_proxy.py opencode_environment
+verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping; confirmed the observation-adapter and config-encoder owner functions in source.
 review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
 ---
 
@@ -25,6 +25,11 @@ Start at the narrow owner for the concern; do not read all modules.
   `ecosystem/models.py` `observe_opencode_backend_capacity` (reuses
   `_observed_model_record` and `context_layout.observed_context_layout`), tests
   `tests/test_model_admission.py` and `tests/test_context_layout.py`.
+- One ephemeral OpenCode configuration encoder (writes the validated effective
+  record's limits to an anonymous memfd, stripping static capacity claims):
+  `ecosystem/inference_proxy.py` `opencode_environment`, base catalogue
+  `config/executor-opencode.json` (names only, no limits), tests
+  `tests/test_inference_enforcement.py`.
 - Physical inference admission and proxying: `ecosystem/inference_capacity.py`,
   `ecosystem/inference_proxy.py`, `ecosystem/inference.py`.
 - Host/resource and worker ownership: `ecosystem/resource_control.py`,
