@@ -42,3 +42,42 @@ proxy restart after safe drain; no full CointOS reboot is justified by these pac
 
 References: https://github.com/lemonade-sdk/lemonade/blob/main/docs/guide/configuration/README.md
 and https://github.com/lemonade-sdk/lemonade/blob/main/docs/dev/getting-started.md
+
+## Updated dispatch preference and AFK handoff
+
+David subsequently requested concurrency based on genuinely independent concerns,
+usually 1–3 local Qwens, rather than filling eight slots for utilization's sake.
+This supersedes the earlier maximize-parallel-Qwen dispatch preference; eight is
+capacity, not a target. Leave the current batch undisturbed and apply the preference
+to subsequent dispatches. Comprehensive personally checked fresh orientation briefs
+are required; the quarantined repository guidance is indexed under `.knowledge/`.
+
+David is heading out and requested a one-hour wait, then artifact inspection and
+next bounded dispatches. Aster began the wait around 07:42 UTC on 2026-09-08;
+review is due around 08:42 UTC (18:42 Sydney). Use the existing approved reusable
+AFK monitor pool, not additional ad-hoc windows. Audit actual patches and outcomes
+before acceptance; do not infer success from worker exit alone.
+
+One-hour inspection completed around 08:43 UTC: all eight job records still say
+running; all eight worktrees remain clean at 4eb0486, with no implementation
+commits. Their JSONL tails contain tool reads/intermediate steps, not final
+deliverables; OpenCode server/client processes remain present. No completed packet
+was available to accept. No new dispatch or proxy restart was performed: adding
+workers would contradict the requested reduction in concurrency. Let this batch
+drain, then prioritize terminal-error exit propagation and parent reservation
+locking, with independent tests/review before integration. The current batch's
+continued orientation and 30–52k-token reported contexts reinforce the need for
+the newly required fresh briefs and smaller concurrency; these observations alone
+do not measure GPU bottleneck attribution or prove active-work budget compliance.
+
+Subsequent completion: local-contact-projection-review2 emitted a final report and
+step_finish reason=stop, with its worktree unchanged. Aster independently reran
+tests.test_conversation_projection and tests.test_conversation: 6/6 pass. Confirmed
+conversation._projected_row stamps sender=user_id on assistant rows as well as
+user rows; existing test checks sender only for the user row. Record a bounded
+follow-up to settle the sender contract and add assistant-row coverage before
+changing its representation; the reviewer's suggested None is not an accepted
+identity design. Its separate lifecycle-linkage concern remains unproven, not
+waived because a test pins current behavior. At inspection the durable job still
+said running despite the final packet, so semantic completion is established but
+lease/process cleanup has not been verified. No replacement worker dispatched.
