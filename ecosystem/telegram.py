@@ -49,6 +49,23 @@ object with keys `response` (a brief string or null) and `deep_required` (boolea
 Use deep_required=true for requested action, live facts, consequential uncertainty,
 or sustained reasoning. Do not include markdown or any other keys."""
 
+FRONT_TOOLS = [{
+    "type": "function",
+    "function": {
+        "name": "route_front_turn",
+        "description": "Return the optional immediate reply and whether deep work is required.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "response": {"type": ["string", "null"]},
+                "deep_required": {"type": "boolean"},
+            },
+            "required": ["response", "deep_required"],
+            "additionalProperties": False,
+        },
+    },
+}]
+
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -68,20 +85,38 @@ def generate_front_decision(history: list[dict[str, str]], infer: Callable[..., 
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_FIRST_RESPONSE_MODEL", "Qwen3.5-4B-GGUF"))
     messages = [{"role": "system", "content": FAST_SYSTEM}, *history[-6:]]
     assistant = (infer(model=model, messages=messages, max_tokens=96,
-                       timeout=20, temperature=0.45)
+                       timeout=20, temperature=0.45, tools=FRONT_TOOLS)
                  if infer is not None else (
                      inference_request({**inference_context, "messages": messages,
-                                        "timeout": 20, "temperature": 0.45}, cli.ROOT, time.monotonic)
+                                        "timeout": 20, "temperature": 0.45,
+                                        "tools": FRONT_TOOLS, "tool_choice": "auto"},
+                                       cli.ROOT, time.monotonic)
                      if inference_context is not None else
                      managed_request(model, messages, 96, timeout=20, temperature=.45,
-                                     root=cli.ROOT, control=True)))
+                                     root=cli.ROOT, control=True, tools=FRONT_TOOLS)))
     raw = assistant.get("content")
-    if not isinstance(raw, str):
+    calls = assistant.get("tool_calls") or []
+    decision = None
+    for call in calls:
+        function = call.get("function", {}) if isinstance(call, dict) else {}
+        if function.get("name") != "route_front_turn":
+            continue
+        try:
+            decision = json.loads(function.get("arguments") or "{}")
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"fast model returned invalid routing tool arguments: {error}") from error
+        break
+    if decision is None and isinstance(raw, str):
+        try:
+            decision = json.loads(raw)
+        except json.JSONDecodeError:
+            # A visible answer is still useful. Route conservatively to deep work
+            # when the model does not honor the structured decision contract.
+            response = sanitize_notification(raw)
+            if response:
+                return {"response": response, "deep_required": True}
+    if decision is None:
         raise RuntimeError("fast model returned no routing decision")
-    try:
-        decision = json.loads(raw)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"fast model returned invalid routing JSON: {error}") from error
     if not isinstance(decision, dict) or set(decision) != {"response", "deep_required"}:
         raise RuntimeError("fast model returned an invalid routing decision")
     if not isinstance(decision["deep_required"], bool):

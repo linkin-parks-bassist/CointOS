@@ -1,9 +1,9 @@
 ---
 scope: project local
-source: "David dispatch-barrier policy correction and implemented OpenCode version behavior 2026-09-15"
+source: "David dispatch-barrier policy correction 2026-09-15 and front-reservation clarification implemented 2026-09-16"
 review_when: Recheck when scheduling architecture changes or an implementation is accepted.
 status: "unverified"
-updated_at: "2026-09-15T22:09:32+10:00"
+updated_at: "2026-09-16T11:30:39+10:00"
 ---
 
 CointOS schedules durable logical agents over finite physical GPU execution slots while treating this host's verified 128 GB-class unified-memory capacity as abundant, as specified by `what/is/the/local/strix/halo/resource/policy.md`. Agent identity, context capacity, backend request, physical slot,
@@ -25,6 +25,8 @@ David restoration priority 2026-09-14: first recover useful bounded live paralle
 David clarification 2026-09-14: inference acquisition must be automatic and easy. Reject a request only when it is suspicious/unauthorized, or when actual physical resources cannot satisfy it after applying priority and reclaiming lower-priority allocations. Ordinary contention produces waiting or suspension, not a terminal denial.
 
 Priority order is sole survivor, Cointelprofessional, user agent sessions, then background work under the existing health/fairness bands. These first three classes should practically never be denied service due to lower-priority blockers: suspend those blockers, preserve their durable tasks/sessions and resume them later. Do not kill their logical work or discard recovery state. Equal/higher-priority contention waits according to policy; no scheduler can promise simultaneous service beyond physical capacity.
+
+Reserved capacity is a guaranteed minimum for its protected class, not a maximum. Cointelprofessional should prefer its reserved front sequences and may use any otherwise-idle general sequence. Lower-priority work cannot consume the reserved minimum; an idle nonreserved sequence must not be withheld from a ready high-priority front request.
 
 Identity and priority come from the authenticated/trusted launch or control boundary, not a caller's self-declared role string. Internal allocation records and credentials remain bookkeeping the system obtains, renews and cleans up; operators and agents do not manually negotiate leases. Missing internal paperwork, stale observations or an unfamiliar client version are repair work for CointOS, not evidence that a benign request is suspicious. Package-version identity never gates dispatch; optional measured client ceilings refine live backend and configured output bounds in the background. Queue while genuinely necessary facts refresh, preserve the request, and wake it automatically. Never invent capacity or silently reduce promised context.
 

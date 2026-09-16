@@ -386,7 +386,13 @@ def reserve_sequence(
                     else _lease_id(validated["request_id"], state["generation"]))
         workload_class = validated["workload_class"]
         if workload_class == "front":
-            available = _available_sequences(active, 0, capacity_policy["front_sequences"])
+            # Front sequences are a guaranteed reserve, not a ceiling. Prefer the
+            # reserve, then spill into any idle general sequence.
+            available = (
+                _available_sequences(active, 0, capacity_policy["front_sequences"])
+                + _available_sequences(active, capacity_policy["front_sequences"],
+                                       capacity_policy["total_sequences"])
+            )
         else:
             available = _available_sequences(
                 active, capacity_policy["front_sequences"],
@@ -398,7 +404,7 @@ def reserve_sequence(
         if sequence is None:
             victims = [
                 lease for lease in active
-                if (lease["workload_class"] == "front") == (workload_class == "front")
+                if (workload_class == "front" or lease["workload_class"] != "front")
                 and _lease_priority(scheduling_policy, lease, now) < priority
                 and lease["state"] not in {"preemption_requested", "release_requested"}
             ]
@@ -890,7 +896,7 @@ def _model_slot_limit(workload_class: str, capacity_policy: dict,
                       route: dict, work_slots: int) -> int:
     observed = route["parallel_sequences"]
     if workload_class == "front":
-        return min(capacity_policy["front_sequences"], observed)
+        return observed
     return min(work_slots, observed)
 
 

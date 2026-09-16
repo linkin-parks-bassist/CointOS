@@ -375,6 +375,26 @@ def test_work_cannot_consume_reserved_front_sequence():
         assert deferred == {"state": "deferred", "reasons": ["gtt_total_bytes"]}
 
 
+def test_front_reserve_is_a_minimum_and_can_spill_into_idle_work_sequence():
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        write_root(root)
+        first = reserve(
+            root,
+            sequence_request("front-one", "coin", "front", "proxy:coin-front"),
+            inventory(), lambda: 10.0,
+        )
+        second = reserve(
+            root,
+            sequence_request("front-two", "coin", "front", "proxy:coin-front"),
+            inventory(), lambda: 11.0,
+        )
+        assert first["state"] == "starting"
+        assert first["backend_sequence"] == 0
+        assert second["state"] == "starting"
+        assert second["backend_sequence"] == 1
+
+
 def test_realized_context_maps_per_sequence_to_backend_total():
     realized = realize_context_tokens(route(), 2)
     assert realized["context_tokens"] == 32_768

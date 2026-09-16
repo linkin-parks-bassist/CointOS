@@ -2,8 +2,8 @@
 status: "unverified"
 created_at: "2026-09-16T10:35:57+10:00"
 scope: "project local"
-source: "ecosystem/telegram.py, control_turns.py, control_agent.py, control_runtime.py and service definition inspected and changed 2026-09-16; 793 source tests and direct managed Qwen3.5 decision probe"
-updated_at: "2026-09-16T11:18:41+10:00"
+source: "ecosystem/telegram.py, control_turns.py, inference_capacity.py and live Qwen3.5 probes inspected 2026-09-16; 794 source tests"
+updated_at: "2026-09-16T11:30:39+10:00"
 ---
 
 Cointelprofessional has a fast routing/contact stage on Qwen3.5 and a deep/action
@@ -12,11 +12,14 @@ now returns a structured decision with an optional visible response and an expli
 `deep_required` boolean. This supports four outcomes: reply only, reply plus deep
 work, intentional silence plus deep work, or intentional silence with no deep work.
 The last outcome completes durably without a Telegram send and leaves no turn for a
-deep worker to reserve. A malformed or failed front decision retains deep work so a
-failure cannot masquerade as intentional silence.
+deep worker to reserve. The decision is requested through native tool calling. A visible plain-text answer
+is preserved as the fast reply and conservatively requests deep work when the model
+does not honor the structured contract; a failed or empty front retains deep work.
+Formatting noncompliance therefore cannot suppress a useful response or masquerade
+as intentional silence.
 
-A direct managed Qwen3.5 probe accepted the contract and chose a visible reply with
-`deep_required: false` for a celebratory exchange. The exact silent/no-deep lifecycle
+Direct managed Qwen3.5 probes accepted the routing contract and chose visible replies
+with `deep_required: false` for completed celebratory exchanges. The exact silent/no-deep lifecycle
 is covered by an injected decision check; natural selection of silence remains a
 model judgment that may need prompt tuning from live conversations.
 
