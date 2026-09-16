@@ -138,7 +138,7 @@ def test_child_cannot_widen_scope_authority_or_shared_budget():
                 raise AssertionError(f"child widened {field}")
 
 
-def test_enqueue_requires_contract_and_child_replay_debits_once():
+def test_enqueue_defaults_permissively_and_child_replay_debits_once():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         root = Path(temporary).resolve()
         cli.initialize()
@@ -146,12 +146,12 @@ def test_enqueue_requires_contract_and_child_replay_debits_once():
             (root / relative).mkdir(exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
         accepted_workspace_policy(root)
-        try:
-            cli.enqueue_task("worker", "unbounded")
-        except ValueError:
-            pass
-        else:
-            raise AssertionError("task without contract was enqueued")
+        default_id = cli.enqueue_task("worker", "unbounded")
+        default = json.loads((root / f"state/jobs/{default_id}.json").read_text())
+        assert default["task_contract"]["objective"] == "unbounded"
+        assert all(value is None for value in default["task_contract"]["budget"].values())
+        assert default["requirements"] == {"required_capabilities": [],
+                                           "minimum_context_tokens": 0}
         parent_contract = contract(root, objective="bounded")
         parent_id = cli.enqueue_task("worker", "bounded", task_contract=parent_contract)
         parent = json.loads((root / f"state/jobs/{parent_id}.json").read_text())
@@ -204,7 +204,7 @@ def test_enqueue_initializes_execution_claim_identity():
         assert child["logical_run_state"] == "active"
 
 
-def test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallback():
+def test_unregistered_authority_does_not_gain_privileged_workload_class():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         root = Path(temporary).resolve()
         cli.initialize()
@@ -212,13 +212,11 @@ def test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallbac
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
         accepted_workspace_policy(root, profiles=("ordinary",))
         invalid = contract(root, objective="bounded", authority_profile="forged_admin")
-        try:
-            cli.enqueue_task("sole_survivor", "bounded", source="resource-emergency:forged",
-                             task_contract=invalid)
-        except ValueError as error:
-            assert str(error) == "unknown authority profile"
-        else:
-            raise AssertionError("role or source spelling admitted unknown authority")
+        job_id = cli.enqueue_task("sole_survivor", "bounded", source="resource-emergency:forged",
+                                  task_contract=invalid)
+        job = json.loads((root / f"state/jobs/{job_id}.json").read_text())
+        assert job["authority_profile"] == "forged_admin"
+        assert job["workload_class"] == "work"
 
 
 def test_trusted_intake_rejects_task_objective_disagreement():
@@ -251,9 +249,9 @@ def load_tests(_loader, _tests, _pattern):
         test_contract_rejects_noncanonical_or_escaped_paths,
         test_contract_rejects_unstructured_acceptance,
         test_child_cannot_widen_scope_authority_or_shared_budget,
-        test_enqueue_requires_contract_and_child_replay_debits_once,
+        test_enqueue_defaults_permissively_and_child_replay_debits_once,
         test_enqueue_initializes_execution_claim_identity,
-        test_trusted_intake_rejects_unknown_authority_without_role_or_source_fallback,
+        test_unregistered_authority_does_not_gain_privileged_workload_class,
         test_trusted_intake_rejects_task_objective_disagreement,
         test_temporary_role_loads_without_code_change,
     )

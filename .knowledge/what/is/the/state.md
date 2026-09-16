@@ -3,7 +3,7 @@ scope: project local
 status: "unverified"
 source: "2026-09-15 coordinator inspection of source, worker journal, checks, runtime service state, and central defect audit"
 review_when: Update after material repository changes or completed tasks.
-updated_at: "2026-09-16T10:21:54+10:00"
+updated_at: "2026-09-16T10:38:02+10:00"
 ---
 
 Both supervised local workers are closed with exact sessions retained and coordinator inspection handoffs. Native caller-death, managed-user interruption cleanup and request-time ghost reconciliation are implemented in source. Allocation now reconciles dead-owner issued/unissued ghosts before counting occupied slots and can complete a uniquely correlated ended slot while another is busy. Periodic watchdog invokes native reconciliation and uses installed runtime paths. Current full discovery passes795 tests63.335s; focused acquisition/proxy/native/operator105 cases pass13.476s. No new regression tests were authored for these latest fixes. Source adoption is pending at a drained boundary.
@@ -60,3 +60,7 @@ Overnight supervision completed 2026-09-16. Installed dispatch was recovered fro
 The development checkout has completed its accumulated MVP bring-up slice. The corrected full discovery run passes 791 tests in 62.194 seconds. The earlier run exposed two stale expectations only: the survival-gateway fixture lacked the shared executor cleanup deadline and the compaction check still expected the retired custom checkpoint state. Both existing fixtures now describe the implemented behavior; focused checks and the full suite pass. No active observable local worker remains.
 
 The tree, installer, managed inference, automatic residency realization, idle reclamation, priority-aware sequence handling, exact-session continuation, 32000-token worker output reserve, semantic OpenCode failure rerouting, abandoned-controller recovery, and service/runtime relocation changes are present together in the checkout. This checkpoint is being prepared for installation, commit, and push; installed and live state must still be observed after installation rather than inferred from source.
+
+## Control-plane rake removal (2026-09-16)
+
+Authenticated Telegram deep control can now queue and amend durable agent tasks by converting the accepted contact identity into the configured `contact_requested` authority profile. Role, model, agent name and explicit active-workspace selection are optional. The former unconditional refusal is gone. Fast contact remains Qwen3.5 for intentionally low prefill latency; deep/action control now runs on Qwen3.8 with a 32000-token allowance. Deep turns have no fixed crash-attempt ceiling or SIGALRM lifetime kill; failures retain and requeue the turn. The installed control-worker unit is active with Qwen3.8. Full source discovery passes 791 tests in 54.383 seconds; 45 focused proxy checks pass after removing the exactly-four-handler gate.

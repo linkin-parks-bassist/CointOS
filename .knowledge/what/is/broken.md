@@ -1,6 +1,6 @@
 ---
 status: "unverified"
-updated_at: "2026-09-16T10:21:55+10:00"
+updated_at: "2026-09-16T10:45:44+10:00"
 source: "config/models diff; worker final; 48 tests; fresh real snapshot route evidence 2026-09-16"
 ---
 
@@ -134,3 +134,7 @@ Observable dispatch provider-case barrier repaired in source 2026-09-16: two low
 ## Current cleanup evidence (2026-09-16)
 
 The full source suite now passes 791 tests in 62.194 seconds after aligning two stale fixtures with the shared cleanup deadline and exact-session compaction behavior. The remaining Cointelprofessional usability barrier is fitting-model selection for deep control: raising its 1400-token output cap to the canonical 32000 allowance currently makes exact-model Qwen3.5 wait because that model cannot fit the prepared input plus output. The acquisition path must route the request to observed fitting capacity, then installed Telegram/deep-control behavior must be live-qualified. The separate 180-second backend request timeout and broader saturated priority/restart behavior remain open recovery work.
+
+Control capability correction 2026-09-16: the advertised queue/amend tools previously always raised `trusted contact conversion is required before executable work`; deep action also used Qwen3.5, a 1400-token cap, three crash attempts, and a ten-minute SIGALRM. Those gates are removed in source and installed control-worker runtime; fast first contact deliberately remains Qwen3.5 for latency. Cancellation/preemption and a broader typed remote operating surface remain absent. The spec-to-gate audit now confirms at least fifteen removed spec-less restrictions; remaining unproven families are the deep backend timeout, fixed memory reserves, and transport-size ceilings.
+
+Latest live Telegram probe: the fast request failed during cleanup because its installed time-policy view predated `executor.cleanup_deadline_seconds`; an interrupted deep probe left a claimed request with no request identity holding an idle Qwen3.8 slot. Exact-incarnation idle observation now closes that ghost and the retained deep turn completed, but it selected `finish_silently` after no fast response. Source now forbids silent completion when no initial response was delivered. The old Qwen3.5 reconciliation record remains historical cleanup debt; new work must not be blocked by it.

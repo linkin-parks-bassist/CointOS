@@ -478,6 +478,16 @@ def reconcile_available_capacity(root: Path, clock=time.monotonic) -> dict:
                 evidence = claim.get("slot_evidence", {})
                 start = evidence.get("start") or {}
                 observed = observe_backend_slots(start.get("identity"))
+                if (not claim.get("request_id") and type(observed) is dict
+                        and observed.get("identity") == start.get("identity")
+                        and observed.get("slots")
+                        and all(slot.get("is_processing") is False
+                                for slot in observed["slots"])):
+                    # The bound process died after claiming but before assigning
+                    # a backend request identity. Fresh exact-incarnation idle
+                    # slots prove that this ghost owns no physical execution.
+                    _finish_claim(root, lease_id, claim_id, False, {}, clock)
+                    continue
                 termination = _slot_ended_idle_termination(root, lease_id, claim_id, observed, clock)
                 if termination is not None:
                     _finish_claim(root, lease_id, claim_id, True,
@@ -866,9 +876,9 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
 def serve_proxy(root: Path, config: dict, clock) -> None:
     validate_loopback_base(config["proxy_base"])
     endpoint = validate_loopback_base(config["proxy_base"])
-    connections = int(config.get("connections", 4))
-    if connections != 4:
-        raise ValueError("proxy requires exactly four handlers")
+    connections = config.get("connections", 4)
+    if type(connections) is not int or connections <= 0:
+        raise ValueError("proxy connections must be a positive integer")
     with socket.create_server((endpoint["host"], endpoint["port"]), backlog=connections) as listener, \
             concurrent.futures.ThreadPoolExecutor(max_workers=connections) as pool:
         listener.settimeout(float(config.get("accept_timeout_seconds", 1)))

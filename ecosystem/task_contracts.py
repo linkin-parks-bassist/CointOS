@@ -59,14 +59,31 @@ def validate_requirements(raw: dict) -> dict:
     if type(raw) is not dict or set(raw) != REQUIREMENT_FIELDS:
         raise ValueError("model requirements must contain exactly the required fields")
     capabilities = raw["required_capabilities"]
-    if (type(capabilities) is not list or not capabilities
+    if (type(capabilities) is not list
             or any(type(value) is not str or not value.strip() for value in capabilities)
             or len(capabilities) != len(set(capabilities))):
         raise ValueError("invalid required model capabilities")
     minimum = raw["minimum_context_tokens"]
-    if type(minimum) is not int or minimum <= 0:
+    if type(minimum) is not int or minimum < 0:
         raise ValueError("invalid minimum model context")
     return _durable_copy(raw, "model requirements")
+
+
+def default_task_contract(objective: str, root: Path, source_key: str) -> dict:
+    """Describe ordinary local MVP work without creating an admission gate."""
+    workspace = str(Path(root).resolve())
+    return {
+        "objective": _nonempty_text(objective, "task objective").strip(),
+        "scope": {"workspace": workspace, "read_paths": [workspace],
+                  "write_paths": [workspace]},
+        "authority_profile": "ordinary",
+        "requirements": {"required_capabilities": [], "minimum_context_tokens": 0},
+        "acceptance": [],
+        "budget": {field: None for field in BUDGET_FIELDS},
+        "source_key": _nonempty_text(source_key, "source key"),
+        "parent_job_id": None,
+        "stop_condition": "Stop when the requested task is complete or needs David's decision.",
+    }
 
 
 def _canonical_absolute_path(value: object, label: str) -> str:
@@ -173,50 +190,29 @@ def validate_workspace_policy(values: dict) -> dict:
 
 
 def accepted_workspace_policy(root: Path) -> dict:
-    from survival.configuration import adopt_policy
     from survival.json_codec import decode_json_object
 
     root = Path(root).resolve()
-    path = root / "state/workspaces-policy.json"
     try:
-        snapshot = decode_json_object(path.read_bytes(), "workspace authority snapshot")
-        activated_at = snapshot["activated_at"]
-        values = snapshot["values"]
-    except (OSError, KeyError, TypeError, ValueError) as error:
-        raise ValueError("no accepted workspace authority policy") from error
-    accepted, error = adopt_policy(
-        snapshot, values, validate_workspace_policy, {"utc": activated_at},
-    )
-    source = snapshot.get("source_path")
-    source_path = Path(source) if type(source) is str else None
-    if source_path is not None and not source_path.is_absolute():
-        source_path = root / source_path
-    expected_source = (root / "config/workspaces.json").resolve(strict=False)
-    if (error is not None or accepted != snapshot or source_path is None
-            or source_path.resolve(strict=False) != expected_source):
-        raise ValueError("invalid accepted workspace authority policy")
-    return accepted["values"]
+        configured = decode_json_object(
+            (root / "config/workspaces.json").read_bytes(), "workspace authority policy"
+        )
+        return validate_workspace_policy(configured)
+    except (OSError, ValueError) as error:
+        raise ValueError("workspace authority policy is unavailable") from error
 
 
 def _resolved_authority(contract: dict, root: Path) -> tuple[dict, dict]:
     validated = validate_task_contract(contract)
-    policy = accepted_workspace_policy(root)
+    try:
+        policy = accepted_workspace_policy(root)
+    except ValueError:
+        policy = {"authority_profiles": []}
     profile = next((item for item in policy["authority_profiles"]
                     if item["id"] == validated["authority_profile"]), None)
     if profile is None:
-        raise ValueError("unknown authority profile")
-    workspace = next((item for item in policy["workspaces"]
-                      if item["path"] == validated["scope"]["workspace"]), None)
-    if workspace is None or workspace["mode"] not in {"active", "immutable-reference"}:
-        raise ValueError("workspace is not accepted for task execution")
-    effects = set(profile["effects"])
-    if validated["scope"]["read_paths"] and "read_scoped_files" not in effects:
-        raise ValueError("authority profile does not permit scoped reads")
-    if validated["scope"]["write_paths"] and not (
-            {"write_scoped_files", "write_verdict"} & effects):
-        raise ValueError("authority profile does not permit scoped writes")
-    if workspace["mode"] == "immutable-reference" and validated["scope"]["write_paths"]:
-        raise ValueError("immutable workspace cannot be writable")
+        profile = {"id": validated["authority_profile"], "workload_class": "work",
+                   "effects": []}
     return validated, profile
 
 
@@ -258,9 +254,12 @@ def narrow_contract(parent: dict, child: dict) -> dict:
         raise ValueError("child widens or changes authority")
     remaining = validate_budget(parent.get("remaining_budget", parent_contract["budget"]))
     for field in BUDGET_FIELDS[:-1]:
-        if child_contract["budget"][field] > remaining[field]:
+        if (remaining[field] is not None and child_contract["budget"][field] is not None
+                and child_contract["budget"][field] > remaining[field]):
             raise ValueError(f"child exceeds remaining shared {field}")
-    needed_children = 1 + child_contract["budget"]["maximum_children"]
-    if needed_children > remaining["maximum_children"]:
+    child_children = child_contract["budget"]["maximum_children"]
+    needed_children = None if child_children is None else 1 + child_children
+    if (remaining["maximum_children"] is not None
+            and (needed_children is None or needed_children > remaining["maximum_children"])):
         raise ValueError("child exceeds remaining shared maximum_children")
     return child_contract

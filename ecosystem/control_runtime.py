@@ -10,6 +10,7 @@ from ecosystem.facts import lifecycle
 from ecosystem.identity import active_names
 from ecosystem.models import snapshot
 from ecosystem.roles import list_roles, safe_role_label
+from ecosystem.task_contracts import accepted_workspace_policy
 
 
 def _prompt_lifecycle_facts() -> dict:
@@ -122,6 +123,47 @@ def _action_key(name: str, arguments: dict) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:20]
 
 
+def _contact_task_contract(identifier: str, key: str, task: str,
+                           workspace_selector: object = None) -> dict:
+    """Convert an authenticated control turn into accepted executable authority."""
+    try:
+        policy = accepted_workspace_policy(cli.ROOT)
+    except ValueError:
+        policy = {"workspaces": []}
+    active = [item for item in policy["workspaces"] if item.get("mode") == "active"]
+    if workspace_selector is None:
+        root = active[0]["path"] if active else str(cli.ROOT.resolve())
+    elif isinstance(workspace_selector, str) and workspace_selector.strip():
+        selector = workspace_selector.strip()
+        workspace = next(
+            (item for item in active if selector in {item["id"], item["path"]}), None
+        )
+        root = workspace["path"] if workspace is not None else str(Path(selector).expanduser().resolve())
+    else:
+        raise ValueError("workspace must be a non-empty id or path")
+    return {
+        "objective": task,
+        "scope": {"workspace": root, "read_paths": [root], "write_paths": [root]},
+        "authority_profile": "contact_requested",
+        "requirements": {
+            "required_capabilities": ["tool-calling"],
+            "minimum_context_tokens": 16384,
+        },
+        "acceptance": [],
+        "budget": {
+            "run_seconds": None,
+            "task_seconds": None,
+            "maximum_attempts": None,
+            "maximum_output_bytes": None,
+            "maximum_evidence_items": None,
+            "maximum_children": 0,
+        },
+        "source_key": f"{identifier}:{key}",
+        "parent_job_id": None,
+        "stop_condition": "Stop when the requested task is complete or requires David's decision.",
+    }
+
+
 def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
     key = _action_key(name, arguments)
     previous = control_turns.action_result(identifier, key)
@@ -139,7 +181,33 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
     elif name == "list_roles":
         result = {"ok": True, "roles": list_roles()}
     elif name in {"queue_task", "amend_pending_task"}:
-        raise ValueError("trusted contact conversion is required before executable work")
+        task = arguments.get("task")
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("empty task")
+        task = task.strip()
+        role = arguments.get("role")
+        model = arguments.get("model")
+        contract = _contact_task_contract(identifier, key, task, arguments.get("workspace"))
+        if name == "queue_task":
+            job_id = cli.enqueue_task(
+                role, task, source=f"telegram:{user_id}", model=model,
+                model_reason=arguments.get("model_reason", ""),
+                agent_name=arguments.get("agent_name"),
+                idempotency_key=f"{identifier}:{key}", task_contract=contract,
+            )
+            job = json.loads((cli.ROOT / "state/jobs" / f"{job_id}.json").read_text())
+            result = {
+                "ok": True, "agent_name": job["agent_name"],
+                "role": safe_role_label(role), "requested_model_hint": model,
+                "model_selection": "pending", "task": task,
+            }
+        else:
+            job_id = cli.amend_latest_task(
+                f"telegram:{user_id}", role, task, model,
+                arguments.get("model_reason", ""),
+                idempotency_key=f"{identifier}:{key}", task_contract=contract,
+            )
+            result = {"ok": bool(job_id), "amended": bool(job_id), "task": task}
     elif name == "pause_dispatch":
         (cli.ROOT / "state/PAUSED").touch()
         cli.audit("ecosystem.paused", source="telegram", user_id=user_id)

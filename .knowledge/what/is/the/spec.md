@@ -3,7 +3,7 @@ scope: project local
 source: "David explicit CointOS work-dissolution vision and small-local-task constraint 2026-09-15"
 review_when: Recheck when repository requirements or the proof-verifier contract changes.
 status: "unverified"
-updated_at: "2026-09-15T09:10:54+10:00"
+updated_at: "2026-09-16T10:45:44+10:00"
 ---
 
 The repository's product contracts live under `what/is/intended/`, with the public
@@ -31,3 +31,5 @@ Deployment contract: source at `~/Projects/CointOS`; an installer deploys all re
 Allocation usability contract: automatically acquire resources for benign authorized inference. Contention is handled by priority, queueing and recoverable suspension, with sole survivor above Cointelprofessional above user agent sessions above background work. Those priority classes must practically never be blocked by lower-priority work. Terminal rejection is reserved for suspicious/unauthorized requests or a physical shortfall that cannot be resolved through priority and reclamation. Internal lease/credential provisioning and observation repair belong to CointOS; they are not operator prerequisites. Detailed scheduling authority and suspension behavior are in `what/is/intended/agent_scheduling.md`.
 
 Working-model contract: local models receive only small concrete tasks, including one bounded step of abstract architectural decomposition. Broad work is progressively dissolved by chunkers with reviews and abstraction barriers, GPU-scheduled execution and Cointelprofessional feedback. The direct vision is owned by what/is/architecture/of/cointos.md; detailed stages/contracts remain design work.
+
+MVP policy clarification 2026-09-16: CointOS is currently a single-owner, local-machine system for David's use and demonstration. Establish the functioning general system and learn its decomposition before adding containment, internal authorization, policy-adoption ceremonies, or defensive execution gates. Resource management remains essential scheduling: account for actual finite capacity, prioritize, queue, suspend, reclaim and resume. It is not an internal firewall. Keep malformed-input and protocol-consistency validation, but missing workspace registration, authority snapshots, task contracts or similar paperwork must not refuse ordinary local work. External Telegram allowlisting may remain at the transport edge without creating repeated internal authorization layers.

@@ -27,8 +27,12 @@ def task_contract(root: Path, objective: str) -> dict:
 
 def write_workspace_policy(root: Path) -> None:
     values = {"version": 1,
-              "authority_profiles": [{"id": "ordinary", "workload_class": "work",
-                                      "effects": ["read_scoped_files"]}],
+              "authority_profiles": [
+                  {"id": "ordinary", "workload_class": "work",
+                   "effects": ["read_scoped_files"]},
+                  {"id": "contact_requested", "workload_class": "work",
+                   "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks"]},
+              ],
               "workspaces": [{"id": "test", "path": str(root.resolve()),
                               "provenance": "personal", "mode": "active"}]}
     canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
@@ -134,29 +138,26 @@ def test_unsafe_role_label_does_not_reach_identity_generation(root):
 
 
 @with_root
-def test_deep_control_cannot_mint_authority_for_unknown_role(root):
+def test_deep_control_converts_accepted_contact_authority_for_unknown_role(root):
     control_turns.accept(7, 42, 42, "inspect the invariant")
     arguments = {
         "role": "mathematical_mongoose",
         "task": "inspect the invariant",
         "agent_name": "Noether",
-        "task_contract": task_contract(root, "inspect the invariant"),
     }
-    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}), \
-            unittest.TestCase().assertRaisesRegex(ValueError, "trusted contact conversion"):
-        control_runtime.execute_tool("telegram-7", "queue_task", arguments)
-    assert list((root / "state/jobs").glob("task-*.json")) == []
+    result = control_runtime.execute_tool("telegram-7", "queue_task", arguments)
+    assert result["ok"] is True
+    assert read_job(root, next((root / "state/jobs").glob("task-*.json")).stem)["role"] == "mathematical_mongoose"
 
 
 @with_root
-def test_deep_control_without_role_still_needs_trusted_contact_conversion(root):
+def test_deep_control_without_role_converts_accepted_contact_authority(root):
     control_turns.accept(8, 42, 42, "inspect the invariant")
     arguments = {"task": "inspect the invariant", "agent_name": "Noether",
-                 "task_contract": task_contract(root, "inspect the invariant")}
-    with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}), \
-            unittest.TestCase().assertRaisesRegex(ValueError, "trusted contact conversion"):
-        control_runtime.execute_tool("telegram-8", "queue_task", arguments)
-    assert list((root / "state/jobs").glob("task-*.json")) == []
+                }
+    result = control_runtime.execute_tool("telegram-8", "queue_task", arguments)
+    assert result["ok"] is True
+    assert len(list((root / "state/jobs").glob("task-*.json"))) == 1
 
 
 @with_root

@@ -8,9 +8,8 @@ Slice=control.slice
 ExecStart=%h/Projects/CointOS/scripts/control-worker
 WorkingDirectory=%h/Projects/CointOS
 EnvironmentFile=%h/.config/agent-ecosystem/telegram.env
-Environment=AGENT_TELEGRAM_MODEL=Qwen3.5-4B-GGUF
+Environment=AGENT_TELEGRAM_MODEL=Qwen3.8-27B-GGUF
 Environment=AGENT_CONTROL_WORKERS=2
-Environment=AGENT_CONTROL_TURN_SECONDS=600
 Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
 Restart=on-failure
 RestartSec=5

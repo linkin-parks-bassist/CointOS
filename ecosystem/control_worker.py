@@ -39,8 +39,8 @@ def process_turn(identifier: str, send=reply, controller=respond) -> None:
         cli.audit("control_turn.followup_delivered", turn_id=identifier, user_id=user_id)
     except Exception as error:
         detail = f"{type(error).__name__}: {error}"
-        control_turns.mark_deep_failed(identifier, detail)
-        cli.audit("control_turn.deep_failed", turn_id=identifier, user_id=user_id, error=detail)
+        control_turns.mark_deep_retry(identifier, detail)
+        cli.audit("control_turn.deep_retry_queued", turn_id=identifier, user_id=user_id, error=detail)
 
 
 def _reap(active: dict[int, str]) -> None:
@@ -74,12 +74,9 @@ def main() -> None:
             if pid == 0:
                 signal.signal(signal.SIGTERM, signal.SIG_DFL)
                 signal.signal(signal.SIGINT, signal.SIG_DFL)
-                signal.signal(signal.SIGALRM, signal.SIG_DFL)
-                signal.alarm(max(30, int(os.environ.get("AGENT_CONTROL_TURN_SECONDS", "600"))))
                 claimed = control_turns.claim_reserved(identifier, os.getppid(), os.getpid())
                 if claimed:
                     process_turn(identifier)
-                signal.alarm(0)
                 os._exit(0)
             active[pid] = identifier
         time.sleep(0.25)

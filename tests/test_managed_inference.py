@@ -94,10 +94,12 @@ def test_native_request_acquires_and_releases_without_supplied_lease(root, _obse
 
 @with_proxy
 def test_default_telegram_fast_and_deep_use_real_acquisition(root, _observed, requests):
+    _observed['models'][0].update(context=131072, loaded_context=131072)
+    _observed['resource_envelope']['maximum_context_tokens'] = 131072
     with patch.object(telegram, 'active_chat_model', return_value='model-a'), patch.object(control_agent, 'active_chat_model', return_value='model-a'):
         assert telegram.generate_first_response([{'role': 'user', 'content': 'hello'}]) == 'Checked.'
         assert control_agent.respond('hello', [], 'checking', {}, lambda *_args: {}) == {'followup': None}
-    assert [item['max_tokens'] for item in requests] == [96, 1400]
+    assert [item['max_tokens'] for item in requests] == [96, 32000]
     assert_closed(root)
     capacities = json.loads((root / 'state/inference-capacity.json').read_text())['leases']
     assert all(item['priority'] >= 900 for item in capacities.values())

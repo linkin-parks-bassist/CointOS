@@ -14,7 +14,6 @@ from ecosystem import cli
 
 SCHEMA_VERSION = 1
 FRONT_TERMINAL_STATES = {"delivered", "failed", "delivery_unknown"}
-MAX_DEEP_ATTEMPTS = 3
 
 
 def turn_id(update_id: int) -> str:
@@ -176,12 +175,7 @@ def recover_interrupted() -> int:
             current_owner = current.get("deep_owner_identity") or current.get("deep_worker_identity")
             current_state = current.get("deep_state")
             if current_state in {"reserved", "running", "followup_ready"} and not _process_alive(current_owner):
-                attempts = current.get("deep_attempts", 0)
-                if attempts >= MAX_DEEP_ATTEMPTS:
-                    current.update(deep_state="failed", deep_finished_at=cli.now(),
-                                   deep_error="deep control exhausted crash-recovery attempts")
-                else:
-                    current.update(deep_state="queued", deep_recovered_at=cli.now())
+                current.update(deep_state="queued", deep_recovered_at=cli.now())
                 current.pop("deep_owner_pid", None)
                 current.pop("deep_owner_identity", None)
                 current.pop("deep_worker_pid", None)
@@ -208,8 +202,7 @@ def reserve_next(owner_pid: int) -> str | None:
         def change(record: dict) -> None:
             nonlocal selected
             if (record.get("front_state") in FRONT_TERMINAL_STATES
-                    and record.get("deep_state") == "queued"
-                    and record.get("deep_attempts", 0) < MAX_DEEP_ATTEMPTS):
+                    and record.get("deep_state") == "queued"):
                 record.update(deep_state="reserved", deep_owner_pid=owner_pid,
                               deep_owner_identity=_process_identity(owner_pid))
                 selected = True
@@ -291,6 +284,15 @@ def mark_followup_delivered(identifier: str) -> dict:
 def mark_deep_failed(identifier: str, error: str) -> dict:
     def change(record: dict) -> None:
         record.update(deep_state="failed", deep_error=error, deep_finished_at=cli.now())
+        record.pop("deep_worker_pid", None)
+        record.pop("deep_worker_identity", None)
+    return _mutate(identifier, change)
+
+
+def mark_deep_retry(identifier: str, error: str) -> dict:
+    def change(record: dict) -> None:
+        record.update(deep_state="queued", deep_last_error=error,
+                      deep_retry_queued_at=cli.now())
         record.pop("deep_worker_pid", None)
         record.pop("deep_worker_identity", None)
     return _mutate(identifier, change)

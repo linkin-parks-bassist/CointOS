@@ -73,11 +73,13 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
                  task_contract: dict | None = None) -> str:
     from ecosystem.identity import validate, generate
     from ecosystem.roles import resolve_role
-    from ecosystem.task_contracts import resolve_task_intake
+    from ecosystem.task_contracts import default_task_contract, resolve_task_intake
 
     initialize()
     if task_contract is None:
-        raise ValueError("executable work requires an explicit task contract")
+        task_contract = default_task_contract(
+            task, ROOT, idempotency_key or f"{source}:{hashlib.sha256(task.encode()).hexdigest()[:16]}"
+        )
     intake = resolve_task_intake(task_contract, ROOT)
     validated_contract = intake["task_contract"]
     if type(task) is not str or task.strip() != validated_contract["objective"]:
@@ -214,10 +216,12 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
 def amend_latest_task(source: str, role: str | None, task: str, model: str | None = None,
                       model_reason: str = "", idempotency_key: str | None = None,
                       task_contract: dict | None = None) -> str | None:
-    from ecosystem.task_contracts import resolve_task_intake
+    from ecosystem.task_contracts import default_task_contract, resolve_task_intake
 
     if task_contract is None:
-        raise ValueError("amended executable work requires an explicit task contract")
+        task_contract = default_task_contract(
+            task, ROOT, idempotency_key or f"{source}:amend:{hashlib.sha256(task.encode()).hexdigest()[:16]}"
+        )
     intake = resolve_task_intake(task_contract, ROOT)
     validated_contract = intake["task_contract"]
     if type(task) is not str or task.strip() != validated_contract["objective"]:

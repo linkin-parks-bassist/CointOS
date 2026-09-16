@@ -3,7 +3,7 @@ scope: project local
 status: "unverified"
 source: "2026-09-15 coordinator inspection of source, worker journal, checks, runtime service state, and central defect audit"
 review_when: Recheck after each restoration milestone or priority change.
-updated_at: "2026-09-16T10:21:55+10:00"
+updated_at: "2026-09-16T10:38:02+10:00"
 ---
 
 Immediate #1: deploy reviewed automatic acquisition/ghost reconciliation code at a drained service boundary, then exercise installed managed acquisition. Both local workers are closed with exact sessions retained and coordinator handoffs complete. Existing full discovery passes795 tests63.335s; focused acquisition/proxy/native/operator105 cases pass13.476s. No new regression tests; global policy index is global:how/to/behave.md.
@@ -44,3 +44,5 @@ Next immediate qualification: launch one bounded observable worker using lowerca
 ## Next after cleanup (2026-09-16)
 
 Make Cointelprofessional useful through one bounded next slice: choose or reroute deep-control inference to a model whose observed context can fit the actual prepared prompt plus the canonical output allowance, then remove the remaining fixed 1400-token deep-output cap and qualify an end-to-end Telegram exchange against the installed runtime. Keep the separate 180-second backend request timeout as an explicit recovery question. After that, qualify saturated priority suspension/resume and restart recovery before treating unattended long-running professional control as dependable.
+
+After live task-submission qualification, add the missing cancellation/preemption tool and a direct per-task progress query, then exercise a full Telegram request through acknowledgement, Qwen3.8 deep dispatch, durable worker execution and truthful result delivery. Continue the spec-to-production gate audit; current unresolved restriction families are the deep backend timeout, fixed memory reserves and transport-size ceilings.

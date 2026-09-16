@@ -14,14 +14,15 @@ from ecosystem.resource_control import active_chat_model
 
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
 WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
+DEEP_OUTPUT_TOKENS = 32000
 
 
 TOOLS = [
     {"type": "function", "function": {"name": "inspect_status", "description": "Refresh exact machine, model, queue, job, and service status.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "inspect_recent_errors", "description": "Read recent durable errors and failure events with timestamps.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "list_roles", "description": "List currently available agent roles.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
-    {"type": "function", "function": {"name": "queue_task", "description": "Delegate one bounded task to an agent. A role is optional advisory context; the central router chooses the actual model and treats any requested model as a hint.", "parameters": {"type": "object", "properties": {"role": {"type": ["string", "null"]}, "task": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}, "agent_name": {"type": "string"}}, "required": ["task", "agent_name"], "additionalProperties": False}}},
-    {"type": "function", "function": {"name": "amend_pending_task", "description": "Amend David's latest still-pending Telegram task when he explicitly corrects it.", "parameters": {"type": "object", "properties": {"role": {"type": ["string", "null"]}, "task": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}}, "required": ["task", "model", "model_reason"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "queue_task", "description": "Delegate one concrete task to an agent. A role and model are optional hints. Choose a workspace only when the request clearly names one; otherwise the default active workspace is used.", "parameters": {"type": "object", "properties": {"role": {"type": ["string", "null"]}, "task": {"type": "string"}, "workspace": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}, "agent_name": {"type": "string"}}, "required": ["task"], "additionalProperties": False}}},
+    {"type": "function", "function": {"name": "amend_pending_task", "description": "Amend David's latest still-pending Telegram task when he explicitly corrects it.", "parameters": {"type": "object", "properties": {"role": {"type": ["string", "null"]}, "task": {"type": "string"}, "workspace": {"type": "string"}, "model": {"type": "string"}, "model_reason": {"type": "string"}}, "required": ["task"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "pause_dispatch", "description": "Pause new agent dispatch when David asks.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "resume_dispatch", "description": "Resume agent dispatch when David asks.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
     {"type": "function", "function": {"name": "forget_conversation", "description": "Clear saved conversational history when David explicitly asks to forget it.", "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
@@ -36,8 +37,9 @@ def respond(message: str, history: list[dict[str, str]], initial_response: str |
             live: dict, execute: Callable[[str, dict], dict],
             infer: Callable[..., dict] | None = None,
             inference_context: dict | None = None) -> dict:
-    model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF"))
-    initial = initial_response or "No initial response was delivered."
+    model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.8-27B-GGUF"))
+    initial_was_delivered = isinstance(initial_response, str) and bool(initial_response.strip())
+    initial = initial_response.strip() if initial_was_delivered else "No initial response was delivered."
     system = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
 
 {CONTROL_ROLE.read_text(encoding='utf-8')}
@@ -63,13 +65,13 @@ Live context at deep-turn start:
                 {"role": "user", "content": message}]
     while True:
         assistant = (infer(model=model, messages=messages, tools=TOOLS,
-                           max_tokens=1400, timeout=180, temperature=0.35)
+                           max_tokens=DEEP_OUTPUT_TOKENS, timeout=180, temperature=0.35)
                      if infer is not None else (
                          inference_request({**inference_context, "messages": messages,
                                             "tools": TOOLS, "tool_choice": "auto", "timeout": 180,
                                             "temperature": .35}, Path(__file__).resolve().parents[1], time.monotonic)
                          if inference_context is not None else
-                         managed_request(model, messages, 1400, timeout=180, tools=TOOLS,
+                         managed_request(model, messages, DEEP_OUTPUT_TOKENS, timeout=180, tools=TOOLS,
                                          control=True)))
         calls = assistant.get("tool_calls") or []
         if not calls:
@@ -103,6 +105,10 @@ Live context at deep-turn start:
         if terminal:
             name, arguments = terminal[0]
             if name == "finish_silently":
+                if not initial_was_delivered:
+                    messages.append({"role": "user", "content":
+                                     "No initial response was delivered. Use publish_followup with a visible reply."})
+                    continue
                 return {"followup": None}
             followup = arguments.get("message")
             if isinstance(followup, str) and followup.strip():

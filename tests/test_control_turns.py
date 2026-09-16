@@ -106,7 +106,8 @@ def test_delivered_generation_cancels_disaster_fallback(_root):
     assert sent == []
 
 
-def _telegram_refuses_untrusted_dispatch(root: Path, identifier: int, role_marker: object) -> None:
+def _telegram_dispatches_accepted_contact_work(root: Path, identifier: int, role_marker: object) -> None:
+    accepted_workspace_policy(root, profiles=("contact_requested",))
     accept_update("token", update(identifier, "inspect it"), {42},
                   send=lambda *_arguments: None,
                   infer=lambda **_arguments: {"content": "I’ll inspect it."})
@@ -120,32 +121,34 @@ def _telegram_refuses_untrusted_dispatch(root: Path, identifier: int, role_marke
 
     def controller(_message, _history, _initial, _live, execute):
         result = execute("queue_task", arguments)
-        assert result["ok"] is False
-        assert "trusted contact conversion" in result["error"]
+        assert result["ok"] is True
         return {"followup": None}
 
     with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}):
         process_turn(turn_id, send=lambda *_arguments: None, controller=controller)
     jobs = list((root / "state/jobs").glob("task-*.json"))
-    assert jobs == []
+    assert len(jobs) == 1
+    job = json.loads(jobs[0].read_text())
+    assert job["task"] == "inspect the invariant"
+    assert job["authority_profile"] == "contact_requested"
 
 
 _OMITTED = object()
 
 
 @with_root
-def test_telegram_dispatch_refuses_omitted_role_without_trusted_contract(root):
-    _telegram_refuses_untrusted_dispatch(root, 82, _OMITTED)
+def test_telegram_dispatch_accepts_omitted_role_from_trusted_contact(root):
+    _telegram_dispatches_accepted_contact_work(root, 82, _OMITTED)
 
 
 @with_root
-def test_telegram_dispatch_refuses_null_role_without_trusted_contract(root):
-    _telegram_refuses_untrusted_dispatch(root, 83, None)
+def test_telegram_dispatch_accepts_null_role_from_trusted_contact(root):
+    _telegram_dispatches_accepted_contact_work(root, 83, None)
 
 
 @with_root
-def test_telegram_dispatch_refuses_unknown_role_without_trusted_contract(root):
-    _telegram_refuses_untrusted_dispatch(root, 84, "mathematical_mongoose")
+def test_telegram_dispatch_accepts_unknown_role_from_trusted_contact(root):
+    _telegram_dispatches_accepted_contact_work(root, 84, "mathematical_mongoose")
 
 
 @with_root
