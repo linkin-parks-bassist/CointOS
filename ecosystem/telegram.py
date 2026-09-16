@@ -66,6 +66,8 @@ FRONT_TOOLS = [{
     },
 }]
 
+FAST_OUTPUT_TOKENS = 512
+
 
 def api(token: str, method: str, values: dict) -> dict:
     data = urllib.parse.urlencode(values).encode()
@@ -84,7 +86,7 @@ def generate_front_decision(history: list[dict[str, str]], infer: Callable[..., 
                             inference_context: dict | None = None) -> dict:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_FIRST_RESPONSE_MODEL", "Qwen3.5-4B-GGUF"))
     messages = [{"role": "system", "content": FAST_SYSTEM}, *history[-6:]]
-    assistant = (infer(model=model, messages=messages, max_tokens=96,
+    assistant = (infer(model=model, messages=messages, max_tokens=FAST_OUTPUT_TOKENS,
                        timeout=20, temperature=0.45, tools=FRONT_TOOLS)
                  if infer is not None else (
                      inference_request({**inference_context, "messages": messages,
@@ -92,11 +94,12 @@ def generate_front_decision(history: list[dict[str, str]], infer: Callable[..., 
                                         "tools": FRONT_TOOLS, "tool_choice": "auto"},
                                        cli.ROOT, time.monotonic)
                      if inference_context is not None else
-                     managed_request(model, messages, 96, timeout=20, temperature=.45,
+                     managed_request(model, messages, FAST_OUTPUT_TOKENS, timeout=20, temperature=.45,
                                      root=cli.ROOT, control=True, tools=FRONT_TOOLS)))
     raw = assistant.get("content")
     calls = assistant.get("tool_calls") or []
     decision = None
+    invalid_arguments_error = None
     for call in calls:
         function = call.get("function", {}) if isinstance(call, dict) else {}
         if function.get("name") != "route_front_turn":
@@ -104,7 +107,7 @@ def generate_front_decision(history: list[dict[str, str]], infer: Callable[..., 
         try:
             decision = json.loads(function.get("arguments") or "{}")
         except json.JSONDecodeError as error:
-            raise RuntimeError(f"fast model returned invalid routing tool arguments: {error}") from error
+            invalid_arguments_error = error
         break
     if decision is None and isinstance(raw, str):
         try:
@@ -116,6 +119,10 @@ def generate_front_decision(history: list[dict[str, str]], infer: Callable[..., 
             if response:
                 return {"response": response, "deep_required": True}
     if decision is None:
+        if invalid_arguments_error is not None:
+            raise RuntimeError(
+                f"fast model returned invalid routing tool arguments: {invalid_arguments_error}"
+            ) from invalid_arguments_error
         raise RuntimeError("fast model returned no routing decision")
     if not isinstance(decision, dict) or set(decision) != {"response", "deep_required"}:
         raise RuntimeError("fast model returned an invalid routing decision")
