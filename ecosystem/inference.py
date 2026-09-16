@@ -39,9 +39,10 @@ def request(request: dict, root: Path, clock) -> dict:
     }
     raw_request = urllib.request.Request(
         base + "/chat/completions", data=json.dumps(body).encode("utf-8"), headers=headers)
+    timeout = request.get("timeout", 180)
     try:
         response = urllib.request.urlopen(
-            raw_request, timeout=float(request.get("timeout", 180)))
+            raw_request, timeout=None if timeout is None else float(timeout))
         if body["stream"]:
             return {"stream": response, "lease_id": lease["lease_id"]}
         with response:

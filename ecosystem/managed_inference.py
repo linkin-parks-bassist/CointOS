@@ -328,7 +328,8 @@ def request(model: str, messages: list[dict], max_tokens: int, timeout: float = 
         raise ValueError('invalid native inference request')
     if type(max_tokens) is not int or max_tokens <= 0:
         raise ValueError('invalid native output allowance')
-    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+    if (timeout is not None
+            and (type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0)):
         raise ValueError('invalid native inference timeout')
     refresh = refresh or (lambda: models.snapshot(root))
     identifier = 'native-' + uuid.uuid4().hex
@@ -512,7 +513,8 @@ def request(model: str, messages: list[dict], max_tokens: int, timeout: float = 
                 while gate['process'].poll() is None:
                     state = json.loads((root / 'state/inference-capacity.json').read_text())
                     preempted = state['leases'][lease['lease_id']]['state'] == 'preemption_requested'
-                    if preempted or (cancelled and cancelled()) or clock() - started > timeout + 5:
+                    if preempted or (cancelled and cancelled()) or (
+                            timeout is not None and clock() - started > timeout + 5):
                         proxy.cancel(root, lease['lease_id'], clock)
                         break
                     sleeper(.05)

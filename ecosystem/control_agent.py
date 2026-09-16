@@ -67,13 +67,13 @@ Live context at deep-turn start:
                 {"role": "user", "content": message}]
     while True:
         assistant = (infer(model=model, messages=messages, tools=TOOLS,
-                           max_tokens=DEEP_OUTPUT_TOKENS, timeout=180, temperature=0.35)
+                           max_tokens=DEEP_OUTPUT_TOKENS, timeout=None, temperature=0.35)
                      if infer is not None else (
                          inference_request({**inference_context, "messages": messages,
-                                            "tools": TOOLS, "tool_choice": "auto", "timeout": 180,
+                                            "tools": TOOLS, "tool_choice": "auto", "timeout": None,
                                             "temperature": .35}, Path(__file__).resolve().parents[1], time.monotonic)
                          if inference_context is not None else
-                         managed_request(model, messages, DEEP_OUTPUT_TOKENS, timeout=180, tools=TOOLS,
+                         managed_request(model, messages, DEEP_OUTPUT_TOKENS, timeout=None, tools=TOOLS,
                                          control=True)))
         calls = assistant.get("tool_calls") or []
         if not calls:

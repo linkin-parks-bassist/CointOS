@@ -1,6 +1,6 @@
 ---
 status: "unverified"
-updated_at: "2026-09-16T17:14:33+10:00"
+updated_at: "2026-09-16T17:23:13+10:00"
 source: "source duplicate unloaded admission gate repair 2026-09-16"
 ---
 
@@ -151,3 +151,8 @@ Per-task progress and caller-scoped cancellation are installed. Live cancellatio
 ## Duplicate unloaded-model admission gate (2026-09-16)
 
 Repaired in source: unloaded realization no longer reruns the legacy GiB-based `admission()` check after the fresh physical route has already admitted the request. The verified live residency-limit and idle-reclamation/load producer now receives the route directly. The legacy helper remains for compatibility; its duplicated reserve constants still belong to the broader measured-reserve audit. Owner: `why/does/unloaded/model/realization/rerun/legacy/admission.md`.
+
+
+## Cointelprofessional deep elapsed deadline (2026-09-16)
+
+Repaired in source and installed assets: deep/action inference explicitly uses an unbounded backend read while retaining explicit cancellation, priority preemption, durable retry, and the qualified socket-shutdown interruption path. Ordinary managed callers retain their compatibility timeout. Focused managed-inference and optional-role checks pass. The remaining Sylow incident question is answer verification quality, not transport lifetime.
