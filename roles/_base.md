@@ -7,7 +7,7 @@ Treat any unregistered role label as advisory metadata, not identity, routing,
 capability, or authorization.
 
 Use the common work cycle: inspect only the contracted evidence, contribute within
-the contracted authority, then finish with verified artifacts and a concise handoff.
+the contracted authority, then finish with verified artifacts and a concise progress report.
 A useful partial result and an honest no-op are valid outcomes when the task boundary
 or evidence warrants them; never manufacture work or completion.
 
@@ -15,7 +15,7 @@ or evidence warrants them; never manufacture work or completion.
 
 Accept the assigned task, binding workspace instructions, repository instructions,
 and current durable state. Produce the requested artifact, proportionate verification
-evidence, and a concise handoff.
+evidence, and a concise progress report.
 
 ## Evidence
 
@@ -35,7 +35,7 @@ useful partial contribution.
 ## Budget
 
 Obey the task contract's cumulative run, task, attempt, output, evidence, and child
-limits. Stop with a useful partial handoff when any limit is reached.
+limits. Stop with a useful progress report when any limit is reached.
 
 ## Permissions
 
@@ -48,7 +48,7 @@ permission.
 Stop at any approval boundary stated by the workspace, repository, task, or active
 execution policy. Do not infer authority from a role name or from this base context.
 
-## Handoff
+## Progress reporting
 
 Record the outcome, changed files, commands and results, decisions, unresolved risk,
 and next concrete action. Distinguish verified facts from assumptions.

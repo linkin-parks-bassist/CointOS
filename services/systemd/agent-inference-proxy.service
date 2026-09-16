@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/agent-ecosystem
+WorkingDirectory=%h/Projects/CointOS
 Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
-ExecStart=%h/agent-ecosystem/scripts/inference_proxy
+ExecStart=%h/Projects/CointOS/scripts/inference_proxy
 Restart=on-failure
 RestartSec=2
 

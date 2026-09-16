@@ -39,7 +39,7 @@ REQUIRED_KEYS = {
         "reconciliation_deadline_seconds", "progress_update_period_seconds",
     },
     "control_turn": {"run_deadline_seconds"},
-    "executor": {"run_deadline_seconds", "time_slice_seconds"},
+    "executor": {"run_deadline_seconds", "time_slice_seconds", "cleanup_deadline_seconds"},
     "workload": {
         "maximum_run_seconds", "wrapup_seconds", "termination_grace_seconds",
     },

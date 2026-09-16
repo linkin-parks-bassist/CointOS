@@ -407,6 +407,8 @@ def status() -> None:
     initialize()
     counts: dict[str, int] = {}
     for path in (ROOT / "state/jobs").glob("*.json"):
+        if path.name.endswith(".opencode.json"):
+            continue
         state = json.loads(path.read_text(encoding="utf-8"))["state"]
         counts[state] = counts.get(state, 0) + 1
     print(json.dumps({"paused": (ROOT / "state/PAUSED").exists(), "jobs": counts}, indent=2))

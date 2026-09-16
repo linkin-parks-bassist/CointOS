@@ -41,11 +41,11 @@
     "context_reserves": {
       "prompt_tokens": 4096,
       "tool_tokens": 8192,
-      "max_output_tokens": 4096,
+      "max_output_tokens": 32000,
       "handoff_tokens": 8192
     },
     "rollover_fraction": 0.75,
-    "parallel_requests": 8,
+    "parallel_requests": 1,
     "llamacpp_batch_size": 512,
     "llamacpp_ubatch_size": 128
   },

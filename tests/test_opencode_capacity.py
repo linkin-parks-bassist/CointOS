@@ -377,11 +377,10 @@ def test_rollover_policy_out_of_range_is_rejected():
             f"rollover fraction {fraction}",
             "rollover_fraction",
             _observation(), _client(), _policy(rollover_fraction=fraction))
-    _expect_failure(
-        "rollover threshold falls before the prompt",
-        "rollover",
-        _observation(), _client(),
-        _policy(rollover_fraction=0.00001))
+    record = effective_inference_capacity(
+        _observation(), _client(), _policy(rollover_fraction=0.00001), NOW)
+    assert record["rollover_threshold_tokens"] < _observation()["prompt_estimate_tokens"]
+
 
 
 def test_unknown_authority_keys_are_rejected():

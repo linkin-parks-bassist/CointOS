@@ -278,6 +278,219 @@ def model_is_live(item: dict) -> bool:
             and item["status"] in LIVE_MODEL_STATUSES)
 
 
+def model_residency_status(health: object, model_name: str) -> dict:
+    if not isinstance(model_name, str) or not model_name:
+        raise ValueError("model_name must be a non-empty string")
+    models, error = _health_models(health)
+    if error:
+        return {"state": "unavailable", "model_name": model_name, "error": error}
+    matches = [record for record in models if record.get("model_name") == model_name]
+    if len(matches) > 1:
+        return {"state": "unavailable", "model_name": model_name,
+                "error": "duplicate model records"}
+    if not matches:
+        return {"state": "not_loaded", "model_name": model_name}
+    record = matches[0]
+    return {"state": "live" if model_is_live(record) else "not_live",
+            "model_name": model_name, "record": record}
+
+
+def model_residency_availability(health: object, maximum_loaded_models: int) -> dict:
+    if type(maximum_loaded_models) is not int or maximum_loaded_models <= 0:
+        raise ValueError("maximum_loaded_models must be a positive integer")
+    models, error = _health_models(health)
+    if error:
+        return {"state": "unavailable", "error": error}
+    occupied_count = sum(1 for record in models if record["loaded"] is True)
+    free_count = max(0, maximum_loaded_models - occupied_count)
+    return {
+        "state": "free" if free_count else "full",
+        "maximum_loaded_models": maximum_loaded_models,
+        "occupied_count": occupied_count,
+        "free_count": free_count,
+    }
+
+
+def llm_residency_limit(health: object) -> dict:
+    if not isinstance(health, dict):
+        return {"state": "unavailable", "error": "health response is not an object"}
+    max_models = health.get("max_models")
+    if not isinstance(max_models, dict):
+        return {"state": "unavailable",
+                "error": "health response has no valid max_models object"}
+    value = max_models.get("llm")
+    if type(value) is not int or value <= 0:
+        return {"state": "unavailable",
+                "error": "health max_models.llm is not a positive exact integer"}
+    return {"state": "available", "maximum_loaded_models": value}
+
+
+def model_load_payload(model_name: str, backend_context_tokens: int,
+                       parallel_requests: int, *, pinned: bool = False) -> dict:
+    if not isinstance(model_name, str) or not model_name:
+        raise ValueError("model_name must be a non-empty string")
+    if type(backend_context_tokens) is not int or backend_context_tokens <= 0:
+        raise ValueError("backend_context_tokens must be a positive integer")
+    if type(parallel_requests) is not int or parallel_requests <= 0:
+        raise ValueError("parallel_requests must be a positive integer")
+    if type(pinned) is not bool:
+        raise ValueError("pinned must be a boolean")
+    return {
+        "model_name": model_name,
+        "pinned": pinned,
+        "ctx_size": backend_context_tokens,
+        "merge_args": True,
+        "llamacpp_args": f"--parallel {parallel_requests} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
+    }
+
+
+def load_model_if_residency_free(
+        model_name: str, backend_context_tokens: int,
+        parallel_requests: int, maximum_loaded_models: int,
+        *, pinned: bool = False, health=None, request=None) -> dict:
+    payload = model_load_payload(model_name, backend_context_tokens,
+                                 parallel_requests, pinned=pinned)
+    health = health or lemonade_health
+    request = request or _lemonade_request
+    before = health()
+    named = model_residency_status(before, model_name)
+    if named["state"] == "unavailable":
+        return {"state": "wait", "reason": "health_unavailable",
+                "observation": named}
+    if named["state"] == "live":
+        return {"state": "already_loaded", "observation": named}
+    if named["state"] == "not_live":
+        return {"state": "wait", "reason": "model_not_live",
+                "observation": named}
+    availability = model_residency_availability(before, maximum_loaded_models)
+    if availability["state"] == "unavailable":
+        return {"state": "wait", "reason": "health_unavailable",
+                "observation": availability}
+    if availability["state"] == "full":
+        return {"state": "wait", "reason": "no_free_residency",
+                "observation": availability}
+    try:
+        response = request(
+            "/v1/load", payload,
+            timeout=_seconds("inference", "model_start_deadline_seconds"),
+        )
+    except Exception as error:
+        return {"state": "wait", "reason": "backend_error",
+                "error": f"{type(error).__name__}: {error}"}
+    observed = model_residency_status(health(), model_name)
+    if observed["state"] == "live":
+        return {"state": "loaded", "response": response,
+                "observation": observed}
+    return {"state": "wait", "reason": "load_unverified", "response": response,
+            "observation": observed}
+
+
+def _idle_residency_protected(protected_model_names: object) -> set[str]:
+    if not isinstance(protected_model_names, (list, tuple, set, frozenset)):
+        raise ValueError(
+            "protected_model_names must be a list, tuple, set, or frozenset")
+    protected: set[str] = set()
+    for name in protected_model_names:
+        if not isinstance(name, str) or not name:
+            raise ValueError(
+                "protected_model_names entries must be non-empty strings")
+        protected.add(name)
+    return protected
+
+
+def select_idle_residency_victim(health: object,
+                                 protected_model_names: object) -> dict:
+    protected = _idle_residency_protected(protected_model_names)
+    models, error = _health_models(health)
+    if error:
+        return {"state": "unavailable", "error": error}
+    names = [record["model_name"] for record in models]
+    if len(names) != len(set(names)):
+        return {"state": "unavailable", "error": "duplicate model records"}
+    eligible = [
+        record for record in models
+        if model_is_live(record)
+        and record.get("is_busy") is False
+        and record["model_name"] not in protected
+    ]
+    if not eligible:
+        return {"state": "wait", "reason": "no_idle_residency_victim"}
+    victim = min(eligible, key=lambda record: record["model_name"])
+    return {"state": "selected", "model_name": victim["model_name"],
+            "record": victim}
+
+
+def unload_idle_residency_victim(protected_model_names: object, *,
+                                 health=None, request=None) -> dict:
+    health = health or lemonade_health
+    request = request or _lemonade_request
+    selection = select_idle_residency_victim(health(), protected_model_names)
+    if selection["state"] == "unavailable":
+        return {"state": "wait", "reason": "health_unavailable",
+                "observation": selection}
+    if selection["state"] == "wait":
+        return selection
+    model_name = selection["model_name"]
+    try:
+        response = request(
+            "/v1/unload", {"model_name": model_name},
+            timeout=_seconds("inference", "model_stop_deadline_seconds"),
+        )
+    except Exception as error:
+        return {"state": "wait", "reason": "backend_error",
+                "error": f"{type(error).__name__}: {error}",
+                "observation": selection}
+    observed = model_residency_status(health(), model_name)
+    if observed["state"] == "not_loaded":
+        return {"state": "unloaded", "model_name": model_name,
+                "response": response, "observation": observed}
+    return {"state": "wait", "reason": "unload_unverified",
+            "model_name": model_name, "response": response,
+            "observation": observed}
+
+
+def protected_residency_model_names(control_model: object, *, root=None) -> set[str]:
+    if control_model is not None:
+        if not isinstance(control_model, str) or not control_model:
+            raise ValueError("control_model must be None or a non-empty string")
+        protected = {control_model}
+    else:
+        protected = set()
+    root = root or cli.ROOT
+    for session in operator_session.active_operator_sessions(Path(root)):
+        request = session.get("request")
+        if not isinstance(request, dict):
+            raise ValueError("invalid active operator session request")
+        model_id = request.get("model_id")
+        if model_id is None:
+            continue
+        if not isinstance(model_id, str) or not model_id:
+            raise ValueError("invalid active operator session model_id")
+        protected.add(model_id)
+    return protected
+
+
+def load_model_with_idle_reclamation(
+        model_name: str, backend_context_tokens: int,
+        parallel_requests: int, maximum_loaded_models: int,
+        protected_model_names: object, *, pinned: bool = False,
+        health=None, request=None) -> dict:
+    first = load_model_if_residency_free(
+        model_name, backend_context_tokens, parallel_requests,
+        maximum_loaded_models, pinned=pinned, health=health, request=request)
+    if first.get("state") != "wait" or first.get("reason") != "no_free_residency":
+        return first
+    reclamation = unload_idle_residency_victim(
+        protected_model_names, health=health, request=request)
+    if reclamation.get("state") != "unloaded":
+        return {"state": "wait", "reason": "residency_reclamation_waiting",
+                "reclamation": reclamation, "load": first}
+    second = load_model_if_residency_free(
+        model_name, backend_context_tokens, parallel_requests,
+        maximum_loaded_models, pinned=pinned, health=health, request=request)
+    return {**second, "reclamation": reclamation}
+
+
 def emergency_model_allocation(settings: dict | None = None) -> dict:
     emergency = (settings if settings is not None else policy())["emergency"]
     context_tokens = emergency.get("chat_context_tokens")
@@ -395,6 +608,9 @@ def opencode_session_id(output: Path) -> str | None:
                 try:
                     value = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                # Runner stdout may contain arbitrary JSON as well as events.
+                if not isinstance(value, dict):
                     continue
                 identifier = value.get("sessionID")
                 if isinstance(identifier, str) and identifier.startswith("ses_"):
@@ -955,7 +1171,7 @@ chatbot state. Do not load a larger model during this incident.
 
 When and only when recovery is safe, run:
 
-`~/agent-ecosystem/scripts/resource-control recover`
+`~/Projects/CointOS/scripts/resource-control recover`
 
 That transition validates your `AGENT_JOB_ID` and the live health gate. If it
 refuses, keep dispatch halted and report the exact blocker. Write the incident
@@ -1031,8 +1247,8 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
         "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
                          "minimum_context_tokens": emergency["chat_context_tokens"]},
         "acceptance": [{"kind": "artifact", "path": str(conclusion)}],
-        "budget": {"run_seconds": 300, "task_seconds": 900, "maximum_attempts": 2,
-                   "maximum_output_bytes": 65536, "maximum_evidence_items": 20,
+        "budget": {"run_seconds": None, "task_seconds": None, "maximum_attempts": None,
+                   "maximum_output_bytes": None, "maximum_evidence_items": None,
                    "maximum_children": 0},
         "source_key": idempotency_key, "parent_job_id": replacement_for,
         "stop_condition": "Stop after safe recovery or an evidence-backed blocked handoff.",
@@ -1606,10 +1822,22 @@ def request_recovery(job_id: str) -> dict:
     state = load_state()
     if state.get("mode") != "emergency":
         raise RuntimeError("resource control is not in emergency mode")
-    if not job_id or job_id != state.get("sole_survivor_job"):
+    survivor_job = state.get("sole_survivor_job")
+    failed_survivor_preparation = (
+        survivor_job is None
+        and state.get("emergency_phase") == "model_loaded"
+        and str(state.get("emergency_error", "")).startswith(
+            "sole survivor preparation failed:"))
+    if survivor_job is not None:
+        if not job_id or job_id != survivor_job:
+            raise PermissionError("only the active Sole Survivor may reopen dispatch")
+        path = cli.ROOT / "state/jobs" / f"{job_id}.json"
+        json.loads(path.read_text(encoding="utf-8"))
+        recovery_actor = job_id
+    elif failed_survivor_preparation and not job_id:
+        recovery_actor = "operator:failed-survivor-recovery"
+    else:
         raise PermissionError("only the active Sole Survivor may reopen dispatch")
-    path = cli.ROOT / "state/jobs" / f"{job_id}.json"
-    job = json.loads(path.read_text(encoding="utf-8"))
     snapshot = resource_snapshot()
     if _threshold_state(snapshot) != "healthy":
         raise RuntimeError(f"recovery health gate refused: {json.dumps(snapshot, sort_keys=True)}")
@@ -1627,7 +1855,8 @@ def request_recovery(job_id: str) -> dict:
                      recovery_error_at=cli.now())
         save_state(state)
         cli.audit("resource.recovery_deferred", incident_id=incident_id,
-                  survivor_job=job_id, reasons=restrictions)
+                  survivor_job=job_id, recovery_actor=recovery_actor,
+                  reasons=restrictions)
         return {"ok": False, "resumed_jobs": [], "resources": snapshot,
                 "executor_start": None}
     start = _start_user_units(("agent-ecosystem.service",))
@@ -1637,18 +1866,20 @@ def request_recovery(job_id: str) -> dict:
                      recovery_error_at=cli.now())
         save_state(state)
         cli.audit("resource.recovery_start_failed", incident_id=incident_id,
-                  survivor_job=job_id, error=state["recovery_error"])
+                  survivor_job=job_id, recovery_actor=recovery_actor,
+                  error=state["recovery_error"])
         return {"ok": False, "resumed_jobs": [], "resources": snapshot,
                 "executor_start": start}
     resumed = _release_interrupted_jobs(
-        state.get("interrupted_jobs", []), f"released by Sole Survivor {job_id}")
-    state.update(mode="normal", recovered_at=cli.now(), recovered_by=job_id,
+        state.get("interrupted_jobs", []), f"released by {recovery_actor}")
+    state.update(mode="normal", recovered_at=cli.now(), recovered_by=recovery_actor,
                  recovery_resources=snapshot, resumed_jobs=resumed)
     for field in ACTIVE_EMERGENCY_FIELDS:
         state.pop(field, None)
     save_state(state)
     cli.audit("resource.emergency_recovered", incident_id=incident_id,
-              survivor_job=job_id, resumed_jobs=resumed, resources=snapshot)
+              survivor_job=job_id, recovery_actor=recovery_actor,
+              resumed_jobs=resumed, resources=snapshot)
     return {"ok": True, "resumed_jobs": resumed, "resources": snapshot,
             "executor_start": start}
 

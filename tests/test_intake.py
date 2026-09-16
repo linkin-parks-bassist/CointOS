@@ -111,7 +111,7 @@ class IntakeTest(unittest.TestCase):
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
         self.assertIn("# Worker", prompt)
         self.assertIn("Inspect the widget", prompt)
-        self.assertIn("# David's workspace instructions", prompt)
+        self.assertIn((Path.home() / "AGENTS.md").read_text().strip(), prompt)
         self.assertIn("# Test repository instructions", prompt)
 
     def test_pending_task_can_be_amended(self):

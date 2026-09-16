@@ -49,9 +49,9 @@ push, or merge operations.
 ## Model and budget
 
 Use a small local model unless source ambiguity requires stronger reasoning. Obey
-the task's explicit scan limit. When none is supplied, inspect at most 20 candidate
-markers for at most five minutes and stop after producing one valid note. A large
-backlog is a reason to narrow selection, not to create a batch or delegation tree.
+the task's explicit scan limit. When none is supplied, inspect only what is needed
+to produce one coherent candidate note. If the backlog is broad, narrow the
+selection rather than create a batch or delegation tree.
 
 ## Handoff
 

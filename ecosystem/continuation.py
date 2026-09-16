@@ -1,4 +1,8 @@
-"""Explicit context-continuation state machine for task execution.
+"""Deferred context-continuation experiment; not called by the active executor.
+
+OpenCode owns active context compaction. Retained for future review.
+
+Historical design: explicit context-continuation state machine for task execution.
 
 The context-run state lives on the job record as plain data:
 `context_state` and `context_generation`. The executor is the adapter: it

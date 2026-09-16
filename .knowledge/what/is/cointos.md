@@ -1,14 +1,13 @@
 ---
-verified_at: '2026-09-11T15:40:39+10:00'
-verified_by: codex /root
 scope: project local
 source: README.md; current project knowledge; pre-99318d9 Git history
-verification: Read the current overview, status, and system map; checked the named top-level source and runtime directories exist.
 review_when: Recheck when the product boundary, repository location, or first live vertical slice changes.
+status: "unverified"
+updated_at: "2026-09-14T22:55:13+10:00"
 ---
 
 CointOS is the personal, local-first agent orchestration system in
-`/home/david/agent-ecosystem`. It represents work as durable filesystem records,
+`/home/david/Projects/CointOS`. It represents work as durable filesystem records,
 runs local inference through Lemonade/OpenCode, separates responsive contact from
 deeper work, and retains append-only evidence. `README.md` is the human entry point;
 `what/is/architecture/of/cointos.md` explains component flow and

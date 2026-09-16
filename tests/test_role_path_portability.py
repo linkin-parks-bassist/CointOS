@@ -40,8 +40,8 @@ def test_helper_scripts_are_referenced_portably():
                          ("steward", "tell-david"),
                          ("worker", "install-package")):
         text = (REPO_ROOT / "roles" / f"{name}.md").read_text(encoding="utf-8")
-        assert f"~/agent-ecosystem/scripts/{script}" in text, (
-            f"roles/{name}.md lost the portable ~/agent-ecosystem/scripts/{script} reference")
+        assert f"~/Projects/CointOS/scripts/{script}" in text, (
+            f"roles/{name}.md lost the portable ~/Projects/CointOS/scripts/{script} reference")
 
 
 def load_tests(_loader, _tests, _pattern):

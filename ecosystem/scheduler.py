@@ -27,7 +27,7 @@ def priority(job: dict, scheduling: dict, now: datetime | None = None) -> int:
     age_seconds = max(0.0, (now - created).total_seconds())
     return effective_priority(
         scheduling, job.get("role"), job.get("execution_profile"),
-        str(job.get("authority_profile") or ""), age_seconds)
+        str(job.get("authority_profile") or "ordinary"), age_seconds)
 
 def choose(jobs: list[tuple[Path, dict]], inventory: dict,
            scheduling: dict, now: datetime | None = None) -> tuple[Path, dict, str]:

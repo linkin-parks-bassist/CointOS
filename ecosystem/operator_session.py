@@ -13,6 +13,8 @@ import json
 import os
 import sys
 import time
+import shutil
+import uuid
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
@@ -233,6 +235,21 @@ def run_command(
         raise ValueError(
             f"operator session {session['session_id']} is not fresh "
             f"(state: {session['state']}); release or reconcile it first")
+    if (len(command) > 1 and Path(command[0]).name == "opencode"
+            and command[1] == "run"):
+        from ecosystem.operator_inference import run as run_managed
+        import signal
+        import threading
+        if threading.current_thread() is not threading.main_thread():
+            return run_managed(root, request, command, clock=clock)
+        previous_term = signal.getsignal(signal.SIGTERM)
+        def interrupted_by_term(signum, _frame):
+            raise KeyboardInterrupt(f"operator stopped by signal {signum}")
+        signal.signal(signal.SIGTERM, interrupted_by_term)
+        try:
+            return run_managed(root, request, command, clock=clock)
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
     # Local import: executor imports resource_control, which imports this
     # module; the gated spawner is only needed at launch time.
     from ecosystem import executor
@@ -287,7 +304,36 @@ def run_command(
     return returncode
 
 
+def suspend_operator_session(root: Path, session_id: str, opencode_session: str, clock=time.monotonic):
+    """Retain the user session after verified process cleanup, ready to resume."""
+    from ecosystem.inference_proxy import _bound_process_ended
+    with _locked_state(root) as (state, save):
+        session = _session(state, session_id)
+        if _bound_process_ended(session.get("process", {})) is not True:
+            raise ValueError("user process still owns resources")
+        session.update(state="starting", process=None, opencode_session=opencode_session,
+                       suspended_monotonic=clock())
+        save()
+
+
+def auto_run(arguments: list[str]) -> int:
+    """Launch local OpenCode work without manual session/allocation parameters."""
+    binary = shutil.which("opencode")
+    if binary is None:
+        raise RuntimeError("OpenCode is not installed")
+    command = [binary, *arguments] if arguments[:1] == ["run"] else [binary, "run", *arguments]
+    model = command[command.index("--model") + 1] if "--model" in command else None
+    root = Path.home() / ".CointOS"
+    request = {"session_id": "user-" + uuid.uuid4().hex,
+               "owner_identity": "operator:" + str(os.getuid()), "tool": "opencode",
+               "model_id": model, "request_id": "user-run-" + uuid.uuid4().hex}
+    return run_command(root, request, command)
+
+
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] not in {"status", "release", "--help", "-h"} and "--root" not in arguments:
+        return auto_run(arguments)
     parser = argparse.ArgumentParser(
         prog="cointos-opencode",
         description="Run an operator tool under an explicit session lease.",
@@ -298,6 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--owner", required=True)
     run.add_argument("--tool", required=True)
     run.add_argument("--model", default=None)
+    run.add_argument("--request-id", default=None)
     run.add_argument("--root", required=True)
     run.add_argument("command", nargs=argparse.REMAINDER)
     status = subparsers.add_parser("status", help="show session leases")
@@ -320,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
             "owner_identity": args.owner,
             "tool": args.tool,
             "model_id": args.model,
-            "request_id": f"{args.session_id}:{args.tool}",
+            "request_id": args.request_id or f"{args.session_id}:{args.tool}",
         }
         return run_command(root, request, argv_tail)
     if args.subcommand == "status":

@@ -13,10 +13,10 @@ WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current
 Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
 Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
 Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json
-Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state
+Environment=AGENT_STATE_DIR=/home/david/Projects/CointOS/state
 ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/time.cfg
 ReadOnlyPaths=/var/lib/cointelprofessional/checkpoint-requests
-BindReadOnlyPaths=-/home/david/agent-ecosystem/state/jobs -/home/david/agent-ecosystem/logs/runs
+BindReadOnlyPaths=-/home/david/Projects/CointOS/state/jobs -/home/david/Projects/CointOS/logs/runs
 ReadWritePaths=/var/lib/cointelprofessional/checkpoint-results
 InaccessiblePaths=-/run/cointelprofessional/guardian.sock
 PrivateTmp=true

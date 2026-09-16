@@ -110,7 +110,7 @@ def test_abandoned_running_job_returns_to_model_routing():
         assert not recovered["resume_available"]
 
 
-def test_context_rollover_preempts_at_seventy_five_percent():
+def test_context_usage_is_left_to_opencode_compaction():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         cli.initialize()
         path = cli.ROOT / "state/jobs/task-context.json"
@@ -126,29 +126,28 @@ def test_context_rollover_preempts_at_seventy_five_percent():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         event = {
             "type": "step_finish", "sessionID": "ses_context_test",
-            "part": {"tokens": {"total": 75, "input": 70, "output": 5}},
+            "part": {"tokens": {"total": 95, "input": 90, "output": 5}},
         }
         output_path.write_text(json.dumps(event) + "\n", encoding="utf-8")
         process = subprocess.Popen(
-            ["bash", "-c", "sleep 60"], start_new_session=True,
+            ["bash", "-c", "sleep 0.4"], start_new_session=True,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
         cancellations = []
         try:
             outcome = _run_preemptibly(
-                process, ["bash", "-c", "sleep 60"], running, output_path,
+                process, ["bash", "-c", "sleep 0.4"], running, output_path,
                 lambda: cancellations.append(process.poll()),
                 scheduling_document(),
             )
         finally:
             if process.poll() is None:
                 process.kill(); process.wait()
-        assert outcome["preempted"]
-        assert cancellations == [None]
-        assert outcome["context_rollover"]
-        assert outcome["session"] == "ses_context_test"
-        assert "75/100" in outcome["reason"]
+        assert outcome["preempted"] is False
+        assert cancellations == []
+        assert outcome["returncode"] == 0
+        assert not list((cli.ROOT / "state/jobs").glob("*.handoff*"))
 
 
 def load_tests(_loader, _tests, _pattern):
@@ -156,5 +155,5 @@ def load_tests(_loader, _tests, _pattern):
         unittest.FunctionTestCase(test_higher_priority_work_preempts_and_preserves_session),
         unittest.FunctionTestCase(test_first_admitted_attempt_runs_with_zero_child_quota),
         unittest.FunctionTestCase(test_abandoned_running_job_returns_to_model_routing),
-        unittest.FunctionTestCase(test_context_rollover_preempts_at_seventy_five_percent),
+        unittest.FunctionTestCase(test_context_usage_is_left_to_opencode_compaction),
     ])

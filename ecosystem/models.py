@@ -1,6 +1,6 @@
 """Live inventory, model-mediated routing, and deterministic safety validation."""
 from __future__ import annotations
-import glob, http.client, ipaddress, json, os, re, shlex, subprocess, time, urllib.request
+import glob, http.client, ipaddress, json, math, os, re, shlex, subprocess, time, urllib.request
 from pathlib import Path
 
 from ecosystem import context_layout
@@ -153,6 +153,59 @@ def _health_parallel_sequences(resident: dict):
         return None
 
 
+def normalize_lemonade_registry_item(item: object) -> dict:
+    if not isinstance(item, dict):
+        return {"state": "unavailable", "error": "registry item is not an object"}
+    model_id = item.get("id")
+    id_valid = isinstance(model_id, str) and bool(model_id)
+    size = item.get("size")
+    size_valid = (
+        isinstance(size, (int, float))
+        and not isinstance(size, bool)
+        and math.isfinite(size)
+        and size > 0
+    )
+    labels = item.get("labels")
+    labels_valid = (
+        isinstance(labels, list)
+        and all(isinstance(value, str) and value for value in labels)
+        and len(set(labels)) == len(labels)
+    )
+    context_length = item.get("context_length")
+    context_valid = (
+        isinstance(context_length, int)
+        and not isinstance(context_length, bool)
+        and context_length > 0
+    )
+    recipe = item.get("recipe")
+    if not id_valid:
+        error = "model id must be a nonempty string"
+    elif item.get("downloaded") is not True:
+        error = "downloaded must be true"
+    elif not size_valid:
+        error = "size must be a positive finite number of GiB"
+    elif not labels_valid:
+        error = "labels must be unique nonempty strings"
+    elif not context_valid:
+        error = "context_length must be a positive integer"
+    elif not (isinstance(recipe, str) and bool(recipe)):
+        error = "recipe must be a nonempty string"
+    else:
+        return {
+            "state": "available",
+            "model_id": model_id,
+            "size_bytes": math.ceil(size * 1024 ** 3),
+            "size_gb": size,
+            "capabilities": list(labels),
+            "context_tokens": context_length,
+            "recipe": recipe,
+        }
+    result = {"state": "unavailable", "error": error}
+    if id_valid:
+        result["model_id"] = model_id
+    return result
+
+
 def _verified_model_record(
     item: dict, resident: dict | None, health_fresh: bool, observed_at: float,
     layout: dict | None = None,
@@ -166,13 +219,10 @@ def _verified_model_record(
     registry_parallel = item.get("parallel_sequences")
     metadata_verified = (
         isinstance(model_id, str) and bool(model_id)
-        and _positive_integer(parameter_count)
         and _positive_integer(size_bytes)
         and isinstance(capabilities, list)
         and all(isinstance(value, str) and value for value in capabilities)
         and _positive_integer(advertised)
-        and _positive_integer(quantum)
-        and _positive_integer(registry_parallel)
     )
     loaded = resident is not None if health_fresh else None
     loaded_context = None
@@ -445,6 +495,16 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
     models = []
     for item in downloaded:
         resident = loaded.get(item.get("id"))
+        if resident is None:
+            normalized = normalize_lemonade_registry_item(item)
+            if normalized["state"] == "available":
+                item = {
+                    **item,
+                    "size_bytes": normalized["size_bytes"],
+                    "capabilities": normalized["capabilities"],
+                    "context_length": normalized["context_tokens"],
+                    "recipe": normalized["recipe"],
+                }
         record = _verified_model_record(item, resident, health_fresh, now)
         if resident is not None and "backend_url" in resident:
             observed, reason = _observed_resident_record(item, resident, now)
@@ -612,6 +672,7 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
         "host": host,
         "resident_models": resident_models,
         "resource_envelope": resource_envelope,
+        "control_model": control_model,
         "scheduling_policy": scheduling,
     }
 
@@ -657,12 +718,9 @@ def _request_reserves(request: dict, policy: dict) -> dict:
     defaults = _policy_value(policy, "context_reserves", {})
     reserves = {}
     for name in ("prompt_tokens", "tool_tokens", "max_output_tokens", "handoff_tokens"):
-        requested = request.get(name, defaults.get(name))
-        configured = defaults.get(name) if isinstance(defaults, dict) else None
-        reserves[name] = (max(requested, configured)
-                          if isinstance(requested, int) and not isinstance(requested, bool)
-                          and isinstance(configured, int) and not isinstance(configured, bool)
-                          else requested)
+        # Defaults supply absent claims; they must not inflate an explicit native
+        # output budget (e.g. a 96-token response into a 4096-token allocation).
+        reserves[name] = request.get(name, defaults.get(name))
     return reserves
 
 
@@ -706,7 +764,8 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     model_bytes = model.get("size_bytes", model.get("model_bytes"))
     advertised = model.get("context", model.get("advertised_context_tokens"))
     quantum = model.get("supported_context_quantum")
-    parallel = model.get("parallel_sequences", _policy_value(policy, "parallel_sequences", 1))
+    model_parallel = model.get("parallel_sequences")
+    parallel = model_parallel if _positive_integer(model_parallel) else _policy_value(policy, "parallel_requests", 1)
     context_mode = model.get("context_mode")
     if context_mode is None:
         context_mode = "fixed"
@@ -729,14 +788,10 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         reasons.append("metadata:stale")
     if not isinstance(model.get("provenance"), str) or not model["provenance"]:
         reasons.append("metadata:provenance")
-    if not _positive_integer(parameter_count):
-        reasons.append("parameter_count")
     if not _positive_integer(model_bytes):
         reasons.append("model_bytes")
     if not _positive_integer(advertised):
         reasons.append("advertised_context_tokens")
-    if not _positive_integer(quantum):
-        reasons.append("supported_context_quantum")
     if not _positive_integer(parallel):
         reasons.append("parallel_sequences")
     if not isinstance(capabilities, list) or any(not isinstance(item, str) for item in capabilities):
@@ -790,7 +845,8 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     per_sequence = 0
     backend_context = 0
     context_exclusion_reasons = []
-    if (_positive_integer(advertised) and _positive_integer(quantum)
+    realization_pressure = []
+    if (_positive_integer(advertised)
             and _positive_integer(parallel) and _positive_integer(maximum_backend_context)):
         if context_mode == "shared":
             loaded_total = model.get("loaded_context")
@@ -808,9 +864,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
                     context_exclusion_reasons.append("context:resource_envelope")
                 if observed_per_sequence < advertised:
                     context_exclusion_reasons.append("context:loaded_allocation")
-                per_sequence = upper - upper % quantum
-                if per_sequence != upper:
-                    context_exclusion_reasons.append("context:backend_quantum")
+                per_sequence = upper
                 if per_sequence == 0:
                     reasons.append("context:unsupported")
                 else:
@@ -829,9 +883,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
                         if loaded_total // parallel < upper:
                             context_exclusion_reasons.append("context:loaded_allocation")
                         upper = min(upper, loaded_total // parallel)
-            per_sequence = upper - upper % quantum
-            if per_sequence != upper:
-                context_exclusion_reasons.append("context:backend_quantum")
+            per_sequence = upper
             if per_sequence == 0:
                 reasons.append("context:unsupported")
             backend_context = per_sequence * parallel
@@ -872,7 +924,10 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         if host_available is not None and (
                 not _positive_integer(host_available)
                 or protected_host + coin_reserved + load_demand + incremental_kv > host_available):
-            reasons.append("host_capacity")
+            if model.get("loaded"):
+                reasons.append("host_capacity")
+            else:
+                realization_pressure.append("host_capacity")
         gtt_used = envelope.get("gtt_used_bytes")
         envelope_gtt_limit = envelope.get("gtt_limit_bytes")
         gtt_limit = min(envelope_gtt_limit, policy_gtt_limit) \
@@ -881,7 +936,10 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
             if (not isinstance(gtt_used, int) or isinstance(gtt_used, bool) or gtt_used < 0
                     or not _positive_integer(gtt_limit)
                     or gtt_used + load_demand + incremental_kv > gtt_limit):
-                reasons.append("gtt_capacity")
+                if model.get("loaded"):
+                    reasons.append("gtt_capacity")
+                else:
+                    realization_pressure.append("gtt_capacity")
 
     return {
         "state": "admitted" if not reasons else "deferred",
@@ -894,6 +952,7 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
         "context_mode": context_mode,
         "context_tokens_per_sequence": per_sequence,
         "context_exclusion_reasons": context_exclusion_reasons,
+        "realization_pressure": realization_pressure,
         **reserves,
         "kv_estimate_bytes": kv_estimate,
         "incremental_kv_bytes": incremental_kv,
@@ -922,7 +981,9 @@ def safe_routes(inventory: dict, policy: dict, request: dict) -> list[dict]:
 
 
 def choose_route(routes: list[dict], request: dict) -> dict:
-    """Choose the largest verified qualified model, with preference only as a tie break."""
+    """Choose the largest qualified model by parameter_count, falling back to
+    positive model_bytes when parameter_count is absent; context, preference,
+    and model id remain deterministic tie breaks."""
     admitted = [route for route in routes if route.get("state") == "admitted"]
     requirements = request.get("requirements", {})
     requirements = requirements if isinstance(requirements, dict) else {}
@@ -931,8 +992,14 @@ def choose_route(routes: list[dict], request: dict) -> dict:
                        for index, model_id in enumerate(preferences)
                        if isinstance(model_id, str)} if isinstance(preferences, list) else {}
     if admitted:
+        def size_rank(route):
+            parameter_count = route.get("parameter_count")
+            if _positive_integer(parameter_count):
+                return (1, parameter_count)
+            model_bytes = route.get("model_bytes")
+            return (0, model_bytes if _positive_integer(model_bytes) else 0)
         selected = max(admitted, key=lambda route: (
-            route["parameter_count"],
+            size_rank(route),
             route["context_tokens_per_sequence"],
             preference_rank.get(route["model_id"], 0),
             route["model_id"],
@@ -1014,7 +1081,12 @@ def realize(decision: dict, inventory: dict) -> dict:
     elif (not _positive_integer(context) or not _positive_integer(backend_context)
             or not _positive_integer(parallel) or backend_context != context * parallel):
         raise ValueError("route has inconsistent per-sequence and backend context allocation")
-    control_model = inventory.get("scheduling_policy", {}).get("control_plane", {}).get("model")
+    control_model = inventory.get("control_model")
+    if not (control_model is None
+            or (isinstance(control_model, str) and control_model)):
+        raise ValueError(
+            f"invalid inventory control model {control_model!r}: "
+            "must be None or a nonempty string")
     if candidate.get("loaded"):
         if model_id != control_model and candidate.get("pinned"):
             subprocess_result = subprocess.run(
@@ -1031,6 +1103,24 @@ def realize(decision: dict, inventory: dict) -> dict:
     admitted, reason = admission(model_id, inventory)
     if not admitted:
         raise RuntimeError(reason)
-    raise RuntimeError(
-        f"model {model_id!r} requires privileged resource-control loading: {reason}"
+    from ecosystem import resource_control
+    limit = resource_control.llm_residency_limit(resource_control.lemonade_health())
+    if limit["state"] != "available":
+        raise RuntimeError(f"residency limit unavailable: {limit['error']}")
+    protected = resource_control.protected_residency_model_names(control_model)
+    result = resource_control.load_model_with_idle_reclamation(
+        model_id, backend_context, parallel, limit["maximum_loaded_models"],
+        protected, pinned=False,
     )
+    if result["state"] in ("loaded", "already_loaded"):
+        return {
+            "action": result["state"],
+            "model": model_id,
+            "context_tokens": context,
+            "backend_context_tokens": backend_context,
+            "parallel_sequences": parallel,
+            "residency": result,
+        }
+    if result["state"] == "wait":
+        raise RuntimeError(f"model residency waiting: {result['reason']}")
+    raise RuntimeError("unknown model residency outcome")

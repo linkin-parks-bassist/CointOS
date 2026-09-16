@@ -141,13 +141,17 @@ def budget_outcome(budget: dict, usage: dict, now_monotonic: float) -> dict:
          validated["maximum_children"], _exceeded_ceiling),
     )
     for reason, total, limit, exhausted in checks:
+        if limit is None:
+            continue
         if exhausted(total, limit):
             return {"state": "checkpoint_required", "reason": reason}
     return {"state": "within_budget"}
 
 
 def record_budget_handoff(outcome: dict, artifact: dict) -> dict:
-    """The only path from checkpoint_required to partial_handoff_ready.
+    """Deferred handoff experiment; the active executor retains OpenCode sessions.
+
+    The only path from checkpoint_required to partial_handoff_ready.
 
     The artifact attests a durable, nonempty file bound to the job and the
     agent generation that produced it; the caller supplies disk facts.

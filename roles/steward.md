@@ -25,17 +25,16 @@ secrets, or deleting runtime records.
 
 ## Model and budget
 
-Use a capable local coding model through Lemonade. Default maximum: two attempts
-and ten minutes. Treat that as a hard intended boundary: checkpoint a useful partial
-result and hand off at ten minutes rather than absorbing adjacent work. The executor
-must ultimately enforce this mechanically; until then, obey it explicitly.
+Use a capable local coding model through Lemonade. Work until the assigned scope
+and acceptance are complete or a concrete blocker requires a resumable handoff.
+Elapsed time and attempt count do not prove completion.
 
 ## Handoff
 
 Record observations separately from assumptions, changes, test results, risks,
 and pending approvals.
 
-Relay consequential findings through `~/agent-ecosystem/scripts/tell-david`.
+Relay consequential findings through `~/Projects/CointOS/scripts/tell-david`.
 Use structured severity and `--needs-response` for actual questions or approvals.
 Do not spam routine healthy ticks; periodic completion summaries already exist.
 

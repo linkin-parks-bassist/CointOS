@@ -1,13 +1,9 @@
-"""Version-qualified OpenCode capability boundary.
+"""Observe OpenCode identity without making package updates an admission gate.
 
-The installed OpenCode output ceiling is qualified once per exact version
-identity with a focused probe or an authoritative client fact, then stored in
-the checked-in catalogue `config/opencode-capabilities.json`. The ceiling is
-never inferred from a context ratio and never defaulted for an unknown
-version: an unknown or changed version invalidates the qualification and
-closes launch until it is requalified. The returned capability record uses
-exactly the keys `ecosystem.opencode_capacity.effective_inference_capacity`
-accepts as its client capability argument.
+Known versions retain measured client ceilings.  An unknown version uses no
+additional client ceiling: backend observations and configured output reserve
+remain the authoritative bounds, so an ordinary package update cannot strand
+otherwise valid local work.
 """
 
 from __future__ import annotations
@@ -74,25 +70,18 @@ def _validate_catalogue(catalogue):
 
 
 def qualified_opencode_capability(version_text, catalogue):
-    """Resolve one exact OpenCode version to its qualified capability.
-
-    `version_text` is the literal output of
-    `/home/david/.opencode/bin/opencode --version` (a surrounding newline is
-    tolerated, nothing else). Returns a plain capability dictionary, or raises
-    ValueError naming the missing qualification; there is no default.
-    """
+    """Return observed client identity and any known measured output ceiling."""
     if not isinstance(version_text, str):
         raise ValueError("version text must be a string")
     version = version_text.strip()
     if not version:
         raise ValueError("version text must not be empty")
     versions = _validate_catalogue(catalogue)
-    if version not in versions:
-        raise ValueError(
-            f"OpenCode version {version!r} has no qualification in the "
-            "catalogue; there is no default capability and launch stays "
-            "closed until requalified")
-    ceiling = _validate_entry(version, versions[version])
+    # An unknown client must not become a dispatch barrier.  A deliberately
+    # huge ceiling means this layer imposes no additional cap; fresh backend
+    # capacity and the configured output reserve still bound every request.
+    ceiling = (_validate_entry(version, versions[version])
+               if version in versions else (1 << 63) - 1)
     return {
         "version": version,
         "qualified": True,

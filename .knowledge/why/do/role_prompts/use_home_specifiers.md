@@ -1,19 +1,16 @@
 ---
-verified_at: '2026-09-11T21:04:42+10:00'
-verified_by: opencode
 scope: project local
 source: roles/*.md; tests/test_role_path_portability.py; David task instruction 2026-09-11
-verification: Grep shows all eight helper-script references in roles/ use the
-  ~/agent-ecosystem/scripts/ spelling with no /home/david/ paths remaining;
-  the focused test passes 3/3 via python3 -m unittest.
 review_when: Recheck if role-prompt path convention changes or the portability
   regression test is moved, renamed, or removed.
+status: "unverified"
+updated_at: "2026-09-14T22:55:13+10:00"
 ---
 
 Role Markdown in `roles/` refers to repository helper scripts with the portable
-spelling `~/agent-ecosystem/scripts/<name>` (for example
-`~/agent-ecosystem/scripts/install-package` and
-`~/agent-ecosystem/scripts/tell-david`), never a fixed `/home/david/...` absolute
+spelling `~/Projects/CointOS/scripts/<name>` (for example
+`~/Projects/CointOS/scripts/install-package` and
+`~/Projects/CointOS/scripts/tell-david`), never a fixed `/home/david/...` absolute
 path, because role prompts are advisory instructions an agent may run under a
 different checkout or home layout.
 

@@ -1,17 +1,17 @@
 ---
-verified_at: '2026-09-12T09:42:22+10:00'
-verified_by: opencode /home/david
 scope: project local
 source: current repository paths; pre-99318d9 Git history; ecosystem/inference_proxy.py opencode_environment; ecosystem/executor.py launch_runner_round capacity preflight; ecosystem/inference_capacity.py validate_launch_capacity; config/opencode-capacity.json
-verification: Checked every named module and directory exists; used canonical architecture documents for responsibility grouping; confirmed the observation-adapter, config-encoder, and pre-spawn validation owner functions in source.
 review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
+status: "unverified"
+updated_at: "2026-09-14T22:42:45+10:00"
 ---
 
 Start at the narrow owner for the concern; do not read all modules.
 
 - Intake and task contracts: `ecosystem/cli.py`, `ecosystem/task_contracts.py`.
-- Execution, continuation, and acceptance: `ecosystem/executor.py`,
-  `ecosystem/continuation.py`, `ecosystem/verification.py`.
+- Execution and acceptance: `ecosystem/executor.py`, `ecosystem/verification.py`.
+  OpenCode owns active context compaction; `ecosystem/continuation.py` is a deferred
+  experiment disconnected from execution. Regression tests: `tests/test_opencode_compaction.py`.
 - Model facts and routing: `ecosystem/models.py`,
   `ecosystem/inference_policy.py`.
 - Live OpenCode capacity record (pure derivation from fresh incarnation-bound
@@ -56,3 +56,5 @@ Start at the narrow owner for the concern; do not read all modules.
 Use `what/is/architecture/of/cointos.md` for flow and
 `what/is/current/technical_debt.md` for known boundary debt. Confirm an exact
 function/interface in source before changing it.
+
+Observable direct/manual launch qualification and server read-back: `ecosystem/opencode_launch.py`, invoked by `scripts/opencode_observable.py` before session/client creation. Tests: `tests/test_opencode_launch.py` include stale config, admitted allowance, startup mismatch/change, no-inference real-server read-back and inert real-client request capture. `constrain_launch_capacity` in `ecosystem/inference_capacity.py` supplies encoder allowances that fit both the lease and the live backend.

@@ -84,6 +84,10 @@ def tick() -> str:
         state_path = cli.ROOT / "state/watchdog.json"
         state = json.loads(state_path.read_text()) if state_path.exists() else {}
         now = datetime.now(timezone.utc)
+        from ecosystem.managed_inference import reconcile_dead_callers
+        native_recovery = reconcile_dead_callers(cli.ROOT)
+        from ecosystem.operator_inference import recover_abandoned_controllers
+        operator_recovery = recover_abandoned_controllers(cli.ROOT)
         repaired_verifications = reconcile_verifications()
         last = datetime.fromisoformat(state["last_review_enqueued_at"]) if state.get("last_review_enqueued_at") else None
         due = not last or (now-last).total_seconds() >= config["steward_review_seconds"]
@@ -97,8 +101,8 @@ Selected Steward assignment (`{task_id}`):
 
 {task_card}
 
-Work from `~/agent-ecosystem`. Read the last 30 conversational entries
-in `~/agent-ecosystem/state/conversations` without copying secrets into
+Work from `{cli.ROOT}`. Read the last 30 conversational entries
+in `{cli.ROOT / "state/conversations"}` without copying secrets into
 durable notes. Review recent audit events, failed/running jobs, executor output
 tails, model choices and rationales, systemd user-service state, and
 the project knowledge tree's current-priority and runtime-truth leaves.
@@ -106,7 +110,7 @@ the project knowledge tree's current-priority and runtime-truth leaves.
 Deterministic findings at enqueue time:
 {issue_text}
 
-Look for confusing or dishonest bot replies, missed context, jobs that did not produce what David requested, stalls, notification failures, unsafe behavior, and documentation drift. Make bounded user-level fixes when evidence is clear; run tests; update status/ADRs when warranted. You may enqueue a focused follow-up job if another role/model is more appropriate. Do not perform approval-required actions. Send David a concise evidence-based handoff."""
+Look for confusing or dishonest bot replies, missed context, jobs that did not produce what David requested, stalls, notification failures, unsafe behavior, and documentation drift. Implement bounded user-level fixes when evidence is clear; use existing focused checks and direct smoke checks; do not write regression tests during MVP bringup. Update project KT state and next actions when warranted. You may enqueue a focused follow-up job if another role/model is more appropriate. Do not perform approval-required actions. Send David a concise evidence-based handoff."""
             root = cli.ROOT.resolve()
             contract = {
                 "objective": task,
@@ -116,9 +120,9 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                 "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
                                  "minimum_context_tokens": 16384},
                 "acceptance": [{"kind": "handoff", "value": "evidence-backed review"}],
-                "budget": {"run_seconds": 300, "task_seconds": 900,
-                           "maximum_attempts": 2, "maximum_output_bytes": 65536,
-                           "maximum_evidence_items": 30, "maximum_children": 1},
+                "budget": {"run_seconds": None, "task_seconds": None,
+                           "maximum_attempts": None, "maximum_output_bytes": None,
+                           "maximum_evidence_items": None, "maximum_children": 1},
                 "source_key": f"{SOURCE}:{task_id}", "parent_job_id": None,
                 "stop_condition": "Stop after one bounded review or useful partial handoff.",
             }
@@ -127,10 +131,10 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                                       model_reason="Optional watchdog preference; central routing remains authoritative.",
                                       task_contract=contract)
             history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
-            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications)
+            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery)
             cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)
             return f"enqueued {job_id}"
-        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications)
+        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery)
         cli.atomic_json(state_path, state)
         return "healthy; review not due" if not issues else f"findings={len(issues)}; review already pending"
 

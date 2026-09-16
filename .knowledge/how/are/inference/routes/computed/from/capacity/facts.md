@@ -1,0 +1,13 @@
+---
+status: "unverified"
+created_at: "2026-09-14T23:33:30+10:00"
+scope: "local"
+source: "ecosystem/models.py; tests/test_model_admission.py; 780-test run single stale assertion"
+updated_at: "2026-09-14T23:48:50+10:00"
+---
+
+ecosystem/models.py safe_routes interprets every inventory model without calling inference; validate_route recomputes its matching model and rejects changed parameter/byte/context-mode/pool/slot/per-sequence allocation fields. _model_route requires verified fresh model and resource-envelope evidence, requested capabilities and minimum context, and nonnegative per-request prompt/tool/output/handoff allowances. Request reserves override dynamic policy defaults. Fixed contexts derive pool/parallel once; proven shared contexts use the observed per-sequence cap and pool. Resident preallocated KV has zero incremental KV demand; nonresident model load includes model/transient bytes. choose_route selects the greatest verified parameter count, then context and explicit preference. models.route can invoke a routing model and must not be used from automatic native acquisition because that would recursively require inference. A requested loaded model can instead be selected directly from safe_routes while retaining its actual per-request output allowance.
+
+Native boundary testing exposed a previous undocumented behavior: _request_reserves used max(explicit request, configured default), treating defaults as mandatory floors. This made a 96-token native worker disagree with its recomputed 2048/4096-token route and prevented acquisition. The implementation now treats defaults as defaults for absent fields, retaining explicit nonnegative allowances exactly. This does not change the observed backend context or implicitly reduce an existing promised agent window. The reason for the previous floor was not recorded; no rationale is inferred.
+
+Explicit zero reserves also remain zero; test_total_context_is_divided_across_sequences used explicit zeros but expected obsolete default floors of one. Updated assertions preserve the independent 65536/2 context split check and match the explicit-reserve contract. Source: tests/test_model_admission.py; full 780-test run exposed this single stale assertion.

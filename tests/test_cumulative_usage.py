@@ -93,6 +93,7 @@ def test_persisted_near_limit_usage_checkpoints_later_round():
                 _fake_process([None, 0]), ["bash", "-c", "true"], job, output_path,
                 lambda: None, scheduling_document(), initial_output_bytes=0)
         assert outcome["budget_checkpoint"]["reason"] == "task_seconds"
+        assert not list((cli.ROOT / "state/jobs").glob("*.handoff*"))
         usage = outcome["usage"]
         assert "run_started" not in usage and "task_started" not in usage
         assert usage["task_seconds"] == 11.0

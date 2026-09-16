@@ -17,7 +17,7 @@ This document outlines the test plan for verifying the Lead agent role implement
 ### 3. Workflow Validation
 - Test that Lead agent can properly review and approve worker tasks
 - Validate that Lead agent can reject incomplete work
-- Verify that proper handoff requirements are enforced
+- Verify that required result evidence is checked
 
 ### 4. Documentation Consistency
 - Check that all related documentation files are present

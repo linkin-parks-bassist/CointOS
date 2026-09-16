@@ -8,12 +8,12 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ecosystem.inference import request as inference_request
+from ecosystem.managed_inference import request as managed_request
 from ecosystem.resource_control import active_chat_model
 
 
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
 WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
-MAX_TOOL_ROUNDS = 6
 
 
 TOOLS = [
@@ -61,14 +61,16 @@ Live context at deep-turn start:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
-    for _ in range(MAX_TOOL_ROUNDS):
+    while True:
         assistant = (infer(model=model, messages=messages, tools=TOOLS,
                            max_tokens=1400, timeout=180, temperature=0.35)
-                     if infer is not None else inference_request({
-                         **(inference_context or {}), "messages": messages,
-                         "tools": TOOLS, "tool_choice": "auto", "timeout": 180,
-                         "temperature": 0.35,
-                     }, Path(__file__).resolve().parents[1], time.monotonic))
+                     if infer is not None else (
+                         inference_request({**inference_context, "messages": messages,
+                                            "tools": TOOLS, "tool_choice": "auto", "timeout": 180,
+                                            "temperature": .35}, Path(__file__).resolve().parents[1], time.monotonic)
+                         if inference_context is not None else
+                         managed_request(model, messages, 1400, timeout=180, tools=TOOLS,
+                                         control=True)))
         calls = assistant.get("tool_calls") or []
         if not calls:
             messages.append(assistant)
@@ -106,4 +108,3 @@ Live context at deep-turn start:
             if isinstance(followup, str) and followup.strip():
                 return {"followup": followup.strip()}
             messages.append({"role": "user", "content": "publish_followup requires a non-empty message."})
-    raise RuntimeError("deep control agent exceeded its bounded tool loop")

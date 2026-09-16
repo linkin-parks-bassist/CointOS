@@ -7,7 +7,7 @@
     {
       "name": "control-plane",
       "id": "qwen3.8-27b-control",
-      "path": "/home/david/agent-ecosystem/models/qwen3.8-27b.gguf",
+      "path": "/home/david/Projects/CointOS/models/qwen3.8-27b.gguf",
       "type": "resident",
       "reserved_for": "control-plane",
       "parallel_requests": 4,
@@ -16,7 +16,7 @@
     {
       "name": "worker-default",
       "id": "qwen3.5-4b-worker",
-      "path": "/home/david/agent-ecosystem/models/qwen3.5-4b.gguf",
+      "path": "/home/david/Projects/CointOS/models/qwen3.5-4b.gguf",
       "type": "resident",
       "reserved_for": "workers",
       "parallel_requests": 2,
@@ -25,7 +25,7 @@
     {
       "name": "worker-large",
       "id": "qwen3.5-8b-worker",
-      "path": "/home/david/agent-ecosystem/models/qwen3.5-8b.gguf",
+      "path": "/home/david/Projects/CointOS/models/qwen3.5-8b.gguf",
       "type": "resident",
       "reserved_for": "workers",
       "parallel_requests": 1,

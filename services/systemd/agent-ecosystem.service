@@ -8,11 +8,11 @@ Nice=10
 CPUWeight=10
 IOWeight=10
 IOSchedulingClass=idle
-WorkingDirectory=%h/agent-ecosystem
+WorkingDirectory=%h/Projects/CointOS
 EnvironmentFile=-%h/.config/agent-ecosystem/telegram.env
 Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
-ExecStart=%h/agent-ecosystem/scripts/ecosystem run-once
-ExecStart=%h/agent-ecosystem/scripts/executor
+ExecStart=%h/Projects/CointOS/scripts/ecosystem run-once
+ExecStart=%h/Projects/CointOS/scripts/executor
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

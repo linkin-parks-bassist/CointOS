@@ -4,7 +4,6 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -12,11 +11,11 @@ import time
 from pathlib import Path
 
 from ecosystem import cli
-from ecosystem import continuation
 from ecosystem import evidence
 from ecosystem import opencode_client
 from ecosystem import task_contracts
-from ecosystem.inference_capacity import reserve_sequence, validate_launch_capacity
+from ecosystem import time_policy
+from ecosystem.inference_capacity import reserve_sequence, constrain_launch_capacity
 from ecosystem.inference_proxy import (
     cancel as cancel_proxy,
     completed_run_termination,
@@ -140,7 +139,7 @@ def gated_child_launch(config_fd: int | None, child_argv: list[str], child_env: 
             "outcome": None,
         }
         return record
-    except Exception as error:
+    except BaseException as error:
         if gate_read_fd >= 0:
             os.close(gate_read_fd)
         if record is None and process is not None:
@@ -160,7 +159,7 @@ def gated_child_launch(config_fd: int | None, child_argv: list[str], child_env: 
                 "pid": record["pid"],
                 "start_ticks": record.get("start_ticks"),
                 "pgid": record["pgid"],
-                "cleanup": gated_child_cleanup(record, 0.2),
+                "cleanup": gated_child_cleanup(record),
             }
         else:
             os.close(gate_write_fd)
@@ -227,11 +226,17 @@ def gated_child_wait(record: dict, timeout: float) -> dict:
     return _reaped_outcome(record, returncode)
 
 
-def gated_child_cleanup(record: dict, timeout: float = 0.2) -> dict:
+def _cleanup_deadline_seconds() -> float:
+    return time_policy.seconds(time_policy.load(), "executor", "cleanup_deadline_seconds")
+
+
+def gated_child_cleanup(record: dict, timeout: float | None = None) -> dict:
     """Cancel, terminate, and reap an owned gated child within bounded waits."""
     if (record.get("outcome") is not None
             and record["outcome"].get("state") == "reaped"):
         return record["outcome"]
+    if timeout is None:
+        timeout = _cleanup_deadline_seconds()
     record["outcome"] = None
     _close_record_fd(record, "gate_write_fd")
     process = record["process"]
@@ -328,7 +333,7 @@ def _runner_worker_request(job: dict, route_record: dict) -> dict:
     }
     for field in (
         "role", "authority_profile", "execution_profile", "requirements",
-        "prompt_tokens", "tool_tokens", "handoff_tokens", "write_paths",
+        "prompt_tokens", "tool_tokens", "handoff_tokens", "write_paths", "operator_session_id",
     ):
         if field in job:
             request[field] = job[field]
@@ -398,27 +403,36 @@ def _observe_worker_capacity(root, model_id, *, refresh_inventory, clock):
                 if isinstance(registry_document, dict) else None)
     if not isinstance(registry, list):
         return None
-    item = next(
-        (entry for entry in registry
+    items = [entry for entry in registry
          if isinstance(entry, dict)
          and entry.get("id") == model_id
-         and entry.get("downloaded") is True), None)
-    if item is None:
+         and entry.get("downloaded") is True]
+    if len(items) != 1:
         return None
+    item = items[0]
     health = (health_document.get("all_models_loaded")
               if isinstance(health_document, dict) else None)
     if not isinstance(health, list):
         return None
-    resident = next(
-        (entry for entry in health
+    residents = [entry for entry in health
          if isinstance(entry, dict)
          and entry.get("model_name") == model_id
-         and "backend_url" in entry), None)
-    if resident is None:
+         and "backend_url" in entry]
+    if len(residents) != 1:
         return None
+    resident = residents[0]
     try:
+        identity = process_identity(resident["pid"])
         backend_document = models._get_backend(resident["backend_url"], "/v1/models")
         props = models._get_backend(resident["backend_url"], "/props")
+        if process_identity(resident["pid"]) != identity:
+            return None
+        refreshed = models._get("/api/v1/health")["all_models_loaded"]
+        matches = [entry for entry in refreshed if entry.get("model_name") == model_id]
+        stable = ("model_name", "backend_url", "pid", "loaded", "backend_alive",
+                  "recipe_options", "launch_command")
+        if len(matches) != 1 or any(matches[0].get(key) != resident.get(key) for key in stable):
+            return None
     except Exception:
         return None
     return observe_opencode_backend_capacity(
@@ -426,25 +440,19 @@ def _observe_worker_capacity(root, model_id, *, refresh_inventory, clock):
 
 
 def _qualify_worker_capability(root, *, refresh_inventory, clock):
-    """Default capability producer: qualify the installed OpenCode version.
+    """Observe the installed OpenCode identity and any measured client ceiling.
 
-    Probes the exact installed version and resolves it against the checked-in
-    qualification catalogue. There is no default capability: an unknown,
-    changed, or unprobeable version raises so the launch stays closed until the
-    version is requalified.
+    Package-version changes are metadata, not admission decisions.  Unknown
+    versions run under fresh backend capacity and configured output bounds.
     """
     binary = Path.home() / ".local/bin/opencode"
     try:
         probe = subprocess.run(
             [str(binary), "--version"], capture_output=True, text=True, timeout=15)
     except Exception:
-        raise ValueError(
-            "OpenCode version probe failed; launch stays closed until the "
-            "installed version is requalified")
+        raise ValueError("OpenCode executable is unavailable")
     if probe.returncode != 0:
-        raise ValueError(
-            "OpenCode version probe failed; launch stays closed until the "
-            "installed version is requalified")
+        raise ValueError("OpenCode executable is unavailable")
     catalogue = opencode_client.load_capability_catalogue(
         Path(root) / "config/opencode-capabilities.json")
     return opencode_client.qualified_opencode_capability(probe.stdout, catalogue)
@@ -503,7 +511,7 @@ def _validate_worker_capacity(
         "context_tokens_per_sequence": route_record["context_tokens_per_sequence"],
         "max_output_tokens": route_record["max_output_tokens"],
     }
-    return validate_launch_capacity(lease, record)
+    return constrain_launch_capacity(lease, record)
 
 
 def launch_runner_round(
@@ -551,6 +559,9 @@ def launch_runner_round(
         job.pop("runner_worker_request", None)
         job.pop("runner_sequence_request", None)
         job.pop("runner_spawn_failure", None)
+        # Close replay evidence belongs to the allocation generation it closed.
+        job.pop("runner_close_outcome", None)
+        job.pop("runner_close_state", None)
         cli.atomic_json(job_path, job)
     elif job.get("state") != "runner_starting":
         raise ValueError("runner round requires ready or runner_starting job")
@@ -617,6 +628,10 @@ def launch_runner_round(
             launch_record["start_ticks"], clock,
         )
         process_registered = True
+        if worker_request.get("operator_session_id"):
+            from ecosystem.operator_session import register_operator_process
+            register_operator_process(root, worker_request["operator_session_id"],
+                                      launch_record["pid"], launch_record["start_ticks"], clock)
         job["runner_phase"] = "process_registered"
         cli.atomic_json(job_path, job)
         sequence_request = _runner_sequence_request(
@@ -637,18 +652,23 @@ def launch_runner_round(
             cli.atomic_json(job_path, job)
             if clock() >= worker_request["deadline_monotonic"]:
                 outcome = gated_child_cleanup(launch_record)
-                job.update(
-                    state="reconciliation_required", updated_at=cli.now(),
-                    reconciliation_reason=(
-                        "inference waiter reached its deadline without withdrawal support"
-                    ),
-                    cleanup_state=outcome["state"],
-                )
+                if outcome.get("state") != "reaped" or outcome.get("process_group_alive") is not False:
+                    raise RuntimeError("waiting acquisition cleanup is unresolved")
+                from ecosystem.inference_capacity import withdraw_unissued_sequence
+                withdraw_unissued_sequence(root, inference_lease["lease_id"], clock)
+                _observe_stopped_worker(root, worker_lease, launch_record, outcome,
+                                       {"state": "deferred", "returncode": outcome["returncode"]},
+                                       clock, release, observe)
+                job.update(state="ready", updated_at=cli.now(),
+                           runner_deferred_reasons=["acquisition deadline; request retained"])
                 cli.atomic_json(job_path, job)
-                return {"state": "reconciliation_required", "job": job}
+                return {"state": "deferred", "job": job}
             sleeper(0.05)
             inventory = refresh_inventory()
+            previous_lease = inference_lease
             inference_lease = reserve(root, sequence_request, inventory, clock)
+            if inference_lease.get("state") == "deferred":
+                inference_lease["pending_acquisition"] = previous_lease
         if inference_lease.get("state") == "deferred":
             outcome = gated_child_cleanup(launch_record)
             if outcome["state"] != "reaped":
@@ -662,6 +682,10 @@ def launch_runner_round(
                 )
                 cli.atomic_json(job_path, job)
                 return {"state": "reconciliation_required", "job": job}
+            pending = inference_lease.get("pending_acquisition")
+            if pending:
+                from ecosystem.inference_capacity import withdraw_unissued_sequence
+                withdraw_unissued_sequence(root, pending["lease_id"], clock)
             _observe_stopped_worker(
                 root, worker_lease, launch_record, outcome,
                 {"state": "deferred", "returncode": outcome["returncode"]},
@@ -715,7 +739,7 @@ def launch_runner_round(
             "state": "running", "launch": launch_record,
             "worker_lease": worker_lease, "inference_lease": inference_lease,
         }
-    except Exception as error:
+    except BaseException as error:
         if inference_lease is not None and inference_lease.get("state") != "deferred":
             job.update(
                 state="reconciliation_required", updated_at=cli.now(),
@@ -814,11 +838,13 @@ def close_runner_round(
     release=release_worker,
     observe=observe_workers,
     clock=time.monotonic,
+    root: Path | None = None,
 ) -> dict:
     """Close R4 then R3 then R1, or retain both leases for reconciliation."""
     if ("runner_closed_generation" in job
             and job["runner_closed_generation"] == job.get("runner_generation")):
         return {"state": job["runner_close_state"]}
+    root = Path(root) if root is not None else cli.ROOT
     saved_outcome = job.get("runner_close_outcome")
     if saved_outcome is not None and saved_outcome != child_outcome:
         raise ValueError("runner close outcome changed during replay")
@@ -839,7 +865,7 @@ def close_runner_round(
         )
         cli.atomic_json(job_path, job)
         return {"state": "reconciliation_required"}
-    evidence = termination(cli.ROOT, inference_lease["lease_id"])
+    evidence = termination(root, inference_lease["lease_id"])
     if evidence is None:
         job.update(
             state="reconciliation_required", updated_at=cli.now(),
@@ -849,14 +875,14 @@ def close_runner_round(
         )
         cli.atomic_json(job_path, job)
         return {"state": "reconciliation_required"}
-    revoked = revoke(cli.ROOT, inference_lease["lease_id"], evidence, clock)
+    revoked = revoke(root, inference_lease["lease_id"], evidence, clock)
     if revoked.get("state") != "revoked" \
             or revoked.get("sequence", {}).get("state") != "released":
         raise RuntimeError("proxy close did not release the inference sequence")
     final_state = "run_finished" if child_outcome["returncode"] == 0 else "failed"
     worker_outcome = {"state": final_state, "returncode": child_outcome["returncode"]}
     _observe_stopped_worker(
-        cli.ROOT, worker_lease, launch_record, child_outcome, worker_outcome,
+        root, worker_lease, launch_record, child_outcome, worker_outcome,
         clock, release, observe,
     )
     job.update(state=final_state, updated_at=cli.now(),
@@ -897,7 +923,7 @@ def _process_alive(job: dict) -> bool:
     return False
 
 
-def _stop_recovered_runner(job: dict, timeout: float = 0.2) -> bool | None:
+def _stop_recovered_runner(job: dict, timeout: float | None = None) -> bool | None:
     pid = job.get("executor_pid")
     start_ticks = job.get("executor_start_ticks")
     pgid = job.get("executor_pgid")
@@ -909,6 +935,8 @@ def _stop_recovered_runner(job: dict, timeout: float = 0.2) -> bool | None:
         return _process_group_alive(pgid)
     if identity["start_ticks"] != start_ticks or identity["pgid"] != pgid:
         return None
+    if timeout is None:
+        timeout = _cleanup_deadline_seconds()
     try:
         os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
@@ -1069,6 +1097,11 @@ def _waiting_jobs(running_id: str) -> list[dict]:
 
 
 def _preemption_reason(job: dict, started: float, scheduling: dict) -> str | None:
+    lease_id = job.get("inference_lease_id")
+    if lease_id:
+        capacity = json.loads((cli.ROOT / "state/inference-capacity.json").read_text())
+        if capacity.get("leases", {}).get(lease_id, {}).get("state") == "preemption_requested":
+            return "higher-priority inference needs this allocation"
     waiting = _waiting_jobs(job["id"])
     if not waiting:
         return None
@@ -1180,40 +1213,19 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
                 last_output_bytes = size
         outcome = execution_budget.budget_outcome(budget, usage, now)
         if outcome["state"] == "checkpoint_required":
-            handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
-            request_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff-request.md"
-            if not handoff_path.exists():
-                cli.atomic_text(request_path, f"""The task budget is exhausted. Do not continue
-the main task. Write a concise, sufficient handoff to `{handoff_path}`.
-Record the objective, authoritative instructions, decisions and rationale, exact completed
-work, changed files, tests and evidence, unresolved risks, and the next concrete action.
-Distinguish verified facts from assumptions. This artifact seeds the next attempt.
-""")
             before_stop()
             execution_budget.stop_process_group(
                 process.pid, wrapup_seconds, grace_seconds, observe)
             stopped = time.monotonic()
             return {"returncode": process.wait(), "preempted": False,
                     "budget_checkpoint": outcome,
+                    "session": job.get("opencode_session") or opencode_session_id(output_path),
                     "usage": _close_usage(budget, usage, output_path,
                                           last_output_bytes, stopped),
                     "elapsed_seconds": round(stopped - started, 3)}
         elapsed = now - started
-        context_rollover = False
-        context_usage = None
-        observed = opencode_context_usage(output_path, job.get("opencode_session"))
-        context_limit = int(job.get("context_tokens") or 0)
-        if observed and context_limit:
-            context_usage = continuation.observe_context_usage(
-                observed, {"context_tokens": context_limit})
-            transition = continuation.context_transition(
-                job, context_usage, float(settings["context_rollover_fraction"]))
-            context_rollover = (
-                transition["context_state"] == "handoff_requested"
-                and job.get("context_state") != "handoff_requested")
-        reason = (f"context reached {context_usage['total_tokens']}/{context_limit} tokens "
-                  f"({float(settings['context_rollover_fraction']):.0%}); durable handoff required"
-                  if context_rollover else _preemption_reason(job, started, scheduling))
+        # OpenCode owns context compaction within its durable session.
+        reason = _preemption_reason(job, started, scheduling)
         if reason:
             session = job.get("opencode_session") or opencode_session_id(output_path)
             # Give OpenCode a short initial window to publish its durable session id.
@@ -1227,8 +1239,6 @@ Distinguish verified facts from assumptions. This artifact seeds the next attemp
                         "usage": _close_usage(budget, usage, output_path,
                                                last_output_bytes,
                                                time.monotonic()),
-                        "context_rollover": context_rollover,
-                        "context_usage": context_usage,
                         "elapsed_seconds": round(elapsed, 3)}
         time.sleep(1)
     stopped = time.monotonic()
@@ -1270,9 +1280,25 @@ def discovery_evidence(job: dict) -> dict:
     }
 
 
+def _resume_without_handoff(job: dict) -> bool:
+    """Retire legacy rollover markers only when the client session is retained.
+
+    An already detached context needs explicit recovery review rather than silently
+    starting fresh or reconstructing it from a generated handoff.
+    """
+    if job.get("context_state") not in (
+            "handoff_requested", "handoff_durable", "continuation_ready"):
+        return True
+    if not job.get("opencode_session"):
+        return False
+    job["context_state"] = "running"
+    if job.get("original_prompt"):
+        job["prompt"] = job["original_prompt"]
+    return True
+
+
 def execute_next(run=subprocess.run) -> bool:
     cli.initialize()
-    rollover_fraction = float(scheduling_policy()["workers"]["context_rollover_fraction"])
     if (cli.ROOT / "state/PAUSED").exists():
         print("ecosystem is paused")
         return False
@@ -1300,6 +1326,13 @@ def execute_next(run=subprocess.run) -> bool:
                 cli.audit("scheduler.admission_deferred", reason=str(error))
                 print(str(error))
                 return False
+            if not _resume_without_handoff(job):
+                reason = "legacy context rollover has no retained OpenCode session; review recovery manually"
+                job.update(state="queued", model_reason=reason, updated_at=cli.now())
+                cli.atomic_json(path, job)
+                cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                print(f"{job['id']} routing deferred: {reason}")
+                return False
             if resource_mode() == "emergency":
                 emergency = json.loads((cli.ROOT / "config/resource-policy.json").read_text(
                     encoding="utf-8"))["emergency"]
@@ -1326,14 +1359,13 @@ def execute_next(run=subprocess.run) -> bool:
             if model_changed:
                 from ecosystem.roles import render_context
                 job.update(model=decision["model"], model_reason=decision["reason"])
-                if job.get("context_state") not in ("handoff_requested", "handoff_durable"):
-                    prompt_path = cli.ROOT / "state/jobs" / f"{job['id']}.prompt.md"
-                    cli.atomic_text(prompt_path, render_context(
-                        job.get("role"), job["task"], job["id"], job["model"],
-                        job["model_reason"], job.get("agent_name", "Agent"),
-                        task_contract=job.get("task_contract")))
-                    job["prompt"] = str(prompt_path.relative_to(cli.ROOT))
-                    job.setdefault("original_prompt", job["prompt"])
+                prompt_path = cli.ROOT / "state/jobs" / f"{job['id']}.prompt.md"
+                cli.atomic_text(prompt_path, render_context(
+                    job.get("role"), job["task"], job["id"], job["model"],
+                    job["model_reason"], job.get("agent_name", "Agent"),
+                    task_contract=job.get("task_contract")))
+                job["prompt"] = str(prompt_path.relative_to(cli.ROOT))
+                job.setdefault("original_prompt", job["prompt"])
             else:
                 job["model_reason"] = decision["reason"]
             try:
@@ -1349,45 +1381,7 @@ def execute_next(run=subprocess.run) -> bool:
             job["model_realization"] = {"at": cli.now(), **realization}
             job["context_tokens"] = int(decision["context_tokens"])
             job["scheduling_reason"] = scheduling_reason
-            if job.get("context_state") in ("handoff_requested", "handoff_durable") \
-                    and not job.get("opencode_session"):
-                resource_policy = json.loads(
-                    (cli.ROOT / "config/resource-policy.json").read_text(encoding="utf-8"))
-                reserves = resource_policy.get("context_reserves", {})
-                destination_lease = {
-                    "model_id": job["model"],
-                    "context_tokens": int(decision["context_tokens"]),
-                    "prompt_tokens": int(decision.get(
-                        "prompt_tokens", reserves.get("prompt_tokens"))),
-                    "handoff_tokens": int(decision.get(
-                        "handoff_tokens", reserves.get("handoff_tokens"))),
-                    "tool_tokens": int(decision.get(
-                        "tool_tokens", reserves.get("tool_tokens"))),
-                    "max_output_tokens": int(decision.get(
-                        "max_output_tokens", reserves.get("max_output_tokens"))),
-                }
-                continuation_record = continuation.prepare_continuation(
-                    job,
-                    job.get("handoff")
-                    if job.get("context_state") == "handoff_durable" else None,
-                    {"evidence_paths": list(job.get("context_logs", []))},
-                    destination_lease)
-                job.update(continuation_record)
-                degraded_note = (
-                    "The handoff is a mechanical degraded artifact: the agent did not "
-                    "emit a semantic summary.\n"
-                    if job.get("handoff_degraded") else "")
-                handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
-                rollover_prompt = cli.ROOT / "state/jobs" / f"{job['id']}.rollover.md"
-                cli.atomic_text(rollover_prompt, f"""Continue the exact assigned task in a fresh context.
-{degraded_note}
-Read the original prompt at `{cli.ROOT / job.get('original_prompt', job.get('prompt', ''))}`, the handoff at
-`{handoff_path}`, and the current filesystem state. Treat the handoff as a navigation
-aid, not authority: verify consequential claims before relying on them. Continue from
-the next incomplete boundary without repeating completed work.
-""")
-                job["prompt"] = str(rollover_prompt.relative_to(cli.ROOT))
-            if job.get("context_state") in ("continuation_ready", "paused_for_resources"):
+            if job.get("context_state") == "paused_for_resources":
                 job["context_state"] = "running"
             job.setdefault("context_state", "running")
             job.setdefault("context_generation", 1)
@@ -1404,26 +1398,15 @@ the next incomplete boundary without repeating completed work.
             resume_session = job.get("opencode_session")
             if resume_session:
                 command.extend(["--session", resume_session])
-                if job.get("context_state") == "handoff_requested":
-                    handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
-                    request_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff-request.md"
-                    cli.atomic_text(request_path, f"""The context reached the {rollover_fraction:.0%} rollover threshold.
-Do not continue the main task. Write a concise, sufficient handoff to `{handoff_path}`.
-Record the objective, authoritative instructions, decisions and rationale, exact completed
-work, changed files, tests and evidence, unresolved risks, and the next concrete action.
-Distinguish verified facts from assumptions. This artifact will seed a fresh context.
-""")
-                    prompt_path = request_path
-                else:
-                    resume_path = cli.ROOT / "state/jobs" / f"{job['id']}.resume.md"
-                    cli.atomic_text(
-                        resume_path,
-                        "Resume this exact task after a scheduler or resource interruption. "
-                        "Re-read the original prepared prompt and current filesystem state, "
-                        "verify what was durably completed, then continue from the last safe "
-                        "boundary without duplicating finished work.\n",
-                    )
-                    prompt_path = resume_path
+                resume_path = cli.ROOT / "state/jobs" / f"{job['id']}.resume.md"
+                cli.atomic_text(
+                    resume_path,
+                    "Resume this exact task after a scheduler or resource interruption. "
+                    "Re-read the original prepared prompt and current filesystem state, "
+                    "verify what was durably completed, then continue from the last safe "
+                    "boundary without duplicating finished work.\n",
+                )
+                prompt_path = resume_path
             view_path = cli.ROOT / 'state/worker-views' / f"{job['id']}-{time.time_ns()}.json"
             view_path.parent.mkdir(parents=True, exist_ok=True)
             command = [sys.executable,
@@ -1467,6 +1450,10 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                     # no later branch (including reconciliation_required) can
                     # discard accounting.
                     job["budget_usage"] = outcome["usage"]
+                    retained_session = outcome.get("session") or opencode_session_id(output_path)
+                    if retained_session:
+                        job["opencode_session"] = retained_session
+                        job["resume_available"] = True
                     _persist_parent_job(job, path)
                     child_outcome = gated_child_wait(context["launch"], 0)
                     closed = close_runner_round(job, path, context, child_outcome)
@@ -1474,38 +1461,38 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                         print(f"{job['id']} requires inference reconciliation")
                         return True
                     if outcome.get("budget_checkpoint"):
-                        from ecosystem import execution_budget
-
                         checkpoint = outcome["budget_checkpoint"]
-                        handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
-                        handoff = None
-                        try:
-                            if handoff_path.stat().st_size > 0:
-                                handoff = {
-                                    "path": str(handoff_path.relative_to(cli.ROOT)),
-                                    "bytes": handoff_path.stat().st_size,
-                                    "job_id": job["id"],
-                                    "agent_generation": int(job.get("agent_generation", 1)),
-                                }
-                        except OSError:
-                            handoff = None
-                        state_record = execution_budget.checkpoint_job_state(
-                            checkpoint, handoff)
-                        # checkpoint_required is persisted first; only
-                        # record_budget_handoff may produce partial_handoff_ready.
-                        job.update(state=state_record["state"],
+                        # Preserve the client session; semantic handoff generation is deferred.
+                        session = outcome.get("session")
+                        if session:
+                            job["opencode_session"] = session
+                        if job.get("opencode_session"):
+                            job.update(state="ready",
+                                       logical_run_state="continuing",
+                                       budget_outcome=checkpoint,
+                                       resume_available=True,
+                                       budget_usage={},
+                                       updated_at=cli.now())
+                            job.pop("executor_pid", None)
+                            cli.atomic_json(path, job)
+                            cli.audit("task.budget_continuation_queued",
+                                      job_id=job["id"],
+                                      reason=checkpoint["reason"])
+                            print(f"{job['id']} budget checkpoint "
+                                  f"({checkpoint['reason']}): continuation queued")
+                            return True
+                        job.update(state="checkpoint_required",
                                    logical_run_state="terminal",
                                    budget_outcome=checkpoint,
+                                   resume_available=bool(job.get("opencode_session")),
                                    updated_at=cli.now())
-                        if handoff:
-                            job["budget_handoff"] = state_record["artifact"]
                         job.pop("executor_pid", None)
                         cli.atomic_json(path, job)
                         cli.audit("task.budget_checkpoint", job_id=job["id"],
                                   reason=checkpoint["reason"],
-                                  state=state_record["state"])
+                                  state=job["state"])
                         print(f"{job['id']} budget exhausted "
-                              f"({checkpoint['reason']}): {state_record['state']}")
+                              f"({checkpoint['reason']}): {job['state']}")
                         return True
                     if outcome["preempted"]:
                             current = json.loads(path.read_text(encoding="utf-8"))
@@ -1521,9 +1508,6 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                             job.update(state="ready", updated_at=cli.now(),
                                        last_preemption_reason=outcome["reason"],
                                        preemption_count=int(job.get("preemption_count", 0)) + 1)
-                            if outcome.get("context_rollover"):
-                                job["context_state"] = "handoff_requested"
-                                job["context_usage"] = outcome.get("context_usage")
                             cli.atomic_json(path, job)
                             cli.audit("task.preempted", job_id=job["id"],
                                       reason=outcome["reason"],
@@ -1538,15 +1522,6 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                 session = opencode_session_id(output_path)
                 if session:
                     job["opencode_session"] = session
-                if job.get("context_state") in (None, "running"):
-                    final_observed = opencode_context_usage(
-                        output_path, job.get("opencode_session"))
-                    final_limit = int(job.get("context_tokens") or 0)
-                    if final_observed and final_limit:
-                        final_usage = continuation.observe_context_usage(
-                            final_observed, {"context_tokens": final_limit})
-                        job.update(continuation.context_transition(
-                            job, final_usage, rollover_fraction))
                 job.pop("executor_pid", None)
             except subprocess.TimeoutExpired:
                 if 'context' in locals():
@@ -1560,60 +1535,6 @@ Distinguish verified facts from assumptions. This artifact will seed a fresh con
                     job.update(state="failed", updated_at=cli.now(),
                                error=f"{type(error).__name__}: {error}")
             job.pop("executor_pid", None)
-            if job.get("state") == "run_finished" \
-                    and job.get("context_state") == "handoff_requested":
-                handoff_path = cli.ROOT / "state/jobs" / f"{job['id']}.handoff.md"
-                handoff = None
-                try:
-                    text = handoff_path.read_text(encoding="utf-8")
-                    if text.strip():
-                        handoff = {
-                            "path": str(handoff_path.relative_to(cli.ROOT)),
-                            "summary": text.strip().splitlines()[0][:200],
-                            "token_count": max(1, (len(text) + 2) // 3),
-                            "job_id": job["id"],
-                            "agent_generation": int(job.get("agent_generation", 1)),
-                        }
-                except OSError:
-                    handoff = None
-                if handoff:
-                    job.update(continuation.attest_handoff(job, handoff))
-                    job.pop("handoff_degraded", None)
-                else:
-                    cli.atomic_text(handoff_path, f"""# Mechanical context handoff
-
-The agent did not emit the requested semantic handoff. This explicit degraded
-artifact preserves the recoverable boundaries without pretending to summarize work.
-
-- Job: `{job['id']}`
-- Objective: {job.get('task', '')}
-- Original prompt: `{job.get('original_prompt', job.get('prompt', ''))}`
-- Previous OpenCode session: `{job.get('opencode_session', 'unknown')}`
-- Executor log: `{job.get('output', '')}`
-- Required next action: inspect those durable sources and current filesystem state,
-  reconstruct only verified progress, then continue without duplicating completed work.
-""")
-                    job["handoff_degraded"] = True
-                rollover_index = int(job.get("context_rollover_count", 0)) + 1
-                archived_log = output_path.with_name(
-                    f"{job['id']}.context-{rollover_index}.opencode.log")
-                shutil.copy2(output_path, archived_log)
-                previous_session = job.get("opencode_session")
-                if previous_session:
-                    job.setdefault("previous_opencode_sessions", []).append(previous_session)
-                job.setdefault("context_logs", []).append(str(archived_log.relative_to(cli.ROOT)))
-                job.pop("opencode_session", None)
-                job.pop("context_usage", None)
-                job.update(state="ready", context_rollover_count=rollover_index,
-                           updated_at=cli.now())
-                cli.atomic_json(path, job)
-                cli.audit("task.context_rolled_over", job_id=job["id"],
-                          handoff=str(handoff_path.relative_to(cli.ROOT)),
-                          durable=job.get("context_state") == "handoff_durable",
-                          degraded=bool(job.get("handoff_degraded")))
-                print(f"{job['id']} context rolled over; handoff "
-                      f"{'attested' if handoff else 'missing, degraded artifact written'}")
-                return True
             _persist_parent_job(job, path)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))
             if job.get("verifies"):

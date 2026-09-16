@@ -79,15 +79,12 @@ def test_capability_feeds_the_capacity_constructor():
     assert record["effective_output_tokens"] == 30000
 
 
-def test_unknown_version_is_rejected_without_default():
-    _expect_failure(
-        "unknown version",
-        "no qualification",
+def test_unknown_version_does_not_block_dispatch():
+    capability = opencode_client.qualified_opencode_capability(
         "1.18.31", _catalogue())
-    _expect_failure(
-        "version text with trailing decoration",
-        "no qualification",
-        "1.18.30 (build 5)", _catalogue())
+    assert capability["version"] == "1.18.31"
+    assert capability["qualified"] is True
+    assert capability["maximum_output_tokens"] == (1 << 63) - 1
 
 
 def test_malformed_version_text_is_rejected():
@@ -96,11 +93,10 @@ def test_malformed_version_text_is_rejected():
     _expect_failure("non-string version text", "version text", 42, _catalogue())
 
 
-def test_unknown_or_malformed_catalogue_is_rejected():
-    _expect_failure(
-        "version missing from an empty catalogue",
-        "no qualification",
+def test_malformed_catalogue_is_rejected():
+    capability = opencode_client.qualified_opencode_capability(
         "1.18.30", _catalogue(versions={}))
+    assert capability["maximum_output_tokens"] == (1 << 63) - 1
     _expect_failure(
         "non-string catalogue",
         "catalogue",

@@ -7,14 +7,14 @@ Execute one approved and bounded work unit in its assigned workspace.
 ## Inputs and outputs
 
 Accept an explicit task plus project notes. Produce working artifacts, proportionate
-test evidence, updated notes, and a concise handoff.
+test evidence, updated notes, and a concise progress report.
 
 ## Permissions
 
 Read and edit the assigned project workspace and run local builds and tests. When
 a task genuinely requires a missing Ubuntu package, install a precisely named
 package from existing configured repositories through
-`~/agent-ecosystem/scripts/install-package`. Record what and why.
+`~/Projects/CointOS/scripts/install-package`. Record what and why.
 
 ## Approval required
 
@@ -24,19 +24,20 @@ people, push/merge, hardware state changes, or deletion/overwrite of material da
 
 ## Model and budget
 
-Use the configured local coding model through Lemonade. Default maximum: three
-attempts and thirty minutes.
+Use the configured local coding model through Lemonade. Work until the assigned
+scope and acceptance are complete or a concrete blocker requires a resumable
+handoff. Elapsed time and attempt count do not prove completion.
 
-## Handoff
+## Progress reporting
 
 Record files changed, commands and results, decisions, known issues, and next action.
 
 When David needs to know something during or after work, leave a structured message
-with `~/agent-ecosystem/scripts/tell-david`. Choose `--severity info`,
+with `~/Projects/CointOS/scripts/tell-david`. Choose `--severity info`,
 `warning`, `question`, or `approval`; add `--needs-response` only when work genuinely
 needs his answer. Cointelprofessional will relay it and retain it as conversation context.
 
 ## Success and failure
 
-Success means acceptance checks pass and the handoff is complete. Stop on an
+Success means acceptance checks pass and results are recorded. Stop on an
 approval boundary, exhausted budget, irrecoverable test failure, or unsafe ambiguity.

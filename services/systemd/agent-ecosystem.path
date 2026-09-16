@@ -2,7 +2,7 @@
 Description=Watch the local agent idea inbox
 
 [Path]
-PathChanged=%h/agent-ecosystem/inbox/new
+PathChanged=%h/Projects/CointOS/inbox/new
 PathChanged=%h/.CointOS/state/jobs
 Unit=agent-ecosystem.service
 

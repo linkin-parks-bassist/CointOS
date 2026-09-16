@@ -176,11 +176,11 @@ def test_checkpoint_unit_is_unprivileged_activation_independent_infrastructure()
         "ExecStart=/usr/bin/python3 -m survival.checkpoint",
         "WorkingDirectory=/usr/local/lib/cointelprofessional-survival/current",
         "Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional",
-        "Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state",
+        "Environment=AGENT_STATE_DIR=/home/david/Projects/CointOS/state",
         "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg",
         "Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json",
         "ReadOnlyPaths=/var/lib/cointelprofessional/checkpoint-requests",
-        "BindReadOnlyPaths=-/home/david/agent-ecosystem/state/jobs -/home/david/agent-ecosystem/logs/runs",
+        "BindReadOnlyPaths=-/home/david/Projects/CointOS/state/jobs -/home/david/Projects/CointOS/logs/runs",
         "ReadWritePaths=/var/lib/cointelprofessional/checkpoint-results",
         "InaccessiblePaths=-/run/cointelprofessional/guardian.sock",
         "NoNewPrivileges=true",
@@ -263,7 +263,7 @@ def test_units_project_task_3_and_4_paths_and_groups():
     assert "Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional" in guardian_text
     assert "Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg" in guardian_text
     assert "Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json" in guardian_text
-    assert "Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state" in guardian_text
+    assert "Environment=AGENT_STATE_DIR=/home/david/Projects/CointOS/state" in guardian_text
     assert "Environment=INCIDENT_DESTINATION_PATH=/etc/cointelprofessional/incident_destination.json" in guardian_text
     assert "/etc/cointelprofessional/incident_destination.json" in guardian_text
     assert "/var/lib/cointelprofessional/lifecycle-progress" in guardian_text

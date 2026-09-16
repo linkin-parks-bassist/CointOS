@@ -130,9 +130,7 @@ def _validate_client(client):
     if not isinstance(version, str) or not version:
         raise ValueError("client capability version must be a non-empty string")
     if client["qualified"] is not True:
-        raise ValueError(
-            f"OpenCode version {version!r} is not qualified; launch stays closed "
-            "until the version is requalified")
+        raise ValueError("client capability qualified flag must be true")
     _positive_integer(
         client["maximum_output_tokens"], "client capability maximum_output_tokens")
 
@@ -214,10 +212,7 @@ def effective_inference_capacity(observation, client_capability, policy, now):
             f"effective output {effective_output} must be strictly smaller than "
             f"effective context {effective_context}")
     threshold = -(-Fraction(fraction) * effective_context // 1)
-    if threshold < prompt:
-        raise ValueError(
-            f"rollover threshold {threshold} leaves no room before the prompt "
-            f"estimate {prompt} inside effective context {effective_context}")
+    # Legacy rollover metadata is informational; OpenCode owns compaction.
     if prompt + effective_output > effective_context:
         raise ValueError(
             f"prompt estimate {prompt} plus effective output {effective_output} "

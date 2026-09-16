@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Slice=control.slice
-ExecStart=%h/agent-ecosystem/scripts/resource-control run
-WorkingDirectory=%h/agent-ecosystem
+ExecStart=%h/Projects/CointOS/scripts/resource-control run
+WorkingDirectory=%h/Projects/CointOS
 Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
 Restart=always
 RestartSec=1
@@ -18,7 +18,7 @@ ManagedOOMPreference=avoid
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=%h/agent-ecosystem
+ReadWritePaths=%h/Projects/CointOS
 
 [Install]
 WantedBy=default.target

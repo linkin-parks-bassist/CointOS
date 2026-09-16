@@ -84,6 +84,31 @@ def publish_view(path, url, directory, session, pid):
     return record
 
 
+def finish_client(process):
+    """Mirror client output and classify semantic failure and truncation."""
+    saw_error = False
+    finish_reason = None
+    for raw_line in iter(process.stdout.readline, b''):
+        sys.stdout.buffer.write(raw_line)
+        sys.stdout.buffer.flush()
+        try:
+            event = json.loads(raw_line.decode('utf-8', errors='replace'))
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'error':
+            saw_error = True
+        part = event.get('part') if isinstance(event, dict) else None
+        if (isinstance(event, dict) and event.get('type') == 'step_finish'
+                and isinstance(part, dict)):
+            finish_reason = part.get('reason')
+    process.stdout.close()
+    code = process.wait()
+    return {
+        'returncode': 1 if code == 0 and saw_error else code,
+        'length': finish_reason == 'length',
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--view-record', required=True, type=Path)
@@ -106,9 +131,27 @@ def main():
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, interrupted)
     server = client = None
+    capacity_fd = None
     try:
-        server, url = start_server(command[0], directory, dict(os.environ),
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from ecosystem.opencode_launch import prepare_environment, verify_server_capacity
+        server_env, capacity_fd, capacity = prepare_environment(
+            command, os.environ, Path(__file__).resolve().parents[1])
+        server, url = start_server(command[0], directory, server_env,
                                   args.view_record.with_suffix('.server.log'))
+        expected_base = None
+        if capacity is not None:
+            payload = json.loads(os.pread(capacity_fd, os.fstat(capacity_fd).st_size, 0))
+            expected_base = payload['provider']['Lemonade']['options']['baseURL']
+            verify_server_capacity(url, directory, capacity,
+                                   expected_base,
+                                   binary=command[0], root=Path(__file__).resolve().parents[1])
+            print(json.dumps({'type': 'worker_capacity_verified',
+                              'model': capacity['model_id'],
+                              'context_tokens': capacity['opencode_context_tokens'],
+                              'output_tokens': capacity['opencode_output_tokens'],
+                              'opencode_version': capacity['opencode_version']}),
+                  file=sys.stderr, flush=True)
         if '--session' in command:
             session = command[command.index('--session')+1]
         else:
@@ -119,7 +162,10 @@ def main():
         client_env = dict(os.environ)
         client_env.pop('OPENCODE_CONFIG', None)
         client_env.pop('OPENCODE_CONFIG_CONTENT', None)
-        client = subprocess.Popen(command+['--attach', url], cwd=directory, env=client_env)
+        client_command = list(command)
+        prompt = command[2] if len(command) > 2 and not command[2].startswith('-') else None
+        if prompt is not None:
+            del client_command[2]
         try:
             runtime_root = Path(os.environ.get(
                 'COINTOS_RUNTIME_ROOT', Path.home()/'.CointOS'))
@@ -133,12 +179,46 @@ def main():
             print(json.dumps({'type': 'worker_view_window_unavailable',
                               'attach_command': record['attach_command']}),
                   file=sys.stderr, flush=True)
-        return client.wait()
+        length_recoveries = 0
+        while True:
+            client = subprocess.Popen(client_command+['--attach', url], cwd=directory,
+                                      env=client_env, stdin=subprocess.PIPE,
+                                      stdout=subprocess.PIPE)
+            client.stdin.write((prompt or '').encode())
+            client.stdin.close()
+            outcome = finish_client(client)
+            client = None
+            if not outcome['length']:
+                return outcome['returncode']
+            length_recoveries += 1
+            print(json.dumps({
+                'type': 'worker_length_recovery',
+                'session_id': session,
+                'attempt': length_recoveries,
+                'output_tokens': capacity.get('opencode_output_tokens')
+                    if capacity is not None else None,
+            }), file=sys.stderr, flush=True)
+            if length_recoveries >= 3:
+                print(json.dumps({
+                    'type': 'worker_emergency',
+                    'reason': 'repeated_output_length',
+                    'session_id': session,
+                    'attempts': length_recoveries,
+                }), file=sys.stderr, flush=True)
+                return 75
+            if capacity is not None:
+                verify_server_capacity(
+                    url, directory, capacity, expected_base,
+                    binary=command[0], root=Path(__file__).resolve().parents[1])
+            prompt = ('Continue the incomplete response in this exact retained session. '
+                      'Complete the requested task; do not repeat finished work.')
     finally:
         if client is not None:
             stop_child(client)
         if server is not None:
             stop_child(server)
+        if capacity_fd is not None:
+            os.close(capacity_fd)
 
 
 if __name__ == '__main__':

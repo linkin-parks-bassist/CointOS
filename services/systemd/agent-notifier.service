@@ -5,8 +5,8 @@ Wants=network-online.target agent-models.service
 
 [Service]
 Slice=control.slice
-ExecStart=%h/agent-ecosystem/scripts/notifier
-WorkingDirectory=%h/agent-ecosystem
+ExecStart=%h/Projects/CointOS/scripts/notifier
+WorkingDirectory=%h/Projects/CointOS
 EnvironmentFile=%h/.config/agent-ecosystem/telegram.env
 Environment=AGENT_TELEGRAM_MODEL=Qwen3.5-4B-GGUF
 Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS

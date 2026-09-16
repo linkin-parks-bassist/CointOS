@@ -22,10 +22,10 @@ Environment=GUARDIAN_SOCKET_PATH=/run/cointelprofessional/guardian.sock
 Environment=SURVIVAL_STORE_DIR=/var/lib/cointelprofessional
 Environment=TIME_CONFIG_PATH=/etc/cointelprofessional/time.cfg
 Environment=LIFECYCLE_CATALOG_PATH=/usr/local/lib/cointelprofessional-survival/current/config/survival-lifecycle.json
-Environment=AGENT_STATE_DIR=/home/david/agent-ecosystem/state
+Environment=AGENT_STATE_DIR=/home/david/Projects/CointOS/state
 Environment=INCIDENT_DESTINATION_PATH=/etc/cointelprofessional/incident_destination.json
 ReadOnlyPaths=/usr/local/lib/cointelprofessional-survival /etc/cointelprofessional/guardian.env /etc/cointelprofessional/incident_destination.json /etc/cointelprofessional/time.cfg /sys/fs/cgroup
-ReadWritePaths=/var/lib/cointelprofessional/lifecycle /var/lib/cointelprofessional/lifecycle-progress /var/lib/cointelprofessional/lifecycle-runtime /var/lib/cointelprofessional/lifecycle-completions /var/lib/cointelprofessional/lifecycle-result-quarantine /var/lib/cointelprofessional/policy /var/lib/cointelprofessional/outbox/critical /run/cointelprofessional /home/david/agent-ecosystem/state
+ReadWritePaths=/var/lib/cointelprofessional/lifecycle /var/lib/cointelprofessional/lifecycle-progress /var/lib/cointelprofessional/lifecycle-runtime /var/lib/cointelprofessional/lifecycle-completions /var/lib/cointelprofessional/lifecycle-result-quarantine /var/lib/cointelprofessional/policy /var/lib/cointelprofessional/outbox/critical /run/cointelprofessional /home/david/Projects/CointOS/state
 PrivateTmp=true
 PrivateDevices=true
 NoNewPrivileges=true

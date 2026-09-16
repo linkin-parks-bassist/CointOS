@@ -47,6 +47,8 @@ def validate_budget(raw: dict) -> dict:
         raise ValueError("budget must contain exactly the required fields")
     for field in BUDGET_FIELDS:
         value = raw[field]
+        if value is None:
+            continue
         minimum = 0 if field == "maximum_children" else 1
         if type(value) is not int or value < minimum:
             raise ValueError(f"invalid budget {field}")

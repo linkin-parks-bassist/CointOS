@@ -10,6 +10,7 @@ from pathlib import Path
 from ecosystem import cli
 
 _CANONICAL_TURN_ID = re.compile(r"telegram-(0|[1-9][0-9]*)")
+_SOURCE_ID = re.compile(r"(telegram-(?:0|[1-9][0-9]*))(?::(?:user|front|deep|disaster))?")
 
 
 def _require_canonical_identity(identity: str) -> str:
@@ -29,7 +30,8 @@ def append(user_id: int, role: str, content: str, source_id: str | None = None,
     if role not in {"user", "assistant"}:
         raise ValueError("invalid conversation role")
     if source_id is not None:
-        _require_canonical_identity(source_id)
+        if _SOURCE_ID.fullmatch(source_id) is None:
+            raise ValueError(f"invalid conversation source identity: {source_id!r}")
     if reply_to is not None:
         _require_canonical_identity(reply_to)
     path = path_for(user_id)
@@ -106,7 +108,7 @@ def _projected_row(user_id: int, entry: dict, content: str,
     reply_to = entry.get("reply_to")
     lifecycle = None
     if source_id is not None:
-        owner = lifecycle_for(source_id)
+        owner = lifecycle_for(source_id.split(":", 1)[0])
         if isinstance(owner, dict):
             lifecycle = owner.get("lifecycle")
     return {

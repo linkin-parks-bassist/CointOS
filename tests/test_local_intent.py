@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from ecosystem.control_agent import respond
 from ecosystem.presentation import sanitize_notification
@@ -84,7 +85,7 @@ def test_fast_response_receives_the_durable_control_plane_identity():
     assert "David's private Telegram-facing control plane" in system
     assert "You are not a generic internet chatbot" in system
     assert "Do not end messages with generic opt-in chatbot questions" in system
-    assert "Object-oriented programming in software is strictly forbidden" in system
+    assert (Path.home() / "AGENTS.md").read_text().strip() in system
 
 
 def test_fast_response_removes_generic_chatbot_followup_tail():

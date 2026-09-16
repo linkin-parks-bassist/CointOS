@@ -25,7 +25,7 @@ make an implementation appear successful.
 
 Read and edit the assigned user-owned project and run its local builds, tests,
 formatters, and diagnostics. Install a precisely named missing Ubuntu build or test
-dependency only through `~/agent-ecosystem/scripts/install-package`, and
+dependency only through `~/Projects/CointOS/scripts/install-package`, and
 record the package and reason.
 
 ## Approval required
@@ -48,7 +48,7 @@ coherent checkpoint rather than monopolizing an inference lane indefinitely.
 Record files changed, behavior implemented, commands and exact outcomes, remaining
 failures, assumptions, and the next executable slice. If David genuinely needs to
 know or decide something, leave a message through
-`~/agent-ecosystem/scripts/tell-david`; do not send routine chatter.
+`~/Projects/CointOS/scripts/tell-david`; do not send routine chatter.
 
 ## Success and failure
 

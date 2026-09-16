@@ -630,6 +630,51 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         self.assertEqual(failure["cleanup"]["pid"], spawned[0].pid)
         self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
 
+    def test_gated_child_keyboard_interrupt_after_spawn_reaps_and_balances_fds(self):
+        baseline = set(os.listdir("/proc/self/fd"))
+        marker = self.root / "injected-failure-must-not-exec"
+        config_fd = os.memfd_create("gated-child-injected-failure", os.MFD_CLOEXEC)
+        os.write(config_fd, b"config")
+        environment = os.environ.copy()
+        environment["OPENCODE_CONFIG"] = f"/proc/self/fd/{config_fd}"
+        spawned = []
+
+        def capturing_popen(*args, **kwargs):
+            process = subprocess.Popen(*args, **kwargs)
+            spawned.append(process)
+            return process
+
+        identity_calls = 0
+
+        def fail_first_identity(pid):
+            nonlocal identity_calls
+            identity_calls += 1
+            if identity_calls == 1:
+                raise KeyboardInterrupt("injected after spawn")
+            return process_identity(pid)
+
+        child_program = "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text('ran')"
+        with patch("ecosystem.executor.process_identity", side_effect=fail_first_identity):
+            with self.assertRaisesRegex(KeyboardInterrupt, "injected after spawn") as raised:
+                gated_child_launch(
+                    config_fd,
+                    [sys.executable, "-c", child_program, str(marker)],
+                    environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    popen=capturing_popen,
+                )
+        self.assertEqual(len(spawned), 1)
+        self.assertIsNotNone(spawned[0].returncode)
+        self.assertFalse(marker.exists())
+        failure = raised.exception.launch_failure
+        self.assertTrue(failure["spawned"])
+        self.assertEqual(failure["pid"], spawned[0].pid)
+        self.assertEqual(failure["cleanup"]["state"], "reaped")
+        self.assertEqual(failure["cleanup"]["pid"], spawned[0].pid)
+        self.assertEqual(set(os.listdir("/proc/self/fd")), baseline)
+
     def test_gated_child_launch_pre_spawn_failure_reports_never_spawned(self):
         baseline = set(os.listdir("/proc/self/fd"))
         config_fd = os.memfd_create("gated-child-pre-spawn", os.MFD_CLOEXEC)
@@ -955,7 +1000,6 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
         }
         (root / "config/resource-policy.json").write_text(json.dumps({
             "inference_capacity": {
-                "front_sequences": 1, "total_sequences": 4,
                 "protected_host_bytes": 1073741824,
                 "coin_reserved_bytes": 1073741824,
                 "load_transient_bytes": 1073741824,
@@ -969,6 +1013,10 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
                 "clock_domain_id": "host-monotonic:boot-one",
             },
         }), encoding="utf-8")
+        (root / "config/inference.cfg").write_text(
+            "[inference]\nfront_slots=1\nwork_slots=3\n"
+            "context_tokens_per_slot=4096\nbackend_context_tokens=12288\n"
+            "context_mode=fixed\n")
         values = {
             "version": 1,
             "priority_bands": {"sole_survivor": 1000, "coin": 900,

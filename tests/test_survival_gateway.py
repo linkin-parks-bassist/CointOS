@@ -85,6 +85,7 @@ def write_time_config(path, degraded_deadline=3, heartbeat_maximum_age=60):
             "[executor]",
             "run_deadline_seconds = 1800",
             "time_slice_seconds = 300",
+            "cleanup_deadline_seconds = 10",
             "",
             "[workload]",
             "maximum_run_seconds = 300",

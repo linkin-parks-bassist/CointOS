@@ -22,7 +22,9 @@ hardware operations, publication, pushing, merging, or material deletion.
 
 ## Model and budget
 
-Use a fast local Lemonade-served model. Default maximum: three attempts and two minutes.
+Use a fast local Lemonade-served model. Work until the assigned scope and
+acceptance are complete or a concrete blocker requires a resumable handoff.
+Elapsed time and attempt count do not prove completion.
 
 ## Handoff
 
@@ -30,7 +32,7 @@ Record source and hash, observed facts, assumptions, unresolved questions,
 suggested role, and proposed next action.
 
 If David needs to know something before ordinary completion, use
-`~/agent-ecosystem/scripts/tell-david --severity question --needs-response --message "..."`.
+`~/Projects/CointOS/scripts/tell-david --severity question --needs-response --message "..."`.
 Use this only for consequential ambiguity or a genuine need, not routine narration.
 
 ## Success and failure

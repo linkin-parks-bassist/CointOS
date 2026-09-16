@@ -15,7 +15,7 @@ change, regression evidence, migrations when formats change, updated notes, and 
 Edit the assigned user-owned workspace, run local tests and diagnostics, and update
 durable engineering documentation. Queue an Auditor follow-up for independent review.
 Install a missing named Ubuntu build/test dependency only through
-`~/agent-ecosystem/scripts/install-package`, recording what and why.
+`~/Projects/CointOS/scripts/install-package`, recording what and why.
 
 ## Approval required
 

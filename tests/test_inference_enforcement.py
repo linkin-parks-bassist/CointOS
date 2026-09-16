@@ -180,7 +180,8 @@ def test_later_crash_uses_dead_owner_evidence_after_prior_end_is_invalidated():
                                                 "process_start_ticks": 1}
         proxy_path.write_text(json.dumps(state))
         evidence = completed_run_termination(value["root"], value["lease_id"])
-        assert evidence["kind"] == "owner_process_ended"
+        assert evidence is None
+        assert stored_credential(value)["last_backend_termination"] is None
 
 
 def test_missing_backend_response_is_not_termination_evidence():
@@ -266,7 +267,7 @@ def test_opencode_memfd_encodes_only_the_effective_record():
         try:
             config = json.loads(os.pread(environment["fd"], 65536, 0))
             models = config["provider"]["Lemonade"]["models"]
-            assert models["model-a"]["limit"] == {"context": 4096, "output": 2048}
+            assert models["model-a"]["limit"] == {"context": 4096, "input": 2048, "output": 2048}
             serialized = json.dumps(config)
             assert "999999" not in serialized
             assert "888888" not in serialized
@@ -286,6 +287,7 @@ def test_opencode_encoder_consumes_validated_record_limits():
             config = json.loads(os.pread(environment["fd"], 65536, 0))
             assert config["provider"]["Lemonade"]["models"]["model-a"]["limit"] == \
                 {"context": record["opencode_context_tokens"],
+                 "input": record["opencode_context_tokens"] - record["opencode_output_tokens"],
                  "output": record["opencode_output_tokens"]}
         finally:
             os.close(environment["fd"])
@@ -619,18 +621,18 @@ def test_close_without_recorded_identity_returns_only_stored_evidence():
         assert stored_credential(value)["state"] == "closing"
 
 
-def test_close_without_identity_uses_dead_owner_evidence():
+def test_never_requested_credential_closes_after_dead_owner():
     with fixture() as value:
         issue(value)
         dead_process(value)
         with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
             evidence = completed_run_termination(value["root"], value["lease_id"])
             probe.assert_not_called()
-        assert evidence["kind"] == "owner_process_ended"
+        assert evidence["kind"] == "never_requested"
         assert stored_credential(value)["last_backend_termination"] == evidence
 
 
-def test_sticky_backend_unknown_close_uses_dead_owner_evidence_without_probe():
+def test_sticky_backend_unknown_never_requested_closes_without_probe():
     with fixture() as value:
         issue(value)
         dead_process(value, backend_identity=snapshot()["identity"],
@@ -638,10 +640,10 @@ def test_sticky_backend_unknown_close_uses_dead_owner_evidence_without_probe():
         with patch("ecosystem.inference_proxy.observe_backend_idle") as probe:
             evidence = completed_run_termination(value["root"], value["lease_id"])
             probe.assert_not_called()
-        assert evidence["kind"] == "owner_process_ended"
+        assert evidence["kind"] == "never_requested"
 
 
-def test_unreliable_idle_probe_falls_back_to_dead_owner_evidence():
+def test_used_credential_with_unreliable_or_busy_probe_retains_occupancy():
     for kwargs in (
         {"return_value": None},
         {"return_value": {"identity": snapshot()["identity"],
@@ -654,12 +656,18 @@ def test_unreliable_idle_probe_falls_back_to_dead_owner_evidence():
         {"side_effect": OSError("backend unreachable")},
     ):
         with fixture() as value:
-            issue(value)
+            secret = issue(value)
+            claim = authorize(value, secret)
+            _record_backend_identity(value['root'], value['lease_id'], claim['claim_id'],
+                value['lease']['backend_sequence'], snapshot(), lambda: 11.0)
+            _finish_claim(value['root'], value['lease_id'], claim['claim_id'], False, {}, lambda: 12.0)
             dead_process(value, backend_identity=snapshot()["identity"])
             with patch("ecosystem.inference_proxy.observe_backend_idle", **kwargs):
                 evidence = completed_run_termination(value["root"], value["lease_id"])
-            assert evidence["kind"] == "owner_process_ended"
-            assert stored_credential(value)["last_backend_termination"] == evidence
+            assert evidence is None
+            assert stored_credential(value)['last_backend_termination'] is None
+            capacity = json.loads((value['root'] / 'state/inference-capacity.json').read_text())
+            assert capacity['leases'][value['lease_id']]['state'] != 'released'
 
 
 def test_changed_credential_during_probe_yields_no_proof():
@@ -1181,7 +1189,7 @@ def test_serve_one_connection_brackets_slot_observations_and_releases():
                    side_effect=fake_observe):
             serve_one_connection(connection, value["root"], {
                 "backend_base": "http://127.0.0.1:13305/v1"}, lambda: 11.0)
-        assert timeline == [[], ["request", "getresponse"],
+        assert timeline == [[], ["request"],
                             ["request", "getresponse", "read1"]]
         credential = stored_credential(value)
         assert credential["completed_requests"] == 1

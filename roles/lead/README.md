@@ -1,10 +1,10 @@
 # Lead Agent Role
 
-The Lead agent is a specialized role in the agent ecosystem that enforces proper handoffs, reviews work completion, and ensures smooth transitions between tasks.
+The Lead agent is a specialized role in the agent ecosystem that checks result evidence, reviews work completion, and ensures smooth transitions between tasks.
 
 ## Key Responsibilities
 
-- Enforce proper task handoffs
+- Check task results and evidence
 - Review work completion before approval
 - Ensure smooth transitions between tasks
 - Act as a quality gate for task completion
@@ -21,7 +21,7 @@ The Lead agent integrates with other roles in the ecosystem:
 
 1. Receive completed task from Worker
 2. Review work against completion criteria
-3. Validate handoff requirements
+3. Validate required result evidence
 4. Approve or reject task completion
 5. Provide feedback for revisions when needed
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from ecosystem import cli, conversation, control_turns
 from ecosystem.control_runtime import friendly_status, recent_errors_text, status_text
 from ecosystem.inference import request as inference_request
+from ecosystem.managed_inference import request as managed_request
 from ecosystem.presentation import sanitize_notification
 from ecosystem.resource_control import active_chat_model
 
@@ -60,10 +61,12 @@ def generate_first_response(history: list[dict[str, str]], infer: Callable[..., 
     messages = [{"role": "system", "content": FAST_SYSTEM}, *history[-6:]]
     assistant = (infer(model=model, messages=messages, max_tokens=96,
                        timeout=20, temperature=0.45)
-                 if infer is not None else inference_request({
-                     **(inference_context or {}), "messages": messages,
-                     "timeout": 20, "temperature": 0.45,
-                 }, Path(__file__).resolve().parents[1], time.monotonic))
+                 if infer is not None else (
+                     inference_request({**inference_context, "messages": messages,
+                                        "timeout": 20, "temperature": 0.45}, cli.ROOT, time.monotonic)
+                     if inference_context is not None else
+                     managed_request(model, messages, 96, timeout=20, temperature=.45,
+                                     root=cli.ROOT, control=True)))
     content = sanitize_notification(assistant.get("content") or "")
     if not content:
         raise RuntimeError("fast model returned no visible response")

@@ -10,8 +10,8 @@ Nice=10
 CPUWeight=10
 IOWeight=10
 IOSchedulingClass=idle
-WorkingDirectory=%h/agent-ecosystem
-ExecStart=%h/agent-ecosystem/scripts/load-resident-models
+WorkingDirectory=%h/Projects/CointOS
+ExecStart=%h/Projects/CointOS/scripts/load-resident-models
 RemainAfterExit=yes
 
 [Install]

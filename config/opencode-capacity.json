@@ -1,5 +1,5 @@
 {
-  "output_reserve_tokens": 4096,
+  "output_reserve_tokens": 32000,
   "rollover_fraction": 0.75,
   "max_age_seconds": 300
 }

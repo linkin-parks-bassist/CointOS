@@ -9,11 +9,11 @@ AGENT_FACING_SOURCES = (
 )
 PORTABLE_REFERENCES = {
     "watchdog.py": (
-        "Work from `~/agent-ecosystem`",
-        "`~/agent-ecosystem/state/conversations`",
+        "Work from `{cli.ROOT}`",
+        '`{cli.ROOT / "state/conversations"}`',
     ),
     "resource_control.py": (
-        "`~/agent-ecosystem/scripts/resource-control recover`",
+        "`~/Projects/CointOS/scripts/resource-control recover`",
     ),
 }
 

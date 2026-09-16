@@ -1,0 +1,21 @@
+---
+status: "unverified"
+created_at: "2026-09-14T22:37:15+10:00"
+scope: "local"
+source: "David user-observed run deaths and compaction behavior; inspected launch code; read-only live capacity derivation and isolated no-inference server API discovery, 2026-09-14"
+updated_at: "2026-09-14T22:42:45+10:00"
+---
+
+OpenCode should perform its normal automatic compactions within the retained agent session. David reports observing that these compactions achieve the behavior he originally wanted from separate handoffs; custom CointOS context handoffs are deferred.
+
+David reports repeated frustrating run deaths when OpenCode's believed context/output capacity does not match Lemonade's actual allocation. Example: backend allocation 131072 while OpenCode believes 262144 delays compaction until the backend context is exhausted. Treat this as user-observed operational failure, not a locally reproduced failure or proof that existing helper code is reliable end to end.
+
+The prior claim that CointOS already reliably informs OpenCode was too strong. Capacity derivation, version qualification, ephemeral encoding and managed-launch checks exist, but the inspected observable supervisor previously inherited configuration without automatically deriving fresh limits or verifying what the server resolved. Tested helpers do not establish runtime integration. A live read-only derivation on 2026-09-14 succeeds for Qwen3.8 with 131072 context, policy output allowance 4096, and qualified OpenCode 1.18.30 maximum output 32000; 262144 is model metadata, not current per-request allocation.
+
+Required launch behavior: derive fresh incarnation-bound backend per-sequence capacity; qualify the exact executable's client ceiling; include output room within the context budget; override stale size claims; keep normal auto-compaction enabled; ensure compaction uses a model with qualified limits; read back OpenCode's resolved provider/model limits and configuration before allowing the agent prompt to run; recheck backend identity/allocation after server startup. Missing, contradictory, unqualified or changed facts must stop launch explicitly. Log verified limit facts without secrets. Preserve session identity for recovery.
+
+The observable supervisor and shared encoder now implement that boundary. A real isolated OpenCode server read back live 131072/4096 limits; a real-client synthetic SSE capture sent the configured 128-token output allowance. Full surrounding verification is recorded in the state leaf; do not claim it is proven reliable in long-running production sessions merely because source was written. Existing running sessions are not reconfigured by these source changes. Mid-session backend reconfiguration and arbitrary model switching need separate enforcement/requalification; correct launch information alone does not guarantee those transitions.
+
+Evidence owners: `ecosystem/opencode_capacity.py`, `ecosystem/opencode_client.py`, `ecosystem/models.py`, `ecosystem/inference_proxy.py`, `ecosystem/opencode_launch.py`, `scripts/opencode_observable.py`. Read-only isolated OpenCode server `/doc` confirms `/config` and `/provider` routes for read-back; no inference was requested. Official config guide https://dev.opencode.ai/docs/config/ documents merged configuration and inline runtime precedence. Final verification and limitations belong in the repository state leaf.
+
+Detailed owners: `how/does/cointos/observe/live/opencode/context/capacity.md`, `how/are/opencode/input/and/output/allowances/encoded.md`, `how/does/cointos/override/stale/opencode/launch/configuration.md`, `how/does/cointos/verify/opencode/resolved/limits/before/inference.md`, `why/does/opencode/compaction/use/the/selected/qualified/model.md`, `when/must/opencode/capacity/be/requalified/during/a/session.md`, and `why/can/a/valid/inference/lease/still/conflict/with/opencode/output/limits.md`.

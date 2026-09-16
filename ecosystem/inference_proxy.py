@@ -34,6 +34,33 @@ DEFAULT_LIMITS = {
 }
 
 
+def apply_opencode_capacity(config: dict, capacity_record: dict) -> None:
+    """Apply observed per-request limits to inference and its compaction model."""
+    if (type(capacity_record) is not dict
+            or type(capacity_record.get("model_id")) is not str
+            or not capacity_record.get("model_id")
+            or type(capacity_record.get("opencode_context_tokens")) is not int
+            or type(capacity_record.get("opencode_output_tokens")) is not int
+            or not 0 < capacity_record["opencode_output_tokens"] < capacity_record["opencode_context_tokens"]):
+        raise ValueError("invalid effective inference capacity record")
+    models = config.setdefault("provider", {}).setdefault("Lemonade", {}).setdefault("models", {})
+    if type(models) is not dict:
+        raise ValueError("OpenCode model catalogue must be an object")
+    for entry in models.values():
+        if type(entry) is dict:
+            entry.pop("limit", None)
+    context = capacity_record["opencode_context_tokens"]
+    output = capacity_record["opencode_output_tokens"]
+    models.setdefault(capacity_record["model_id"], {})["limit"] = {
+        "context": context, "input": context - output, "output": output,
+    }
+    selected = "Lemonade/" + capacity_record["model_id"]
+    config["model"] = selected
+    config["small_model"] = selected
+    config.setdefault("compaction", {})["auto"] = True
+    config.setdefault("agent", {}).setdefault("compaction", {})["model"] = selected
+
+
 def opencode_environment(root: Path, capacity_record: dict, credential: bytes) -> dict:
     """Create one anonymous OpenCode configuration; the caller owns the returned fd.
 
@@ -74,17 +101,7 @@ def opencode_environment(root: Path, capacity_record: dict, credential: bytes) -
         "headerTimeout": False,
         "chunkTimeout": False,
     }
-    models = provider.setdefault("models", {})
-    if type(models) is not dict:
-        models = provider["models"] = {}
-    for entry in models.values():
-        if type(entry) is dict:
-            entry.pop("limit", None)
-    model = models.setdefault(capacity_record["model_id"], {})
-    model["limit"] = {
-        "context": capacity_record["opencode_context_tokens"],
-        "output": capacity_record["opencode_output_tokens"],
-    }
+    apply_opencode_capacity(config, capacity_record)
     descriptor = os.memfd_create("cointos-opencode", os.MFD_CLOEXEC)
     try:
         payload = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -165,6 +182,7 @@ def issue_proxy_credential(root: Path, lease: dict, credential_sink, clock) -> d
                 "issued_monotonic": now,
                 "in_flight": {},
                 "completed_requests": 0,
+                "claimed_requests": 0,
                 "last_backend_termination": None,
             }
             save()
@@ -193,6 +211,9 @@ def authorize_proxy_request(root: Path, metadata: dict, body: dict, clock) -> di
         if len(matches) != 1:
             return {"status": 401, "error": "invalid bearer credential"}
         lease_id, credential = matches[0]
+        if credential.get("state") in {"parked", "reacquiring"}:
+            return {"status": 425, "error": "inference capacity is being reacquired",
+                    "lease_id": lease_id}
         if credential.get("state") != "open":
             return {"status": 409, "error": "credential is closing or revoked"}
         try:
@@ -219,9 +240,12 @@ def authorize_proxy_request(root: Path, metadata: dict, body: dict, clock) -> di
             "claimed_monotonic": now,
             "backend": None,
         }
+        credential["claimed_requests"] = credential.get(
+            "claimed_requests", credential.get("completed_requests", 0)) + 1
         # A new backend round supersedes prior end evidence until this round
         # itself has a verified termination.
         credential["last_backend_termination"] = None
+        credential["response_finished"] = False
         save()
         return {"status": 200, "claim_id": claim_id, "lease": _durable(lease),
                 "credential_binding": _durable(credential["binding"])}
@@ -293,7 +317,7 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
                     "sequence": _durable(released)}
         if credential["in_flight"]:
             raise ValueError("requests remain in flight")
-        termination = credential.get("last_backend_termination")
+        termination = _verified_run_end(credential)
         if (type(observed_end) is not dict or observed_end.get("terminated") is not True
                 or termination is None or observed_end != termination):
             raise ValueError("backend termination is not verified")
@@ -324,9 +348,165 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
     return {"state": "revoked", "lease_id": lease_id, "sequence": released}
 
 
+def park_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock) -> dict:
+    """Release a live session's physical sequence while keeping its bearer valid."""
+    root = Path(root)
+    now = _clock(clock)
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None:
+            raise ValueError("unknown proxy credential")
+        if credential.get("state") == "parked":
+            released = credential.get("released_sequence")
+            if (type(released) is not dict or released.get("lease_id") != lease_id
+                    or released.get("expected_release_binding")
+                    != credential.get("binding", {}).get("release_binding")):
+                raise ValueError("parked credential lacks authoritative sequence result")
+            return {"state": "parked", "lease_id": lease_id,
+                    "sequence": _durable(released)}
+        if credential["in_flight"]:
+            raise ValueError("requests remain in flight")
+        termination = _verified_run_end(credential)
+        if (type(observed_end) is not dict or observed_end.get("terminated") is not True
+                or termination is None or observed_end != termination):
+            raise ValueError("backend termination is not verified")
+        credential["state"] = "parking"
+        credential["park_requested_monotonic"] = now
+        save()
+    lease = _capacity_lease(root, lease_id)
+    attestation = {
+        "schema_version": 1,
+        "binding": _durable(observed_end["binding"]),
+        "kind": observed_end.get("kind", "sequence_end"),
+        "observer_identity": observed_end["observer_identity"],
+        "observer_generation": observed_end["observer_generation"],
+        "observed_monotonic": observed_end["observed_monotonic"],
+        "clock_domain_id": observed_end["clock_domain_id"],
+        "evidence_id": observed_end["evidence_id"],
+    }
+    released = release_sequence(root, lease_id, attestation, clock)
+    if released.get("state") != "released":
+        raise RuntimeError("R3 did not accept sequence termination")
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"][lease_id]
+        credential["released_sequence"] = _durable(released)
+        credential["parked_monotonic"] = _clock(clock)
+        # Cancellation may have changed parking -> closing while R3 released
+        # the sequence.  Never reopen that credential after cancellation.
+        if credential.get("state") == "parking":
+            credential["state"] = "parked"
+        elif credential.get("state") != "closing":
+            raise RuntimeError("proxy credential changed during physical park")
+        final_state = credential["state"]
+        save()
+    return {"state": final_state, "lease_id": lease_id, "sequence": released}
+
+
+def reacquire_proxy_credential(root: Path, lease_id: str, inventory: dict, clock) -> dict:
+    """Renew a parked logical credential after reacquire_sequence obtains capacity."""
+    root = Path(root)
+    with _proxy_lock(root) as (state, save):
+        credential = state["credentials"].get(lease_id)
+        if credential is None:
+            raise ValueError("unknown proxy credential")
+        if credential.get("state") not in {"parked", "reacquiring"}:
+            raise ValueError("proxy credential is not parked or reacquiring")
+        if not credential.get("digest"):
+            raise ValueError("proxy credential lacks a bearer digest")
+        if credential["in_flight"]:
+            raise ValueError("requests remain in flight")
+        credential["state"] = "reacquiring"
+        save()
+    from ecosystem import inference_capacity
+    sequence = inference_capacity.reacquire_sequence(root, lease_id, inventory, clock)
+    if sequence.get("state") not in {"starting", "active"}:
+        return {"state": "reacquiring", "lease_id": lease_id, "sequence": sequence}
+    with _locked_states(root) as (worker_state, capacity_state, proxy_state, save):
+        authoritative = _starting_lease(worker_state, capacity_state, lease_id)
+        worker = worker_state["leases"][authoritative["request"]["worker_lease_id"]]
+        _validate_registered_process(worker)
+        credential = proxy_state["credentials"].get(lease_id)
+        if (credential is None or credential.get("state") not in {"reacquiring", "closing"}
+                or not credential.get("digest") or credential["in_flight"]):
+            raise ValueError("proxy credential is not reacquiring")
+        credential["binding"] = _credential_binding(authoritative, worker)
+        # Cancellation may arrive while capacity is being reacquired.  Refresh
+        # the physical binding either way so cleanup can release the new
+        # sequence, but never reopen a closing credential.
+        if credential["state"] == "reacquiring":
+            credential["state"] = "open"
+        final_state = credential["state"]
+        credential["reacquired_monotonic"] = _clock(clock)
+        credential["claimed_requests"] = 0
+        credential["completed_requests"] = 0
+        for field in ("released_sequence", "park_requested_monotonic", "parked_monotonic",
+                      "last_backend_termination", "last_slot_evidence", "response_finished"):
+            credential.pop(field, None)
+        save()
+    return {"state": final_state, "lease_id": lease_id, "sequence": sequence}
+
+
+def reconcile_available_capacity(root: Path, clock=time.monotonic) -> dict:
+    """Reclaim abandoned capacity before admission, independent of caller cleanup."""
+    root = Path(root)
+    result = {"released": [], "retained": []}
+    # Unissued ghosts must not depend on a proxy credential ever existing.
+    from ecosystem import inference_capacity
+    capacity_path = root / "state/inference-capacity.json"
+    if capacity_path.exists():
+        capacity = json.loads(capacity_path.read_text())
+        for lease_id, lease in capacity.get("leases", {}).items():
+            if lease.get("state") not in {"starting", "active", "preemption_requested", "release_requested"}:
+                continue
+            try:
+                withdrawn = inference_capacity.withdraw_unissued_sequence(root, lease_id, clock)
+                if withdrawn.get("state") == "released":
+                    result["released"].append(lease_id)
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+                pass  # Issued leases close through their incarnation-bound proxy evidence below.
+    if not (root / "state/inference-proxy.json").exists():
+        return result
+    with _proxy_lock(root) as (state, save):
+        candidates = [lease_id for lease_id, item in state["credentials"].items()
+                      if item.get("state") != "revoked"
+                      and _bound_process_ended(item.get("binding", {}).get("process", {})) is True]
+    for lease_id in candidates:
+        try:
+            with _proxy_lock(root) as (state, _save):
+                stale = _durable(state["credentials"].get(lease_id, {}))
+            for claim_id, claim in stale.get("in_flight", {}).items():
+                evidence = claim.get("slot_evidence", {})
+                start = evidence.get("start") or {}
+                observed = observe_backend_slots(start.get("identity"))
+                termination = _slot_ended_idle_termination(root, lease_id, claim_id, observed, clock)
+                if termination is not None:
+                    _finish_claim(root, lease_id, claim_id, True,
+                                  {"termination_observation": termination}, clock)
+            end = completed_run_termination(root, lease_id, clock)
+            if end is None:
+                result["retained"].append(lease_id)
+                continue
+            closed = revoke_proxy_credential(root, lease_id, end, clock)
+            if closed.get("sequence", {}).get("state") != "released":
+                result["retained"].append(lease_id)
+                continue
+            result["released"].append(lease_id)
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
+            result["retained"].append(lease_id)
+    # Finish abandoned caller/worker bookkeeping after physical reclamation.
+    # Live native callers are left untouched; this never replays model work.
+    from ecosystem.managed_inference import reconcile_dead_callers
+    try:
+        result["native"] = reconcile_dead_callers(root, clock)
+    except (OSError, ValueError, RuntimeError):
+        result["native"] = {"pending": "caller reconciliation unavailable"}
+    return result
+
+
 def completed_run_termination(root: Path, lease_id: str,
-                              clock=time.monotonic) -> dict | None:
-    """End ownership when the bound runner is gone and has no live request."""
+                              clock=time.monotonic, *,
+                              require_process_end: bool = True) -> dict | None:
+    """Prove physical completion after a request or an entire bound run."""
     root = Path(root)
     with _proxy_lock(Path(root)) as (state, save):
         credential = state["credentials"].get(lease_id)
@@ -337,36 +517,57 @@ def completed_run_termination(root: Path, lease_id: str,
         process = credential.get("binding", {}).get("process")
         if type(process) is not dict:
             raise ValueError("proxy credential lacks a bound process")
-        if _bound_process_ended(process) is not True:
+        if require_process_end and _bound_process_ended(process) is not True:
             return None
         if credential.get("state") == "revoked":
-            termination = credential.get("last_backend_termination")
+            termination = _verified_run_end(credential)
             return _durable(termination) if termination is not None else None
-        credential["state"] = "closing"
+        credential["state"] = "closing" if require_process_end else "parking"
         identity = credential.get("backend_identity")
         should_probe = (not credential.get("backend_observation_unknown")
                         and type(identity) is dict)
         save()
-        termination = credential.get("last_backend_termination")
+        termination = _verified_run_end(credential)
         if not should_probe and termination is not None:
             return _durable(termination)
     observation = None
     if should_probe:
         try:
-            candidate = observe_backend_idle(_durable(identity))
-            if _idle_observation_matches(candidate, identity):
-                observation = candidate
+            evidence = credential.get("last_slot_evidence") or {}
+            pre, start = evidence.get("pre"), evidence.get("start")
+            candidate = observe_backend_slots(_durable(identity)) if pre and start else None
+            slot_id = correlate_claim_slot(pre, start, candidate) if candidate else None
+            if slot_id is not None and candidate.get("identity") == identity:
+                observation = {"identity": _durable(identity), "slot_id": slot_id,
+                               "slots": [{"id": slot_id, "is_processing": False}]}
+            elif credential.get("response_finished") is True:
+                candidate = candidate or observe_backend_slots(_durable(identity))
+                free = [] if candidate is None else [slot for slot in candidate["slots"]
+                                                    if slot.get("is_processing") is False]
+                if free and candidate.get("identity") == identity:
+                    observation = {"identity": _durable(identity), "response_finished": True,
+                                   "slots": _durable(free)}
+            if observation is None:
+                candidate = observe_backend_idle(_durable(identity))
+                if _idle_observation_matches(candidate, identity):
+                    observation = candidate
         except Exception:
             pass
     with _proxy_lock(root) as (state, save):
         credential = state["credentials"].get(lease_id)
         if (credential is None or credential["in_flight"]
-                or _bound_process_ended(
-                    credential["binding"]["process"]) is not True):
+                or (require_process_end and _bound_process_ended(
+                    credential["binding"]["process"]) is not True)):
             return None
-        termination = credential.get("last_backend_termination")
+        termination = _verified_run_end(credential)
         if observation is None and termination is not None:
             return _durable(termination)
+        if observation is None and not _never_requested(credential):
+            # A dead HTTP client does not prove its upstream GPU request ended.
+            if not require_process_end and credential.get("state") == "parking":
+                credential["state"] = "open"
+                save()
+            return None
         now = _clock(clock)
         try:
             policy = json.loads((root / "config/resource-policy.json").read_text(
@@ -378,7 +579,7 @@ def completed_run_termination(root: Path, lease_id: str,
         generation = int(state["generation"]) + 1
         record_id = uuid.uuid4().hex
         evidence_id = "backend-observations.jsonl#" + record_id
-        kind = "reconciled_absent" if observation is not None else "owner_process_ended"
+        kind = "reconciled_absent" if observation is not None else "never_requested"
         termination = {
             "terminated": True,
             "kind": kind,
@@ -399,8 +600,10 @@ def completed_run_termination(root: Path, lease_id: str,
         if observation is None:
             record.update(process=_durable(credential["binding"]["process"]), in_flight=0)
         else:
-            record.update(identity=_durable(identity), all_slots_idle=True,
-                          slots=[{"id": slot["id"], "is_processing": False}
+            record.update(identity=_durable(identity),
+                          all_slots_idle=observation.get("all_slots_idle", False),
+                          response_finished=observation.get("response_finished", False),
+                          slot_id=observation.get("slot_id"), slots=[{"id": slot["id"], "is_processing": False}
                                  for slot in observation["slots"]])
         try:
             _append_backend_observation(Path(root), record)
@@ -410,6 +613,21 @@ def completed_run_termination(root: Path, lease_id: str,
         credential["last_backend_termination"] = termination
         save()
         return _durable(termination)
+
+
+def _verified_run_end(credential):
+    termination = credential.get("last_backend_termination")
+    if type(termination) is not dict:
+        return None
+    if termination.get("kind", "sequence_end") in {"sequence_end", "reconciled_absent"}:
+        return termination
+    if termination.get("kind") == "never_requested" and _never_requested(credential):
+        return termination
+    return None
+
+
+def _never_requested(credential):
+    return type(credential.get("claimed_requests")) is int and credential["claimed_requests"] == 0
 
 
 def _idle_observation_matches(observation, identity: dict) -> bool:
@@ -432,7 +650,7 @@ def _bound_process_ended(process: dict) -> bool | None:
         return True
     except (KeyError, OSError, ValueError, IndexError):
         return None
-    return observed_ticks != process.get("process_start_ticks")
+    return stat.rsplit(")", 1)[1].split()[0] == "Z" or observed_ticks != process.get("process_start_ticks")
 
 
 def read_proxy_request(connection, limits: dict) -> tuple[dict, dict]:
@@ -483,6 +701,24 @@ def read_proxy_request(connection, limits: dict) -> tuple[dict, dict]:
     return metadata, body
 
 
+def _json_response_finished(status, payload):
+    if status != 200 or not payload:
+        return False
+    try:
+        choices = json.loads(payload).get("choices")
+        return (isinstance(choices, list) and bool(choices)
+            and all(isinstance(choice, dict) and choice.get("finish_reason")
+                    in {"stop", "length", "tool_calls", "function_call"} for choice in choices))
+    except (ValueError, AttributeError):
+        return False
+
+
+def _stream_response_finished(status, payload):
+    if status != 200 or not payload:
+        return False
+    return any(line.strip() == b"data: [DONE]" for line in payload.splitlines())
+
+
 def forward_proxy_response(connection, upstream, lease: dict, observe, clock) -> dict:
     """Forward one response with bounded reads and an explicit termination record."""
     chunk_size = min(int(lease.get("stream_chunk_bytes", 65536)), 65536)
@@ -491,6 +727,8 @@ def forward_proxy_response(connection, upstream, lease: dict, observe, clock) ->
     connection.sendall((f"HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\n"
                         "Connection: close\r\n\r\n").encode("ascii"))
     total = 0
+    completed_json = bytearray() if "application/json" in content_type else None
+    completed_stream = bytearray() if "text/event-stream" in content_type else None
     while True:
         chunk = upstream.read1(chunk_size)
         if not chunk:
@@ -499,8 +737,21 @@ def forward_proxy_response(connection, upstream, lease: dict, observe, clock) ->
             raise ValueError("upstream exceeded bounded read")
         connection.sendall(chunk)
         total += len(chunk)
+        if completed_json is not None:
+            if len(completed_json) + len(chunk) <= 8 * 1024 * 1024:
+                completed_json.extend(chunk)
+            else:
+                completed_json = None
+        if completed_stream is not None:
+            completed_stream.extend(chunk)
+            if len(completed_stream) > 65536:
+                del completed_stream[:-65536]
+    response_finished = (_json_response_finished(status, completed_json)
+                         if completed_json is not None
+                         else _stream_response_finished(status, completed_stream))
     if observe is None:
-        return {"status": status, "bytes_forwarded": total, "terminated": False}
+        return {"status": status, "bytes_forwarded": total, "terminated": False,
+                "response_finished": response_finished}
     evidence = observe({"kind": "backend_terminated", "backend_sequence":
                         lease.get("backend_sequence"), "observed_monotonic": _clock(clock)})
     if type(evidence) is not dict or evidence.get("terminated") is not True:
@@ -512,7 +763,22 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
     try:
         connection.settimeout(float(config.get("read_timeout_seconds", 5)))
         metadata, body = read_proxy_request(connection, config)
-        admission = authorize_proxy_request(root, metadata, body, clock)
+        while True:
+            admission = authorize_proxy_request(root, metadata, body, clock)
+            if admission.get("status") != 425:
+                break
+            try:
+                from ecosystem import models
+                renewed = reacquire_proxy_credential(
+                    Path(root), admission["lease_id"], models.snapshot(Path(root)), clock)
+            except (OSError, RuntimeError, ValueError):
+                # The request remains queued while local facts or capacity are
+                # refreshed.  A closing credential is handled on the next
+                # authorization pass rather than reopened here.
+                time.sleep(0.05)
+                continue
+            if renewed.get("state") != "open":
+                time.sleep(0.05)
         if admission["status"] != 200:
             _send_json(connection, admission["status"], admission)
             return
@@ -543,7 +809,6 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             # A connected, admitted request may wait indefinitely for its
             # scheduled turn. Explicit cancellation and lease policy end it.
             upstream_connection.sock.settimeout(None)
-            upstream = upstream_connection.getresponse()
             start = None
             if pre is not None:
                 try:
@@ -552,6 +817,7 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
                     start = None
             _record_claim_slot_evidence(Path(root), lease["lease_id"],
                                         admission["claim_id"], pre, start, clock)
+            upstream = upstream_connection.getresponse()
             result = forward_proxy_response(connection, upstream,
                                             {**lease, "stream_chunk_bytes": config.get(
                                                 "stream_chunk_bytes", 65536)},
@@ -568,6 +834,19 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
                 result = {**result, "termination_observation": termination}
             _finish_claim(Path(root), lease["lease_id"], admission["claim_id"],
                           termination is not None, result, clock)
+            if termination is None and result.get("response_finished") is True:
+                termination = completed_run_termination(
+                    Path(root), lease["lease_id"], clock,
+                    require_process_end=False)
+            if termination is not None:
+                try:
+                    park_proxy_credential(
+                        Path(root), lease["lease_id"], termination, clock)
+                except (OSError, RuntimeError, ValueError):
+                    # Failure to prove or persist parking retains the physical
+                    # lease; it must not turn a completed response into an
+                    # apparent client failure.
+                    pass
         except Exception:
             _finish_claim(Path(root), lease["lease_id"], admission["claim_id"], False,
                           {}, clock)
@@ -685,6 +964,8 @@ def _finish_claim(root: Path, lease_id: str, claim_id: str, terminated: bool,
         if claim is None:
             return
         credential["completed_requests"] += 1
+        credential["last_slot_evidence"] = _durable(claim.get("slot_evidence"))
+        credential["response_finished"] = result.get("response_finished") is True
         if terminated:
             observation = _validated_backend_termination(
                 root, credential, claim_id, claim, result, now,
@@ -729,7 +1010,8 @@ def _slot_ended_idle_termination(root: Path, lease_id: str, claim_id: str,
     root = Path(root)
     with _proxy_lock(root) as (state, _save):
         credential = state["credentials"].get(lease_id)
-        if credential is None or credential.get("state") != "open":
+        if credential is None or (credential.get("state") != "open"
+                and _bound_process_ended(credential.get("binding", {}).get("process", {})) is not True):
             return None
         claim = credential["in_flight"].get(claim_id)
         if claim is None:
@@ -750,7 +1032,8 @@ def _slot_ended_idle_termination(root: Path, lease_id: str, claim_id: str,
         credential = state["credentials"].get(lease_id)
         claim = (None if credential is None
                  else credential["in_flight"].get(claim_id))
-        if credential is None or credential.get("state") != "open" \
+        if credential is None or (credential.get("state") != "open"
+                and _bound_process_ended(credential.get("binding", {}).get("process", {})) is not True) \
                 or claim is None:
             return None
         request_id = claim.get("request_id")
@@ -1255,3 +1538,12 @@ def _capture_start_slots(pre, attempts=3):
         if _false_to_true_flips(pre, start):
             return start
     return start
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run the admitted local inference proxy")
+    parser.parse_args()
+    root = Path(__file__).resolve().parents[1]
+    policy = json.loads((root / "config/model-policy.json").read_text(encoding="utf-8"))
+    serve_proxy(root, policy["inference_proxy"], time.monotonic)
