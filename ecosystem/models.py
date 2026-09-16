@@ -1100,9 +1100,6 @@ def realize(decision: dict, inventory: dict) -> dict:
                 "context_tokens": context,
                 "backend_context_tokens": backend_context,
                 "parallel_sequences": parallel}
-    admitted, reason = admission(model_id, inventory)
-    if not admitted:
-        raise RuntimeError(reason)
     from ecosystem import resource_control
     limit = resource_control.llm_residency_limit(resource_control.lemonade_health())
     if limit["state"] != "available":

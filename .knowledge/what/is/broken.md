@@ -1,7 +1,7 @@
 ---
 status: "unverified"
-updated_at: "2026-09-16T17:02:49+10:00"
-source: "explicit source/runtime reconciliation after live qualification 2026-09-16"
+updated_at: "2026-09-16T17:14:33+10:00"
+source: "source duplicate unloaded admission gate repair 2026-09-16"
 ---
 
 Current #1: automatic priority-aware inference acquisition is partially repaired and still under qualification. Six isolated real subprocess/client/HTTP-proxy tests pass for native/default Telegram acquisition, exact output allowances, stale capacity repair, priority suspension with retry, waiting cancellation and failed-spawn worker release. Two managed user tests pass for automatic launch and retained exact-session resume. No live GPU or installed-service qualification is claimed.
@@ -78,8 +78,9 @@ Confirmed defects or unresolved high-priority risks:
 
 Restrictions requiring evidence review before retention or removal:
 
-- dynamic-model `parallel_requests: 8`, introduced by a commit titled “admit eight
-  parallel Qwen requests” without a measured per-model/context qualification;
+- repaired dynamic-model parallel default: the unmeasured value eight was removed;
+  unloaded routes now use explicit dynamic policy one unless live observation supplies
+  a positive value, and installed inventory qualification reported one;
 - 32 GiB protected-host, 8 GiB Coin, 12 GiB load-transient, and 64 GiB
   unknown-model reserves, including duplicated legacy/current policy forms;
 - `maximum_work_models: 1` and the relationship between two Lemonade LLM residency
@@ -146,3 +147,7 @@ Repaired and installed: `prepare_next` retains and reports an unroutable task, t
 ## Cointelprofessional cancellation qualification (2026-09-16)
 
 Per-task progress and caller-scoped cancellation are installed. Live cancellation of a running Qwen3.8 task conservatively entered reconciliation until backend termination became provable; recovery then produced terminal `cancelled` while leaving worker quiescent, inference released, and proxy credential revoked. Unlimited task deadlines and executor prompt delivery were repaired on the path to this qualification. Remaining control work is broader task interaction and correctness/reviewer policy, not the cancellation lifecycle.
+
+## Duplicate unloaded-model admission gate (2026-09-16)
+
+Repaired in source: unloaded realization no longer reruns the legacy GiB-based `admission()` check after the fresh physical route has already admitted the request. The verified live residency-limit and idle-reclamation/load producer now receives the route directly. The legacy helper remains for compatibility; its duplicated reserve constants still belong to the broader measured-reserve audit. Owner: `why/does/unloaded/model/realization/rerun/legacy/admission.md`.
