@@ -30,7 +30,7 @@ def with_root(function):
 @with_root
 def test_duplicate_update_has_one_user_record_and_one_front_delivery(_root):
     sent = []
-    infer = lambda **_arguments: {"content": "hiya."}
+    infer = lambda **_arguments: {"content": '{"response":"hiya.","deep_required":false}'}
     sender = lambda token, chat_id, message: sent.append((token, chat_id, message))
     accept_update("token", update(), {42}, send=sender, infer=infer)
     accept_update("token", update(), {42}, send=sender, infer=infer)
@@ -51,9 +51,24 @@ def test_front_failure_preserves_deep_turn_without_canned_reply(_root):
 
 
 @with_root
+def test_front_can_intentionally_finish_without_reply_or_deep_dispatch(_root):
+    sent = []
+    accept_update("token", update(82, "yippee"), {42},
+                  send=lambda *_arguments: sent.append(True),
+                  infer=lambda **_arguments: {
+                      "content": '{"response":null,"deep_required":false}'})
+    turn = control_turns.load("telegram-82")
+    assert turn["front_state"] == "silent"
+    assert turn["deep_state"] == "completed"
+    assert turn["deep_skip_reason"] == "front_decided_no_deep_work"
+    assert control_turns.reserve_next(os.getpid()) is None
+    assert sent == []
+
+
+@with_root
 def test_deep_turn_can_finish_silently_after_front_reply(_root):
     accept_update("token", update(), {42}, send=lambda *_arguments: None,
-                  infer=lambda **_arguments: {"content": "already enough."})
+                  infer=lambda **_arguments: {"content": '{"response":"already enough.","deep_required":true}'})
     assert control_turns.reserve_next(111) == "telegram-81"
     assert control_turns.claim_reserved("telegram-81", 111, 222)
     process_turn("telegram-81", send=lambda *_arguments: (_ for _ in ()).throw(AssertionError("sent")),
@@ -66,7 +81,7 @@ def test_deep_turn_can_finish_silently_after_front_reply(_root):
 @with_root
 def test_interrupted_reserved_turn_is_recovered(_root):
     accept_update("token", update(), {42}, send=lambda *_arguments: None,
-                  infer=lambda **_arguments: {"content": "quick."})
+                  infer=lambda **_arguments: {"content": '{"response":"quick.","deep_required":true}'})
     assert control_turns.reserve_next(99999999) == "telegram-81"
     assert control_turns.recover_interrupted() == 1
     assert control_turns.load("telegram-81")["deep_state"] == "queued"
@@ -75,7 +90,7 @@ def test_interrupted_reserved_turn_is_recovered(_root):
 @with_root
 def test_reaped_child_before_claim_releases_only_its_reservation(_root):
     accept_update("token", update(), {42}, send=lambda *_arguments: None,
-                  infer=lambda **_arguments: {"content": "quick."})
+                  infer=lambda **_arguments: {"content": '{"response":"quick.","deep_required":true}'})
     owner = os.getpid()
     assert control_turns.reserve_next(owner) == "telegram-81"
     active = {99101: "telegram-81"}
@@ -97,7 +112,7 @@ def test_reaped_child_before_claim_releases_only_its_reservation(_root):
 def test_delivered_generation_cancels_disaster_fallback(_root):
     sent = []
     accept_update("token", update(), {42}, send=lambda *_arguments: None,
-                  infer=lambda **_arguments: {"content": "quick."})
+                  infer=lambda **_arguments: {"content": '{"response":"quick.","deep_required":false}'})
     old = datetime.now(timezone.utc) + timedelta(minutes=6)
     with patch("ecosystem.control_turns.datetime") as clock:
         clock.now.return_value = old
@@ -110,7 +125,7 @@ def _telegram_dispatches_accepted_contact_work(root: Path, identifier: int, role
     accepted_workspace_policy(root, profiles=("contact_requested",))
     accept_update("token", update(identifier, "inspect it"), {42},
                   send=lambda *_arguments: None,
-                  infer=lambda **_arguments: {"content": "I’ll inspect it."})
+                  infer=lambda **_arguments: {"content": '{"response":"I’ll inspect it.","deep_required":true}'})
     turn_id = f"telegram-{identifier}"
     owner = os.getpid()
     assert control_turns.reserve_next(owner) == turn_id

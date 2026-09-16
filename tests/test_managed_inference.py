@@ -34,8 +34,12 @@ def with_proxy(function):
                         lease = context['lease']
                         while (root / 'delay-backend').exists():
                             time.sleep(.01)
+                        content = ('{"response":"Checked.","deep_required":true}'
+                                   if any('first-stage router' in str(message.get('content', ''))
+                                          for message in body.get('messages', []))
+                                   else 'Checked.')
                         return {'status': 200, 'choices': [{'message': {
-                            'role': 'assistant', 'content': 'Checked.',
+                            'role': 'assistant', 'content': content,
                             'tool_calls': [{'id': 'end', 'type': 'function', 'function': {
                                 'name': 'finish_silently', 'arguments': '{}'}}],
                         }}], 'termination_observation': {

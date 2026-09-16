@@ -13,7 +13,7 @@ from ecosystem import cli
 
 
 SCHEMA_VERSION = 1
-FRONT_TERMINAL_STATES = {"delivered", "failed", "delivery_unknown"}
+FRONT_TERMINAL_STATES = {"delivered", "silent", "failed", "delivery_unknown"}
 
 
 def turn_id(update_id: int) -> str:
@@ -110,10 +110,21 @@ def mark_front_failed(identifier: str, error: str) -> dict:
     return _mutate(identifier, change)
 
 
-def mark_front_ready(identifier: str, message: str) -> dict:
+def mark_front_ready(identifier: str, message: str, deep_required: bool = True) -> dict:
     def change(record: dict) -> None:
         record.update(front_state="ready", initial_response=message,
-                      front_generated_at=cli.now())
+                      front_generated_at=cli.now(), deep_required=deep_required)
+    return _mutate(identifier, change)
+
+
+def mark_front_silent(identifier: str, deep_required: bool) -> dict:
+    def change(record: dict) -> None:
+        now = cli.now()
+        record.update(front_state="silent", front_finished_at=now,
+                      deep_required=deep_required)
+        if not deep_required:
+            record.update(deep_state="completed", deep_finished_at=now,
+                          deep_skip_reason="front_decided_no_deep_work")
     return _mutate(identifier, change)
 
 
@@ -129,6 +140,9 @@ def mark_front_delivered(identifier: str) -> dict:
         now = cli.now()
         record.update(front_state="delivered", front_delivered_at=now,
                       generated_response_delivered_at=now)
+        if record.get("deep_required") is False:
+            record.update(deep_state="completed", deep_finished_at=now,
+                          deep_skip_reason="front_decided_no_deep_work")
     return _mutate(identifier, change)
 
 

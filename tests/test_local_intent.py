@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ecosystem.control_agent import respond
 from ecosystem.presentation import sanitize_notification
-from ecosystem.telegram import FAST_SYSTEM, generate_first_response
+from ecosystem.telegram import FAST_SYSTEM, generate_first_response, generate_front_decision
 
 
 def tool_call(name, arguments="{}", identifier="call-one"):
@@ -60,7 +60,7 @@ def test_fast_response_is_small_and_forbids_action_claims():
     captured = {}
     def infer(**arguments):
         captured.update(arguments)
-        return {"content": "Yep — that distinction matters."}
+        return {"content": '{"response":"Yep — that distinction matters.","deep_required":false}'}
     response = generate_first_response([{"role": "user", "content": "Don't claim it started."}], infer=infer)
     assert response == "Yep — that distinction matters."
     assert captured["max_tokens"] == 96
@@ -78,7 +78,7 @@ def test_fast_response_receives_the_durable_control_plane_identity():
 
     def infer(**arguments):
         captured.update(arguments)
-        return {"content": "Yep."}
+        return {"content": '{"response":"Yep.","deep_required":false}'}
 
     generate_first_response([{"role": "user", "content": "Who are you?"}], infer=infer)
     system = captured["messages"][0]["content"]
@@ -92,10 +92,18 @@ def test_fast_response_removes_generic_chatbot_followup_tail():
     response = generate_first_response(
         [{"role": "user", "content": "yay"}],
         infer=lambda **_arguments: {
-            "content": "Excellent, glad that's sorted! Would you like me to help with anything else?"
+            "content": '{"response":"Excellent, glad that is sorted! Would you like me to help with anything else?","deep_required":false}'
         },
     )
-    assert response == "Excellent, glad that's sorted!"
+    assert response == "Excellent, glad that is sorted!"
+
+
+def test_fast_front_can_choose_intentional_silence_without_deep_work():
+    decision = generate_front_decision(
+        [{"role": "user", "content": "yippee"}],
+        infer=lambda **_arguments: {"content": '{"response":null,"deep_required":false}'},
+    )
+    assert decision == {"response": None, "deep_required": False}
 
 
 def test_removes_generic_chatbot_tail():
@@ -111,6 +119,7 @@ def load_tests(_loader, _tests, _pattern):
         test_fast_response_is_small_and_forbids_action_claims,
         test_fast_response_receives_the_durable_control_plane_identity,
         test_fast_response_removes_generic_chatbot_followup_tail,
+        test_fast_front_can_choose_intentional_silence_without_deep_work,
         test_removes_generic_chatbot_tail,
     ]
     return unittest.TestSuite(unittest.FunctionTestCase(function) for function in functions)

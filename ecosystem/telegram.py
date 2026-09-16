@@ -24,12 +24,17 @@ FAST_SYSTEM = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
 
 {CONTROL_ROLE.read_text(encoding='utf-8')}
 
-You are Cointelprofessional's fast conversational front. Reply to
-David using the recent conversation in one brief, natural sentence. Match his
+You are Cointelprofessional's fast conversational front and first-stage router.
+Consider David's message in its recent conversational context. Decide whether a
+visible reply is natural and whether deeper inspection, reasoning, tools, or action
+is actually needed. Match his
 informal tone without sounding like a support bot. You may directly answer ordinary
 conversation from context. This update is already durably accepted, and a separate
-capable deep controller will inspect it after this reply; that controller has live
-facts, tools, and agents. Never say the system cannot act merely because this fast
+capable deep controller is available when you request it; that controller has live
+facts, tools, and agents. Do not request deep work for conversation already handled
+by your reply or for a message that naturally needs no response. It is valid to
+return no reply and request no deep work when the exchange is genuinely complete.
+Never say the system cannot act merely because this fast
 front has no tools. Speak as one coherent agent: do not mention stages, queues,
 handoffs, or the deep controller unless David asks how it works. If the message needs
 machine facts, sustained reasoning, or action, briefly say what needs checking or
@@ -39,7 +44,10 @@ timestamps, downloads, dispatches, or promises. You have no current machine or a
 facts in this prompt: when asked for any current, recent, or local fact, say briefly
 that you need to check the exact record and never supply a candidate fact, number,
 name, time, or status. Never emit JSON, internal IDs, a
-stock status phrase, or the five-minute failure notice. Output only the sentence."""
+stock status phrase, or the five-minute failure notice. Output exactly one JSON
+object with keys `response` (a brief string or null) and `deep_required` (boolean).
+Use deep_required=true for requested action, live facts, consequential uncertainty,
+or sustained reasoning. Do not include markdown or any other keys."""
 
 
 def api(token: str, method: str, values: dict) -> dict:
@@ -55,8 +63,8 @@ def reply(token: str, chat_id: int, message: str) -> None:
     api(token, "sendMessage", {"chat_id": chat_id, "text": message[:4000]})
 
 
-def generate_first_response(history: list[dict[str, str]], infer: Callable[..., dict] | None = None,
-                            inference_context: dict | None = None) -> str:
+def generate_front_decision(history: list[dict[str, str]], infer: Callable[..., dict] | None = None,
+                            inference_context: dict | None = None) -> dict:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_FIRST_RESPONSE_MODEL", "Qwen3.5-4B-GGUF"))
     messages = [{"role": "system", "content": FAST_SYSTEM}, *history[-6:]]
     assistant = (infer(model=model, messages=messages, max_tokens=96,
@@ -67,10 +75,34 @@ def generate_first_response(history: list[dict[str, str]], infer: Callable[..., 
                      if inference_context is not None else
                      managed_request(model, messages, 96, timeout=20, temperature=.45,
                                      root=cli.ROOT, control=True)))
-    content = sanitize_notification(assistant.get("content") or "")
-    if not content:
-        raise RuntimeError("fast model returned no visible response")
-    return content
+    raw = assistant.get("content")
+    if not isinstance(raw, str):
+        raise RuntimeError("fast model returned no routing decision")
+    try:
+        decision = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"fast model returned invalid routing JSON: {error}") from error
+    if not isinstance(decision, dict) or set(decision) != {"response", "deep_required"}:
+        raise RuntimeError("fast model returned an invalid routing decision")
+    if not isinstance(decision["deep_required"], bool):
+        raise RuntimeError("fast model deep_required must be boolean")
+    response = decision["response"]
+    if response is not None:
+        if not isinstance(response, str):
+            raise RuntimeError("fast model response must be a string or null")
+        response = sanitize_notification(response)
+        if not response:
+            response = None
+    return {"response": response, "deep_required": decision["deep_required"]}
+
+
+def generate_first_response(history: list[dict[str, str]], infer: Callable[..., dict] | None = None,
+                            inference_context: dict | None = None) -> str:
+    """Compatibility helper for callers that specifically require a visible reply."""
+    decision = generate_front_decision(history, infer=infer, inference_context=inference_context)
+    if not decision["response"]:
+        raise RuntimeError("fast model chose not to produce a visible response")
+    return decision["response"]
 
 
 def accept_update(token: str, update: dict, allowed: set[int],
@@ -107,9 +139,16 @@ def accept_update(token: str, update: dict, allowed: set[int],
         try:
             history = [entry for entry in conversation.recent(sender, max_messages=6, max_characters=2500)
                        if entry.get("content") != DISASTER_FALLBACK]
-            initial = generate_first_response(
+            decision = generate_front_decision(
                 history, infer=infer, inference_context=inference_context)
-            control_turns.mark_front_ready(identifier, initial)
+            initial = decision["response"]
+            if initial is None:
+                control_turns.mark_front_silent(identifier, decision["deep_required"])
+                cli.audit("control_turn.front_silent", turn_id=identifier, user_id=sender,
+                          deep_required=decision["deep_required"])
+                return True
+            control_turns.mark_front_ready(identifier, initial,
+                                           decision["deep_required"])
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"
             control_turns.mark_front_failed(identifier, detail)

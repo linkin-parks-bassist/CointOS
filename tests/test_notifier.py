@@ -42,7 +42,8 @@ def test_terminal_result_uses_notifier_without_blocking_telegram_ingress(root):
     sent = []
     accept_update("token", update(), {42},
                   send=lambda token, user_id, message: sent.append((token, user_id, message)),
-                  infer=lambda **_arguments: {"content": "I’ll check the record."})
+                  infer=lambda **_arguments: {"content":
+                      '{"response":"I’ll check the record.","deep_required":true}'})
     waiting = json.loads((root / f"state/jobs/{notification_id}.json").read_text())
     assert waiting["state"] == "waiting"
     assert sent == [("token", 42, "I’ll check the record.")]
