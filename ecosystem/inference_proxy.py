@@ -281,6 +281,12 @@ def cancel(root: Path, lease_id: str, clock) -> dict:
     with _active_upstreams_lock:
         upstreams = list(_active_upstreams.get((str(Path(root)), lease_id), ()))
     for upstream in upstreams:
+        sock = getattr(upstream, "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         upstream.close()
     now = _clock(clock)
     with _proxy_lock(Path(root)) as (state, save):
