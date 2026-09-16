@@ -336,7 +336,7 @@ def prepare_next() -> None:
             atomic_json(path, job)
             audit("task.routing_deferred", job_id=job["id"], reason=decision["reason"])
             print(f"{job['id']} routing deferred: {decision['reason']}")
-            return
+            continue
         job.update(model=decision["model"], model_reason=decision["reason"],
                    context_tokens=decision["context_tokens"])
         prompt = render_context(job.get("role"), job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"), job.get("task_contract"))

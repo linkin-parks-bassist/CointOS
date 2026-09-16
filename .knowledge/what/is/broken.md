@@ -1,7 +1,7 @@
 ---
 status: "unverified"
-updated_at: "2026-09-16T10:45:44+10:00"
-source: "config/models diff; worker final; 48 tests; fresh real snapshot route evidence 2026-09-16"
+updated_at: "2026-09-16T17:02:49+10:00"
+source: "explicit source/runtime reconciliation after live qualification 2026-09-16"
 ---
 
 Current #1: automatic priority-aware inference acquisition is partially repaired and still under qualification. Six isolated real subprocess/client/HTTP-proxy tests pass for native/default Telegram acquisition, exact output allowances, stale capacity repair, priority suspension with retry, waiting cancellation and failed-spawn worker release. Two managed user tests pass for automatic launch and retained exact-session resume. No live GPU or installed-service qualification is claimed.
@@ -138,3 +138,11 @@ The full source suite now passes 791 tests in 62.194 seconds after aligning two 
 Control capability correction 2026-09-16: the advertised queue/amend tools previously always raised `trusted contact conversion is required before executable work`; deep action also used Qwen3.5, a 1400-token cap, three crash attempts, and a ten-minute SIGALRM. Those gates are removed in source and installed control-worker runtime; fast first contact deliberately remains Qwen3.5 for latency. Cancellation/preemption and a broader typed remote operating surface remain absent. The spec-to-gate audit now confirms at least fifteen removed spec-less restrictions; remaining unproven families are the deep backend timeout, fixed memory reserves, and transport-size ceilings.
 
 Latest live Telegram probe: the fast request failed during cleanup because its installed time-policy view predated `executor.cleanup_deadline_seconds`; an interrupted deep probe left a claimed request with no request identity holding an idle Qwen3.8 slot. Exact-incarnation idle observation now closes that ghost and the retained deep turn completed, but it selected `finish_silently` after no fast response. Source now forbids silent completion when no initial response was delivered. The old Qwen3.5 reconciliation record remains historical cleanup debt; new work must not be blocked by it.
+
+## Queue preparation starvation (2026-09-16)
+
+Repaired and installed: `prepare_next` retains and reports an unroutable task, then continues to later candidates instead of returning at the first deferral. Live qualification retained two older unroutable watchdog tasks and prepared a later authenticated-contact Qwen3.8 task, which reached running execution. Owner: `why/does/an/unroutable/queued/task/block/later/runnable/tasks.md`.
+
+## Cointelprofessional cancellation qualification (2026-09-16)
+
+Per-task progress and caller-scoped cancellation are installed. Live cancellation of a running Qwen3.8 task conservatively entered reconciliation until backend termination became provable; recovery then produced terminal `cancelled` while leaving worker quiescent, inference released, and proxy credential revoked. Unlimited task deadlines and executor prompt delivery were repaired on the path to this qualification. Remaining control work is broader task interaction and correctness/reviewer policy, not the cancellation lifecycle.

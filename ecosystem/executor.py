@@ -310,20 +310,29 @@ def _claim_execution(job: dict, clock) -> None:
         job["caller_handle"] = "executor:local"
     if "deadline_monotonic" not in job:
         budget = job.get("remaining_budget")
-        if type(budget) is not dict or type(budget.get("task_seconds")) is not int:
+        if type(budget) is not dict:
             raise ValueError(
                 f"job {job['id']} lacks a remaining task budget for its "
                 f"execution deadline")
-        job["deadline_monotonic"] = clock() + budget["task_seconds"]
+        task_seconds = budget.get("task_seconds")
+        if task_seconds is None:
+            job["deadline_monotonic"] = None
+        elif type(task_seconds) is int and task_seconds > 0:
+            job["deadline_monotonic"] = clock() + task_seconds
+        else:
+            raise ValueError(
+                f"job {job['id']} has an invalid remaining task budget")
 
 
 def _runner_worker_request(job: dict, route_record: dict) -> dict:
+    if "deadline_monotonic" not in job:
+        raise ValueError("job lacks authoritative deadline_monotonic")
     request = {
         "workload_class": _required_job_field(job, "workload_class"),
         "model_id": route_record["model_id"],
         "context_tokens": route_record["context_tokens_per_sequence"],
         "max_output_tokens": route_record["max_output_tokens"],
-        "deadline_monotonic": _required_job_field(job, "deadline_monotonic"),
+        "deadline_monotonic": job["deadline_monotonic"],
         "owner_identity": _required_job_field(job, "owner_identity"),
         "job_id": job["id"],
         "agent_generation": _required_job_field(job, "agent_generation"),
@@ -650,7 +659,8 @@ def launch_runner_round(
                 updated_at=cli.now(),
             )
             cli.atomic_json(job_path, job)
-            if clock() >= worker_request["deadline_monotonic"]:
+            if (worker_request["deadline_monotonic"] is not None
+                    and clock() >= worker_request["deadline_monotonic"]):
                 outcome = gated_child_cleanup(launch_record)
                 if outcome.get("state") != "reaped" or outcome.get("process_group_alive") is not False:
                     raise RuntimeError("waiting acquisition cleanup is unresolved")
@@ -983,6 +993,22 @@ def recover_abandoned_jobs() -> int:
                 except (OSError, RuntimeError, ValueError):
                     closed = {"state": "reconciliation_required"}
                 if closed["state"] != "reconciliation_required":
+                    cancellation = job.get("cancellation_requested_at")
+                    if type(cancellation) is str and cancellation:
+                        stamp = cli.now()
+                        job.update(
+                            state="cancelled", logical_run_state="terminal",
+                            cancelled_at=stamp, updated_at=stamp,
+                            last_preemption_reason=(
+                                "cancellation completed during reconciliation"
+                            ),
+                            runner_close_state="cancelled",
+                        )
+                        job.pop("reconciliation_reason", None)
+                        job.pop("executor_pid", None)
+                        cli.atomic_json(path, job)
+                        cli.audit("task.cancelled", job_id=job["id"],
+                                  reason="cancellation completed during reconciliation")
                     recovered += 1
                     continue
             job["recovery_process_group_alive"] = group_alive
@@ -1420,6 +1446,7 @@ def execute_next(run=subprocess.run) -> bool:
                     "boundary without duplicating finished work.\n",
                 )
                 prompt_path = resume_path
+            command.insert(2, prompt_path.read_text(encoding="utf-8"))
             view_path = cli.ROOT / 'state/worker-views' / f"{job['id']}-{time.time_ns()}.json"
             view_path.parent.mkdir(parents=True, exist_ok=True)
             command = [sys.executable,
@@ -1582,9 +1609,17 @@ def execute_next(run=subprocess.run) -> bool:
                     job.update(state="failed", updated_at=cli.now(),
                                error="executor timed out before a clean runner stop")
             except Exception as error:
+                detail = f"{type(error).__name__}: {error}"
+                if job.get("state") == "ready":
+                    job.pop("executor_pid", None)
+                    job.update(last_executor_error=detail, updated_at=cli.now())
+                    _persist_parent_job(job, path)
+                    cli.audit("task.executor_deferred", job_id=job["id"], error=detail)
+                    print(f"{job['id']} executor deferred: {detail}")
+                    return False
                 if job.get("state") not in {"ready", "reconciliation_required"}:
                     job.update(state="failed", updated_at=cli.now(),
-                               error=f"{type(error).__name__}: {error}")
+                               error=detail)
             job.pop("executor_pid", None)
             _persist_parent_job(job, path)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))

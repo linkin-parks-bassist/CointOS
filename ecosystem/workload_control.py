@@ -336,7 +336,8 @@ def _validate_request(request: dict) -> dict:
             raise ValueError(f"invalid worker {field}")
     if type(request["agent_generation"]) is not int or request["agent_generation"] < 0:
         raise ValueError("invalid worker agent_generation")
-    _number(request["deadline_monotonic"], "worker deadline")
+    if request["deadline_monotonic"] is not None:
+        _number(request["deadline_monotonic"], "worker deadline")
     if request["stop_method"] not in STOP_METHODS:
         raise ValueError("invalid worker stop_method")
     if "write_paths" in request and (
