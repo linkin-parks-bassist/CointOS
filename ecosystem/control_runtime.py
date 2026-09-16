@@ -164,6 +164,47 @@ def _contact_task_contract(identifier: str, key: str, task: str,
     }
 
 
+def _task_progress(user_id: int, agent_name: object = None) -> dict:
+    records = []
+    for path in (cli.ROOT / "state/jobs").glob("*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(job, dict) and job.get("kind") == "agent-task" \
+                and job.get("source") == f"telegram:{user_id}":
+            records.append(job)
+    if agent_name is not None:
+        if not isinstance(agent_name, str) or not agent_name:
+            return {"ok": True, "found": False}
+        records = [job for job in records if job.get("agent_name") == agent_name]
+    else:
+        active = [job for job in records
+                  if job.get("state") in {"queued", "ready", "running", "awaiting_verification"}]
+        records = active if active else records
+    if not records:
+        return {"ok": True, "found": False}
+
+    def updated(job):
+        value = job.get("updated_at")
+        return value if isinstance(value, str) else ""
+
+    selected = max(records, key=updated)
+    progress = {key: selected[key] for key in
+                ("agent_name", "state", "task", "role", "model", "updated_at", "attempts",
+                 "logical_run_state", "runner_phase", "last_preemption_reason", "failure_reason")
+                if key in selected}
+    output = selected.get("output")
+    if isinstance(output, str) and output:
+        root = cli.ROOT.resolve()
+        candidate = (root / output).resolve()
+        if candidate.is_relative_to(root) and candidate.is_file():
+            stat = candidate.stat()
+            progress["output_bytes"] = stat.st_size
+            progress["output_updated_at"] = datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat()
+    return {"ok": True, "found": True, "progress": progress}
+
+
 def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
     key = _action_key(name, arguments)
     previous = control_turns.action_result(identifier, key)
@@ -176,6 +217,8 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
         refreshed = snapshot()
         result = {"ok": True, "job_status": status_text(), "models": refreshed,
                   "lifecycle_facts": _prompt_lifecycle_facts()}
+    elif name == "inspect_task_progress":
+        result = _task_progress(user_id, arguments.get("agent_name"))
     elif name == "inspect_recent_errors":
         result = {"ok": True, "recent_errors": recent_errors_text()}
     elif name == "list_roles":
