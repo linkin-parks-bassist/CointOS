@@ -219,6 +219,8 @@ def execute_tool(identifier: str, name: str, arguments: dict) -> dict:
                   "lifecycle_facts": _prompt_lifecycle_facts()}
     elif name == "inspect_task_progress":
         result = _task_progress(user_id, arguments.get("agent_name"))
+    elif name == "cancel_task":
+        result = cli.request_task_cancellation(f"telegram:{user_id}", arguments.get("agent_name"))
     elif name == "inspect_recent_errors":
         result = {"ok": True, "recent_errors": recent_errors_text()}
     elif name == "list_roles":

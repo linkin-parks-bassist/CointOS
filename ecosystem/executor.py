@@ -1097,6 +1097,15 @@ def _waiting_jobs(running_id: str) -> list[dict]:
 
 
 def _preemption_reason(job: dict, started: float, scheduling: dict) -> str | None:
+    try:
+        durable = json.loads(
+            (cli.ROOT / "state/jobs" / f"{job['id']}.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        durable = None
+    if (type(durable) is dict and durable.get("id") == job.get("id")
+            and type(durable.get("cancellation_requested_at")) is str
+            and durable["cancellation_requested_at"]):
+        return "authenticated contact requested cancellation"
     lease_id = job.get("inference_lease_id")
     if lease_id:
         capacity = json.loads((cli.ROOT / "state/inference-capacity.json").read_text())
@@ -1150,6 +1159,10 @@ def _adopt_durable_reservation_state(job: dict, job_path: Path) -> None:
         job["remaining_budget"] = durable["remaining_budget"]
     if "child_reservations" in durable:
         job["child_reservations"] = durable["child_reservations"]
+    if "cancellation_requested_at" in durable:
+        job["cancellation_requested_at"] = durable["cancellation_requested_at"]
+    if "cancellation_reason" in durable:
+        job["cancellation_reason"] = durable["cancellation_reason"]
 
 
 def _persist_parent_job(job: dict, job_path: Path) -> None:
@@ -1495,27 +1508,65 @@ def execute_next(run=subprocess.run) -> bool:
                               f"({checkpoint['reason']}): {job['state']}")
                         return True
                     if outcome["preempted"]:
-                            current = json.loads(path.read_text(encoding="utf-8"))
-                            if current.get("state") == "interrupted":
-                                print(f"{job['id']} interrupted by resource control")
-                                return True
+                        current = json.loads(path.read_text(encoding="utf-8"))
+                        cancellation = current.get("cancellation_requested_at")
+                        if type(cancellation) is str and cancellation:
                             if outcome.get("session"):
                                 job["opencode_session"] = outcome["session"]
                                 job["resume_available"] = True
                             else:
                                 job["resume_available"] = False
+                            job["cancellation_requested_at"] = cancellation
+                            if "cancellation_reason" in current:
+                                job["cancellation_reason"] = current["cancellation_reason"]
                             job.pop("executor_pid", None)
-                            job.update(state="ready", updated_at=cli.now(),
-                                       last_preemption_reason=outcome["reason"],
-                                       preemption_count=int(job.get("preemption_count", 0)) + 1)
+                            stamp = cli.now()
+                            job.update(state="cancelled", logical_run_state="terminal",
+                                       cancelled_at=stamp, updated_at=stamp,
+                                       last_preemption_reason=outcome["reason"])
                             cli.atomic_json(path, job)
-                            cli.audit("task.preempted", job_id=job["id"],
-                                      reason=outcome["reason"],
-                                      resume_available=bool(outcome.get("session")))
-                            print(f"{job['id']} preempted: {outcome['reason']}")
+                            cli.audit("task.cancelled", job_id=job["id"],
+                                      reason=outcome["reason"])
+                            print(f"{job['id']} cancelled: {outcome['reason']}")
                             return True
+                        if current.get("state") == "interrupted":
+                            print(f"{job['id']} interrupted by resource control")
+                            return True
+                        if outcome.get("session"):
+                            job["opencode_session"] = outcome["session"]
+                            job["resume_available"] = True
+                        else:
+                            job["resume_available"] = False
+                        job.pop("executor_pid", None)
+                        job.update(state="ready", updated_at=cli.now(),
+                                   last_preemption_reason=outcome["reason"],
+                                   preemption_count=int(job.get("preemption_count", 0)) + 1)
+                        cli.atomic_json(path, job)
+                        cli.audit("task.preempted", job_id=job["id"],
+                                  reason=outcome["reason"],
+                                  resume_available=bool(outcome.get("session")))
+                        print(f"{job['id']} preempted: {outcome['reason']}")
+                        return True
                     result = subprocess.CompletedProcess(command, outcome["returncode"])
                 current = json.loads(path.read_text(encoding="utf-8"))
+                cancellation = current.get("cancellation_requested_at")
+                if type(cancellation) is str and cancellation:
+                    session = opencode_session_id(output_path)
+                    if session:
+                        job["opencode_session"] = session
+                    job["cancellation_requested_at"] = cancellation
+                    if "cancellation_reason" in current:
+                        job["cancellation_reason"] = current["cancellation_reason"]
+                    job.pop("executor_pid", None)
+                    stamp = cli.now()
+                    job.update(state="cancelled", logical_run_state="terminal",
+                               cancelled_at=stamp, updated_at=stamp,
+                               last_preemption_reason="cancellation completed as runner exited")
+                    cli.atomic_json(path, job)
+                    cli.audit("task.cancelled", job_id=job["id"],
+                              reason="cancellation completed as runner exited")
+                    print(f"{job['id']} cancelled as runner exited")
+                    return True
                 if current.get("state") == "interrupted":
                     print(f"{job['id']} interrupted by resource control")
                     return True

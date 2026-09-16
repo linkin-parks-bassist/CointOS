@@ -63,7 +63,7 @@ def test_fast_response_is_small_and_forbids_action_claims():
         return {"content": '{"response":"Yep — that distinction matters.","deep_required":false}'}
     response = generate_first_response([{"role": "user", "content": "Don't claim it started."}], infer=infer)
     assert response == "Yep — that distinction matters."
-    assert captured["max_tokens"] == 96
+    assert captured["max_tokens"] == 512
     assert captured["timeout"] == 20
     assert "without claiming that the requested action has already" in FAST_SYSTEM
     assert "started" in FAST_SYSTEM

@@ -213,6 +213,60 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
     return child_id
 
 
+def request_task_cancellation(source: str, agent_name: str | None = None) -> dict:
+    if type(source) is not str or not source:
+        raise ValueError("cancellation requires a nonempty source")
+    if agent_name is not None and (type(agent_name) is not str or not agent_name):
+        raise ValueError("cancellation agent name must be None or a nonempty string")
+    candidates = []
+    lock_path = ROOT / "state/task-enqueue.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for path in (ROOT / "state/jobs").glob("*.json"):
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if type(record) is not dict:
+                continue
+            if record.get("kind") != "agent-task":
+                continue
+            if record.get("source") != source:
+                continue
+            if record.get("state") not in {"queued", "ready", "running", "awaiting_verification"}:
+                continue
+            if agent_name is not None and record.get("agent_name") != agent_name:
+                continue
+            updated_at = record.get("updated_at")
+            candidates.append((updated_at if type(updated_at) is str else "", path, record))
+        if not candidates:
+            return {"ok": True, "found": False, "cancelled": False}
+        _, path, record = max(candidates, key=lambda item: item[0])
+        timestamp = now()
+        if record.get("state") == "running":
+            record.update(cancellation_requested_at=timestamp,
+                          cancellation_reason="authenticated contact requested cancellation",
+                          updated_at=timestamp)
+            atomic_json(path, record)
+            event = "task.cancellation_requested"
+            result = {"ok": True, "found": True, "cancelled": False,
+                      "cancellation_requested": True,
+                      "agent_name": record.get("agent_name"), "state": "running"}
+        else:
+            record.update(state="cancelled", logical_run_state="terminal",
+                          cancelled_at=timestamp,
+                          cancellation_reason="authenticated contact requested cancellation",
+                          updated_at=timestamp)
+            atomic_json(path, record)
+            event = "task.cancelled"
+            result = {"ok": True, "found": True, "cancelled": True,
+                      "cancellation_requested": False,
+                      "agent_name": record.get("agent_name"), "state": "cancelled"}
+    audit(event, job_id=record.get("id"), source=source, agent_name=record.get("agent_name"))
+    return result
+
+
 def amend_latest_task(source: str, role: str | None, task: str, model: str | None = None,
                       model_reason: str = "", idempotency_key: str | None = None,
                       task_contract: dict | None = None) -> str | None:
