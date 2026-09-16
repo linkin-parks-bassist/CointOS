@@ -16,8 +16,8 @@
     "pinned": true,
     "parallel_requests": 2,
     "shared_context_tokens": 32768,
-    "maximum_output_tokens": 96,
-    "purpose": "Always-available chatbot, emergency control, and model-routing decisions"
+    "maximum_output_tokens": 512,
+    "purpose": "Low-latency first-contact and model-routing decisions"
   },
   "control_plane": {
     "model": "Qwen3.5-4B-GGUF",

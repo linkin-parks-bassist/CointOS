@@ -1,6 +1,6 @@
 ---
 status: "unverified"
-updated_at: "2026-09-16T17:23:13+10:00"
+updated_at: "2026-09-16T17:25:39+10:00"
 source: "source duplicate unloaded admission gate repair 2026-09-16"
 ---
 
@@ -156,3 +156,8 @@ Repaired in source: unloaded realization no longer reruns the legacy GiB-based `
 ## Cointelprofessional deep elapsed deadline (2026-09-16)
 
 Repaired in source and installed assets: deep/action inference explicitly uses an unbounded backend read while retaining explicit cancellation, priority preemption, durable retry, and the qualified socket-shutdown interruption path. Ordinary managed callers retain their compatibility timeout. Focused managed-inference and optional-role checks pass. The remaining Sylow incident question is answer verification quality, not transport lifetime.
+
+
+## Stale fast-front policy ceiling (2026-09-16)
+
+Repaired in source configuration: `model-policy.json` now records the live 512-token low-latency first-contact allowance instead of the retired truncating 96-token value, and no longer describes the fast router as emergency control. The source caller, focused expectation, installed policy and resource-policy leaf now agree.
