@@ -613,6 +613,9 @@ def opencode_session_id(output: Path) -> str | None:
                 if not isinstance(value, dict):
                     continue
                 identifier = value.get("sessionID")
+                if (value.get("type") == "worker_view_ready"
+                        and isinstance(value.get("session_id"), str)):
+                    identifier = value["session_id"]
                 if isinstance(identifier, str) and identifier.startswith("ses_"):
                     return identifier
     except OSError:

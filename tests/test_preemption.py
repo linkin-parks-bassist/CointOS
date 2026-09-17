@@ -27,7 +27,7 @@ def test_higher_priority_work_preempts_and_preserves_session():
             "authority_profile": "worker", "remaining_budget": LARGE_BUDGET,
         }
         waiting = {
-            "id": "task-user", "kind": "agent-task", "state": "queued",
+            "id": "task-user", "kind": "agent-task", "state": "ready",
             "role": "worker", "source": "telegram:42",
             "created_at": (datetime.now(timezone.utc)
                            .replace(microsecond=0)).isoformat(),

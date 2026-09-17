@@ -496,9 +496,8 @@ def main() -> None:
     elif args.command == "enqueue":
         if not args.task:
             parser.error("enqueue requires --task")
-        if not args.task_contract:
-            parser.error("enqueue requires --task-contract")
-        task_contract = json.loads(Path(args.task_contract).read_text(encoding="utf-8"))
+        task_contract = (json.loads(Path(args.task_contract).read_text(encoding="utf-8"))
+                         if args.task_contract else None)
         print(enqueue_task(args.role, args.task, model=args.model,
                            model_reason=args.model_reason, agent_name=args.agent_name,
                            task_contract=task_contract))

@@ -993,6 +993,24 @@ def recover_abandoned_jobs() -> int:
                 except (OSError, RuntimeError, ValueError):
                     closed = {"state": "reconciliation_required"}
                 if closed["state"] != "reconciliation_required":
+                    pending_preemption = job.pop("pending_preemption_reason", None)
+                    session = job.get("opencode_session") or opencode_session_id(
+                        cli.ROOT / job.get("output", ""))
+                    if pending_preemption and session:
+                        job.update(
+                            state="ready", logical_run_state="continuing",
+                            opencode_session=session, resume_available=True,
+                            last_preemption_reason=pending_preemption,
+                            preemption_count=int(job.get("preemption_count", 0)) + 1,
+                            updated_at=cli.now(),
+                        )
+                        job.pop("reconciliation_reason", None)
+                        job.pop("executor_pid", None)
+                        cli.atomic_json(path, job)
+                        cli.audit("task.preempted", job_id=job["id"],
+                                  reason=pending_preemption, resume_available=True)
+                        recovered += 1
+                        continue
                     cancellation = job.get("cancellation_requested_at")
                     if type(cancellation) is str and cancellation:
                         stamp = cli.now()
@@ -1116,7 +1134,7 @@ def _waiting_jobs(running_id: str) -> list[dict]:
         except (OSError, json.JSONDecodeError):
             continue
         if (job.get("id") != running_id and job.get("kind") == "agent-task"
-                and job.get("state") in {"queued", "ready"}
+                and job.get("state") == "ready"
                 and job_admitted_in_current_mode(job)):
             waiting.append(job)
     return waiting
@@ -1494,6 +1512,9 @@ def execute_next(run=subprocess.run) -> bool:
                     if retained_session:
                         job["opencode_session"] = retained_session
                         job["resume_available"] = True
+                    if outcome.get("preempted"):
+                        job["pending_preemption_reason"] = outcome["reason"]
+                        job["logical_run_state"] = "continuing"
                     _persist_parent_job(job, path)
                     child_outcome = gated_child_wait(context["launch"], 0)
                     closed = close_runner_round(job, path, context, child_outcome)
@@ -1565,6 +1586,7 @@ def execute_next(run=subprocess.run) -> bool:
                         else:
                             job["resume_available"] = False
                         job.pop("executor_pid", None)
+                        job.pop("pending_preemption_reason", None)
                         job.update(state="ready", updated_at=cli.now(),
                                    last_preemption_reason=outcome["reason"],
                                    preemption_count=int(job.get("preemption_count", 0)) + 1)
