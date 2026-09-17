@@ -1,6 +1,6 @@
 ---
 status: "unverified"
-updated_at: "2026-09-17T22:35:30+10:00"
+updated_at: "2026-09-17T23:28:21+10:00"
 source: "installed user-directed scheduling qualification and supervised compaction incident 2026-09-17"
 ---
 
@@ -9,7 +9,6 @@ Current #1 is qualification and simplification of abundance-first inference sche
 ## Open defects and unresolved risks
 
 - **Compaction handoff can falsely complete unfinished work.** Builder `task-33f3571db23d4c29` emitted a structured handoff explicitly saying no edits or acceptance checks were complete, then ended with nominal `stop`; CointOS terminalized the job and closed its observable endpoint. The retained session survives, but no checked managed one-call resume procedure exists. Owner: `why/can/a/worker/be/falsely/completed/after/a/tool/call.md`.
-- **Service-generation agreement lacks an identity marker.** `scripts/cointos-system` owns the complete 11-unit membership, but systemd active state cannot prove running processes loaded one installed code/config generation. Triggered oneshots may legitimately be transiently active. Owner: `how/should/cointos/periodically/reconcile/whole/system/liveness.md`.
 - **Quiescent worker leases accumulate without a retention policy.** The first aggregate observation found 2,084 quiescent records. They do not consume execution, but the whole state document grows indefinitely. Safe pruning shape is known; the justified replay window/count is not. Owner: `why/are/quiescent/worker/leases/retained.md`.
 - **Notification incident reporting still names a dead event.** Delivery acquisition and cleanup are repaired and the stranded notification delivered, but the watchdog findings filter still looks for `outbox.delivery_failed`, which the notifier does not emit. It should consume the new state-based delivery summary. Owner: `why/did/cointos/notifications/fail/to/deliver.md`.
 - **Remaining fixed memory reserves.** The active byte-form policy retains 32 GiB protected host memory, 8 GiB coin/control reserve, and 12 GiB model-load transient reserve. Their values still need live measurement. Owner: `what/is/the/local/strix/halo/resource/policy.md`.
@@ -19,6 +18,8 @@ Current #1 is qualification and simplification of abundance-first inference sche
 - **Quarantined model metadata.** Lemonade reports `gpt-oss-120b-mxfp-GGUF` as 1.48 GiB while the installed registry records 63.4 GiB. Do not admit it until provenance is reconciled.
 
 ## Repaired restriction and failure families
+
+Installed generation agreement now has an atomic post-swap stamp and read-only systemd observer. After the whole-system restart, all six service members live-qualified as installed-path, post-stamp `ok`; unavailable observation cannot collapse into a healthy action.
 
 Recognized user-directed task creation is now durable scheduler provenance. Exact local CLI origin and syntactically valid authenticated Telegram contact origin enter the existing user-driven band; every other origin omits the field. The installed local path live-scored 850 instead of the former 250, while direct checks preserved Sole Survivor 1000 and Coin 900 above it and aged background work below it.
 

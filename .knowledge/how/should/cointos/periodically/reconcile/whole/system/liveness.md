@@ -1,11 +1,10 @@
 ---
-status: "unresolved"
+status: "unverified"
 created_at: "2026-09-17T16:31:05+10:00"
 scope: "local"
 source: "installed watchdog qualification; mapper tasks task-b27cce9dfd664d16 and task-9c1195d706e64c88; live systemctl show 2026-09-17"
-updated_at: "2026-09-17T23:27:21+10:00"
-blocker: "Post-swap generation identity and watchdog comparison are designed but not implemented."
-next_check: "Write an atomic post-swap generation stamp with boot identity and monotonic completion time, observe each long-running unit's ExecStart and ExecMainStartTimestampMonotonic, persist the compact result, then live-qualify after a whole-system restart."
+updated_at: "2026-09-17T23:28:21+10:00"
+review_when: "Recheck when installer transaction order, whole-system membership, or systemd service shapes change."
 ---
 
 CointOS requires a mandatory periodic higher-order sanity pass across every durable queue and ownership system. Local state-machine validity is insufficient: the pass must ask whether accepted work is making progress, whether logical ownership agrees with live processes/backend capacity, whether already-visible or obsolete work still consumes scarce execution, whether newer high-priority work is trapped behind stale work, and whether code/config/service generations agree.
@@ -28,4 +27,8 @@ Identity mapper `task-9c1195d706e64c88` found that `scripts/install-cointos` alr
 
 The minimal proof is an atomic post-swap generation stamp under `~/.CointOS` plus per-unit systemd identity. To avoid wall-clock parsing and survive reboot correctly, the stamp should contain schema version, source revision, current boot ID, and completion monotonic microseconds. For the same boot, a running unit is current only when its `ExecMainStartTimestampMonotonic` is at or after the stamp and `ExecStart` is under the installed prefix. Across a later boot, no pre-install process can survive, so installed-prefix execution plus active state is sufficient. Missing/unreadable stamp or failed systemd observation is unavailable, never guessed current. Source-prefix execution or a same-boot start before the stamp is a mismatch requiring the whole-system restart boundary, never an individual-unit restart.
 
-Remaining work: implement and persist service-generation health, define the common subsystem result schema, make repeated unresolved incidents visible operator incidents, and consume notification health in findings rather than the dead `outbox.delivery_failed` event name.
+Implemented and installed in commits `481405b` and `369673e`: the installer atomically writes `.cointos-generation` after the payload swap while holding its lock. The stamp records source revision, boot ID, completion monotonic microseconds, and UTC completion time. `watchdog.service_generation_health()` observes the six `cointos-system` service members through systemd, validates installed `ExecStart` paths and same-boot start times, handles the resident-model loader's active exited oneshot state, and persists compact counts, unit evidence, mixed-generation state, and an operator action on both tick paths. Observation failure produces `unavailable`, never `none`.
+
+Live qualification after a whole-system restart on 2026-09-17 observed all six units as `ok`, with installed-prefix executable paths and start times after generation `369673e`'s stamp; the aggregate was `counts: {ok: 6}`, `mixed: false`, `action: none`.
+
+Remaining work: define the common subsystem result schema, make repeated unresolved incidents visible operator incidents, and consume notification health in findings rather than the dead `outbox.delivery_failed` event name.
