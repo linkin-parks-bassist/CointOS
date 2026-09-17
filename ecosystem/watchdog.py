@@ -10,8 +10,8 @@ from ecosystem.models import snapshot
 CONFIG = cli.ROOT / "config/watchdog.json"
 SOURCE = "watchdog:periodic-steward"
 GENERATION_STAMP = ".cointos-generation"
-GENERATION_UNITS = ("agent-models", "inference-proxy", "resource-guard",
-                    "telegram", "control-worker", "notifier")
+GENERATION_UNITS = ("agent-models", "agent-inference-proxy", "agent-resource-guard",
+                    "agent-telegram", "agent-control-worker", "agent-notifier")
 GENERATION_PROPERTIES = ("MainPID", "ActiveState", "ExecMainStartTimestampMonotonic",
                          "ExecStart", "FragmentPath")
 
@@ -99,7 +99,7 @@ def service_generation_health() -> dict:
     counts = {}
     for unit in units.values(): counts[unit["verdict"]] = counts.get(unit["verdict"], 0) + 1
     mixed = counts.get("ok", 0) > 0 and (counts.get("source", 0) > 0 or counts.get("stale", 0) > 0)
-    if stamp is None or current_boot is None: action = "unavailable"
+    if stamp is None or current_boot is None or counts.get("unavailable", 0) > 0: action = "unavailable"
     elif counts.get("source", 0) > 0: action = "fix_fragment"
     elif counts.get("stale", 0) > 0: action = "restart_system"
     else: action = "none"
