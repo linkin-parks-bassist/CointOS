@@ -9,6 +9,11 @@ from ecosystem.models import snapshot
 
 CONFIG = cli.ROOT / "config/watchdog.json"
 SOURCE = "watchdog:periodic-steward"
+GENERATION_STAMP = ".cointos-generation"
+GENERATION_UNITS = ("agent-models", "inference-proxy", "resource-guard",
+                    "telegram", "control-worker", "notifier")
+GENERATION_PROPERTIES = ("MainPID", "ActiveState", "ExecMainStartTimestampMonotonic",
+                         "ExecStart", "FragmentPath")
 
 def reconcile_verifications() -> list[str]:
     from ecosystem.verification import enqueue
@@ -25,6 +30,80 @@ def reconcile_verifications() -> list[str]:
 def service_state(name: str) -> str:
     result = subprocess.run(["systemctl", "--user", "is-active", name], text=True, capture_output=True)
     return result.stdout.strip() or "unknown"
+
+def _read_generation_stamp() -> dict | None:
+    """Return the installer's generation stamp, or None when absent or malformed."""
+    try: stamp = json.loads((cli.ROOT / GENERATION_STAMP).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError): return None
+    if not isinstance(stamp, dict) or stamp.get("schema_version") != 1: return None
+    if not isinstance(stamp.get("source_revision"), str): return None
+    if not isinstance(stamp.get("boot_id"), str) or not stamp["boot_id"]: return None
+    if (isinstance(stamp.get("completed_monotonic_usec"), bool)
+            or not isinstance(stamp.get("completed_monotonic_usec"), int)
+            or stamp["completed_monotonic_usec"] < 0): return None
+    try: datetime.fromisoformat(stamp["completed_at"])
+    except (KeyError, TypeError, ValueError): return None
+    return stamp
+
+def _exec_start_uses_root(exec_start: str) -> bool:
+    """True when systemd's structured ExecStart path is inside the installed root."""
+    fields = (field.strip() for field in exec_start.strip().strip("{}").split(";"))
+    executable = next((field.removeprefix("path=").strip('"')
+                       for field in fields if field.startswith("path=")), None)
+    if executable is None:
+        return False
+    path = Path(executable)
+    return path == cli.ROOT or cli.ROOT in path.parents
+
+def _unit_generation_verdict(name: str, stamp: dict | None, current_boot: str | None) -> dict:
+    unit = {"verdict": "unavailable", "main_pid": None, "active_state": None,
+            "start_monotonic_usec": None, "exec_start": None, "fragment_path": None}
+    if stamp is None or current_boot is None: return unit
+    try:
+        result = subprocess.run(["systemctl", "--user", "show", name, "--property=" + ",".join(GENERATION_PROPERTIES)],
+                                text=True, capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError): return unit
+    if result.returncode != 0: return unit
+    observed = {}
+    for line in result.stdout.splitlines():
+        key, sep, value = line.partition("=")
+        if sep: observed[key] = value
+    if any(key not in observed for key in GENERATION_PROPERTIES): return unit
+    unit["active_state"] = observed["ActiveState"]
+    unit["exec_start"] = observed["ExecStart"]
+    unit["fragment_path"] = observed["FragmentPath"]
+    try:
+        unit["main_pid"] = int(observed["MainPID"])
+        unit["start_monotonic_usec"] = int(observed["ExecMainStartTimestampMonotonic"])
+    except ValueError: return unit
+    # agent-models is deliberately Type=oneshot + RemainAfterExit, so active
+    # with no surviving MainPID is its healthy steady state.
+    if observed["ActiveState"] != "active" or (unit["main_pid"] == 0 and name != "agent-models"):
+        unit["verdict"] = "inactive"
+    elif not _exec_start_uses_root(observed["ExecStart"]):
+        unit["verdict"] = "source"
+    elif stamp["boot_id"] == current_boot and unit["start_monotonic_usec"] < stamp["completed_monotonic_usec"]:
+        unit["verdict"] = "stale"
+    else:
+        unit["verdict"] = "ok"
+    return unit
+
+def service_generation_health() -> dict:
+    """Read-only installed-generation health for the long-running cointos-system units."""
+    stamp = _read_generation_stamp()
+    current_boot = None
+    if stamp is not None:
+        try: current_boot = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        except OSError: current_boot = None
+    units = {name: _unit_generation_verdict(name, stamp, current_boot) for name in GENERATION_UNITS}
+    counts = {}
+    for unit in units.values(): counts[unit["verdict"]] = counts.get(unit["verdict"], 0) + 1
+    mixed = counts.get("ok", 0) > 0 and (counts.get("source", 0) > 0 or counts.get("stale", 0) > 0)
+    if stamp is None or current_boot is None: action = "unavailable"
+    elif counts.get("source", 0) > 0: action = "fix_fragment"
+    elif counts.get("stale", 0) > 0: action = "restart_system"
+    else: action = "none"
+    return {"stamp": stamp, "counts": counts, "units": units, "mixed": mixed, "action": action}
 
 def findings(config: dict) -> list[str]:
     now = datetime.now(timezone.utc)
@@ -100,6 +179,7 @@ def tick() -> str:
         lease_health = worker_lease_health(cli.ROOT)
         from ecosystem import outbox
         notification_health = outbox.delivery_health()
+        generation_health = service_generation_health()
         last = datetime.fromisoformat(state["last_review_enqueued_at"]) if state.get("last_review_enqueued_at") else None
         due = not last or (now-last).total_seconds() >= config["steward_review_seconds"]
         issues = findings(config)
@@ -142,10 +222,10 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                                       model_reason="Optional watchdog preference; central routing remains authoritative.",
                                       task_contract=contract)
             history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
-            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health)
+            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health, last_service_generation_health=generation_health)
             cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)
             return f"enqueued {job_id}"
-        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health)
+        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health, last_service_generation_health=generation_health)
         cli.atomic_json(state_path, state)
         return "healthy; review not due" if not issues else f"findings={len(issues)}; review already pending"
 

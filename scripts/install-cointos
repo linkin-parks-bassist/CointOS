@@ -10,11 +10,13 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 
 PAYLOAD = ('ecosystem', 'survival', 'scripts', 'config', 'roles', 'services',
            'infrastructure', 'steward-tasks', '.knowledge', 'AGENTS.md', 'README.md')
 MANIFEST = '.cointos-install.json'
+GENERATION = '.cointos-generation'
 
 
 def digest(path):
@@ -53,7 +55,7 @@ def install(source, prefix, dry_run=False):
             raise ValueError(f'missing required payload: {name}')
         if (prefix / name).is_symlink():
             raise ValueError(f'refusing to replace symlink: {prefix / name}')
-    for name in (MANIFEST, '.cointos-previous', '.cointos-install.lock'):
+    for name in (MANIFEST, GENERATION, '.cointos-previous', '.cointos-install.lock'):
         if (prefix / name).is_symlink():
             raise ValueError(f'refusing installation metadata symlink: {prefix / name}')
     for directory in ('config', '.knowledge'):
@@ -174,6 +176,14 @@ def install(source, prefix, dry_run=False):
             if recovery.exists():
                 shutil.rmtree(recovery)
             backup.rename(recovery)
+            # Stamp the completed generation atomically while still under the install lock.
+            stamp = {'schema_version': 1,
+                     'source_revision': metadata['source']['revision'],
+                     'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                     'completed_monotonic_usec': time.monotonic_ns() // 1000,
+                     'completed_at': datetime.now(timezone.utc).isoformat()}
+            (stage / GENERATION).write_text(json.dumps(stamp, indent=2) + '\n')
+            (stage / GENERATION).rename(prefix / GENERATION)
     print(f'Installed CointOS into {prefix}; services unchanged.')
     for name in preserved:
         print(f'Preserved {name}; updated default is {name}.dist')
