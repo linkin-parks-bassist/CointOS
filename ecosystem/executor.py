@@ -1064,7 +1064,67 @@ def recover_abandoned_jobs() -> int:
                 job["recovery_cancel_state"] = cancel_result["state"]
             except ValueError:
                 job["recovery_cancel_state"] = "credential_absent"
-            job["recovery_process_group_alive"] = _stop_recovered_runner(job)
+            group_alive = _stop_recovered_runner(job)
+            job["recovery_process_group_alive"] = group_alive
+            if group_alive is False and job.get("worker_lease_id"):
+                child_outcome = {
+                    "state": "reaped",
+                    "returncode": -signal.SIGKILL,
+                    "process_group_alive": False,
+                }
+                context = {
+                    "worker_lease": {"lease_id": job["worker_lease_id"]},
+                    "inference_lease": {"lease_id": job["inference_lease_id"]},
+                    "launch": {
+                        "pid": job["executor_pid"],
+                        "start_ticks": job["executor_start_ticks"],
+                        "pgid": job["executor_pgid"],
+                    },
+                }
+                try:
+                    closed = close_runner_round(job, path, context, child_outcome)
+                except (OSError, RuntimeError, ValueError):
+                    closed = {"state": "reconciliation_required"}
+                if closed["state"] != "reconciliation_required":
+                    cancellation = job.get("cancellation_requested_at")
+                    if type(cancellation) is str and cancellation:
+                        stamp = cli.now()
+                        job.update(
+                            state="cancelled", logical_run_state="terminal",
+                            cancelled_at=stamp, updated_at=stamp,
+                            last_preemption_reason=(
+                                "cancellation completed during restart recovery"
+                            ),
+                            runner_close_state="cancelled",
+                        )
+                        job.pop("reconciliation_reason", None)
+                        job.pop("executor_pid", None)
+                        cli.atomic_json(path, job)
+                        cli.audit(
+                            "task.cancelled", job_id=job["id"],
+                            reason="cancellation completed during restart recovery",
+                        )
+                        recovered += 1
+                        continue
+                    output = cli.ROOT / job.get("output", "")
+                    session = job.get("opencode_session") or opencode_session_id(output)
+                    if session:
+                        job.update(
+                            state="ready", logical_run_state="continuing",
+                            opencode_session=session, resume_available=True,
+                            last_preemption_reason="executor service restarted",
+                            preemption_count=int(job.get("preemption_count", 0)) + 1,
+                            updated_at=cli.now(),
+                        )
+                        job.pop("reconciliation_reason", None)
+                        job.pop("executor_pid", None)
+                        cli.atomic_json(path, job)
+                        cli.audit(
+                            "task.restart_recovered", job_id=job["id"],
+                            resume_available=True,
+                        )
+                        recovered += 1
+                        continue
             job.update(
                 state="reconciliation_required", updated_at=cli.now(),
                 reconciliation_reason="runner disappeared after inference reservation",
