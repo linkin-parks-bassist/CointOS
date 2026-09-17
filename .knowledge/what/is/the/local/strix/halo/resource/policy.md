@@ -3,10 +3,10 @@ status: "unverified"
 created_at: "2026-09-15T22:09:16+10:00"
 scope: "project local"
 source: "David explicit abundance-first policy; /proc/meminfo and amdgpu sysfs observation; config/resource-policy.json and model-policy.json 2026-09-15"
-updated_at: "2026-09-16T17:25:39+10:00"
+updated_at: "2026-09-17T12:43:21+10:00"
 ---
 
-This CointOS host is a Strix Halo machine with nominal 128 GB unified LPDDR5 memory. The operating system currently reports 134149070848 bytes (124.936 GiB) of physical RAM; amdgpu currently exposes a 64 GiB GTT domain. CointOS must use fresh live measurements for admission, including the smaller current accelerator-visible boundary, rather than assuming every physical byte is immediately GPU-addressable.
+This CointOS host is a Strix Halo machine with nominal 128 GB unified LPDDR5 memory. The operating system has reported 134149070848 bytes (124.936 GiB) of physical RAM. David explicitly confirms that 100 GiB is currently available at the hardware level for GPU use; the configured 100 GiB GPU boundary represents that intended capability. A 64 GiB value observed through one amdgpu GTT sysfs domain is therefore not evidence that hardware GPU allocation is capped at 64 GiB and must not be used to reduce the 100 GiB ceiling. Fresh runtime observations still govern current pressure and occupancy, but their domain and meaning must be established before treating them as physical capacity.
 
 Policy is abundance-first within those measured boundaries. General agent work receives the largest useful verified context and output allowances; when the backend and client support it, 32000 output tokens is the minimum ordinary-worker allowance. Allocate a fitting backend, reclaim idle lower-priority residency, or queue retained work rather than silently starving an agent. Small limits require a named workload reason and evidence that truncation cannot discard work. The fast-front allowance is a specialized 512-token latency response, raised from the truncating 96-token value; it is not a precedent for worker agents.
 

@@ -19,17 +19,6 @@
     "chat_context_tokens": 32768,
     "parallel_requests": 2
   },
-  "gpu_boundary": {
-    "gtt_limit_gb": 100,
-    "ttm_pages_limit": 16777216,
-    "ttm_page_pool_pages": 2097152
-  },
-  "admission": {
-    "desktop_and_control_reserve_gb": 32.0,
-    "model_load_transient_reserve_gb": 12.0,
-    "unknown_model_reserve_gb": 64.0,
-    "forbidden_recipes": []
-  },
   "physical_capacity": {
     "protected_host_bytes": 34359738368,
     "coin_reserved_bytes": 8589934592,

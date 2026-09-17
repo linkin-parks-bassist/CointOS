@@ -111,15 +111,15 @@ def resource_envelope(
     coin_reserved = _nonnegative_integer(policy.get("coin_reserved_bytes"))
     transient = _nonnegative_integer(policy.get("load_transient_bytes"))
     gtt_limit = _positive_integer(policy.get("gtt_limit_bytes"))
-    gtt_capacity = (min(measured_gtt_total, gtt_limit)
-                    if measured_gtt_total is not None and gtt_total_fresh
-                    and gtt_limit is not None else None)
+    # The amdgpu GTT total is an observed reporting domain, not the physical
+    # UMA allocation ceiling.  Capacity comes from the host-qualified policy;
+    # live gtt_used remains the pressure and occupancy observation.
+    gtt_capacity = gtt_limit
     total_sequences = _positive_integer(policy.get("total_sequences"))
     front_sequences = _positive_integer(policy.get("front_sequences"))
     for name, value in (
         ("available_host_bytes", available_host),
         ("gtt_used_bytes", gtt_used),
-        ("gtt_total_bytes", measured_gtt_total if gtt_total_fresh else None),
         ("protected_host_bytes", protected),
         ("coin_reserved_bytes", coin_reserved),
         ("load_transient_bytes", transient),

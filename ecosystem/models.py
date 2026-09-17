@@ -556,8 +556,10 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
     coin_reserved = _nonnegative_integer(physical.get("coin_reserved_bytes"))
     transient = _nonnegative_integer(physical.get("load_transient_bytes"))
     configured_gtt_limit = _positive_integer_value(physical.get("gtt_limit_bytes"))
-    gtt_limit = min(measured_gtt_total, configured_gtt_limit) \
-        if measured_gtt_total and configured_gtt_limit else None
+    # mem_info_gtt_total describes a kernel GTT reporting domain on this UMA
+    # host, not the hardware's allocatable GPU-memory ceiling.  Keep the live
+    # usage observation, but use the explicitly qualified machine capability.
+    gtt_limit = configured_gtt_limit
     host_model_headroom = available - protected - coin_reserved - transient \
         if None not in (available, protected, coin_reserved, transient) else None
     gtt_model_headroom = gtt_limit - gtt_used - transient \
@@ -678,36 +680,6 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
 
 def ids(inventory: dict) -> list[str]:
     return [item["id"] for item in inventory["models"]]
-
-
-def admission(model_id: str, inventory: dict) -> tuple[bool, str]:
-    """Decide whether loading one more model preserves the machine reserve."""
-    settings = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))
-    model = next((item for item in inventory.get("models", []) if item["id"] == model_id), None)
-    if model is None:
-        return False, f"model {model_id!r} is absent from the live local inventory"
-    if model.get("loaded"):
-        return True, "model is already resident; no load transient required"
-    if model.get("recipe") in settings["admission"]["forbidden_recipes"]:
-        return False, f"recipe {model.get('recipe')!r} is disabled by resource policy"
-    reserve = float(settings["admission"]["desktop_and_control_reserve_gb"])
-    transient = float(settings["admission"]["model_load_transient_reserve_gb"])
-    size = model.get("size_gb")
-    required_model = (float(size) if size is not None
-                      else float(settings["admission"]["unknown_model_reserve_gb"]))
-    available = float(inventory.get("memory_available_gb") or 0)
-    required_available = reserve + transient + required_model
-    if available < required_available:
-        return False, (f"load needs {required_available:.1f} GiB available including the "
-                       f"{reserve:.1f} GiB desktop/control reserve; only {available:.1f} GiB is available")
-    memory = inventory.get("memory", {})
-    gtt_used = memory.get("gtt_used_gb")
-    gtt_limit = float(settings["gpu_boundary"]["gtt_limit_gb"])
-    if gtt_used is not None and gtt_limit - float(gtt_used) < required_model + transient:
-        return False, (f"load needs {required_model + transient:.1f} GiB GTT headroom; "
-                       f"the bounded domain has only {gtt_limit - float(gtt_used):.1f} GiB")
-    return True, (f"load admitted with {available - required_model - transient:.1f} GiB "
-                  "remaining beyond model and transient demand")
 
 
 def _positive_integer(value) -> bool:

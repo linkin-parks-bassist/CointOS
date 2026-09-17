@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 from ecosystem import cli, operator_session, resource_control, time_policy, workload_control
 from ecosystem.models import (
-    admission,
     choose_route,
     safe_routes,
 )
@@ -306,23 +305,6 @@ def in_memory_lemonade(calls=None, initially_loaded=True, initial_health=None,
         raise AssertionError(f"unexpected Lemonade path: {path}")
 
     return request
-
-
-def test_oversized_vllm_is_refused_before_load():
-    inventory = {
-        "memory_available_gb": 11.5,
-        "memory": {"gtt_used_gb": 80.5},
-        "models": [{
-            "id": "Qwen3.6-27B-FP16-vLLM",
-            "recipe": "vllm",
-            "size_gb": 51.8,
-            "loaded": False,
-            "labels": ["reasoning", "tool-calling"],
-        }],
-    }
-    allowed, reason = admission("Qwen3.6-27B-FP16-vLLM", inventory)
-    assert not allowed
-    assert "only 11.5 GiB is available" in reason
 
 
 def test_model_selection_uses_explicit_requirements():

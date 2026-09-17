@@ -359,20 +359,20 @@ def test_work_cannot_consume_reserved_front_sequence():
     for host in (
         {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB},
         {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB,
-         "gtt_total_bytes": 100 * GIB, "gtt_total_fresh": False},
+         "gtt_total_bytes": 64 * GIB, "gtt_total_fresh": False},
     ):
-        failed = resource_envelope(host, [], [], capacity_policy())
-        assert failed["safe"] is False
-        assert "gtt_total_bytes" in failed["unknown_facts"]
+        observed_domain = resource_envelope(host, [], [], capacity_policy())
+        assert observed_domain["safe"] is True
+        assert observed_domain["gtt_capacity_bytes"] == 100 * GIB
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         write_root(root)
         stale_inventory = inventory()
         stale_inventory["host"]["gtt_total_fresh"] = False
-        deferred = reserve(
+        admitted = reserve(
             root, sequence_request(), stale_inventory, lambda: 10.0,
         )
-        assert deferred == {"state": "deferred", "reasons": ["gtt_total_bytes"]}
+        assert admitted["state"] == "starting"
 
 
 def test_front_reserve_is_a_minimum_and_can_spill_into_idle_work_sequence():
@@ -697,12 +697,10 @@ def test_waiter_requires_fresh_reservation_after_release():
         assert state["leases"][waiter["lease_id"]]["state"] == "ready_for_revalidation"
         stale = inventory()
         stale["host"]["gtt_total_fresh"] = False
-        deferred = reserve(root, waiter_request, stale, lambda: 31.0)
-        assert deferred["state"] == "deferred"
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-        assert state["leases"][waiter["lease_id"]]["state"] == "ready_for_revalidation"
-        resumed = reserve(root, waiter_request, inventory(), lambda: 32.0)
+        resumed = reserve(root, waiter_request, stale, lambda: 31.0)
         assert resumed["state"] == "starting"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        assert state["leases"][waiter["lease_id"]]["state"] == "starting"
         assert resumed["backend_sequence"] == 1
 
 
