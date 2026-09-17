@@ -1,9 +1,11 @@
 ---
-status: "unverified"
+status: "unresolved"
 created_at: "2026-09-17T16:31:05+10:00"
 scope: "local"
-source: "installed last_notification_health and live delivery qualification 2026-09-17"
-updated_at: "2026-09-17T21:08:55+10:00"
+source: "installed watchdog, worker and notification qualification; task-b27cce9dfd664d16 service manifest mapping 2026-09-17"
+updated_at: "2026-09-17T22:34:10+10:00"
+blocker: "The complete service membership owner is known, but active-state observation alone cannot prove all running processes use one installed code/config generation and no generation marker exists."
+next_check: "Map the smallest observable identity for each long-running unit—systemd fragment and ExecStart plus live process executable/cwd or an installed generation stamp—and define correct transient oneshot semantics before wiring watchdog state."
 ---
 
 CointOS requires a mandatory periodic higher-order sanity pass across every durable queue and ownership system. Local state-machine validity is insufficient: the pass must ask whether accepted work is making progress, whether logical ownership agrees with live processes/backend capacity, whether already-visible or obsolete work still consumes scarce execution, whether newer high-priority work is trapped behind stale work, and whether code/config/service generations agree.
@@ -20,4 +22,6 @@ Wired so far: `watchdog.tick` persists control-turn recovery/head, managed-job r
 
 `outbox.delivery_health()` is read-only and returns six state counts plus `oldest_pending_updated_at`; watchdog persists it as `last_notification_health`. The first installed snapshot exposed 22 failed, one delivery-unknown, and one hours-old waiting notification. Tracing that record repaired cancelled-dependency release, default managed notification inference, and terminal-response cleanup evidence; the retained notification then delivered in one attempt. Owner: `why/did/cointos/notifications/fail/to/deliver.md`.
 
-Remaining work: add service-generation observation, define the common subsystem result schema, and make repeated unresolved incidents visible operator incidents without inventing duplicate transitions. Notification findings should consume the state-based summary rather than the dead `outbox.delivery_failed` event name.
+Service-generation mapper `task-b27cce9dfd664d16` established that `scripts/cointos-system` owns the complete generation membership: six long-running services, three triggers, and two triggered oneshots. `watchdog.service_state` can cheaply report systemd active state, but that proves only unit availability. It does not prove a running Python process loaded the current installed code/config, nor detect an extra mixed-generation unit. Oneshots are also legitimately active while triggered, so requiring them always inactive is incorrect. The systemd unit files carry no generation marker.
+
+Remaining work: establish service-generation identity, define the common subsystem result schema, make repeated unresolved incidents visible operator incidents, and consume notification health in findings rather than the dead `outbox.delivery_failed` event name.
