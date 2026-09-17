@@ -86,7 +86,7 @@ def _execute_context_case(context_state="running", session="ses_compaction", bud
 def test_near_full_context_finishes_without_detaching_session():
     result, saved, commands = _execute_context_case()
     assert result is True
-    assert saved["state"] == "awaiting_verification"
+    assert saved["state"] == "completed"
     assert saved["opencode_session"] == "ses_compaction"
     assert saved["context_state"] == "running"
     assert commands[0][commands[0].index("--session") + 1] == "ses_compaction"
@@ -95,7 +95,7 @@ def test_near_full_context_finishes_without_detaching_session():
 def test_legacy_handoff_request_resumes_retained_session():
     result, saved, commands = _execute_context_case("handoff_requested")
     assert result is True
-    assert saved["state"] == "awaiting_verification"
+    assert saved["state"] == "completed"
     assert saved["context_state"] == "running"
     assert "--session" in commands[0]
 

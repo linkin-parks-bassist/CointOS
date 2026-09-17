@@ -70,7 +70,8 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
                  model_reason: str = "", agent_name: str | None = None,
                  idempotency_key: str | None = None,
                  prefer_models_other_than: list[str] | None = None,
-                 task_contract: dict | None = None) -> str:
+                 task_contract: dict | None = None,
+                 verification_requested: bool = False) -> str:
     from ecosystem.identity import validate, generate
     from ecosystem.roles import resolve_role
     from ecosystem.task_contracts import default_task_contract, resolve_task_intake
@@ -82,6 +83,8 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
         )
     intake = resolve_task_intake(task_contract, ROOT)
     validated_contract = intake["task_contract"]
+    if type(verification_requested) is not bool:
+        raise ValueError("verification request must be boolean")
     if type(task) is not str or task.strip() != validated_contract["objective"]:
         raise ValueError("task differs from validated objective")
     job_id = (f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
@@ -97,6 +100,8 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
                 raise ValueError("task identifier collision")
             if saved.get("task_contract") != validated_contract:
                 raise ValueError("idempotency key reused with a different task contract")
+            if saved.get("verification_requested", False) != verification_requested:
+                raise ValueError("idempotency key reused with a different verification request")
             return job_id
         resolved_role = resolve_role(role) if not agent_name else None
         identity_role = resolved_role["label"] if resolved_role and resolved_role["known"] else "agent"
@@ -119,6 +124,7 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
             "scope": intake["scope"],
             "write_paths": intake["write_paths"],
             "workload_class": intake["workload_class"],
+            "verification_requested": verification_requested,
         }
         if idempotency_key:
             job["idempotency_key"] = idempotency_key
@@ -478,6 +484,7 @@ def main() -> None:
     parser.add_argument("--role", default="worker")
     parser.add_argument("--task")
     parser.add_argument("--task-contract")
+    parser.add_argument("--verify", action="store_true")
     parser.add_argument("--model")
     parser.add_argument("--model-reason", default="")
     parser.add_argument("--agent-name")
@@ -500,7 +507,8 @@ def main() -> None:
                          if args.task_contract else None)
         print(enqueue_task(args.role, args.task, model=args.model,
                            model_reason=args.model_reason, agent_name=args.agent_name,
-                           task_contract=task_contract))
+                           task_contract=task_contract,
+                           verification_requested=args.verify))
     elif args.command == "prepare-next": prepare_next()
     elif args.command == "roles":
         from ecosystem.roles import list_roles

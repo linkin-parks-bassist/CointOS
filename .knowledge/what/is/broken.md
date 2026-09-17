@@ -1,6 +1,6 @@
 ---
 status: "unverified"
-updated_at: "2026-09-17T13:39:02+10:00"
+updated_at: "2026-09-17T13:41:48+10:00"
 source: "2026-09-17 reconciliation of source, installed runtime, live services, and owning defect leaves"
 ---
 
@@ -8,7 +8,6 @@ Current #1 is qualification and simplification of abundance-first inference sche
 
 ## Open defects and unresolved risks
 
-- **Automatic verifier spawning.** Every successful ordinary task currently enters `awaiting_verification`, and the watchdog manufactures a local verifier if one is absent. This consumes the Qwen worker and conflicts with production-first MVP policy. Owner: `why/does/every/successful/cointos/agent/task/spawn/a/local/verifier.md`.
 - **Prefill/time-slice livelock.** A retained worker can repeatedly spend its fairness slice prefilling, be preempted before useful progress, and repeat indefinitely. Owner: `why/can/repeated/prefill/and/time/slicing/prevent/a/managed/worker/from/progressing.md`.
 - **Remaining fixed memory reserves.** The active byte-form policy retains 32 GiB protected host memory, 8 GiB control reserve, and 12 GiB model-load transient reserve. Duplication is removed; their values and combined effect still need live measurement. Owner: `what/is/the/local/strix/halo/resource/policy.md`.
 - **Proxy transport ceilings.** Header, request-body, stream-buffer, completed-JSON, and backend-observation limits protect bounded protocol handling, but their exact values have not been compared with legitimate maximum-context payloads. Owner: `why/does/cointos/limit/inference/proxy/transport/sizes.md`.
@@ -18,7 +17,7 @@ Current #1 is qualification and simplification of abundance-first inference sche
 
 ## Repaired restriction families
 
-Removed or replaced barriers include exact OpenCode patch allowlisting; 4096-token worker output; 96-token front truncation; six deep tool rounds; 1400-token deep output; three deep crash attempts; ten-minute deep SIGALRM; 180-second deep inference cancellation; unconditional trusted-contact task refusal; mandatory workspace/task-contract paperwork; mandatory unloaded parameter count; synthetic context quantum; denial before idle reclamation; missing unloaded realization; duplicate legacy realization admission; the dead 64 GiB unknown-model fallback; the false `min(64 GiB sysfs domain, 100 GiB hardware capability)` cap; terminal ordinary-agent budgets; prompt-level elapsed/attempt stops; 0.2-second cleanup; exactly-four proxy handlers; and duplicated physical reserve configuration.
+Removed or replaced barriers include exact OpenCode patch allowlisting; 4096-token worker output; 96-token front truncation; six deep tool rounds; 1400-token deep output; three deep crash attempts; ten-minute deep SIGALRM; 180-second deep inference cancellation; unconditional trusted-contact task refusal; mandatory workspace/task-contract paperwork; mandatory unloaded parameter count; synthetic context quantum; denial before idle reclamation; missing unloaded realization; duplicate legacy realization admission; the dead 64 GiB unknown-model fallback; the false `min(64 GiB sysfs domain, 100 GiB hardware capability)` cap; terminal ordinary-agent budgets; prompt-level elapsed/attempt stops; 0.2-second cleanup; exactly-four proxy handlers; duplicated physical reserve configuration; and unconditional ordinary-task verifier spawning.
 
 Other completed repairs include credential-preserving park/reacquire, dead-controller gated relaunch, backend-instance restart reconciliation, semantic OpenCode error rerouting despite exit zero, queue head-of-line starvation removal, absent-deadline propagation, ready-state hot-loop prevention, caller-scoped progress/cancellation, proxy socket shutdown, dynamic parallel default one, measured Qwen3.8 batch/ubatch 512/128, stale reasoning-cap removal, and exact-session recovery after executor-service death.
 

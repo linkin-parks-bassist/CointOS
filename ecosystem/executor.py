@@ -1712,11 +1712,17 @@ def execute_next(run=subprocess.run) -> bool:
                     job.update(state="completed", updated_at=cli.now())
                     cli.atomic_json(path, job)
                 queue_notifications(target)
-            elif job["state"] == "run_finished":
+            elif (job["state"] == "run_finished"
+                  and job.get("verification_requested") is True):
                 from ecosystem.verification import enqueue
                 job.update(state="awaiting_verification", updated_at=cli.now())
                 cli.atomic_json(path, job)
                 enqueue(job)
+            elif job["state"] == "run_finished":
+                job.update(state="completed", logical_run_state="terminal",
+                           completed_at=cli.now(), updated_at=cli.now())
+                cli.atomic_json(path, job)
+                queue_notifications(job)
             else:
                 queue_notifications(job)
             print(f"{job['id']} {job['state']}")
