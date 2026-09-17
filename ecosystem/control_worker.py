@@ -53,7 +53,6 @@ def _reap(active: dict[int, str]) -> None:
 
 def main() -> None:
     cli.initialize()
-    maximum = max(1, int(os.environ.get("AGENT_CONTROL_WORKERS", "2")))
     active: dict[int, str] = {}
     stopping = False
 
@@ -66,7 +65,7 @@ def main() -> None:
     while not stopping:
         _reap(active)
         control_turns.recover_interrupted()
-        while len(active) < maximum:
+        while True:
             identifier = control_turns.reserve_next(os.getpid())
             if not identifier:
                 break

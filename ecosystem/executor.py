@@ -1246,9 +1246,13 @@ def _preemption_reason(job: dict, fairness_started: float | None,
     if not waiting:
         return None
     strongest = max(waiting, key=lambda item: priority(item, scheduling))
-    if priority(strongest, scheduling) > priority(job, scheduling):
+    strongest_priority = priority(strongest, scheduling)
+    running_priority = priority(job, scheduling)
+    if strongest_priority > running_priority:
         return (f"higher-priority job {strongest['id']} is waiting "
-                f"({priority(strongest, scheduling)} > {priority(job, scheduling)})")
+                f"({strongest_priority} > {running_priority})")
+    if strongest_priority < running_priority:
+        return None
     quantum = float(scheduling_policy()["workers"]["time_slice_seconds"])
     if fairness_started is not None and time.monotonic() - fairness_started >= quantum:
         return f"{quantum:.0f}-second time slice expired while other work is waiting"
@@ -1545,6 +1549,11 @@ def execute_next(run=subprocess.run) -> bool:
                 print(f"{job['id']} routing deferred: {reason}")
                 return False
             job["model_realization"] = {"at": cli.now(), **realization}
+            # Realization may load or reclaim a model.  Runner admission must
+            # account from that verified post-realization residency, not the
+            # pre-load snapshot that routed the request.
+            inventory = snapshot()
+            job["resource_snapshot"] = inventory
             job["context_tokens"] = int(decision["context_tokens"])
             job["scheduling_reason"] = scheduling_reason
             if job.get("context_state") == "paused_for_resources":
