@@ -88,11 +88,18 @@ def tick() -> str:
         native_recovery = reconcile_dead_callers(cli.ROOT)
         from ecosystem.operator_inference import recover_abandoned_controllers
         operator_recovery = recover_abandoned_controllers(cli.ROOT)
+        from ecosystem.executor import recover_abandoned_jobs
+        managed_job_recovery = recover_abandoned_jobs()
         repaired_verifications = reconcile_verifications()
+        from ecosystem.control_turns import recover_interrupted, observe_head
+        control_recovery = recover_interrupted()
+        control_head = observe_head()
+        from ecosystem.inference_proxy import reconcile_available_capacity
+        capacity_reconciliation = reconcile_available_capacity(cli.ROOT)
         last = datetime.fromisoformat(state["last_review_enqueued_at"]) if state.get("last_review_enqueued_at") else None
         due = not last or (now-last).total_seconds() >= config["steward_review_seconds"]
         issues = findings(config)
-        if (due or issues) and not pending_review() and not (cli.ROOT / "state/PAUSED").exists():
+        if due and not pending_review() and not (cli.ROOT / "state/PAUSED").exists():
             task_id, task_card, selection_reason = select(config, state, now=now)
             issue_text = "\n".join(f"- {item}" for item in issues) or "- No deterministic warning; perform the scheduled qualitative review."
             task = f"""Perform the periodic ecosystem sanity review.
@@ -131,10 +138,10 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                                       model_reason="Optional watchdog preference; central routing remains authoritative.",
                                       task_contract=contract)
             history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
-            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery)
+            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation)
             cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)
             return f"enqueued {job_id}"
-        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery)
+        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation)
         cli.atomic_json(state_path, state)
         return "healthy; review not due" if not issues else f"findings={len(issues)}; review already pending"
 

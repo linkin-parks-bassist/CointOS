@@ -1026,6 +1026,60 @@ def _reconcile_interrupted_leases(identifiers: list[str], incident_id: str) -> d
     return result
 
 
+def _reconcile_unregistered_leases_after_global_stop(state: dict,
+                                                      incident_id: str) -> dict:
+    """Close process-less managed leases after the emergency boundary proved
+    every managed client stopped and every backend model unloaded.
+
+    These leases can be left behind when a caller dies after spawn intent but
+    before child registration.  Ordinary reconciliation must retain that
+    ambiguity.  The completed global stop supplies the missing stronger fact:
+    no managed child or backend request from the stopped generation survived.
+    Registered and hosted leases remain subject to their normal identity-aware
+    reconciliation paths.
+    """
+    result = {"quiescent": [], "quarantined": []}
+    if not (state.get("client_stop_result", {}).get("ok") is True
+            and state.get("model_unload_result", {}).get("ok") is True):
+        result["quarantined"].append({
+            "reason": "global client stop and model unload are not both verified"})
+        return result
+    mode, document = _work_gate_observation(cli.ROOT)
+    if document is None:
+        result["quarantined"].append({"reason": f"work gate is {mode}"})
+        return result
+    for lease_id, lease in document["leases"].items():
+        if (lease.get("state") == "quiescent"
+                or lease.get("request", {}).get("stop_method") != "process_group"
+                or lease.get("process") is not None):
+            continue
+        try:
+            workload_control.release_worker(
+                cli.ROOT, lease_id,
+                {"state": "preempted", "reason": "emergency global stop",
+                 "incident_id": incident_id}, time.monotonic)
+            workload_control.observe_workers(cli.ROOT, [{
+                "lease_id": lease_id,
+                "managed_clients_stopped": True,
+                "process_group_alive": False,
+                "backend_request_active": False,
+                "inference_lease_active": False,
+                "checkpoint_observed": True,
+            }], time.monotonic)
+        except ValueError as error:
+            result["quarantined"].append(
+                {"lease_id": lease_id, "reason": str(error)})
+            continue
+        reconciled, error = _gate_lease(cli.ROOT, lease_id)
+        if reconciled is not None and reconciled.get("state") == "quiescent":
+            result["quiescent"].append(lease_id)
+        else:
+            result["quarantined"].append({
+                "lease_id": lease_id,
+                "reason": error or f"ended in {reconciled.get('state')!r}"})
+    return result
+
+
 def _reopen_restrictions(root: Path) -> list[str]:
     """Independently observed restrictions that keep admission closed even
     when resources are healthy. Reopen never clears any of them."""
@@ -1850,6 +1904,9 @@ def request_recovery(job_id: str) -> dict:
         reconciliation = _reconcile_interrupted_leases(
             state.get("interrupted_jobs", []), incident_id or "emergency")
         state["recovery_lease_reconciliation"] = reconciliation
+        state["recovery_unregistered_lease_reconciliation"] = (
+            _reconcile_unregistered_leases_after_global_stop(
+                state, incident_id or "emergency"))
         gate = _reopen_work_gate(cli.ROOT, time.monotonic)
         if not gate["ok"]:
             restrictions = gate["reasons"]

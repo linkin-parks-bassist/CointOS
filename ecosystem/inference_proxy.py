@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from email.parser import BytesHeaderParser
 from pathlib import Path
 
-from ecosystem.inference_capacity import release_sequence
+from ecosystem.inference_capacity import release_parked_sequence, release_sequence
 from survival.records import atomic_json
 
 
@@ -331,6 +331,19 @@ def revoke_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock
         credential["release_requested_monotonic"] = now
         save()
     lease = _capacity_lease(root, lease_id)
+    parked_release = credential.get("released_sequence")
+    if lease.get("backend_sequence") is None and type(parked_release) is dict:
+        released = release_parked_sequence(
+            root, lease_id, parked_release, clock)
+        with _proxy_lock(root) as (state, save):
+            credential = state["credentials"][lease_id]
+            credential["state"] = "revoked"
+            credential["digest"] = ""
+            credential["released_sequence"] = _durable(released)
+            credential["revoked_monotonic"] = _clock(clock)
+            save()
+        return {"state": "revoked", "lease_id": lease_id,
+                "sequence": released}
     attestation = {
         "schema_version": 1,
         "binding": _durable(observed_end["binding"]),

@@ -613,6 +613,43 @@ def withdraw_unissued_sequence(root: Path, lease_id: str, clock) -> dict:
         return _public_lease(lease)
 
 
+def release_parked_sequence(root: Path, lease_id: str, released_sequence: dict,
+                            clock) -> dict:
+    """Finalize a stopped logical run whose physical sequence was already
+    released while the session was parked and was never reacquired."""
+    from ecosystem import inference_proxy
+    root = Path(root)
+    with inference_proxy._locked_states(root) as (workers, state, proxy_state, _save):
+        lease = state["leases"].get(lease_id)
+        credential = proxy_state["credentials"].get(lease_id)
+        if lease is None or credential is None:
+            raise ValueError("unknown parked inference allocation")
+        if lease["state"] == "released":
+            return _public_lease(lease)
+        if (lease.get("backend_sequence") is not None
+                or lease.get("state") not in {"ready_for_revalidation", "release_requested"}):
+            raise ValueError("inference allocation is not parked without occupancy")
+        if (type(released_sequence) is not dict
+                or released_sequence.get("state") != "released"
+                or released_sequence.get("lease_id") != lease_id
+                or released_sequence.get("expected_release_binding")
+                != credential.get("binding", {}).get("release_binding")):
+            raise ValueError("parked release proof does not match the credential")
+        worker = workers["leases"].get(lease["request"]["worker_lease_id"])
+        if (type(worker) is not dict
+                or inference_proxy._bound_process_ended(worker.get("process", {})) is not True):
+            raise ValueError("parked allocation process has not ended")
+        lease.update(
+            state="released",
+            released_monotonic=_clock_value(clock),
+            withdrawal_reason="parked_session_ended_before_reacquisition",
+            observed_release=_durable_copy(released_sequence.get("observed_release")),
+        )
+        state["generation"] += 1
+        _atomic_write(root / "state/inference-capacity.json", state)
+        return _public_lease(lease)
+
+
 def scheduling_snapshot(root: Path) -> dict:
     """Load and validate the published scheduling snapshot; return its values."""
     document = _load_json(Path(root) / "state" / "scheduling-policy.json")

@@ -953,9 +953,8 @@ def safe_routes(inventory: dict, policy: dict, request: dict) -> list[dict]:
 
 
 def choose_route(routes: list[dict], request: dict) -> dict:
-    """Choose the largest qualified model by parameter_count, falling back to
-    positive model_bytes when parameter_count is absent; context, preference,
-    and model id remain deterministic tie breaks."""
+    """Honor the first admitted explicit preference, otherwise choose the
+    largest qualified model deterministically."""
     admitted = [route for route in routes if route.get("state") == "admitted"]
     requirements = request.get("requirements", {})
     requirements = requirements if isinstance(requirements, dict) else {}
@@ -970,12 +969,18 @@ def choose_route(routes: list[dict], request: dict) -> dict:
                 return (1, parameter_count)
             model_bytes = route.get("model_bytes")
             return (0, model_bytes if _positive_integer(model_bytes) else 0)
-        selected = max(admitted, key=lambda route: (
-            size_rank(route),
-            route["context_tokens_per_sequence"],
-            preference_rank.get(route["model_id"], 0),
-            route["model_id"],
-        ))
+        selected = next(
+            (route for model_id in preferences for route in admitted
+             if route.get("model_id") == model_id),
+            None,
+        ) if isinstance(preferences, list) else None
+        if selected is None:
+            selected = max(admitted, key=lambda route: (
+                size_rank(route),
+                route["context_tokens_per_sequence"],
+                preference_rank.get(route["model_id"], 0),
+                route["model_id"],
+            ))
         excluded = [{"model_id": route.get("model_id"),
                      "exclusion_reasons": route.get("exclusion_reasons", [])}
                     for route in routes if route.get("state") != "admitted"]
@@ -1007,17 +1012,36 @@ def validate_route(route: dict, fresh_inventory: dict, policy: dict, request: di
 def route(job: dict, inventory: dict, infer=None) -> dict:
     """Compatibility entry point for consumers awaiting the R4 lease migration."""
     resource_policy = json.loads(RESOURCE_POLICY_PATH.read_text(encoding="utf-8"))
-    selected = choose_route(safe_routes(inventory, resource_policy, job), job)
+    request = job
+    requested_model = job.get("requested_model")
+    if isinstance(requested_model, str) and requested_model:
+        requirements = job.get("requirements")
+        requirements = dict(requirements) if isinstance(requirements, dict) else {}
+        requirements["preferred_model_ids"] = [requested_model]
+        request = {**job, "requirements": requirements}
+    routes = safe_routes(inventory, resource_policy, request)
+    selected = choose_route(routes, request)
     if selected.get("state") != "admitted":
         reasons = selected.get("exclusion_reasons", ["no_safe_route"])
         return {"action": "defer", "model": None, "context_tokens": None,
                 "reason": "; ".join(reasons), "valid": False,
                 "exclusion_reasons": reasons}
+    if selected["model_id"] == requested_model:
+        reason = "caller-requested verified task-qualified route"
+    elif requested_model:
+        requested = next((item for item in routes
+                          if item.get("model_id") == requested_model), None)
+        exclusion = ((requested or {}).get("exclusion_reasons")
+                     or ["requested_model_unavailable"])
+        reason = (f"requested model {requested_model} unavailable: "
+                  f"{'; '.join(exclusion)}; using largest verified task-qualified route")
+    else:
+        reason = "largest verified task-qualified route"
     return {**selected,
             "action": "use_loaded" if selected["loaded"] else "load",
             "model": selected["model_id"],
             "context_tokens": selected["context_tokens_per_sequence"],
-            "reason": "largest verified task-qualified route", "valid": True}
+            "reason": reason, "valid": True}
 
 
 def realize(decision: dict, inventory: dict) -> dict:

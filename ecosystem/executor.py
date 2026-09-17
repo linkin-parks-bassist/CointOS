@@ -976,16 +976,21 @@ def recover_abandoned_jobs() -> int:
             continue
         if (job.get("runner_close_outcome") is not None
                 and job.get("worker_lease_id") and job.get("inference_lease_id")):
-            group_alive = _stop_recovered_runner(job)
+            already_closed = (
+                job.get("runner_closed_generation") == job.get("runner_generation")
+                and job["runner_close_outcome"].get("process_group_alive") is False
+            )
+            group_alive = False if already_closed else _stop_recovered_runner(job)
             if group_alive is False:
+                launch = job["runner_close_outcome"] if already_closed else {
+                    "pid": job["executor_pid"],
+                    "start_ticks": job["executor_start_ticks"],
+                    "pgid": job["executor_pgid"],
+                }
                 context = {
                     "worker_lease": {"lease_id": job["worker_lease_id"]},
                     "inference_lease": {"lease_id": job["inference_lease_id"]},
-                    "launch": {
-                        "pid": job["executor_pid"],
-                        "start_ticks": job["executor_start_ticks"],
-                        "pgid": job["executor_pgid"],
-                    },
+                    "launch": launch,
                 }
                 try:
                     closed = close_runner_round(
@@ -1027,6 +1032,24 @@ def recover_abandoned_jobs() -> int:
                         cli.atomic_json(path, job)
                         cli.audit("task.cancelled", job_id=job["id"],
                                   reason="cancellation completed during reconciliation")
+                    else:
+                        session = job.get("opencode_session") or opencode_session_id(
+                            cli.ROOT / job.get("output", ""))
+                        if session:
+                            job.update(
+                                state="ready", logical_run_state="continuing",
+                                opencode_session=session, resume_available=True,
+                                last_preemption_reason="executor service restarted",
+                                preemption_count=int(job.get("preemption_count", 0)) + 1,
+                                updated_at=cli.now(),
+                            )
+                            job.pop("reconciliation_reason", None)
+                            job.pop("executor_pid", None)
+                            cli.atomic_json(path, job)
+                            cli.audit(
+                                "task.restart_recovered", job_id=job["id"],
+                                resume_available=True,
+                            )
                     recovered += 1
                     continue
             job["recovery_process_group_alive"] = group_alive

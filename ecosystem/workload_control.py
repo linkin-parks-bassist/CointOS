@@ -388,6 +388,15 @@ def _validate_observations(observations: list[dict]) -> list[dict]:
         seen.add(lease_id)
         if "never_spawned" in item and type(item["never_spawned"]) is not bool:
             raise ValueError("invalid worker never_spawned attestation")
+        if ("managed_clients_stopped" in item
+                and type(item["managed_clients_stopped"]) is not bool):
+            raise ValueError("invalid managed client stop attestation")
+        if item.get("managed_clients_stopped") is True and not (
+                item.get("process_group_alive") is False
+                and item.get("backend_request_active") is False
+                and item.get("inference_lease_active") is False
+                and item.get("checkpoint_observed") is True):
+            raise ValueError("incomplete managed client stop attestation")
         if "reaped_spawn" in item:
             reaped = item["reaped_spawn"]
             if (
@@ -506,7 +515,9 @@ def _smoke_blockers(state: dict) -> list[str]:
 
 
 def _attested_stop(observation: dict) -> bool:
-    return observation.get("never_spawned") is True or "reaped_spawn" in observation
+    return (observation.get("never_spawned") is True
+            or observation.get("managed_clients_stopped") is True
+            or "reaped_spawn" in observation)
 
 
 def _hosted_writer_blocks(owner: dict | None, request: dict, observation: dict) -> bool:

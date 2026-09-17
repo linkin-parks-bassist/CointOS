@@ -209,21 +209,36 @@ def recover_interrupted() -> int:
     return recovered
 
 
+def _retry_due(record: dict) -> bool:
+    retry_at = record.get("deep_retry_not_before")
+    if not isinstance(retry_at, str):
+        return True
+    try:
+        return datetime.fromisoformat(retry_at) <= datetime.now(timezone.utc)
+    except ValueError:
+        return True
+
+
+def _reserve_eligible(record: dict) -> bool:
+    return (record.get("front_state") in FRONT_TERMINAL_STATES
+            and record.get("deep_state") == "queued" and _retry_due(record))
+
+
+def observe_head() -> str | None:
+    for path in sorted(directory().glob("telegram-*.json")):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if _reserve_eligible(record):
+            return path.stem
+    return None
+
+
 def reserve_next(owner_pid: int) -> str | None:
     for path in sorted(directory().glob("telegram-*.json")):
         identifier = path.stem
         selected = False
         def change(record: dict) -> None:
             nonlocal selected
-            retry_at = record.get("deep_retry_not_before")
-            retry_due = True
-            if isinstance(retry_at, str):
-                try:
-                    retry_due = datetime.fromisoformat(retry_at) <= datetime.now(timezone.utc)
-                except ValueError:
-                    retry_due = True
-            if (record.get("front_state") in FRONT_TERMINAL_STATES
-                    and record.get("deep_state") == "queued" and retry_due):
+            if _reserve_eligible(record):
                 record.update(deep_state="reserved", deep_owner_pid=owner_pid,
                               deep_owner_identity=_process_identity(owner_pid))
                 selected = True

@@ -15,13 +15,18 @@ from ecosystem.task_contracts import accepted_workspace_policy
 
 def _prompt_lifecycle_facts() -> dict:
     facts = lifecycle()
+    active_states = {"queued", "ready", "running", "awaiting_verification"}
     recent = []
     for fact in facts.get("recent_agents", []):
+        if fact.get("state") not in active_states:
+            continue
         projected = dict(fact)
         projected["role"] = safe_role_label(projected.get("role"))
         recent.append(projected)
     latest = {}
     for raw_role, fact in facts.get("latest_by_role", {}).items():
+        if fact.get("state") not in active_states:
+            continue
         role = safe_role_label(raw_role)
         if role is None:
             continue
