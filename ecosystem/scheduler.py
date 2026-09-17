@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ecosystem.cli import USER_DIRECTED_ORIGINS
 from ecosystem.inference_capacity import effective_priority
 
 POLICY_PATH = Path(__file__).resolve().parents[1] / "config/model-policy.json"
@@ -27,7 +28,8 @@ def priority(job: dict, scheduling: dict, now: datetime | None = None) -> int:
     age_seconds = max(0.0, (now - created).total_seconds())
     return effective_priority(
         scheduling, job.get("role"), job.get("execution_profile"),
-        str(job.get("authority_profile") or "ordinary"), age_seconds)
+        str(job.get("authority_profile") or "ordinary"), age_seconds,
+        operator_session=job.get("user_directed_origin") in USER_DIRECTED_ORIGINS)
 
 def choose(jobs: list[tuple[Path, dict]], inventory: dict,
            scheduling: dict, now: datetime | None = None) -> tuple[Path, dict, str]:

@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DIRS = ("inbox/new", "inbox/triaged", "projects", "state/jobs", "state/verifications", "logs/runs")
+USER_DIRECTED_ORIGINS = ("local_operator", "telegram_contact")
 
 
 def now() -> str:
@@ -64,6 +65,15 @@ def initialize() -> None:
     for relative in DIRS:
         (ROOT / relative).mkdir(parents=True, exist_ok=True)
     print(f"initialized {ROOT}")
+
+
+def _user_directed_origin(source: object, authority_profile: str) -> str | None:
+    if source == "local-cli":
+        return "local_operator"
+    if (authority_profile == "contact_requested" and isinstance(source, str)
+            and re.fullmatch(r"telegram:[0-9]+", source)):
+        return "telegram_contact"
+    return None
 
 
 def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: str | None = None,
@@ -126,6 +136,9 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
             "workload_class": intake["workload_class"],
             "verification_requested": verification_requested,
         }
+        user_directed_origin = _user_directed_origin(source, intake["authority_profile"])
+        if user_directed_origin is not None:
+            job["user_directed_origin"] = user_directed_origin
         if idempotency_key:
             job["idempotency_key"] = idempotency_key
         atomic_json(job_path, job)
