@@ -1057,6 +1057,11 @@ def recover_abandoned_jobs() -> int:
             cli.atomic_json(path, job)
             recovered += 1
             continue
+        # This routine also runs from the periodic watchdog while the executor
+        # service is healthy.  A live runner is not abandoned: never cancel its
+        # inference lease or stop its process group during reconciliation.
+        if _process_alive(job):
+            continue
         if (job.get("state") == "runner_starting"
                 and job.get("runner_phase") not in {
                     "generation_claimed", "r1_acquire_intent", "r1_acquired",
@@ -1156,8 +1161,6 @@ def recover_abandoned_jobs() -> int:
             cli.audit("task.reconciliation_required", job_id=job["id"],
                       inference_lease_id=job["inference_lease_id"])
             recovered += 1
-            continue
-        if _process_alive(job):
             continue
         if job.get("state") == "runner_starting":
             continue

@@ -1,7 +1,7 @@
 ---
 status: "unverified"
-updated_at: "2026-09-17T18:58:44+10:00"
-source: "watchdog.py installed cadence repair and active-job qualification 2026-09-17"
+updated_at: "2026-09-17T19:12:51+10:00"
+source: "ecosystem/executor.py ordering and installed manual watchdog qualification 2026-09-17"
 ---
 
 Current #1 is qualification and simplification of abundance-first inference scheduling. The main acquisition path is implemented and live-proven for ordinary acquisition, unloaded-model loading, idle residency reclamation, park/reacquire, dead-owner recovery, context rerouting, cancellation, whole-system restart recovery, backend-restart reconciliation, cleanup, and multi-step retained-session continuation. The false 64 GiB capacity cap and dead legacy 108 GiB load gate are removed. Physical reserve values have one configuration owner under `physical_capacity`, and their production arithmetic is mapped.
@@ -17,6 +17,8 @@ Current #1 is qualification and simplification of abundance-first inference sche
 - **Quarantined model metadata.** Lemonade reports `gpt-oss-120b-mxfp-GGUF` as 1.48 GiB while the installed registry records 63.4 GiB. Do not admit it until provenance is reconciled.
 
 ## Repaired restriction and failure families
+
+The watchdog no longer kills healthy managed workers while checking for abandoned jobs. `recover_abandoned_jobs()` previously cancelled any recorded inference lease and stopped its process group before reaching `_process_alive(job)`, so each periodic watchdog tick SIGKILLed a legitimate observable Qwen worker. The installed ordering preserves live processes before destructive recovery; a manual watchdog tick left the worker PID, inference lease, and retained OpenCode session unchanged.
 
 Removed or replaced barriers include exact OpenCode patch allowlisting; 4096-token worker output; 96-token front truncation; six deep tool rounds; 1400-token deep output; three deep crash attempts; ten-minute deep SIGALRM; 180-second deep inference cancellation; unconditional trusted-contact task refusal; mandatory workspace/task-contract paperwork; mandatory unloaded parameter count; synthetic context quantum; denial before idle reclamation; missing unloaded realization; duplicate legacy realization admission; the dead 64 GiB unknown-model fallback; the false `min(64 GiB sysfs domain, 100 GiB hardware capability)` cap; terminal ordinary-agent budgets; prompt-level elapsed/attempt stops; 0.2-second cleanup; exactly-four proxy handlers; duplicated physical reserve configuration; unconditional ordinary-task verifier spawning; and fairness time charged during retained-session prefill.
 
