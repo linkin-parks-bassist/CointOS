@@ -6,7 +6,9 @@ import os
 import re
 from pathlib import Path
 
+from ecosystem import cli
 from ecosystem.inference import request as inference_request
+from ecosystem.managed_inference import request as managed_request
 from ecosystem.resource_control import active_chat_model
 
 
@@ -29,11 +31,15 @@ only when the source explicitly requires David's decision. Never add a generic
 follow-up invitation. Output only the message."""
     messages = [{"role": "system", "content": system}, *((history or [])[-8:]),
                 {"role": "user", "content": raw}]
-    if not inference_context:
-        raise RuntimeError("notification inference requires an admitted proxy context")
-    assistant = inference_request({
-        **inference_context, "messages": messages, "temperature": 0.4, "timeout": 180,
-    }, Path(__file__).resolve().parents[1], __import__("time").monotonic)
+    assistant = (
+        inference_request({
+            **inference_context, "messages": messages, "temperature": 0.4,
+            "timeout": None,
+        }, cli.ROOT, __import__("time").monotonic)
+        if inference_context is not None else
+        managed_request(model, messages, 512, timeout=None, temperature=0.4,
+                        root=cli.ROOT, control=True)
+    )
     return sanitize_notification(assistant["content"])
 
 

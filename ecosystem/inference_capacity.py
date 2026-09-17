@@ -997,7 +997,7 @@ def _valid_release_attestation(
         return False
     kind = observed.get("kind")
     sequence_state_is_valid = kind in {
-        "sequence_end", "reconciled_absent", "never_requested",
+        "sequence_end", "reconciled_absent", "never_requested", "response_finished",
     }
     return (
         backend_sequence is not None

@@ -9,7 +9,7 @@ from collections.abc import Callable
 from ecosystem import cli
 
 
-TERMINAL_STATES = {"completed", "failed", "rejected"}
+TERMINAL_STATES = {"completed", "failed", "rejected", "cancelled"}
 
 
 def mark_interrupted_deliveries_unknown() -> int:
@@ -25,6 +25,22 @@ def mark_interrupted_deliveries_unknown() -> int:
         cli.audit("outbox.delivery_unknown", job_id=job["id"], user_id=job["user_id"])
         changed += 1
     return changed
+
+
+def delivery_health() -> dict:
+    """Read-only snapshot of outbound-message job states for the watchdog."""
+    counts = {state: 0 for state in ("queued", "waiting", "sending", "delivered", "delivery_unknown", "failed")}
+    oldest = None
+    for path in sorted((cli.ROOT / "state/jobs").glob("outbox-*.json")):
+        job = json.loads(path.read_text(encoding="utf-8"))
+        state = job.get("state")
+        if state in counts:
+            counts[state] += 1
+        if state in {"waiting", "queued", "sending"}:
+            updated_at = job.get("updated_at")
+            if updated_at and (oldest is None or updated_at < oldest):
+                oldest = updated_at
+    return {"counts": counts, "oldest_pending_updated_at": oldest}
 
 
 def enqueue(user_id: int, message: str = "", depends_on: str | None = None, result_of: str | None = None,

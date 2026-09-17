@@ -1,14 +1,16 @@
 ---
 status: "unverified"
-updated_at: "2026-09-17T19:54:29+10:00"
-source: "installed source repairs and durable worker evidence 2026-09-17"
+updated_at: "2026-09-17T21:11:31+10:00"
+source: "installed live qualification and scheduler inspection 2026-09-17"
 ---
 
 Current #1 is qualification and simplification of abundance-first inference scheduling. The main acquisition path is implemented and live-proven for ordinary acquisition, unloaded-model loading, idle residency reclamation, park/reacquire, dead-owner recovery, context rerouting, cancellation, whole-system restart recovery, backend-restart reconciliation, cleanup, and multi-step retained-session continuation. The false 64 GiB capacity cap and dead legacy 108 GiB load gate are removed. Physical reserve values have one configuration owner under `physical_capacity`, and their production arithmetic is mapped.
 
 ## Open defects and unresolved risks
 
-- **Server-side tool continuation needs qualification.** The attached OpenCode CLI can exit after `tool-calls` while the loopback server independently produces the final assistant report and `stop`. Immediate prompt injection restarted a completed one-tool task six times. The installed wrapper now observes and mirrors unseen server-session parts instead of injecting another user prompt; live qualification was interrupted after the scheduler silently chose the 8B model. Owner: `why/does/a/retained/worker/repeat/the/same/tool/call/after/continuation.md`.
+- **User-directed work is not classified as user-driven.** `scheduler.priority()` calls `effective_priority()` without authoritative operator-session state. Ordinary manually requested mapper work therefore fell into the default 250 band, while an older periodic Steward job aged to 253 and was repeatedly selected first. Owner: `why/can/an/aged/steward/outrank/user/directed/local/work.md`.
+- **Quiescent worker leases accumulate without a retention policy.** The first aggregate observation found 2,084 quiescent records. They do not consume execution, but the whole state document grows indefinitely. Safe pruning shape is known; the justified replay window/count is not. Owner: `why/are/quiescent/worker/leases/retained.md`.
+- **Notification incident reporting still names a dead event.** Delivery acquisition and cleanup are repaired and the stranded notification delivered, but the watchdog findings filter still looks for `outbox.delivery_failed`, which the notifier does not emit. It should consume the new state-based delivery summary. Owner: `why/did/cointos/notifications/fail/to/deliver.md`.
 - **Remaining fixed memory reserves.** The active byte-form policy retains 32 GiB protected host memory, 8 GiB coin/control reserve, and 12 GiB model-load transient reserve. All three stack in host admission; transient also enters GTT admission. Their values still need live measurement. Owner: `what/is/the/local/strix/halo/resource/policy.md`.
 - **Proxy transport ceilings.** Header, request-body, stream-buffer, completed-JSON, and backend-observation limits protect bounded protocol handling, but their exact values have not been compared with legitimate maximum-context payloads. Owner: `why/does/cointos/limit/inference/proxy/transport/sizes.md`.
 - **Work-residency policy.** `maximum_work_models: 1` has not been fully reconciled with two Lemonade LLM residency positions, the pinned fast model, idle reclamation, and future concurrent work-model use.
@@ -16,6 +18,10 @@ Current #1 is qualification and simplification of abundance-first inference sche
 - **Quarantined model metadata.** Lemonade reports `gpt-oss-120b-mxfp-GGUF` as 1.48 GiB while the installed registry records 63.4 GiB. Do not admit it until provenance is reconciled.
 
 ## Repaired restriction and failure families
+
+Notification delivery now treats cancelled dependencies as terminal, acquires the fast control model through managed inference when no context is injected, and releases capacity from a terminal successful response when no backend slot identity exists and no request remains in flight. Installed live qualification delivered the formerly waiting record in one attempt. The watchdog persists notification state counts and oldest pending time.
+
+Server-side OpenCode continuation is live-qualified: after a tool call the wrapper mirrors the server-produced report and explicit stop without injecting another user continuation or replaying the tool.
 
 The control worker no longer limits eligible deep turns to two controller children. It reserves and forks every eligible durable turn so each reaches the real managed inference priority/resource scheduler. The previous `AGENT_CONTROL_WORKERS=2` process cap was a second admission gate that hid high-priority Telegram work from scheduling.
 

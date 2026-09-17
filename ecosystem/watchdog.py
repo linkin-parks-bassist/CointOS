@@ -98,6 +98,8 @@ def tick() -> str:
         capacity_reconciliation = reconcile_available_capacity(cli.ROOT)
         from ecosystem.workload_control import worker_lease_health
         lease_health = worker_lease_health(cli.ROOT)
+        from ecosystem import outbox
+        notification_health = outbox.delivery_health()
         last = datetime.fromisoformat(state["last_review_enqueued_at"]) if state.get("last_review_enqueued_at") else None
         due = not last or (now-last).total_seconds() >= config["steward_review_seconds"]
         issues = findings(config)
@@ -140,10 +142,10 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                                       model_reason="Optional watchdog preference; central routing remains authoritative.",
                                       task_contract=contract)
             history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
-            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health)
+            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health)
             cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)
             return f"enqueued {job_id}"
-        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health)
+        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health)
         cli.atomic_json(state_path, state)
         return "healthy; review not due" if not issues else f"findings={len(issues)}; review already pending"
 

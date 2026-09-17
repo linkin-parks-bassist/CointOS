@@ -609,7 +609,9 @@ def completed_run_termination(root: Path, lease_id: str,
         termination = _verified_run_end(credential)
         if observation is None and termination is not None:
             return _durable(termination)
-        if observation is None and not _never_requested(credential):
+        response_finished = credential.get("response_finished") is True
+        if (observation is None and not _never_requested(credential)
+                and not response_finished):
             # A dead HTTP client does not prove its upstream GPU request ended.
             if not require_process_end and credential.get("state") == "parking":
                 credential["state"] = "open"
@@ -626,7 +628,8 @@ def completed_run_termination(root: Path, lease_id: str,
         generation = int(state["generation"]) + 1
         record_id = uuid.uuid4().hex
         evidence_id = "backend-observations.jsonl#" + record_id
-        kind = "reconciled_absent" if observation is not None else "never_requested"
+        kind = ("reconciled_absent" if observation is not None else
+                "response_finished" if response_finished else "never_requested")
         termination = {
             "terminated": True,
             "kind": kind,
@@ -645,7 +648,8 @@ def completed_run_termination(root: Path, lease_id: str,
             "evidence_id": evidence_id,
         }
         if observation is None:
-            record.update(process=_durable(credential["binding"]["process"]), in_flight=0)
+            record.update(process=_durable(credential["binding"]["process"]), in_flight=0,
+                          response_finished=response_finished)
         elif observation.get("backend_instance_ended") is True:
             record.update(
                 identity=_durable(identity),
@@ -675,7 +679,8 @@ def _verified_run_end(credential):
     termination = credential.get("last_backend_termination")
     if type(termination) is not dict:
         return None
-    if termination.get("kind", "sequence_end") in {"sequence_end", "reconciled_absent"}:
+    if termination.get("kind", "sequence_end") in {
+            "sequence_end", "reconciled_absent", "response_finished"}:
         return termination
     if termination.get("kind") == "never_requested" and _never_requested(credential):
         return termination
