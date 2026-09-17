@@ -70,6 +70,51 @@ def create_session(url, directory, title):
     return identifier
 
 
+def session_parts(url, directory, session):
+    query = urllib.parse.urlencode({'directory': str(directory)})
+    with urllib.request.urlopen(
+            f'{url}/session/{session}/message?{query}', timeout=10) as response:
+        messages = json.load(response)
+    if not isinstance(messages, list):
+        raise RuntimeError('invalid OpenCode session message response')
+    parts = []
+    for message in messages:
+        if not isinstance(message, dict) or not isinstance(message.get('parts'), list):
+            continue
+        parts.extend(part for part in message['parts'] if isinstance(part, dict))
+    return parts
+
+
+def await_server_finish(url, directory, session, seen_part_ids):
+    """Mirror server-side orchestration after an attached CLI exits."""
+    seen = set(seen_part_ids)
+    while True:
+        for part in session_parts(url, directory, session):
+            identifier = part.get('id')
+            if isinstance(identifier, str) and identifier in seen:
+                continue
+            if isinstance(identifier, str):
+                seen.add(identifier)
+            part_type = part.get('type')
+            event_type = {
+                'step-start': 'step_start',
+                'step-finish': 'step_finish',
+                'tool': 'tool_use',
+            }.get(part_type, part_type)
+            if isinstance(event_type, str):
+                print(json.dumps({'type': event_type, 'sessionID': session,
+                                  'part': part}), flush=True)
+            if part_type == 'step-finish':
+                reason = part.get('reason')
+                if reason == 'stop':
+                    return {'returncode': 0, 'length': False,
+                            'continuation_required': False}
+                if reason == 'length':
+                    return {'returncode': 0, 'length': True,
+                            'continuation_required': False}
+        time.sleep(0.1)
+
+
 def publish_view(path, url, directory, session, pid):
     record = {'url': url, 'directory': str(directory), 'session_id': session,
               'server_pid': pid,
@@ -89,6 +134,7 @@ def finish_client(process):
     saw_error = False
     finish_reason = None
     semantic_complete = False
+    part_ids = set()
     for raw_line in iter(process.stdout.readline, b''):
         sys.stdout.buffer.write(raw_line)
         sys.stdout.buffer.flush()
@@ -99,6 +145,8 @@ def finish_client(process):
         if isinstance(event, dict) and event.get('type') == 'error':
             saw_error = True
         part = event.get('part') if isinstance(event, dict) else None
+        if isinstance(part, dict) and isinstance(part.get('id'), str):
+            part_ids.add(part['id'])
         if (isinstance(event, dict) and event.get('type') == 'step_finish'
                 and isinstance(part, dict)):
             finish_reason = part.get('reason')
@@ -123,6 +171,7 @@ def finish_client(process):
         # explicit semantic finish arrives.
         'continuation_required': finish_reason is None or finish_reason in (
             'tool_calls', 'tool-calls', 'function_call'),
+        'part_ids': part_ids,
     }
 
 
@@ -198,6 +247,10 @@ def main():
                   file=sys.stderr, flush=True)
         length_recoveries = 0
         while True:
+            baseline_part_ids = {
+                part['id'] for part in session_parts(url, directory, session)
+                if isinstance(part.get('id'), str)
+            }
             client = subprocess.Popen(client_command+['--attach', url], cwd=directory,
                                       env=client_env, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE)
@@ -207,17 +260,12 @@ def main():
             client = None
             if outcome['returncode'] == 0 and outcome['continuation_required']:
                 print(json.dumps({
-                    'type': 'worker_tool_continuation_recovery',
+                    'type': 'worker_server_continuation_wait',
                     'session_id': session,
                 }), file=sys.stderr, flush=True)
-                if capacity is not None:
-                    verify_server_capacity(
-                        url, directory, capacity, expected_base,
-                        binary=command[0], root=Path(__file__).resolve().parents[1])
-                prompt = ('Continue the incomplete task in this exact retained session. '
-                          'The previous model step ended after tool execution; inspect the '
-                          'tool result and continue until the requested task is complete.')
-                continue
+                outcome = await_server_finish(
+                    url, directory, session,
+                    baseline_part_ids | outcome['part_ids'])
             if not outcome['length']:
                 return outcome['returncode']
             length_recoveries += 1
