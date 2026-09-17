@@ -1200,7 +1200,8 @@ def _waiting_jobs(running_id: str) -> list[dict]:
     return waiting
 
 
-def _preemption_reason(job: dict, started: float, scheduling: dict) -> str | None:
+def _preemption_reason(job: dict, fairness_started: float | None,
+                       scheduling: dict) -> str | None:
     try:
         durable = json.loads(
             (cli.ROOT / "state/jobs" / f"{job['id']}.json").read_text(encoding="utf-8"))
@@ -1223,9 +1224,27 @@ def _preemption_reason(job: dict, started: float, scheduling: dict) -> str | Non
         return (f"higher-priority job {strongest['id']} is waiting "
                 f"({priority(strongest, scheduling)} > {priority(job, scheduling)})")
     quantum = float(scheduling_policy()["workers"]["time_slice_seconds"])
-    if time.monotonic() - started >= quantum:
+    if fairness_started is not None and time.monotonic() - fairness_started >= quantum:
         return f"{quantum:.0f}-second time slice expired while other work is waiting"
     return None
+
+
+def _completed_step_after(output_path: Path, offset: int,
+                          session: str | None) -> bool:
+    try:
+        with output_path.open("rb") as stream:
+            stream.seek(offset)
+            for raw in stream:
+                try:
+                    event = json.loads(raw)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if (event.get("type") == "step_finish"
+                        and (session is None or event.get("sessionID") == session)):
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def _close_usage(budget: dict, usage: dict, output_path: Path,
@@ -1320,6 +1339,7 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
     if initial_output_bytes is None:
         initial_output_bytes = output_path.stat().st_size if output_path.exists() else 0
     last_output_bytes = initial_output_bytes
+    fairness_started = None
     while process.poll() is None:
         now = time.monotonic()
         if output_path.exists():
@@ -1342,9 +1362,12 @@ def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
                     "elapsed_seconds": round(stopped - started, 3)}
         elapsed = now - started
         # OpenCode owns context compaction within its durable session.
-        reason = _preemption_reason(job, started, scheduling)
+        session = job.get("opencode_session") or opencode_session_id(output_path)
+        if (fairness_started is None
+                and _completed_step_after(output_path, initial_output_bytes, session)):
+            fairness_started = now
+        reason = _preemption_reason(job, fairness_started, scheduling)
         if reason:
-            session = job.get("opencode_session") or opencode_session_id(output_path)
             # Give OpenCode a short initial window to publish its durable session id.
             if session or elapsed >= float(settings["preemption_grace_seconds"]):
                 before_stop()

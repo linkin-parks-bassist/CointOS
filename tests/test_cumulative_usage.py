@@ -120,6 +120,8 @@ def test_preemption_returns_closed_usage_with_final_output():
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"abcde")
         with patch("time.monotonic", side_effect=[0.0, 5.0, 5.0]), \
+             patch("ecosystem.executor._preemption_reason",
+                   return_value="time slice expired while other work is waiting"), \
              patch("ecosystem.execution_budget.stop_process_group",
                    return_value={"state": "exited", "signal": None}):
             outcome = _run_preemptibly(
