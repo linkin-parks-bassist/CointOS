@@ -88,6 +88,7 @@ def finish_client(process):
     """Mirror client output and classify semantic failure and truncation."""
     saw_error = False
     finish_reason = None
+    semantic_complete = False
     for raw_line in iter(process.stdout.readline, b''):
         sys.stdout.buffer.write(raw_line)
         sys.stdout.buffer.flush()
@@ -101,11 +102,27 @@ def finish_client(process):
         if (isinstance(event, dict) and event.get('type') == 'step_finish'
                 and isinstance(part, dict)):
             finish_reason = part.get('reason')
+            if finish_reason == 'stop':
+                semantic_complete = True
+                break
     process.stdout.close()
-    code = process.wait()
+    if semantic_complete:
+        # The JSON event is the task boundary.  Do not let OpenCode's
+        # post-response housekeeping keep the managed worker schedulable and
+        # turn already-complete work into another retained-session dispatch.
+        stop_child(process)
+        code = 0
+    else:
+        code = process.wait()
     return {
         'returncode': 1 if code == 0 and saw_error else code,
         'length': finish_reason == 'length',
+        # A clean process exit is transport state, not proof that the model
+        # finished the task.  Preempted retained sessions can yield no new
+        # step_finish at all when first reattached; keep recovering until an
+        # explicit semantic finish arrives.
+        'continuation_required': finish_reason is None or finish_reason in (
+            'tool_calls', 'tool-calls', 'function_call'),
     }
 
 
@@ -188,6 +205,19 @@ def main():
             client.stdin.close()
             outcome = finish_client(client)
             client = None
+            if outcome['returncode'] == 0 and outcome['continuation_required']:
+                print(json.dumps({
+                    'type': 'worker_tool_continuation_recovery',
+                    'session_id': session,
+                }), file=sys.stderr, flush=True)
+                if capacity is not None:
+                    verify_server_capacity(
+                        url, directory, capacity, expected_base,
+                        binary=command[0], root=Path(__file__).resolve().parents[1])
+                prompt = ('Continue the incomplete task in this exact retained session. '
+                          'The previous model step ended after tool execution; inspect the '
+                          'tool result and continue until the requested task is complete.')
+                continue
             if not outcome['length']:
                 return outcome['returncode']
             length_recoveries += 1

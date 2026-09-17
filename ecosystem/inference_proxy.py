@@ -211,9 +211,9 @@ def authorize_proxy_request(root: Path, metadata: dict, body: dict, clock) -> di
         if len(matches) != 1:
             return {"status": 401, "error": "invalid bearer credential"}
         lease_id, credential = matches[0]
-        if credential.get("state") in {"parked", "reacquiring"}:
+        if credential.get("state") in {"parking", "parked", "reacquiring"}:
             return {"status": 425, "error": "inference capacity is being reacquired",
-                    "lease_id": lease_id}
+                    "lease_id": lease_id, "credential_state": credential["state"]}
         if credential.get("state") != "open":
             return {"status": 409, "error": "credential is closing or revoked"}
         try:
@@ -390,9 +390,21 @@ def park_proxy_credential(root: Path, lease_id: str, observed_end: dict, clock) 
         "clock_domain_id": observed_end["clock_domain_id"],
         "evidence_id": observed_end["evidence_id"],
     }
-    released = release_sequence(root, lease_id, attestation, clock)
-    if released.get("state") != "released":
-        raise RuntimeError("R3 did not accept sequence termination")
+    try:
+        released = release_sequence(root, lease_id, attestation, clock)
+        if released.get("state") != "released":
+            raise RuntimeError("R3 did not accept sequence termination")
+    except Exception:
+        # Parking is optional between model steps. If physical release cannot
+        # be proved, retain the allocation and keep the logical run usable.
+        # Cancellation may have changed parking -> closing meanwhile.
+        with _proxy_lock(root) as (state, save):
+            credential = state["credentials"].get(lease_id)
+            if credential is not None and credential.get("state") == "parking":
+                credential["state"] = "open"
+                credential.pop("park_requested_monotonic", None)
+                save()
+        raise
     with _proxy_lock(root) as (state, save):
         credential = state["credentials"][lease_id]
         credential["released_sequence"] = _durable(released)
@@ -798,6 +810,9 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             admission = authorize_proxy_request(root, metadata, body, clock)
             if admission.get("status") != 425:
                 break
+            if admission.get("credential_state") == "parking":
+                time.sleep(0.05)
+                continue
             try:
                 from ecosystem import models
                 renewed = reacquire_proxy_credential(
