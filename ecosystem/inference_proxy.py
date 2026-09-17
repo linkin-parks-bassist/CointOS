@@ -549,24 +549,30 @@ def completed_run_termination(root: Path, lease_id: str,
     observation = None
     if should_probe:
         try:
-            evidence = credential.get("last_slot_evidence") or {}
-            pre, start = evidence.get("pre"), evidence.get("start")
-            candidate = observe_backend_slots(_durable(identity)) if pre and start else None
-            slot_id = correlate_claim_slot(pre, start, candidate) if candidate else None
-            if slot_id is not None and candidate.get("identity") == identity:
-                observation = {"identity": _durable(identity), "slot_id": slot_id,
-                               "slots": [{"id": slot_id, "is_processing": False}]}
-            elif credential.get("response_finished") is True:
-                candidate = candidate or observe_backend_slots(_durable(identity))
-                free = [] if candidate is None else [slot for slot in candidate["slots"]
-                                                    if slot.get("is_processing") is False]
-                if free and candidate.get("identity") == identity:
-                    observation = {"identity": _durable(identity), "response_finished": True,
-                                   "slots": _durable(free)}
-            if observation is None:
-                candidate = observe_backend_idle(_durable(identity))
-                if _idle_observation_matches(candidate, identity):
-                    observation = candidate
+            if _bound_process_ended(identity) is True:
+                observation = {
+                    "identity": _durable(identity),
+                    "backend_instance_ended": True,
+                }
+            else:
+                evidence = credential.get("last_slot_evidence") or {}
+                pre, start = evidence.get("pre"), evidence.get("start")
+                candidate = observe_backend_slots(_durable(identity)) if pre and start else None
+                slot_id = correlate_claim_slot(pre, start, candidate) if candidate else None
+                if slot_id is not None and candidate.get("identity") == identity:
+                    observation = {"identity": _durable(identity), "slot_id": slot_id,
+                                   "slots": [{"id": slot_id, "is_processing": False}]}
+                elif credential.get("response_finished") is True:
+                    candidate = candidate or observe_backend_slots(_durable(identity))
+                    free = [] if candidate is None else [slot for slot in candidate["slots"]
+                                                        if slot.get("is_processing") is False]
+                    if free and candidate.get("identity") == identity:
+                        observation = {"identity": _durable(identity), "response_finished": True,
+                                       "slots": _durable(free)}
+                if observation is None:
+                    candidate = observe_backend_idle(_durable(identity))
+                    if _idle_observation_matches(candidate, identity):
+                        observation = candidate
         except Exception:
             pass
     with _proxy_lock(root) as (state, save):
@@ -615,6 +621,15 @@ def completed_run_termination(root: Path, lease_id: str,
         }
         if observation is None:
             record.update(process=_durable(credential["binding"]["process"]), in_flight=0)
+        elif observation.get("backend_instance_ended") is True:
+            record.update(
+                identity=_durable(identity),
+                backend_instance_ended=True,
+                backend_process={
+                    "pid": identity.get("pid"),
+                    "process_start_ticks": identity.get("process_start_ticks"),
+                },
+            )
         else:
             record.update(identity=_durable(identity),
                           all_slots_idle=observation.get("all_slots_idle", False),

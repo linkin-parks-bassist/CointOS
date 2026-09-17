@@ -999,11 +999,13 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
             "proxy_identity": "proxy:work", "backend_sequence": 1,
         }
         (root / "config/resource-policy.json").write_text(json.dumps({
-            "inference_capacity": {
+            "physical_capacity": {
                 "protected_host_bytes": 1073741824,
                 "coin_reserved_bytes": 1073741824,
                 "load_transient_bytes": 1073741824,
                 "gtt_limit_bytes": 107374182400,
+            },
+            "inference_capacity": {
                 "maximum_work_models": 2,
                 "front_proxy_identity": "proxy:front",
                 "work_proxy_identity": "proxy:work",

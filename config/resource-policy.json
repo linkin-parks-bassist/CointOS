@@ -39,10 +39,6 @@
     "llamacpp_ubatch_size": 128
   },
   "inference_capacity": {
-    "protected_host_bytes": 34359738368,
-    "coin_reserved_bytes": 8589934592,
-    "load_transient_bytes": 12884901888,
-    "gtt_limit_bytes": 107374182400,
     "maximum_work_models": 1,
     "front_proxy_identity": "proxy:coin-front",
     "work_proxy_identity": "proxy:work",

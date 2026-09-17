@@ -901,7 +901,18 @@ def _model_slot_limit(workload_class: str, capacity_policy: dict,
 
 
 def _validated_capacity_policy(document: dict) -> dict:
-    policy = document.get("inference_capacity")
+    configured = document.get("inference_capacity")
+    physical = document.get("physical_capacity")
+    if type(configured) is not dict or type(physical) is not dict:
+        raise ValueError("invalid inference capacity policy")
+    policy = dict(configured)
+    for field in (
+        "protected_host_bytes", "coin_reserved_bytes",
+        "load_transient_bytes", "gtt_limit_bytes",
+    ):
+        if field not in physical:
+            raise ValueError("invalid inference capacity policy")
+        policy[field] = physical[field]
     required = {
         "front_sequences", "total_sequences", "protected_host_bytes",
         "coin_reserved_bytes", "load_transient_bytes", "gtt_limit_bytes",
@@ -910,7 +921,7 @@ def _validated_capacity_policy(document: dict) -> dict:
         "release_observer_identity", "release_observation_maximum_age_seconds",
         "clock_domain_id",
     }
-    if type(policy) is not dict or not required <= policy.keys():
+    if not required <= policy.keys():
         raise ValueError("invalid inference capacity policy")
     numeric = required - {
         "front_proxy_identity", "work_proxy_identity", "release_observer_identity",
