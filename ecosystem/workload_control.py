@@ -244,6 +244,18 @@ def admission_reasons(
     return reasons
 
 
+def worker_lease_health(root: Path) -> dict:
+    state = _read_state(Path(root) / "state" / "workload-control.json")
+    counts: dict[str, int] = {}
+    for lease in state["leases"].values():
+        counts[lease["state"]] = counts.get(lease["state"], 0) + 1
+    return {
+        "mode": state["mode"],
+        "generation": state["generation"],
+        "lease_counts": counts,
+    }
+
+
 def _restriction_reason(name: str, *states: dict) -> str | None:
     for state in states:
         for key in (f"{name}_paused", f"{name}_pause"):

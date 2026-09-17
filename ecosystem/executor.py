@@ -1554,6 +1554,18 @@ def execute_next(run=subprocess.run) -> bool:
             # pre-load snapshot that routed the request.
             inventory = snapshot()
             job["resource_snapshot"] = inventory
+            decision = route(job, inventory)
+            if (decision.get("action") == "defer"
+                    or decision.get("model") != realization.get("model")):
+                reason = "post-realization route has not converged on the realized model"
+                job.update(state="ready", model_reason=reason, updated_at=cli.now())
+                cli.atomic_json(path, job)
+                cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                print(f"{job['id']} routing deferred: {reason}")
+                return False
+            job.setdefault("routing_decisions", []).append(
+                {"at": cli.now(), "phase": "post_realization", **decision})
+            job["model_reason"] = decision["reason"]
             job["context_tokens"] = int(decision["context_tokens"])
             job["scheduling_reason"] = scheduling_reason
             if job.get("context_state") == "paused_for_resources":
