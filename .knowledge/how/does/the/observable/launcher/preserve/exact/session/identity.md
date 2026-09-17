@@ -3,7 +3,7 @@ status: "unverified"
 created_at: "2026-09-14T23:38:58+10:00"
 scope: "local"
 source: "Installed two-generation same-session context reroute and semantic JSON-error exit evidence 2026-09-15"
-updated_at: "2026-09-15T17:35:09+10:00"
+updated_at: "2026-09-17T10:26:30+10:00"
 ---
 
 scripts/opencode_observable.py accepts an unattached opencode run command with explicit --dir and --title. After capacity read-back it either uses --session or creates a session via the scoped server /session API, injects that exact ID into the client command, and publishes a private view record containing session_id, URL, directory, server PID and exact attach command before inference. worker_view_ready repeats that record on stderr. The wrapper waits for the attached client and stops its server/client in finally. A managed user runner can persist session_id from its owned view record before suspension and relaunch with the same --session; it must not guess the newest session from shared storage or replay the original user prompt. The wrapper supports run commands, not arbitrary TUI/serve/attach commands.
@@ -13,3 +13,6 @@ Visible monitors are separate from admitted inference lifetimes. scripts/worker_
 Monitor registry lives at root/registry.json, with a flock-protected atomic rewrite in change. reserve reuses an existing starting/busy slot for the same view record, then an idle live monitor, otherwise creates a starting slot. register changes starting to busy and records the monitor kernel identity. Verify registry state busy, alive(slot.monitor), and the monitor child command attaching the exact session. On 2026-09-15 the coordinator promoted an owned AFK view with checked installed show(driver): GNOME launch returned success, registry was busy with a live monitor and its child was the exact OpenCode attach command. This verifies viewer process attachment, not rendered UI appearance or inference task completion. No worker/backend restart was performed.
 
 The observable wrapper now mirrors attached-client stdout byte-for-byte while classifying parseable JSONL. A top-level `type:error` event makes an otherwise-zero client exit return1; non-JSON output passes through and does not count as failure. The client is started before monitor publication and drained afterward, preserving live monitor behavior. Direct semantic-error smoke passed. Importing this executable as a module for a smoke requires `scripts/` on Python's module path because `worker_monitors` is a sibling script; normal executable invocation already has that path.
+
+
+Managed-executor session discovery also reads the observable wrapper''s durable `worker_view_ready` event. `resource_control.opencode_session_id` accepts either OpenCode''s `sessionID` field or `session_id` only when the event type is exactly `worker_view_ready`, and requires the `ses_` prefix. This repaired a live priority-preemption case where the exact session existed in the log but the job was incorrectly treated as sessionless.

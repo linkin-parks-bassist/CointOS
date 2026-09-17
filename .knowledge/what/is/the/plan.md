@@ -3,14 +3,14 @@ scope: project local
 status: "unverified"
 source: "2026-09-17 reconciliation of installed runtime, current source, live services, and owning implementation leaves"
 review_when: Recheck after each allocation/control milestone or priority change.
-updated_at: "2026-09-17T09:55:11+10:00"
+updated_at: "2026-09-17T10:27:09+10:00"
 ---
 
 The current priority remains dependable abundance-first local inference: an authorized active request must receive physically available capacity, while lower-priority work is suspended and retained when necessary. Ghost state, stale metadata, version drift, duplicated admission, and arbitrary ceilings must never become terminal resource denials.
 
 The automatic acquisition path is now implemented through routing, unloaded-model realization, idle residency reclamation, priority-aware sequence allocation, verified park/reacquire, dead-owner reconciliation, exact-session continuation, context-overflow rerouting, and durable cancellation. The immediate plan is to qualify the remaining boundaries rather than add another scheduling layer:
 
-1. Exercise installed saturation and restart recovery with real competing work. Confirm that Cointelprofessional, user work, and background work follow priority; suspended work resumes with the same durable session; and every physical lease, credential, worker, and controller is clean after cancellation or process death.
+1. Qualify process/service restart recovery during retained managed work. Installed saturation already proves that priority-900 control displaces priority-550 Qwen3.8 work, reconciliation requeues the same exact session, resumed work progresses, and cancellation closes every resource. The remaining boundary is recovery when the owned executor or service process itself restarts.
 2. Measure and consolidate the remaining fixed memory reserves. Retain safety slack supported by this Strix Halo host and observed backend behavior; replace duplicated or fictitious limits with fresh physical facts.
 3. Measure legitimate maximum proxy request, stream, and backend-observation payloads. Keep bounded protocol parsing with sufficient derived headroom so large-context agent state cannot be truncated.
 4. Improve Cointelprofessional answer quality and operating usefulness. The fast Qwen3.5 first-contact lane remains for latency; deep Qwen3.8 work has a 32000-token allowance and no arbitrary elapsed deadline. Add reviewer/verifier behavior only where demanding tasks show that it is needed.

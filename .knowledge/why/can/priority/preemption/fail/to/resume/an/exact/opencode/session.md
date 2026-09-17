@@ -1,0 +1,8 @@
+---
+status: "unverified"
+created_at: "2026-09-17T10:26:18+10:00"
+scope: "CointOS managed executor priority recovery"
+source: "ecosystem/resource_control.py, ecosystem/executor.py, installed durable job/capacity/proxy/workload records and Lemonade health 2026-09-17"
+---
+
+Two independent persistence gaps caused the first installed saturation run to terminalize resumable work. First, `resource_control.opencode_session_id()` recognized OpenCode JSON events using `sessionID` but not the observable wrappers durable `worker_view_ready.session_id`; the exact session was present in the run log but the job remained sessionless. It now recognizes both exact forms. Second, when runner cleanup temporarily required backend reconciliation, preemption intent existed only in the executors local outcome; `close_runner_round` could record failed before recovery knew it should requeue. The executor now persists `pending_preemption_reason` and `logical_run_state: continuing` before close. After reconciliation proves closure, recovery requires a retained exact session, clears the marker, and queues `ready/continuing` with the same session. Normal immediate preemption clears the marker itself. Installed qualification used priority-550 managed Qwen3.8 work and three priority-900 native control calls. The final cycle returned PRIORITY_THREE_OK, recovered the background job automatically with session ses_f534d3f8affeKafz6Xf2KLRPhQ, resumed it stably in generation 23, then durable cancellation ended terminal/cancelled with worker quiescent, capacity released, proxy revoked/empty, zero in-flight claims, and the backend idle.
