@@ -1,6 +1,6 @@
 ---
 status: "unverified"
-updated_at: "2026-09-17T23:28:21+10:00"
+updated_at: "2026-09-18T00:15:18+10:00"
 source: "installed user-directed scheduling qualification and supervised compaction incident 2026-09-17"
 ---
 
@@ -14,6 +14,7 @@ Current #1 is qualification and simplification of abundance-first inference sche
 - **Remaining fixed memory reserves.** The active byte-form policy retains 32 GiB protected host memory, 8 GiB coin/control reserve, and 12 GiB model-load transient reserve. Their values still need live measurement. Owner: `what/is/the/local/strix/halo/resource/policy.md`.
 - **Proxy transport ceilings.** Bounded protocol limits have not been compared with legitimate maximum-context payloads. Owner: `why/does/cointos/limit/inference/proxy/transport/sizes.md`.
 - **Work-residency policy.** `maximum_work_models: 1` has not been fully reconciled with two Lemonade LLM residency positions, the pinned fast model, idle reclamation, and future concurrent work-model use.
+- **Cointelprofessional progress prose and conversational endings are poor.** Repaired unsolicited delivery exposed operational messages that were unclear or partly nonsensical, and routine replies repeatedly ended with canned chatbot engagement questions. Progress must state the concrete change, result, and consequence; generic follow-up solicitations should be omitted unless an answer is required. Owner: `what/is/intended/control_plane.md`.
 - **Cointelprofessional verification quality.** Demanding answers still need an evidence-based reviewer/verifier policy.
 - **Quarantined model metadata.** Lemonade reports `gpt-oss-120b-mxfp-GGUF` as 1.48 GiB while the installed registry records 63.4 GiB. Do not admit it until provenance is reconciled.
 

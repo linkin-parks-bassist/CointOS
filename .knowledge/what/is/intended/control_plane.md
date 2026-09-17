@@ -3,7 +3,7 @@ scope: project local
 source: "pre-99318d9 Git history; David conversational non-response intent clarification 2026-09-16"
 review_when: Recheck when contact, messaging, or control-plane implementation changes.
 status: "unverified"
-updated_at: "2026-09-16T11:12:34+10:00"
+updated_at: "2026-09-18T00:15:05+10:00"
 ---
 
 `Cointelprofessional` is the permanent Telegram-facing control-plane identity. It
@@ -13,6 +13,8 @@ customer-service phrasing. Intended agent messaging is durable, directly address
 transport-independent, and eventually visible at safe boundaries during live runs.
 Design intent does not establish current deployment or service health; consult
 `where/is/runtime_truth.md` for that.
+
+Unsolicited operational notifications are useful when they are concrete: state what changed, whether it succeeded, and the practical consequence in plain language. Internal agent names, implementation fragments, or vague status prose without that context are not adequate user-facing progress reports. Routine replies and notifications must not append generic engagement solicitations such as “want to dive into this?” or “what would you like to explore?”; ask a follow-up only when a specific answer is genuinely needed to continue authorized work.
 
 Natural conversation includes intentional non-response. Before producing a fast
 reply or dispatching deeper inference, Cointelprofessional should consider the

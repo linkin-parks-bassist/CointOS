@@ -88,6 +88,7 @@ def session_parts(url, directory, session):
 def await_server_finish(url, directory, session, seen_part_ids):
     """Mirror server-side orchestration after an attached CLI exits."""
     seen = set(seen_part_ids)
+    last_text = None
     while True:
         for part in session_parts(url, directory, session):
             identifier = part.get('id')
@@ -104,13 +105,19 @@ def await_server_finish(url, directory, session, seen_part_ids):
             if isinstance(event_type, str):
                 print(json.dumps({'type': event_type, 'sessionID': session,
                                   'part': part}), flush=True)
+            if part_type == 'text':
+                content = part.get('text')
+                if isinstance(content, str):
+                    last_text = content
             if part_type == 'step-finish':
                 reason = part.get('reason')
                 if reason == 'stop':
                     return {'returncode': 0, 'length': False,
+                            'incomplete': is_incomplete_handoff(last_text or ''),
                             'continuation_required': False}
                 if reason == 'length':
                     return {'returncode': 0, 'length': True,
+                            'incomplete': False,
                             'continuation_required': False}
         time.sleep(0.1)
 
@@ -129,11 +136,42 @@ def publish_view(path, url, directory, session, pid):
     return record
 
 
+def is_incomplete_handoff(text):
+    """Recognize an explicit incomplete structured handoff.
+
+    True only when the text carries the whole-line headings ``## Work State``,
+    ``### Active``, ``## Next Move``, and ``## Relevant Files`` in that order,
+    the Active section has substantive content beyond a lone ``(none)`` bullet,
+    and the Next Move section names at least one numbered future step.
+    """
+    if not isinstance(text, str):
+        return False
+    lines = [line.strip() for line in text.splitlines()]
+    headings = ('## Work State', '### Active', '## Next Move', '## Relevant Files')
+    positions = []
+    for heading in headings:
+        if heading not in lines:
+            return False
+        index = lines.index(heading)
+        if positions and index <= positions[-1]:
+            return False
+        positions.append(index)
+    active, next_move, relevant = positions[1], positions[2], positions[3]
+    none_bullet = re.compile(r'^(?:[-*+]\s*)?\(?none\)?$', re.IGNORECASE)
+    active_lines = [line for line in lines[active+1:next_move] if line]
+    if not any(not none_bullet.match(line) for line in active_lines):
+        return False
+    numbered = re.compile(r'^[0-9]+[.)]\s+\S')
+    return bool([line for line in lines[next_move+1:relevant]
+                 if numbered.match(line)])
+
+
 def finish_client(process):
     """Mirror client output and classify semantic failure and truncation."""
     saw_error = False
     finish_reason = None
     semantic_complete = False
+    last_text = None
     part_ids = set()
     for raw_line in iter(process.stdout.readline, b''):
         sys.stdout.buffer.write(raw_line)
@@ -147,6 +185,10 @@ def finish_client(process):
         part = event.get('part') if isinstance(event, dict) else None
         if isinstance(part, dict) and isinstance(part.get('id'), str):
             part_ids.add(part['id'])
+        if isinstance(part, dict) and part.get('type') == 'text':
+            content = part.get('text')
+            if isinstance(content, str):
+                last_text = content
         if (isinstance(event, dict) and event.get('type') == 'step_finish'
                 and isinstance(part, dict)):
             finish_reason = part.get('reason')
@@ -165,6 +207,11 @@ def finish_client(process):
     return {
         'returncode': 1 if code == 0 and saw_error else code,
         'length': finish_reason == 'length',
+        # A stop whose final text part is an explicit incomplete handoff is a
+        # semantic boundary, not a finished task: keep it distinct so the
+        # retained session can be resumed for completion.
+        'incomplete': (finish_reason == 'stop'
+                       and is_incomplete_handoff(last_text or '')),
         # A clean process exit is transport state, not proof that the model
         # finished the task.  Preempted retained sessions can yield no new
         # step_finish at all when first reattached; keep recovering until an
@@ -266,6 +313,19 @@ def main():
                 outcome = await_server_finish(
                     url, directory, session,
                     baseline_part_ids | outcome['part_ids'])
+            if outcome.get('incomplete'):
+                # An explicit incomplete handoff ends the turn at a semantic
+                # boundary without finishing the task.  Resume the same
+                # retained session and let it complete the work; no cap.
+                print(json.dumps({
+                    'type': 'worker_incomplete_handoff',
+                    'session_id': session,
+                }), file=sys.stderr, flush=True)
+                prompt = ('The last turn ended with an explicit incomplete '
+                          'handoff. Continue in this exact retained session and '
+                          'complete the requested task without repeating '
+                          'finished work.')
+                continue
             if not outcome['length']:
                 return outcome['returncode']
             length_recoveries += 1
