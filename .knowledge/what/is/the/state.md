@@ -1,19 +1,19 @@
 ---
 scope: project local
 status: "unverified"
-source: "Git, installed assets, focused checks, and task-4894b791ecbcbafc runtime evidence 2026-09-17"
+source: "Git, scripts/cointos-system, telegram-999135394 durable/audit evidence, installed services 2026-09-17"
 review_when: Update after material repository, installation, or live-service changes.
-updated_at: "2026-09-17T15:00:33+10:00"
+updated_at: "2026-09-17T16:26:01+10:00"
 ---
 
-Development is on branch `docs/cointos-mvp-bringup`. Commits through `f0a2660` are pushed and installed. Proxy park/reacquire recovery and semantic OpenCode completion changes are installed and pending commit.
+Development is on branch `docs/cointos-mvp-bringup`. Commits through `3193d72` are pushed and installed. Whole-system lifecycle and control-turn retry-backoff changes are installed and pending commit.
 
-Inference acquisition covers fresh routing, unloaded realization, idle reclamation, priority allocation, tool-boundary park/reacquire, failed-park rollback, ghost reconciliation, context rerouting, retained-session continuation, executor restart, and old-backend termination after Lemonade restart. Ordinary successful tasks complete directly; independent verification requires exact opt-in.
+User-session CointOS now has one installed lifecycle command: `scripts/cointos-system {start|stop|restart|status}`. It stops triggers, oneshots, and long-running services together; reloads units; starts the whole long-running system plus triggers; and stops everything again if start fails. A live restart returned models, inference proxy, resource guard, Telegram, control worker, notifier, ecosystem triggers, and watchdog trigger as one generation.
 
-The qualified GPU allocation capacity is 100 GiB. The 64 GiB sysfs value is informational. Physical reserves have one owner under `physical_capacity`. Production audit confirms 32 GiB protected host, 8 GiB coin/control, and 12 GiB load transient all stack in host admission; transient also enters GTT admission. Numeric necessity remains to be measured.
+This closed a mixed-version incident: Telegram turn `telegram-999135394` hot-retried `invalid inference capacity policy` more than 1,200 times because a 24-hour-old control worker interpreted the newly installed resource-policy schema with stale code. The whole-system restart stopped policy errors and recovered the retained turn into a stable deep attempt. Control-turn failures now use durable exponential retry backoff instead of immediate twice-per-second requeue.
 
-`ReserveArithmeticTracer` live-qualified multi-step park/reacquire and retained-session continuation across tool calls and scheduler rotations. It exposed two semantic completion holes: a zero client exit with no current `step_finish`, and post-stop OpenCode housekeeping surviving long enough for another rotation. No-finish exits now continue; explicit stop now terminates the attached client promptly. The preserved worker produced a complete report followed by `step_finish: stop`; the erroneous post-stop dispatch was discarded and durable completion recovered.
+Inference acquisition covers fresh routing, unloaded realization, idle reclamation, priority allocation, tool-boundary park/reacquire, failed-park rollback, ghost reconciliation, context rerouting, retained-session continuation, executor restart, and old-backend termination after Lemonade restart. The qualified GPU allocation capacity is 100 GiB; the 64 GiB sysfs value is informational.
 
-Equal-priority fairness begins at the first appended, session-matching `step_finish` event of the runner round, after retained-session prefill. Cancellation, allocation preemption, and higher-priority work remain immediate.
+The installed observable wrapper waits for and mirrors server-side assistant completion after CLI-visible tool calls rather than injecting duplicate user continuation prompts. Its live qualification is pending because a requested Qwen3.8 qualifier was silently routed to DeepSeek-Qwen3-8B; `requested_model` is recorded but currently inert.
 
-Latest evidence: source compilation, direct wrapper stream checks, 108 existing focused inference/executor checks, and the live multi-step managed worker. No new regression test was added.
+Latest evidence: shell/source compilation, installed whole-system restart/status, cessation of policy-error audits, retained-turn recovery, direct wrapper stream checks, and 108 earlier focused inference/executor checks. No new regression test was added.

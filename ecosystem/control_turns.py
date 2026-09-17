@@ -6,7 +6,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ecosystem import cli
@@ -215,8 +215,15 @@ def reserve_next(owner_pid: int) -> str | None:
         selected = False
         def change(record: dict) -> None:
             nonlocal selected
+            retry_at = record.get("deep_retry_not_before")
+            retry_due = True
+            if isinstance(retry_at, str):
+                try:
+                    retry_due = datetime.fromisoformat(retry_at) <= datetime.now(timezone.utc)
+                except ValueError:
+                    retry_due = True
             if (record.get("front_state") in FRONT_TERMINAL_STATES
-                    and record.get("deep_state") == "queued"):
+                    and record.get("deep_state") == "queued" and retry_due):
                 record.update(deep_state="reserved", deep_owner_pid=owner_pid,
                               deep_owner_identity=_process_identity(owner_pid))
                 selected = True
@@ -272,6 +279,8 @@ def mark_deep_completed(identifier: str, followup: str | None) -> dict:
     def change(record: dict) -> None:
         record.update(deep_state="followup_ready" if followup else "completed",
                       deep_finished_at=cli.now(), followup=followup)
+        record.pop("deep_retry_count", None)
+        record.pop("deep_retry_not_before", None)
         if not followup:
             record.pop("deep_worker_pid", None)
             record.pop("deep_worker_identity", None)
@@ -305,8 +314,12 @@ def mark_deep_failed(identifier: str, error: str) -> dict:
 
 def mark_deep_retry(identifier: str, error: str) -> dict:
     def change(record: dict) -> None:
+        count = int(record.get("deep_retry_count", 0)) + 1
+        delay = min(30, 2 ** min(count - 1, 5))
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         record.update(deep_state="queued", deep_last_error=error,
-                      deep_retry_queued_at=cli.now())
+                      deep_retry_queued_at=cli.now(), deep_retry_count=count,
+                      deep_retry_not_before=retry_at.isoformat())
         record.pop("deep_worker_pid", None)
         record.pop("deep_worker_identity", None)
     return _mutate(identifier, change)
