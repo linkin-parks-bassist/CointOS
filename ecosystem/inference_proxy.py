@@ -509,14 +509,21 @@ def reconcile_available_capacity(root: Path, clock=time.monotonic) -> dict:
                 evidence = claim.get("slot_evidence", {})
                 start = evidence.get("start") or {}
                 observed = observe_backend_slots(start.get("identity"))
-                if (not claim.get("request_id") and type(observed) is dict
-                        and observed.get("identity") == start.get("identity")
-                        and observed.get("slots")
-                        and all(slot.get("is_processing") is False
-                                for slot in observed["slots"])):
+                backend_ended = (
+                    type(start.get("identity")) is dict
+                    and _bound_process_ended(start["identity"]) is True
+                )
+                if (not claim.get("request_id") and (
+                        backend_ended
+                        or (type(observed) is dict
+                            and observed.get("identity") == start.get("identity")
+                            and observed.get("slots")
+                            and all(slot.get("is_processing") is False
+                                    for slot in observed["slots"])))):
                     # The bound process died after claiming but before assigning
-                    # a backend request identity. Fresh exact-incarnation idle
-                    # slots prove that this ghost owns no physical execution.
+                    # a backend request identity. An ended exact backend
+                    # incarnation or fresh idle slots prove that this ghost
+                    # owns no physical execution.
                     _finish_claim(root, lease_id, claim_id, False, {}, clock)
                     continue
                 termination = _slot_ended_idle_termination(root, lease_id, claim_id, observed, clock)
