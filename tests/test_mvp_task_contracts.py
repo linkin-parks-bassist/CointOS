@@ -26,7 +26,7 @@ def contract(workspace, **changes):
         "scope": {
             "workspace": str(workspace),
             "read_paths": [str(workspace / "ecosystem")],
-            "write_paths": [str(workspace / "agent_notes")],
+            "write_paths": [str(workspace / "workspace_notes")],
         },
         "authority_profile": "bounded_maintenance",
         "requirements": {
@@ -116,7 +116,7 @@ def test_child_cannot_widen_scope_authority_or_shared_budget():
             scope={
                 "workspace": str(workspace),
                 "read_paths": [str(workspace / "ecosystem" / "cli.py")],
-                "write_paths": [str(workspace / "agent_notes" / "child.md")],
+                "write_paths": [str(workspace / "workspace_notes" / "child.md")],
             },
             budget={**budget(0), "task_seconds": 300},
             source_key="test:child",
@@ -142,7 +142,7 @@ def test_enqueue_defaults_permissively_and_child_replay_debits_once():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         root = Path(temporary).resolve()
         cli.initialize()
-        for relative in ("ecosystem", "agent_notes", "roles"):
+        for relative in ("ecosystem", "workspace_notes", "roles"):
             (root / relative).mkdir(exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
         accepted_workspace_policy(root)
@@ -163,7 +163,7 @@ def test_enqueue_defaults_permissively_and_child_replay_debits_once():
         child_contract = contract(
             root,
             scope={"workspace": str(root), "read_paths": [str(root / "ecosystem")],
-                   "write_paths": [str(root / "agent_notes" / "child.md")]},
+                   "write_paths": [str(root / "workspace_notes" / "child.md")]},
             budget={**budget(0), "task_seconds": 300},
             source_key="test:child",
             parent_job_id=parent_id,
@@ -180,7 +180,7 @@ def test_enqueue_initializes_execution_claim_identity():
     with tempfile.TemporaryDirectory() as temporary, patch.object(cli, "ROOT", Path(temporary)):
         root = Path(temporary).resolve()
         cli.initialize()
-        for relative in ("ecosystem", "agent_notes", "roles"):
+        for relative in ("ecosystem", "workspace_notes", "roles"):
             (root / relative).mkdir(exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
         accepted_workspace_policy(root)
@@ -194,7 +194,7 @@ def test_enqueue_initializes_execution_claim_identity():
             contract(root,
                      scope={"workspace": str(root),
                             "read_paths": [str(root / "ecosystem")],
-                            "write_paths": [str(root / "agent_notes" / "child.md")]},
+                            "write_paths": [str(root / "workspace_notes" / "child.md")]},
                      budget={**budget(0), "task_seconds": 300},
                      source_key="test:claim-child",
                      parent_job_id=job_id),

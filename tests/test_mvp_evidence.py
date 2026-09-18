@@ -32,7 +32,7 @@ def _contract(workspace, read_paths, write_paths, evidence_items=5):
 
 def test_evidence_reader_rejects_escape():
     with TemporaryDirectory() as tmp:
-        scope = {"workspace": tmp, "read_paths": [str(Path(tmp) / "agent_notes")],
+        scope = {"workspace": tmp, "read_paths": [str(Path(tmp) / "workspace_notes")],
                  "write_paths": []}
         try:
             read_evidence(scope, "../outside", 0, {"maximum_bytes": 2048, "maximum_items": 1})

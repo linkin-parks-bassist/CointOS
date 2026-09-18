@@ -62,7 +62,7 @@ def test_parent_reservation_survives_cached_parent_write_back():
             patch.object(cli, "ROOT", Path(temporary)):
         root = Path(temporary).resolve()
         cli.initialize()
-        for relative in ("ecosystem", "agent_notes", "roles", "logs/runs"):
+        for relative in ("ecosystem", "workspace_notes", "roles", "logs/runs"):
             (root / relative).mkdir(parents=True, exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
         accepted_workspace_policy(root)
@@ -83,7 +83,7 @@ def test_parent_reservation_survives_cached_parent_write_back():
             root,
             scope={"workspace": str(root),
                    "read_paths": [str(root / "ecosystem")],
-                   "write_paths": [str(root / "agent_notes" / "child.md")]},
+                   "write_paths": [str(root / "workspace_notes" / "child.md")]},
             budget=dict(CHILD_BUDGET),
             source_key=CHILD_KEY,
             parent_job_id=PARENT_ID,
