@@ -4,7 +4,7 @@ source: "David canonical KT policy index requirement, routed from project and in
 review_when: Recheck when project purpose, runtime layout, service activation,
   current priority, or primary development workflow changes.
 status: "unverified"
-updated_at: "2026-09-15T09:02:38+10:00"
+updated_at: "2026-09-18T12:14:58+10:00"
 ---
 
 This is `/home/david/Projects/CointOS`, David's personal, local-only CointOS
@@ -20,16 +20,11 @@ tests are in `tests/`. Start current project work with `what/is/the/spec.md`,
 orientation continues through `what/is/current/project_priority.md`,
 `where/is/code/for/cointos.md`, and `what/is/architecture/of/cointos.md`.
 
-Reusable project knowledge belongs in this semantic tree, not an `agent_notes/`
-chronology. The reason and disposition are recorded in
-[`why/are/agent_notes/deprecated.md`](../../why/are/agent_notes/deprecated.md); Git
-retains removed historical notes.
-
 Mutable runtime data is physically under `/home/david/.CointOS`, not this checkout.
 There are intentionally no repo compatibility paths for `state/` or `logs/`.
 Installed services now run from ~/.CointOS; proxy, Telegram/control, notifier, resource guard and background timers are online. Startup/basic work and control inference pass, while saturation and recovery remain unqualified. Establish live truth through `where/is/runtime_truth.md`; use
 `how/to/test/cointos_changes.md` before claiming verification.
 
-The canonical branches cover procedures in `how/` (for example `how/to/operate/cointos.md`), requirements and state in `what/` (`what/is/intended/agent_scheduling.md`), locations in `where/` (`where/is/runtime_truth.md`), and rationale in `why/` (`why/are/agent_notes/deprecated.md`). The `does/` and `is/` branches are currently empty and reserved for behavior and classification yes/no answers.
+The canonical branches cover procedures in `how/` (for example `how/to/operate/cointos.md`), requirements and state in `what/` (`what/is/intended/agent_scheduling.md`), locations in `where/` (`where/is/runtime_truth.md`), and rationale in `why/` (`why/does/cointos/limit/inference/proxy/transport/sizes.md`). The `does/` and `is/` branches are currently empty and reserved for behavior and classification yes/no answers.
 
 Agent policy is indexed by `global:how/to/behave.md`; project-specific requirements and operational policy are in this tree’s spec and intended-behavior leaves.

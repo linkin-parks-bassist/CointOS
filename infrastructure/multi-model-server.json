@@ -46,9 +46,5 @@
     "port": 11434,
     "num_thread": 4,
     "max_ctx_size": 131072
-  },
-  "agent_notes": {
-    "name": "Wren",
-    "description": "Multi-model server coordinator managing time-sharing between resident models"
   }
 }
