@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T09:52:01+10:00"
+revised_at: "2026-09-26T09:58:21+10:00"
 ---
 
 Stopping repository work does not mean leaving the deployed system in a preventably degraded state. Before handing off, check live resource mode, the authoritative durable work gate, relevant service health, and active recovery escalation. If emergency persists, keep the guard and dedicated survivor escalation running; distinguish physical-unsafety blockers from a terminal failed worker and never call a sticky emergency a clean operational state. Do not reopen an unsafe gate merely to report uptime.
@@ -10,6 +10,7 @@ David's views and controls, via the `cointos` command (`~/.local/bin/cointos`, t
 - `cointos status`: one-screen dashboard of health or pause state, loaded models and their lanes, live agents, queue counts per spawner project, spawner activity, and any down services. The old queue counts are `cointos counts`.
 - `cointos agents`: every live agent, with role, state, age, origin (you, via Coin, auto·survey and so on), workspace, model, tool-call count, time since last output, and what it is working on.
 - `cointos jobs [-n N]`: the N most recently updated jobs with outcome, and failure reasons in red.
+- **Dashboard:** `http://127.0.0.1:4200`, served by `agent-dashboard.service` (loopback only; `ecosystem/dashboard.py` plus `ecosystem/web/dashboard.html`), which `cointos-system` manages. It polls `/api/state`, which returns `views.snapshot()`, every 2 seconds. It shows the scheduler stage (each loaded model as a well with one slot per lane, running agents as role-coloured orbs that pulse on new tool calls, waiting agents on the left, agents finished in the last 45 minutes fading at top right), agent details, per-project queue boards, and a recent-jobs strip.
 
 Run the installed command, not `python3 -m ecosystem.cli` inside the source checkout: that resolves the checkout's own stray `state/` directory, which is not the live runtime.
 
