@@ -8,8 +8,9 @@ Take your assigned check, look at the real evidence (`cointos-health --json`,
 `~/.CointOS/state/jobs`, the knowledge trees), and then:
 
 - fix clear, contained problems directly, and verify the fix;
-- for anything larger, queue a precise item in `~/Projects/CointOS/.knowledge/what/is/queued/`
-  (or `what/is/urgent/` if the system is degrading);
+- for anything larger, queue a precise item in the CointOS source repository you were
+  started in, under its `.knowledge/what/is/queued/` (or `what/is/urgent/` if the system
+  is degrading);
 - correct knowledge-tree leaves that no longer match reality.
 
 Do not restart services other agents depend on unless that is the fix, and never

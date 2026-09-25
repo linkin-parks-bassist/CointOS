@@ -27,6 +27,7 @@ EXPECTED_UNITS = (
     "agent-inference-proxy.service",
     "agent-notifier.service",
     "agent-resource-guard.service",
+    "agent-dashboard.service",
     "agent-spawner.service",
     "agent-telegram.service",
     "agent-watchdog.service",

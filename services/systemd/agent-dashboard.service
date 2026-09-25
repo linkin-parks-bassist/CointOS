@@ -1,0 +1,19 @@
+[Unit]
+Description=CointOS local web dashboard (loopback only)
+After=network.target
+[Service]
+Slice=background.slice
+Nice=10
+CPUWeight=20
+WorkingDirectory=%h/Projects/CointOS
+Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
+Environment=COINTOS_DASHBOARD_PORT=4200
+ExecStart=/usr/bin/python3 -m ecosystem.dashboard
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=%h/.CointOS
+[Install]
+WantedBy=default.target

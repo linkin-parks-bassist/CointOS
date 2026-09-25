@@ -11,6 +11,7 @@ long_running=(
   agent-telegram.service
   agent-control-worker.service
   agent-notifier.service
+  agent-dashboard.service
 )
 triggers=(
   agent-ecosystem.path

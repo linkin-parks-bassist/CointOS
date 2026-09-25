@@ -306,3 +306,46 @@ def show(view: str, limit: int = 20) -> None:
         sys.stdout.write(render_jobs(recent_jobs(limit, now), colour))
     else:
         sys.stdout.write(render_status(colour))
+
+
+# ── web snapshot ────────────────────────────────────────────────────────────
+
+def queue_items() -> list[dict]:
+    """Every item leaf in the spawner projects' queues, with its status and headline."""
+    try:
+        config = json.loads((cli.ROOT / "config/spawner.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    from ecosystem.spawner import _status
+    items = []
+    for project in (Path(p).expanduser() for p in config.get("projects", [])):
+        for branch in ("urgent", "queued", "drafted"):
+            folder = project / ".knowledge/what/is" / branch
+            for leaf in sorted(folder.rglob("*.md")) if folder.is_dir() else ():
+                text = leaf.read_text(encoding="utf-8", errors="replace")
+                if text.startswith("---"):
+                    text = text.split("\n---", 1)[-1]
+                lines = [line.strip() for line in text.splitlines() if line.strip()]
+                headline = next((line for line in lines if not line.lower().startswith("status:")), "")
+                items.append({"project": project.name, "branch": branch, "path": str(leaf),
+                              "name": leaf.stem.replace("-", " "), "status": _status(leaf) or "no status",
+                              "headline": headline.strip("*# ")})
+    return items
+
+
+def _plain(value: object) -> object:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _plain(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_plain(item) for item in value]
+    return value
+
+
+def snapshot() -> dict:
+    """Everything the dashboard shows, as JSON-ready data."""
+    now = datetime.now(timezone.utc)
+    return _plain({"now": now, "health": health(), "agents": agents(now),
+                   "jobs": recent_jobs(40, now), "queues": queue_items(),
+                   "spawner": spawner_state(), "services": services()})
