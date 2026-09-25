@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+from ecosystem import knowledge_tools
 from ecosystem.inference import request as inference_request
 from ecosystem.managed_inference import request as managed_request
 from ecosystem.resource_control import active_chat_model
@@ -52,7 +53,7 @@ def _knowledge_guidance(knowledge) -> str:
         "Knowledge trees (kt_* tools) are CointOS's maintained knowledge, including work queues. "
         "Use them to answer from checked knowledge and to record David's ideas, queue changes "
         "and corrections. A leaf is a current answer, never a log.\n"
-        f"{knowledge.instructions}\n\n"
+        f"{knowledge['instructions']}\n\n"
     )
 
 
@@ -86,7 +87,7 @@ Live context at deep-turn start:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
-    tools = TOOLS + (knowledge.tools if knowledge is not None else [])
+    tools = TOOLS + (knowledge["tools"] if knowledge is not None else [])
     successful_tool_action = False
     while True:
         assistant = (infer(model=model, messages=messages, tools=tools,
@@ -119,8 +120,8 @@ Live context at deep-turn start:
                     result = {"ok": True, "accepted": True}
                 else:
                     try:
-                        result = (knowledge.call(name, arguments)
-                                  if knowledge is not None and name in knowledge.names
+                        result = (knowledge_tools.call(knowledge, name, arguments)
+                                  if knowledge is not None and name in knowledge["names"]
                                   else execute(name, arguments))
                     except Exception as error:
                         result = {"ok": False, "error": f"{type(error).__name__}: {error}"}

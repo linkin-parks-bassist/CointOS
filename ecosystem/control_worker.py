@@ -8,7 +8,7 @@ import time
 from ecosystem import cli, conversation, control_turns, resource_control
 from ecosystem.control_agent import respond
 from ecosystem.control_runtime import execute_tool, live_context
-from ecosystem.knowledge_tools import open_tools
+from ecosystem.knowledge_tools import close as close_tools, open_tools
 from ecosystem.telegram import reply
 
 
@@ -45,7 +45,7 @@ def process_turn(identifier: str, send=reply, controller=respond) -> None:
         cli.audit("control_turn.deep_retry_queued", turn_id=identifier, user_id=user_id, error=detail)
     finally:
         if knowledge is not None:
-            knowledge.close()
+            close_tools(knowledge)
 
 
 def _reap(active: dict[int, str]) -> None:
