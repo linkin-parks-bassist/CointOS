@@ -43,7 +43,7 @@ def contract(workspace, **changes):
     return value
 
 
-def accepted_workspace_policy(root, profiles=("bounded_maintenance",)):
+def accepted_authority_policy(root, profiles=("bounded_maintenance",)):
     values = {
         "version": 1,
         "authority_profiles": [
@@ -51,14 +51,12 @@ def accepted_workspace_policy(root, profiles=("bounded_maintenance",)):
              "effects": ["read_scoped_files", "write_scoped_files"]}
             for profile in profiles
         ],
-        "workspaces": [{"id": "test", "path": str(root), "provenance": "personal",
-                        "mode": "active"}],
     }
     canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     snapshot = {"schema_version": 1, "values": values,
                 "digest": hashlib.sha256(canonical).hexdigest(),
                 "activated_at": "2026-09-05T00:00:00+00:00",
-                "source_path": str(root / "config/workspaces.json")}
+                "source_path": str(root / "config/authority-profiles.json")}
     policy_path = root / "state/workspaces-policy.json"
     policy_path.parent.mkdir(parents=True, exist_ok=True)
     policy_path.write_text(json.dumps(snapshot), encoding="utf-8")
@@ -145,7 +143,7 @@ def test_enqueue_defaults_permissively_and_child_replay_debits_once():
         for relative in ("ecosystem", "workspace_notes", "roles"):
             (root / relative).mkdir(exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
-        accepted_workspace_policy(root)
+        accepted_authority_policy(root)
         default_id = cli.enqueue_task("worker", "unbounded")
         default = json.loads((root / f"state/jobs/{default_id}.json").read_text())
         assert default["task_contract"]["objective"] == "unbounded"
@@ -183,7 +181,7 @@ def test_enqueue_initializes_execution_claim_identity():
         for relative in ("ecosystem", "workspace_notes", "roles"):
             (root / relative).mkdir(exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
-        accepted_workspace_policy(root)
+        accepted_authority_policy(root)
         job_id = cli.enqueue_task(
             "worker", "bounded", task_contract=contract(root, objective="bounded"))
         job = json.loads((root / f"state/jobs/{job_id}.json").read_text())
@@ -210,7 +208,7 @@ def test_unregistered_authority_does_not_gain_privileged_workload_class():
         cli.initialize()
         (root / "roles").mkdir()
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
-        accepted_workspace_policy(root, profiles=("ordinary",))
+        accepted_authority_policy(root, profiles=("ordinary",))
         invalid = contract(root, objective="bounded", authority_profile="forged_admin")
         job_id = cli.enqueue_task("sole_survivor", "bounded", source="resource-emergency:forged",
                                   task_contract=invalid)
@@ -225,7 +223,7 @@ def test_trusted_intake_rejects_task_objective_disagreement():
         cli.initialize()
         (root / "roles").mkdir()
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
-        accepted_workspace_policy(root)
+        accepted_authority_policy(root)
         try:
             cli.enqueue_task("worker", "different task", task_contract=contract(root))
         except ValueError as error:

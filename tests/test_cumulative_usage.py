@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from ecosystem import cli
 from ecosystem.executor import _run_preemptibly, execute_next
+from ecosystem.task_contracts import default_task_contract
 from tests.test_scheduler import scheduling_policy as scheduling_document
 
 LARGE_BUDGET = {"run_seconds": 300, "task_seconds": 900,
@@ -149,6 +150,8 @@ def _run_execute_next_case(initial_attempts, opencode_session, remaining_budget)
             "created_at": _utc_stamp(), "authority_profile": "worker",
             "remaining_budget": remaining_budget,
             "prompt": "state/jobs/task-exec.prompt.md",
+            "task_contract": default_task_contract(
+                "do the work", cli.ROOT, "test:cumulative-usage:execute-next"),
         }
         if opencode_session is not None:
             job["opencode_session"] = opencode_session
@@ -180,7 +183,8 @@ def _run_execute_next_case(initial_attempts, opencode_session, remaining_budget)
             patch("ecosystem.executor.route", return_value={
                 "action": "run", "model": "test-model", "reason": "test",
                 "context_tokens": 1024}),
-            patch("ecosystem.executor.realize", return_value={"state": "realized"}),
+            patch("ecosystem.executor.realize", return_value={
+                "state": "realized", "model": "test-model"}),
             patch("ecosystem.executor.job_admitted_in_current_mode", return_value=True),
             patch("ecosystem.executor.cancel_proxy", return_value={"state": "cancelled"}),
             patch("ecosystem.executor.launch_runner_round", side_effect=fake_launch),

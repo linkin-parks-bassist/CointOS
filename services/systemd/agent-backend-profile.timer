@@ -1,0 +1,11 @@
+[Unit]
+Description=Retry qualified backend profile reconciliation
+PartOf=agent-executors.target
+
+[Timer]
+OnBootSec=3m
+OnUnitActiveSec=1m
+Unit=agent-backend-profile.service
+
+[Install]
+WantedBy=timers.target

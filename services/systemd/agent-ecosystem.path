@@ -3,7 +3,7 @@ Description=Watch the local agent idea inbox
 
 [Path]
 PathChanged=%h/Projects/CointOS/inbox/new
-PathChanged=%h/.CointOS/state/jobs
+PathChanged=%h/.CointOS/state/agent-enqueue.wakeup
 Unit=agent-ecosystem.service
 
 [Install]

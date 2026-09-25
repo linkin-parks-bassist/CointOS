@@ -89,7 +89,10 @@ def _mutate(identifier: str, change: Callable[[dict], None]) -> dict:
     with lock_path.open("a", encoding="utf-8") as lock:
         fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         record = json.loads(path.read_text(encoding="utf-8"))
+        original = json.dumps(record, sort_keys=True)
         change(record)
+        if json.dumps(record, sort_keys=True) == original:
+            return record
         record["updated_at"] = cli.now()
         cli.atomic_json(path, record)
         return record
@@ -235,6 +238,8 @@ def observe_head() -> str | None:
 def reserve_next(owner_pid: int) -> str | None:
     for path in sorted(directory().glob("telegram-*.json")):
         identifier = path.stem
+        if not _reserve_eligible(json.loads(path.read_text(encoding="utf-8"))):
+            continue
         selected = False
         def change(record: dict) -> None:
             nonlocal selected

@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Show CointOS resource control, inference health, and lease-state counts."""
+
+import argparse
+import json
+import sys
+from collections import Counter
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ecosystem.resource_control import lemonade_health
+
+
+def _read_record(path: Path) -> dict:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if type(value) is not dict:
+        raise ValueError(f"invalid state record: {path}")
+    return value
+
+
+def _state_counts(record: dict, field: str) -> dict[str, int]:
+    values = record.get(field)
+    if type(values) is not dict:
+        raise ValueError(f"invalid {field} state")
+    states = []
+    for item in values.values():
+        state = item.get("state") if type(item) is dict else None
+        states.append(state if type(state) is str else "invalid")
+    return dict(sorted(Counter(states).items()))
+
+
+def snapshot(root: Path) -> dict:
+    state = root / "state"
+    control = _read_record(state / "resource-control.json")
+    workload = _read_record(state / "workload-control.json")
+    capacity = _read_record(state / "inference-capacity.json")
+    proxy = _read_record(state / "inference-proxy.json")
+    health = lemonade_health()
+    loaded = health.get("all_models_loaded") if type(health) is dict else None
+    models = []
+    if type(loaded) is list:
+        for item in loaded:
+            if type(item) is not dict or item.get("loaded") is not True:
+                continue
+            options = item.get("recipe_options")
+            options = options if type(options) is dict else {}
+            models.append({
+                "model": item.get("model_name"),
+                "status": item.get("status"),
+                "backend_alive": item.get("backend_alive"),
+                "pinned": item.get("pinned"),
+                "context_tokens": options.get("ctx_size"),
+                "llamacpp_args": options.get("llamacpp_args"),
+            })
+    return {
+        "resource_mode": control.get("mode"),
+        "emergency_phase": control.get("emergency_phase"),
+        "work_gate": workload.get("mode"),
+        "incident": control.get("incident_id"),
+        "survivor": control.get("sole_survivor_job"),
+        "emergency_error": control.get("emergency_error"),
+        "backend_error": health.get("error") if type(health) is dict else "invalid health response",
+        "loaded_models": models,
+        "lease_states": {
+            "workers": _state_counts(workload, "leases"),
+            "inference": _state_counts(capacity, "leases"),
+            "proxy_credentials": _state_counts(proxy, "credentials"),
+        },
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path.home() / ".CointOS")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    args = parser.parse_args()
+    try:
+        report = snapshot(args.root)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        parser.exit(2, f"cointos-health: {error}\n")
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return
+    print(f"resource={report['resource_mode']} phase={report['emergency_phase']} "
+          f"gate={report['work_gate']} incident={report['incident']}")
+    if report["emergency_error"]:
+        print(f"emergency_error: {report['emergency_error']}")
+    if report["backend_error"]:
+        print(f"backend_error: {report['backend_error']}")
+    for model in report["loaded_models"]:
+        print(f"model={model['model']} status={model['status']} "
+              f"alive={model['backend_alive']} pinned={model['pinned']} "
+              f"ctx={model['context_tokens']} args={model['llamacpp_args']}")
+    for name, counts in report["lease_states"].items():
+        print(f"{name}: " + ", ".join(f"{state}={count}" for state, count in counts.items()))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,6 +1,7 @@
 {
   "tick_seconds": 180,
   "steward_review_seconds": 900,
+  "steward_review_enabled": false,
   "running_job_warn_seconds": 600,
   "running_job_hard_seconds": 1800,
   "output_idle_warn_seconds": 300,
@@ -21,9 +22,7 @@
     {"id": "model-catalogue", "file": "model-catalogue.md", "weight": 2, "maximum_interval_seconds": 3600}
   ],
   "auto_actions": [
-    "enqueue one deduplicated steward review",
-    "report unhealthy services, failed jobs, and stalled output",
-    "allow steward repairs within its user-level role permissions"
+    "report unhealthy services, failed jobs, and stalled output"
   ],
   "approval_required": [
     "root or package operations",

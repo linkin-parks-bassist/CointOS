@@ -17,6 +17,12 @@
     "maximum_memory_full_avg10": 1.0,
     "chat_model": "Qwen3.5-4B-GGUF",
     "chat_context_tokens": 32768,
+    "context_reserves": {
+      "prompt_tokens": 4096,
+      "tool_tokens": 4096,
+      "max_output_tokens": 8192,
+      "handoff_tokens": 8192
+    },
     "parallel_requests": 2
   },
   "physical_capacity": {
@@ -34,6 +40,8 @@
       "handoff_tokens": 8192
     },
     "rollover_fraction": 0.75,
+    "profile_minimum_dwell_seconds": 300,
+    "profile_failure_cooldown_seconds": 3600,
     "parallel_requests": 1,
     "llamacpp_batch_size": 512,
     "llamacpp_ubatch_size": 128

@@ -15,19 +15,16 @@ class IntakeTest(unittest.TestCase):
         self.root_patch = patch.object(cli, "ROOT", self.root)
         self.root_patch.start()
         cli.initialize()
-        (self.root / "AGENTS.md").write_text("# Test repository instructions\n\nUse explicit evidence.\n", encoding="utf-8")
         (self.root / "config").mkdir(exist_ok=True)
         values = {"version": 1,
                   "authority_profiles": [{"id": "ordinary", "workload_class": "work", "effects": [
-                      "read_scoped_files", "write_scoped_files"]}],
-                  "workspaces": [{"id": "test", "path": str(self.root.resolve()),
-                                  "provenance": "personal", "mode": "active"}]}
-        (self.root / "config/workspaces.json").write_text(json.dumps(values), encoding="utf-8")
+                      "read_scoped_files", "write_scoped_files"]}]}
+        (self.root / "config/authority-profiles.json").write_text(json.dumps(values), encoding="utf-8")
         canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
         snapshot = {"schema_version": 1, "values": values,
                     "digest": hashlib.sha256(canonical).hexdigest(),
                     "activated_at": "2026-09-05T00:00:00+00:00",
-                    "source_path": str((self.root / "config/workspaces.json").resolve())}
+                    "source_path": str((self.root / "config/authority-profiles.json").resolve())}
         (self.root / "state/workspaces-policy.json").write_text(
             json.dumps(snapshot), encoding="utf-8")
         scheduling_values = json.loads(
@@ -95,7 +92,7 @@ class IntakeTest(unittest.TestCase):
             cli.run_once()
         self.assertEqual(caught.exception.code, 75)
 
-    def test_role_is_injected_into_prepared_task(self):
+    def test_prepared_task_uses_plain_assigned_text(self):
         roles = self.root / "roles"
         roles.mkdir()
         (roles / "worker.md").write_text("# Worker\n## Mission\nDo it.\n## Permissions\nRead.\n## Approval required\nWrites.\n## Handoff\nReport.\n")
@@ -109,10 +106,7 @@ class IntakeTest(unittest.TestCase):
                 patch("ecosystem.models.route", return_value=decision):
             cli.prepare_next()
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
-        self.assertIn("# Worker", prompt)
-        self.assertIn("Inspect the widget", prompt)
-        self.assertIn((Path.home() / "AGENTS.md").read_text().strip(), prompt)
-        self.assertIn("# Test repository instructions", prompt)
+        self.assertEqual(prompt, "Inspect the widget\n")
 
     def test_pending_task_can_be_amended(self):
         roles = self.root / "roles"; roles.mkdir(exist_ok=True)

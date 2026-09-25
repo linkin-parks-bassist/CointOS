@@ -34,6 +34,8 @@ def test_terminal_result_uses_notifier_without_blocking_telegram_ingress(root):
         "state": "completed",
         "agent_name": "Noether",
         "output": "logs/result.log",
+        "verification_job": "task-verifier",
+        "verification": {"accepted": True},
         "verification_summary": "all checks passed",
     })
     notification_id = outbox.enqueue(

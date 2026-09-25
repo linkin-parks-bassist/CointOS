@@ -480,7 +480,7 @@ def reacquire_proxy_credential(root: Path, lease_id: str, inventory: dict, clock
 def reconcile_available_capacity(root: Path, clock=time.monotonic) -> dict:
     """Reclaim abandoned capacity before admission, independent of caller cleanup."""
     root = Path(root)
-    result = {"released": [], "retained": []}
+    result = {"released": [], "retained": [], "reconciled_credentials": []}
     # Unissued ghosts must not depend on a proxy credential ever existing.
     from ecosystem import inference_capacity
     capacity_path = root / "state/inference-capacity.json"
@@ -497,6 +497,10 @@ def reconcile_available_capacity(root: Path, clock=time.monotonic) -> dict:
                 pass  # Issued leases close through their incarnation-bound proxy evidence below.
     if not (root / "state/inference-proxy.json").exists():
         return result
+    # A prior R3 release can outlive a proxy crash between capacity release
+    # and bearer revocation. Adopt only that persisted release, under the same
+    # locks as both ledgers; this does not assert a new physical termination.
+    result["reconciled_credentials"] = reconcile_released_proxy_credentials(root, clock)
     with _proxy_lock(root) as (state, save):
         candidates = [lease_id for lease_id, item in state["credentials"].items()
                       if item.get("state") != "revoked"
@@ -549,6 +553,51 @@ def reconcile_available_capacity(root: Path, clock=time.monotonic) -> dict:
     except (OSError, ValueError, RuntimeError):
         result["native"] = {"pending": "caller reconciliation unavailable"}
     return result
+
+
+def reconcile_released_proxy_credentials(root: Path, clock=time.monotonic) -> list[str]:
+    """Finish proxy bookkeeping for exact R3 releases already persisted."""
+    reconciled = []
+    with _locked_states(Path(root)) as (_worker, capacity, proxy, save):
+        for lease_id, credential in proxy["credentials"].items():
+            lease = capacity.get("leases", {}).get(lease_id)
+            if not _can_adopt_released_sequence(lease_id, credential, lease):
+                continue
+            credential["state"] = "revoked"
+            credential["digest"] = ""
+            credential["released_sequence"] = _durable(lease)
+            credential["revoked_monotonic"] = _clock(clock)
+            reconciled.append(lease_id)
+            save()
+    return reconciled
+
+
+def _can_adopt_released_sequence(lease_id: str, credential: dict,
+                                 lease: dict | None) -> bool:
+    """Match an already accepted R3 release to a dead proxy incarnation."""
+    if (type(credential) is not dict or type(lease) is not dict
+            or credential.get("state") not in {"closing", "releasing"}
+            or credential.get("in_flight") != {}
+            or lease.get("lease_id") != lease_id
+            or lease.get("state") != "released"):
+        return False
+    binding = credential.get("binding")
+    if (type(binding) is not dict or type(binding.get("release_binding")) is not dict
+            or type(binding.get("process")) is not dict
+            or _bound_process_ended(binding["process"]) is not True):
+        return False
+    observed = lease.get("observed_release")
+    accepted = observed.get("accepted_monotonic") if type(observed) is dict else None
+    return (type(observed) is dict
+            and observed.get("schema_version") == 1
+            and observed.get("kind") in {"sequence_end", "reconciled_absent",
+                                         "never_requested", "response_finished"}
+            and type(accepted) in (int, float) and math.isfinite(accepted)
+            and lease.get("expected_release_binding") == binding["release_binding"]
+            and observed.get("binding") == binding["release_binding"]
+            and observed.get("observer_identity") == lease.get("release_observer_identity")
+            and type(observed.get("evidence_id")) is str
+            and bool(observed["evidence_id"]))
 
 
 def completed_run_termination(root: Path, lease_id: str,
@@ -827,7 +876,41 @@ def forward_proxy_response(connection, upstream, lease: dict, observe, clock) ->
     return {"status": status, "bytes_forwarded": total, **evidence}
 
 
+def _normalize_survivor_system_messages(body: dict, lease: dict, root: Path) -> dict:
+    """Fit OpenCode's system preamble to the emergency model's strict template."""
+    request = lease.get("request", {})
+    if (request.get("authority_profile") != "sole_survivor"
+            or request.get("role") != "sole_survivor"):
+        return body
+    try:
+        resource = json.loads((Path(root) / "state/resource-control.json").read_text(
+            encoding="utf-8"))
+        emergency = json.loads((Path(root) / "config/resource-policy.json").read_text(
+            encoding="utf-8"))["emergency"]
+    except (OSError, ValueError, KeyError) as error:
+        raise ValueError("emergency template policy is unavailable") from error
+    if (resource.get("mode") != "emergency"
+            or request.get("owner_identity") !=
+            f"executor:{resource.get('sole_survivor_job')}"
+            or emergency.get("chat_model") != lease["model_id"]):
+        return body
+    messages = body.get("messages")
+    if type(messages) is not list or any(type(message) is not dict for message in messages):
+        raise ValueError("invalid emergency message list")
+    systems = [message for message in messages if message.get("role") == "system"]
+    if not systems or (len(systems) == 1 and messages[0] is systems[0]):
+        return body
+    if any(set(message) != {"role", "content"} or type(message["content"]) is not str
+           for message in systems):
+        raise ValueError("unsupported emergency system message content")
+    merged = {"role": "system", "content": "\n\n".join(
+        message["content"] for message in systems)}
+    return {**body, "messages": [merged] + [
+        message for message in messages if message.get("role") != "system"]}
+
+
 def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
+    response_started = False
     try:
         connection.settimeout(float(config.get("read_timeout_seconds", 5)))
         metadata, body = read_proxy_request(connection, config)
@@ -854,21 +937,27 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             _send_json(connection, admission["status"], admission)
             return
         lease = admission["lease"]
-        endpoint = validate_loopback_base(config["backend_base"])
         try:
-            snapshot = backend_snapshot(config["backend_base"], lease["model_id"])
-        except Exception:
-            snapshot = None
-        identity = _snapshot_identity(snapshot)
-        pre = None
-        if identity is not None:
+            body = _normalize_survivor_system_messages(body, lease, root)
+            endpoint = validate_loopback_base(config["backend_base"])
             try:
-                pre = observe_backend_slots(identity)
+                snapshot = backend_snapshot(config["backend_base"], lease["model_id"])
             except Exception:
-                pre = None
-        upstream_connection = http.client.HTTPConnection(
-            endpoint["host"], endpoint["port"],
-            timeout=float(config.get("backend_connect_timeout_seconds", 10)))
+                snapshot = None
+            identity = _snapshot_identity(snapshot)
+            pre = None
+            if identity is not None:
+                try:
+                    pre = observe_backend_slots(identity)
+                except Exception:
+                    pre = None
+            upstream_connection = http.client.HTTPConnection(
+                endpoint["host"], endpoint["port"],
+                timeout=float(config.get("backend_connect_timeout_seconds", 10)))
+        except Exception:
+            _finish_claim(Path(root), lease["lease_id"], admission["claim_id"],
+                          False, {}, clock)
+            raise
         try:
             _register_upstream(Path(root), lease["lease_id"], upstream_connection)
             _record_backend_identity(Path(root), lease["lease_id"], admission["claim_id"],
@@ -889,6 +978,7 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             _record_claim_slot_evidence(Path(root), lease["lease_id"],
                                         admission["claim_id"], pre, start, clock)
             upstream = upstream_connection.getresponse()
+            response_started = True
             result = forward_proxy_response(connection, upstream,
                                             {**lease, "stream_chunk_bytes": config.get(
                                                 "stream_chunk_bytes", 65536)},
@@ -926,10 +1016,11 @@ def serve_one_connection(connection, root: Path, config: dict, clock) -> None:
             _unregister_upstream(Path(root), lease["lease_id"], upstream_connection)
             upstream_connection.close()
     except Exception as error:
-        try:
-            _send_json(connection, 400, {"status": 400, "error": str(error)})
-        except OSError:
-            pass
+        if not response_started:
+            try:
+                _send_json(connection, 400, {"status": 400, "error": str(error)})
+            except OSError:
+                pass
     finally:
         connection.close()
 

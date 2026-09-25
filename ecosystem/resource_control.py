@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -21,10 +22,18 @@ from ecosystem import cli, inference_capacity, operator_session, time_policy, wo
 POLICY_PATH = cli.ROOT / "config/resource-policy.json"
 RUNNING_STATES = {"running"}
 HALTED_MODES = {"pressure", "emergency"}
-MODEL_CLIENT_UNITS = ("agent-ecosystem.service", "agent-control-worker.service")
+DISPATCH_UNIT = "agent-ecosystem.service"
+DISPATCH_TRIGGER_UNITS = ("agent-ecosystem.path", "agent-ecosystem.timer",
+                          "agent-backend-profile.timer")
+PROFILE_SERVICE = "agent-backend-profile.service"
+EXECUTOR_TARGET = "agent-executors.target"
+EXECUTOR_LANE_PATTERN = "agent-executor@*.service"
+MANAGED_EXECUTION_UNITS = (*DISPATCH_TRIGGER_UNITS, DISPATCH_UNIT,
+                           PROFILE_SERVICE, EXECUTOR_TARGET)
+MODEL_CLIENT_UNITS = (*MANAGED_EXECUTION_UNITS, "agent-control-worker.service")
 WORK_GATE_OWNER = {"owner_identity": "resource-control", "covered_paths": []}
 LIVE_MODEL_STATUSES = {"ready", "in_use", "busy"}
-SURVIVOR_ACTIVE_STATES = {"ready", "running"}
+SURVIVOR_ACTIVE_STATES = {"ready", "claimed", "runner_starting", "running"}
 SURVIVOR_INCOMPLETE_STATES = {"awaiting_verification"}
 SURVIVOR_TERMINAL_STATES = {"completed", "failed", "rejected"}
 SURVIVOR_RETRYABLE_STATES = SURVIVOR_INCOMPLETE_STATES | SURVIVOR_TERMINAL_STATES
@@ -43,7 +52,7 @@ SURVIVOR_QUEUED_FIELDS = frozenset({
     "requested_model_reason", "prefer_models_other_than", "agent_name",
     "idempotency_key", "task_contract", "remaining_budget", "authority_profile",
     "requirements", "scope", "write_paths", "workload_class",
-    "agent_generation", "logical_run_state",
+    "agent_generation", "logical_run_state", "verification_requested",
 })
 SURVIVOR_READY_FIELDS = SURVIVOR_QUEUED_FIELDS | {
     "context_tokens", "prompt", "original_prompt",
@@ -76,6 +85,7 @@ ACTIVE_EMERGENCY_FIELDS = (
     "emergency_escalation",
     "interrupted_jobs",
     "client_stop_result",
+    "emergency_executor_reconciliation",
     "model_unload_result",
     "emergency_model_last_attempt",
     "emergency_model_last_result",
@@ -83,6 +93,9 @@ ACTIVE_EMERGENCY_FIELDS = (
     "sole_survivor_job",
     "survivor_start_result",
     "survivor_retry",
+    "survivor_retry_history",
+    "survivor_escalation_waiting_for",
+    "survivor_escalation_due_at",
     "active_service_result",
     "recovery_start_result",
     "recovery_error",
@@ -98,6 +111,7 @@ ACTIVE_EMERGENCY_FIELDS = (
     "pressure_dynamic_unloads",
     "pressure_operator_preemptions",
     "pressure_client_stop_result",
+    "pressure_executor_reconciliation",
     "pressure_client_start_result",
     "pressure_error",
     "pressure_error_at",
@@ -335,13 +349,19 @@ def model_load_payload(model_name: str, backend_context_tokens: int,
         raise ValueError("parallel_requests must be a positive integer")
     if type(pinned) is not bool:
         raise ValueError("pinned must be a boolean")
-    return {
+    args = f"--parallel {parallel_requests} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1"
+    if model_name == "Qwen3.8-27B-GGUF":
+        args = f"{args} --reasoning-budget 2048 --spec-type draft-mtp"
+    payload = {
         "model_name": model_name,
         "pinned": pinned,
         "ctx_size": backend_context_tokens,
         "merge_args": True,
-        "llamacpp_args": f"--parallel {parallel_requests} --batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
+        "llamacpp_args": args,
     }
+    if model_name == "Qwen3.8-27B-GGUF":
+        payload["save_options"] = True
+    return payload
 
 
 def load_model_if_residency_free(
@@ -626,22 +646,24 @@ def opencode_session_id(output: Path) -> str | None:
 def checkpoint_running_jobs(incident_id: str, reason: str = "resource emergency") -> list[str]:
     interrupted = []
     for path in sorted((cli.ROOT / "state/jobs").glob("*.json")):
-        try:
-            job = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if job.get("state") not in RUNNING_STATES:
-            continue
-        output = cli.ROOT / job.get("output", "")
-        session = job.get("opencode_session") or opencode_session_id(output)
-        job.update(state="interrupted", updated_at=cli.now(), interrupted_by=incident_id,
-                   interruption_reason=f"{reason}; durable context flushed before inference unload")
-        if session:
-            job["opencode_session"] = session
-            job["resume_available"] = True
-        else:
-            job["resume_available"] = False
-        cli.atomic_json(path, job)
+        with (cli.ROOT / "state/task-enqueue.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                job = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if job.get("state") not in RUNNING_STATES:
+                continue
+            output = cli.ROOT / job.get("output", "")
+            session = job.get("opencode_session") or opencode_session_id(output)
+            job.update(state="interrupted", updated_at=cli.now(), interrupted_by=incident_id,
+                       interruption_reason=f"{reason}; durable context flushed before inference unload")
+            if session:
+                job["opencode_session"] = session
+                job["resume_available"] = True
+            else:
+                job["resume_available"] = False
+            cli.atomic_json(path, job)
         cli.audit("task.interrupted", job_id=job["id"], incident_id=incident_id,
                   resume_available=bool(session))
         interrupted.append(job["id"])
@@ -683,10 +705,13 @@ def _user_unit_state(unit: str) -> dict:
         key, separator, value = line.partition("=")
         if separator:
             fields[key] = value
-    if set(fields) != {"ActiveState", "ControlGroup", "MainPID"}:
+    process_unit = unit.endswith(".service")
+    required = ({"ActiveState", "ControlGroup", "MainPID"}
+                if process_unit else {"ActiveState"})
+    if not required.issubset(fields) or not fields["ActiveState"]:
         return {"ok": False, "error": f"ambiguous unit state for {unit}"}
     try:
-        main_pid = int(fields["MainPID"])
+        main_pid = int(fields.get("MainPID", "0"))
     except ValueError:
         return {"ok": False, "error": f"ambiguous unit MainPID for {unit}"}
     if main_pid < 0:
@@ -695,7 +720,7 @@ def _user_unit_state(unit: str) -> dict:
         "ok": True,
         "unit": unit,
         "active_state": fields["ActiveState"],
-        "control_group": fields["ControlGroup"],
+        "control_group": fields.get("ControlGroup", ""),
         "main_pid": main_pid,
     }
 
@@ -763,8 +788,155 @@ def _start_user_units(units: tuple[str, ...]) -> dict:
     return {**verified, "action": result}
 
 
+def _start_dispatch() -> dict:
+    """Run the short-lived dispatcher to completion, not as a live worker."""
+    action = _user_systemctl("start", DISPATCH_UNIT)
+    return {"ok": bool(action.get("ok")), "action": action,
+            "error": action.get("error") if not action.get("ok") else None}
+
+
+def _executor_lane_states() -> dict:
+    """Observe all loaded dynamic executor instances, not a fixed slot count."""
+    result = _user_systemctl("list-units", "--all", "--full", "--no-legend",
+                             "--no-pager", EXECUTOR_LANE_PATTERN)
+    if not result.get("ok"):
+        return {"ok": False, "error": result.get("error"), "states": []}
+    units = []
+    for line in result.get("stdout", "").splitlines():
+        fields = line.split()
+        if fields and fields[0] == "●":
+            fields = fields[1:]
+        if not fields:
+            continue
+        unit = fields[0]
+        if (not unit.startswith("agent-executor@")
+                or not unit.endswith(".service") or "/" in unit):
+            return {"ok": False, "error": f"unexpected executor unit listing: {line}",
+                    "states": []}
+        units.append(unit)
+    states = [_user_unit_state(unit) for unit in sorted(set(units))]
+    if any(not state.get("ok") for state in states):
+        return {"ok": False, "error": "executor lane state unavailable",
+                "states": states}
+    return {"ok": True, "states": states}
+
+
+def _verify_stopped_executor_lanes() -> dict:
+    observed = _executor_lane_states()
+    if not observed["ok"]:
+        return observed
+    stopped = all(state["active_state"] in STOPPED_UNIT_STATES
+                  and not state["control_group"] and state["main_pid"] == 0
+                  for state in observed["states"])
+    return {"ok": stopped, "states": observed["states"],
+            "error": None if stopped else "executor lane remained active after stop"}
+
+
+def _stop_managed_clients(*, include_control: bool) -> dict:
+    units = MODEL_CLIENT_UNITS if include_control else MANAGED_EXECUTION_UNITS
+    stopped = _stop_user_units(units)
+    if not stopped.get("ok"):
+        return stopped
+    lanes = _verify_stopped_executor_lanes()
+    return {**stopped, "ok": lanes["ok"], "error": lanes["error"],
+            "executor_lanes": lanes}
+
+
+def _start_executor_target() -> dict:
+    action = _user_systemctl("start", EXECUTOR_TARGET)
+    if not action.get("ok"):
+        return {"ok": False, "error": action.get("error"), "action": action}
+    state = _user_unit_state(EXECUTOR_TARGET)
+    active = state.get("ok") and state.get("active_state") == "active"
+    return {"ok": bool(active), "error": None if active else "executor target did not become active",
+            "action": action, "state": state}
+
+
+def _start_dispatch_triggers() -> dict:
+    action = _user_systemctl("start", *DISPATCH_TRIGGER_UNITS)
+    if not action.get("ok"):
+        return {"ok": False, "error": action.get("error"), "action": action}
+    states = [_user_unit_state(unit) for unit in DISPATCH_TRIGGER_UNITS]
+    active = all(state.get("ok") and state.get("active_state") == "active"
+                 for state in states)
+    return {"ok": active, "error": None if active else "dispatch trigger did not become active",
+            "action": action, "states": states}
+
+
+def _start_managed_dispatch() -> dict:
+    target = _start_executor_target()
+    if not target["ok"]:
+        return {"ok": False, "error": target["error"], "target": target}
+    triggers = _start_dispatch_triggers()
+    if not triggers["ok"]:
+        return {"ok": False, "error": triggers["error"],
+                "target": target, "triggers": triggers}
+    dispatch = _start_dispatch()
+    return {"ok": dispatch["ok"], "error": dispatch["error"],
+            "target": target, "triggers": triggers, "dispatch": dispatch}
+
+
+def _verify_live_executor_lane() -> dict:
+    observed = _executor_lane_states()
+    if not observed["ok"]:
+        return observed
+    states = observed["states"]
+    live = any(
+        state.get("ok") and state.get("active_state") in STARTED_UNIT_STATES
+        and bool(state.get("control_group")) and state.get("main_pid", 0) > 0
+        for state in states
+    )
+    return {"ok": live, "states": states,
+            "error": None if live else "no executor lane has a verified live process"}
+
+
+def _wait_for_live_executor_lane() -> dict:
+    deadline_seconds = _seconds("lifecycle", "reconciliation_deadline_seconds")
+    poll_seconds = _seconds("resource", "poll_seconds")
+    deadline = time.monotonic() + deadline_seconds
+    while True:
+        verified = _verify_live_executor_lane()
+        if verified["ok"]:
+            return verified
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            verified["error"] += f" after {deadline_seconds:g} seconds"
+            return verified
+        time.sleep(min(poll_seconds, remaining))
+
+
+def _start_survivor_clients() -> dict:
+    control = _start_user_units(("agent-control-worker.service",))
+    if not control.get("ok"):
+        return {"ok": False, "error": control.get("error"), "control": control}
+    target = _start_executor_target()
+    if not target["ok"]:
+        return {"ok": False, "error": target["error"],
+                "control": control, "target": target}
+    dispatch = _start_dispatch()
+    if not dispatch["ok"]:
+        return {"ok": False, "error": dispatch["error"],
+                "control": control, "target": target, "dispatch": dispatch}
+    lane = _wait_for_live_executor_lane()
+    return {"ok": lane["ok"], "error": lane["error"],
+            "control": control, "target": target, "dispatch": dispatch, "lane": lane,
+            "states": control["states"] + lane["states"]}
+
+
+def _verify_survivor_clients() -> dict:
+    control = _verify_user_units(("agent-control-worker.service",), "started")
+    target = _user_unit_state(EXECUTOR_TARGET)
+    target_active = target.get("ok") and target.get("active_state") == "active"
+    lane = _verify_live_executor_lane()
+    return {"ok": bool(control["ok"] and target_active and lane["ok"]),
+            "error": (control.get("error") or
+                      ("executor target is not active" if not target_active else None) or
+                      lane.get("error")),
+            "states": control["states"] + [target] + lane["states"]}
+
+
 def interrupt_model_clients() -> dict:
-    return _stop_user_units(MODEL_CLIENT_UNITS)
+    return _stop_managed_clients(include_control=True)
 
 
 def unload_all_models() -> dict:
@@ -1018,12 +1190,81 @@ def _reconcile_interrupted_leases(identifiers: list[str], incident_id: str) -> d
                 {"job_id": identifier, "reason": record["quarantined_reason"]})
         if type(job) is dict:
             if job.get("lease_reconciliation") != record:
-                job["lease_reconciliation"] = record
                 try:
-                    cli.atomic_json(path, job)
+                    with (cli.ROOT / "state/task-enqueue.lock").open("w") as lock:
+                        fcntl.flock(lock, fcntl.LOCK_EX)
+                        current = json.loads(path.read_text(encoding="utf-8"))
+                        if current.get("id") == identifier:
+                            current["lease_reconciliation"] = record
+                            cli.atomic_json(path, current)
                 except OSError:
                     pass
     return result
+
+
+def _reconcile_stopped_executor_jobs() -> dict:
+    """After lane shutdown, recover dead owners and reject unclosed managed leases."""
+    from ecosystem.executor import _process_alive, recover_abandoned_jobs
+    from ecosystem.inference_proxy import reconcile_available_capacity
+
+    try:
+        recovered = recover_abandoned_jobs()
+        proxy = reconcile_available_capacity(cli.ROOT)
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError) as error:
+        return {"ok": False, "error": f"stopped executor recovery failed: {error}"}
+    mode, worker_state = _work_gate_observation(cli.ROOT)
+    if worker_state is None:
+        return {"ok": False, "error": f"work gate is {mode}",
+                "recovered": recovered, "proxy": proxy}
+    inference_path = cli.ROOT / "state/inference-capacity.json"
+    try:
+        inference_state = (json.loads(inference_path.read_text(encoding="utf-8"))
+                           if inference_path.exists() else {"leases": {}})
+    except (OSError, json.JSONDecodeError) as error:
+        return {"ok": False, "error": f"inference state unreadable: {error}",
+                "recovered": recovered, "proxy": proxy}
+    if type(inference_state.get("leases")) is not dict:
+        return {"ok": False, "error": "inference lease state is invalid",
+                "recovered": recovered, "proxy": proxy}
+
+    jobs = []
+    for path in (cli.ROOT / "state/jobs").glob("*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if type(job) is dict and type(job.get("id")) is str and (
+                job.get("kind") == "agent-task" or job.get("worker_lease_id")):
+            jobs.append(job)
+    job_ids = {job["id"] for job in jobs}
+    blockers = []
+    for job in jobs:
+        if job.get("state") == "reconciliation_required":
+            blockers.append(f"{job['id']}: executor reconciliation is unresolved")
+        if job.get("state") in {"claimed", "runner_starting", "running"} and _process_alive(job):
+            blockers.append(f"{job['id']}: executor owner is still alive")
+    managed_worker_ids = set()
+    for lease_id, lease in worker_state["leases"].items():
+        if type(lease) is not dict:
+            return {"ok": False, "error": f"invalid worker lease {lease_id}",
+                    "recovered": recovered, "proxy": proxy}
+        request = lease.get("request")
+        if type(request) is not dict or request.get("job_id") not in job_ids:
+            continue
+        managed_worker_ids.add(lease_id)
+        if lease.get("state") != "quiescent":
+            blockers.append(f"{request['job_id']}: worker lease {lease_id} is {lease.get('state')}")
+    for lease_id, lease in inference_state["leases"].items():
+        if type(lease) is not dict:
+            return {"ok": False, "error": f"invalid inference lease {lease_id}",
+                    "recovered": recovered, "proxy": proxy}
+        request = lease.get("request")
+        if (type(request) is dict
+                and request.get("worker_lease_id") in managed_worker_ids
+                and lease.get("state") != "released"):
+            blockers.append(f"inference lease {lease_id} is {lease.get('state')}")
+    return {"ok": not blockers, "error": "; ".join(blockers) if blockers else None,
+            "recovered": recovered, "proxy": proxy, "blockers": blockers}
 
 
 def _reconcile_unregistered_leases_after_global_stop(state: dict,
@@ -1141,7 +1382,7 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
         return state
     save_state(state)
     interrupted = checkpoint_running_jobs(incident_id, "resource pressure")
-    stop = _stop_user_units(("agent-ecosystem.service",))
+    stop = _stop_managed_clients(include_control=False)
     state.update(pressure_interrupted_jobs=interrupted,
                  pressure_client_stop_result=stop)
     if not stop.get("ok"):
@@ -1153,6 +1394,15 @@ def enter_pressure(state: dict, snapshot: dict) -> dict:
         return state
     reconciliation = _reconcile_interrupted_leases(interrupted, incident_id)
     state["pressure_lease_reconciliation"] = reconciliation
+    executor_reconciliation = _reconcile_stopped_executor_jobs()
+    state["pressure_executor_reconciliation"] = executor_reconciliation
+    if not executor_reconciliation["ok"]:
+        state.update(pressure_error=executor_reconciliation["error"],
+                     pressure_error_at=cli.now())
+        save_state(state)
+        cli.audit("resource.pressure_error", incident_id=incident_id,
+                  error=state["pressure_error"])
+        return state
     unloads = unload_dynamic_models()
     preemptions = _preempt_leased_models_if_unprotected(unloads, incident_id)
     state.update(pressure_dynamic_unloads=unloads)
@@ -1206,11 +1456,19 @@ def load_emergency_model() -> dict:
             "/v1/load", payload,
             timeout=_seconds("inference", "model_start_deadline_seconds"),
         )
-        health = lemonade_health()
-        if not emergency_model_live(health):
-            return {"ok": False, "error": "emergency model remained non-live after load",
-                    "response": result, "health": health}
-        return {"ok": True, "response": result, "health": health}
+        # Lemonade may acknowledge /v1/load before its health inventory has
+        # published the new backend.  Do not turn that short gap into a reload
+        # loop that repeatedly unloads the same emergency model.
+        deadline = time.monotonic() + min(
+            30.0, _seconds("inference", "model_start_deadline_seconds"))
+        while True:
+            health = lemonade_health()
+            if emergency_model_live(health):
+                return {"ok": True, "response": result, "health": health}
+            if time.monotonic() >= deadline:
+                return {"ok": False, "error": "emergency model remained non-live after load",
+                        "response": result, "health": health}
+            time.sleep(0.2)
     except Exception as error:
         return {"ok": False, "error": f"{type(error).__name__}: {error}",
                 "health": lemonade_health()}
@@ -1218,26 +1476,41 @@ def load_emergency_model() -> dict:
 
 def _survivor_task(incident_path: Path, incident_id: str,
                    replacement_for: str | None) -> str:
+    incident_view = incident_path.parents[2] / "scripts/cointos-incident"
+    health_view = incident_path.parents[2] / "scripts/cointos-health"
     task = f"""Recover resource incident `{incident_id}`.
 
 The immutable incident snapshot is `{incident_path}`. Ordinary dispatch is
-mechanically halted. Inspect the snapshot and the minimum relevant journal, model,
-job, and repository evidence. Determine the causal chain, make only bounded safe
+mechanically halted. Start with the bounded read-only views
+`{incident_view} {incident_id} --json` and `{health_view} --json`.
+The snapshot and lease ledgers contain very large one-line records: inspect only
+specific fields of those originals when the summaries leave a concrete question
+unanswered. Then inspect the minimum relevant journal, model, job, and repository
+evidence. Determine the causal chain, make only bounded safe
 user-level repairs, and verify stable memory, GTT, swap, PSI, Lemonade, GNOME, and
 chatbot state. Do not load a larger model during this incident.
+
+Create `state/resource-incidents/{incident_id}-conclusion.md` early with only
+verified facts, remaining unknowns, and an explicit statement that ordinary
+dispatch is still closed. Update that file as checks complete. Keep the scope
+bounded: a truthful unresolved conclusion is better than a broad investigation
+that ends without the required record. Do not claim recovery is safe unless the
+resource and ownership checks actually pass.
 
 When and only when recovery is safe, run:
 
 `~/Projects/CointOS/scripts/resource-control recover`
 
 That transition validates your `AGENT_JOB_ID` and the live health gate. If it
-refuses, keep dispatch halted and report the exact blocker. Write the incident
-conclusion to `state/resource-incidents/{incident_id}-conclusion.md`."""
+refuses, keep dispatch halted and record the exact blocker in the conclusion.
+After any successful transition, update the conclusion with its verified result."""
     if replacement_for:
         task = (
-            f"This is the one authorized same-model retry of failed survivor "
-            f"`{replacement_for}` after correcting its backend allocation. Preserve that "
-            f"job and transcript as incident evidence.\n\n{task}"
+            f"This is a dedicated recovery escalation after survivor "
+            f"`{replacement_for}` failed. Inspect its recorded failure and only the "
+            f"bounded evidence needed to choose a different approach. Preserve that "
+            f"job and transcript as incident evidence. Write the truthful conclusion "
+            f"before lengthy investigation.\n\n{task}"
         )
     return task
 
@@ -1287,8 +1560,6 @@ def _require_canonical_survivor_prompt(path: Path, expected: str) -> None:
 
 def _prepare_survivor(incident_path: Path, incident_id: str,
                       replacement_for: str | None = None) -> str:
-    from ecosystem.roles import render_context
-
     emergency = policy()["emergency"]
     emergency_model = emergency["chat_model"]
     task = _survivor_task(incident_path, incident_id, replacement_for)
@@ -1347,13 +1618,11 @@ def _prepare_survivor(incident_path: Path, incident_id: str,
         "workload_class": "repair",
         "agent_generation": 1,
         "logical_run_state": "active",
+        "verification_requested": False,
     }
     prompt_path = cli.ROOT / "state/jobs" / f"{job_id}.prompt.md"
     relative_prompt = str(prompt_path.relative_to(cli.ROOT))
-    expected_prompt = render_context(
-        SURVIVOR_ROLE, task, job_id, emergency_model,
-        SURVIVOR_MODEL_REASON, SURVIVOR_AGENT_NAME, contract,
-    )
+    expected_prompt = task.strip() + "\n"
     if job.get("state") == "ready":
         _require_canonical_survivor_job(job, {
             **common,
@@ -1537,7 +1806,8 @@ def _survivor_retry_record(state: dict) -> dict | None:
              and type(record.get("version")) is int
              and record["version"] == 1
              and status in {"requested", "active"}
-             and record.get("reason") == "corrected_same_model_allocation"
+             and record.get("reason") in {
+                 "corrected_same_model_allocation", "automated_incident_escalation"}
              and isinstance(record.get("replaces"), str)
              and bool(record["replaces"])
              and isinstance(record.get("requested_at"), str)
@@ -1637,8 +1907,14 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
         reconciliation = _reconcile_interrupted_leases(
             state["interrupted_jobs"], state["incident_id"])
         state["emergency_lease_reconciliation"] = reconciliation
+        executor_reconciliation = _reconcile_stopped_executor_jobs()
+        state["emergency_executor_reconciliation"] = executor_reconciliation
+        if not executor_reconciliation["ok"]:
+            return _record_emergency_error(
+                state, f"executor shutdown is not reconciled: {executor_reconciliation['error']}")
         _update_incident(state, interrupted_jobs=state["interrupted_jobs"],
-                         lease_reconciliation=reconciliation)
+                         lease_reconciliation=reconciliation,
+                         executor_reconciliation=executor_reconciliation)
         _persist_emergency_phase(state, "clients_stopped")
         phase = "clients_stopped"
 
@@ -1694,9 +1970,7 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
         if not _survivor_is_ready(state):
             return _record_emergency_error(state, "sole survivor job is not ready")
         try:
-            started = _start_user_units(
-                ("agent-control-worker.service", "agent-ecosystem.service")
-            )
+            started = _start_survivor_clients()
         except Exception as error:
             return _record_emergency_error(
                 state, f"survivor executor start failed: {type(error).__name__}: {error}"
@@ -1735,9 +2009,7 @@ def advance_emergency(state: dict, snapshot: dict, reason: str) -> dict:
                 state, "sole survivor job is not in a live executor state",
                 escalation=escalation,
             )
-        services = _verify_user_units(
-            ("agent-control-worker.service", "agent-ecosystem.service"), "started"
-        )
+        services = _verify_survivor_clients()
         state["active_service_result"] = services
         if not services.get("ok"):
             return _record_emergency_error(
@@ -1816,8 +2088,32 @@ def tick() -> dict:
         return enter_emergency(state, snapshot,
                                f"kernel oom_kill increased from {previous_oom} to {snapshot['oom_kills']}")
     if state.get("mode") == "emergency":
-        return advance_emergency(state, snapshot,
-                                 state.get("emergency_reason", "resource emergency retry"))
+        state = advance_emergency(
+            state, snapshot, state.get("emergency_reason", "resource emergency retry"))
+        survivor = _survivor_job(state)
+        terminal = survivor is not None and survivor.get("state") == "failed"
+        incident_recorded = _incident_path_from_state(state).is_file()
+        if (terminal and state.get("emergency_phase") == "active"
+                and incident_recorded and _threshold_state(snapshot) == "healthy"):
+            survivor_id = survivor["id"]
+            if state.get("survivor_escalation_waiting_for") != survivor_id:
+                history = state.get("survivor_retry_history", [])
+                attempts = len(history) + (1 if _survivor_retry_record(state) else 0)
+                delay = 0 if attempts == 0 else min(60 * (2 ** min(attempts - 1, 6)), 3600)
+                state["survivor_escalation_waiting_for"] = survivor_id
+                state["survivor_escalation_due_at"] = time.time() + delay
+                save_state(state)
+                cli.audit("resource.survivor_escalation_scheduled",
+                          incident_id=state.get("incident_id"),
+                          failed_survivor=survivor_id, delay_seconds=delay)
+            elif time.time() >= state.get("survivor_escalation_due_at", float("inf")):
+                request_survivor_retry(escalate=True)
+                return load_state()
+        elif state.get("survivor_escalation_waiting_for"):
+            state.pop("survivor_escalation_waiting_for", None)
+            state.pop("survivor_escalation_due_at", None)
+            save_state(state)
+        return state
     threshold = confirmed_threshold(state, snapshot, now_monotonic)
     if threshold == "emergency" and state.get("mode") != "emergency":
         return enter_emergency(state, snapshot, "critical memory/GTT/swap/PSI threshold crossed before OOM")
@@ -1846,7 +2142,7 @@ def tick() -> dict:
                     "reasons": gate["reasons"], "at": cli.now()}
                 save_state(state)
                 return state
-            started = _start_user_units(("agent-ecosystem.service",))
+            started = _start_managed_dispatch()
             state["pressure_client_start_result"] = started
             if not started.get("ok"):
                 state.update(pressure_error=started.get("error", "unverified restart"),
@@ -1875,7 +2171,7 @@ def tick() -> dict:
     return state
 
 
-def request_recovery(job_id: str) -> dict:
+def request_recovery(job_id: str, *, operator: bool = False) -> dict:
     state = load_state()
     if state.get("mode") != "emergency":
         raise RuntimeError("resource control is not in emergency mode")
@@ -1885,7 +2181,24 @@ def request_recovery(job_id: str) -> dict:
         and state.get("emergency_phase") == "model_loaded"
         and str(state.get("emergency_error", "")).startswith(
             "sole survivor preparation failed:"))
-    if survivor_job is not None:
+    failed_terminal_survivor = False
+    if operator and survivor_job is not None and not job_id:
+        path = cli.ROOT / "state/jobs" / f"{survivor_job}.json"
+        survivor = json.loads(path.read_text(encoding="utf-8"))
+        retry = _survivor_retry_record(state)
+        failed_terminal_survivor = (
+            state.get("emergency_phase") == "active"
+            and state.get("emergency_error") == "sole survivor job is not in a live executor state"
+            and survivor.get("id") == survivor_job
+            and survivor.get("state") == "failed"
+            and retry is not None
+            and retry.get("status") == "active"
+            and retry.get("replacement") == survivor_job
+        )
+        if not failed_terminal_survivor:
+            raise PermissionError("operator recovery requires a failed terminal replacement survivor")
+        recovery_actor = "operator:failed-terminal-survivor-recovery"
+    elif survivor_job is not None:
         if not job_id or job_id != survivor_job:
             raise PermissionError("only the active Sole Survivor may reopen dispatch")
         path = cli.ROOT / "state/jobs" / f"{job_id}.json"
@@ -1919,7 +2232,7 @@ def request_recovery(job_id: str) -> dict:
                   reasons=restrictions)
         return {"ok": False, "resumed_jobs": [], "resources": snapshot,
                 "executor_start": None}
-    start = _start_user_units(("agent-ecosystem.service",))
+    start = _start_managed_dispatch()
     state["recovery_start_result"] = start
     if not start.get("ok"):
         state.update(recovery_error=start.get("error", "unverified restart"),
@@ -1961,16 +2274,24 @@ def _survivor_retry_result(state: dict, reused: bool) -> dict:
     return result
 
 
-def request_survivor_retry() -> dict:
+def request_survivor_retry(*, escalate: bool = False) -> dict:
     state = load_state()
     if state.get("mode") != "emergency":
         raise RuntimeError("resource control is not in emergency mode")
     retry = _survivor_retry_record(state)
-    if retry is not None and retry["status"] == "active":
+    if retry is not None and retry["status"] == "active" and not escalate:
         result = _survivor_retry_result(state, reused=True)
         if not result["ok"]:
             raise RuntimeError("active survivor retry record is inconsistent")
         return result
+    if retry is not None and escalate:
+        survivor = _survivor_job(state)
+        if (survivor is None or survivor.get("state") not in SURVIVOR_TERMINAL_STATES
+                or retry.get("replacement") != survivor.get("id")):
+            raise RuntimeError("escalation requires the terminal replacement survivor")
+        state.setdefault("survivor_retry_history", []).append(dict(retry))
+        state.pop("survivor_retry", None)
+        retry = None
     if retry is None:
         if state.get("emergency_phase") != "active":
             raise RuntimeError("survivor retry requires an active emergency")
@@ -1980,15 +2301,19 @@ def request_survivor_retry() -> dict:
         state["survivor_retry"] = {
             "version": 1,
             "status": "requested",
-            "reason": "corrected_same_model_allocation",
+            "reason": ("automated_incident_escalation" if escalate
+                       else "corrected_same_model_allocation"),
             "replaces": survivor["id"],
             "requested_at": cli.now(),
             "trigger": state.get("emergency_escalation"),
         }
+        state.pop("survivor_escalation_waiting_for", None)
+        state.pop("survivor_escalation_due_at", None)
         _persist_emergency_phase(state, "recorded")
     snapshot = resource_snapshot()
     advanced = advance_emergency(
-        state, snapshot, "operator requested corrected same-model survivor retry"
+        state, snapshot, ("automatic survivor escalation" if escalate
+                          else "operator requested corrected same-model survivor retry")
     )
     return _survivor_retry_result(advanced, reused=False)
 
@@ -2009,6 +2334,8 @@ def main() -> None:
     parser.add_argument(
         "command", choices=("run", "tick", "status", "recover", "retry-survivor")
     )
+    parser.add_argument("--operator", action="store_true",
+                        help="recover a failed terminal replacement survivor after operator review")
     args = parser.parse_args()
     if args.command == "run":
         run_guard()
@@ -2017,7 +2344,8 @@ def main() -> None:
     elif args.command == "status":
         print(json.dumps(load_state(), indent=2, sort_keys=True))
     elif args.command == "recover":
-        print(json.dumps(request_recovery(os.environ.get("AGENT_JOB_ID", "")),
+        print(json.dumps(request_recovery(os.environ.get("AGENT_JOB_ID", ""),
+                                          operator=args.operator),
                          indent=2, sort_keys=True))
     elif args.command == "retry-survivor":
         print(json.dumps(request_survivor_retry(), indent=2, sort_keys=True))

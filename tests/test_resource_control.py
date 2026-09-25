@@ -81,18 +81,15 @@ def initialize_survivor_context(root):
     (root / "config").mkdir(parents=True, exist_ok=True)
     (root / "roles/_base.md").write_text("Base context.\n", encoding="utf-8")
     (root / "roles/sole_survivor.md").write_text("Survivor context.\n", encoding="utf-8")
-    (root / "AGENTS.md").write_text("Repository instructions.\n", encoding="utf-8")
     values = {"version": 1,
               "authority_profiles": [{"id": "sole_survivor", "workload_class": "repair", "effects": [
-                  "read_scoped_files", "write_scoped_files", "recover_resources"]}],
-              "workspaces": [{"id": "test", "path": str(root.resolve()),
-                              "provenance": "personal", "mode": "active"}]}
-    (root / "config/workspaces.json").write_text(json.dumps(values), encoding="utf-8")
+                  "read_scoped_files", "write_scoped_files", "recover_resources"]}]}
+    (root / "config/authority-profiles.json").write_text(json.dumps(values), encoding="utf-8")
     canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     snapshot = {"schema_version": 1, "values": values,
                 "digest": hashlib.sha256(canonical).hexdigest(),
                 "activated_at": "2026-09-05T00:00:00+00:00",
-                "source_path": str((root / "config/workspaces.json").resolve())}
+                "source_path": str((root / "config/authority-profiles.json").resolve())}
     (root / "state/workspaces-policy.json").write_text(json.dumps(snapshot), encoding="utf-8")
 
 
@@ -148,16 +145,30 @@ def transition_state(phase="model_loaded", sole_survivor_job=None):
 
 
 def systemctl_units(calls):
-    return [argument for call in calls for argument in call if argument.endswith(".service")]
+    return [argument for call in calls for argument in call
+            if argument.endswith((".service", ".target", ".path", ".timer"))]
 
 
 def in_memory_systemctl(calls=None, failed_action=None, ambiguous_unit=None,
                         missing_process_unit=None, start_pid_sequences=None):
     recorded = calls if calls is not None else []
+    lane = "agent-executor@task-survivor.service"
     states = {
         "agent-ecosystem.service": {
+            "active_state": "inactive", "control_group": "", "main_pid": 0,
+        },
+        "agent-ecosystem.path": {
+            "active_state": "active", "control_group": "", "main_pid": 0,
+        },
+        "agent-ecosystem.timer": {
+            "active_state": "active", "control_group": "", "main_pid": 0,
+        },
+        "agent-executors.target": {
+            "active_state": "active", "control_group": "", "main_pid": 0,
+        },
+        lane: {
             "active_state": "active",
-            "control_group": "/user.slice/agent-ecosystem.service",
+            "control_group": f"/user.slice/{lane}",
             "main_pid": 4101,
         },
         "agent-control-worker.service": {
@@ -177,16 +188,26 @@ def in_memory_systemctl(calls=None, failed_action=None, ambiguous_unit=None,
             return {"ok": False, "error": f"injected {action} failure"}
         if action in {"start", "stop"}:
             for unit in systemctl_units([arguments]):
-                states[unit] = ({
-                    "active_state": "active",
-                    "control_group": f"/user.slice/{unit}",
-                    "main_pid": states[unit]["main_pid"] or (4101 if "ecosystem" in unit else 4102),
-                } if action == "start" else {
-                    "active_state": "inactive",
-                    "control_group": "",
-                    "main_pid": 0,
-                })
+                if action == "stop":
+                    states[unit] = {"active_state": "inactive", "control_group": "", "main_pid": 0}
+                    if unit == "agent-executors.target":
+                        states[lane] = {"active_state": "inactive", "control_group": "", "main_pid": 0}
+                elif unit == "agent-ecosystem.service":
+                    # A successful oneshot dispatch exits; its worker is the lane.
+                    states[unit] = {"active_state": "inactive", "control_group": "", "main_pid": 0}
+                    if states["agent-executors.target"]["active_state"] == "active":
+                        states[lane] = {"active_state": "active",
+                                        "control_group": f"/user.slice/{lane}", "main_pid": 4101}
+                elif unit.endswith((".target", ".path", ".timer")):
+                    states[unit] = {"active_state": "active", "control_group": "", "main_pid": 0}
+                else:
+                    states[unit] = {"active_state": "active",
+                                    "control_group": f"/user.slice/{unit}",
+                                    "main_pid": states[unit]["main_pid"] or 4102}
             return {"ok": True, "returncode": 0, "stdout": ""}
+        if action == "list-units":
+            return {"ok": True, "returncode": 0, "stdout":
+                    f"{lane} loaded {states[lane]['active_state']} running Executor lane\n"}
         if action == "show":
             unit = arguments[1]
             state = states[unit].copy()
@@ -807,7 +828,7 @@ def test_active_phase_waits_for_each_unit_live_process(root):
     sleeps = []
     systemctl = in_memory_systemctl(start_pid_sequences={
         "agent-control-worker.service": [0, 4102],
-        "agent-ecosystem.service": [0, 4101],
+        "agent-executor@task-survivor.service": [0, 4101],
     })
     with patch.object(time_policy, "load", return_value=central_policy), \
             patch("ecosystem.resource_control.lemonade_health",
@@ -821,7 +842,7 @@ def test_active_phase_waits_for_each_unit_live_process(root):
         )
 
     assert result["emergency_phase"] == "active"
-    assert sleeps == [0.75]
+    assert sleeps == [0.75, 0.75]
     assert all(item["main_pid"] > 0
                for item in result["survivor_start_result"]["states"])
 
@@ -836,11 +857,11 @@ def test_started_unit_wait_never_sleeps_past_reconciliation_deadline(_root):
     with patch.object(time_policy, "load", return_value=central_policy), \
             patch("ecosystem.resource_control._user_systemctl",
                   side_effect=in_memory_systemctl(
-                      missing_process_unit="agent-ecosystem.service")), \
+                      missing_process_unit="agent-executor@task-survivor.service")), \
             patch("ecosystem.resource_control.time.monotonic",
                   side_effect=(100.0, 100.0, 119.0)), \
             patch("ecosystem.resource_control.time.sleep", side_effect=sleeps.append):
-        result = resource_control._start_user_units(("agent-ecosystem.service",))
+        result = resource_control._start_user_units(("agent-executor@task-survivor.service",))
     assert result["ok"] is False
     assert sleeps == [19.0]
 
@@ -858,7 +879,7 @@ def test_active_tick_reobserves_required_unit_processes(root):
                return_value=emergency_health()), \
             patch("ecosystem.resource_control._user_systemctl",
                   side_effect=in_memory_systemctl(
-                      missing_process_unit="agent-ecosystem.service")):
+                      missing_process_unit="agent-executor@task-survivor.service")):
         result = resource_control.advance_emergency(
             state, healthy_snapshot(), "active liveness observation"
         )
@@ -867,7 +888,8 @@ def test_active_tick_reobserves_required_unit_processes(root):
     assert "live process" in result.get("emergency_error", "")
     assert {item["unit"] for item in result["active_service_result"]["states"]} == {
         "agent-control-worker.service",
-        "agent-ecosystem.service",
+        "agent-executors.target",
+        "agent-executor@task-survivor.service",
     }
 
 
@@ -1315,10 +1337,11 @@ def test_ready_survivor_reuse_requires_complete_canonical_descriptor(root):
         "idempotency_key", "task_contract", "remaining_budget", "context_tokens",
         "authority_profile", "requirements", "scope", "write_paths",
         "workload_class", "prompt", "original_prompt",
-        "agent_generation", "logical_run_state",
+        "agent_generation", "logical_run_state", "verification_requested",
     }
     assert canonical["agent_generation"] == 1
     assert canonical["logical_run_state"] == "active"
+    assert canonical["verification_requested"] is False
     assert canonical["kind"] == "agent-task"
     assert canonical["state"] == "ready"
     assert canonical["attempts"] == 0
@@ -1497,7 +1520,7 @@ def test_recovery_restart_failure_keeps_emergency_generation_retryable(root):
                   return_value=healthy_snapshot()), \
             patch("ecosystem.resource_control._user_systemctl",
                   side_effect=in_memory_systemctl(
-                      missing_process_unit="agent-ecosystem.service")), \
+                      ambiguous_unit="agent-executors.target")), \
             patch("ecosystem.resource_control.time.monotonic",
                   side_effect=(100.0, 100.0, 119.0)), \
             patch("ecosystem.resource_control.time.sleep", side_effect=sleeps.append):
@@ -1505,7 +1528,7 @@ def test_recovery_restart_failure_keeps_emergency_generation_retryable(root):
 
     persisted = resource_control.load_state()
     assert failed["ok"] is False
-    assert sleeps == [0.75]
+    assert sleeps == []
     assert persisted["mode"] == "emergency"
     assert persisted["emergency_phase"] == "active"
     assert persisted["incident_id"] == state["incident_id"]
@@ -1771,7 +1794,7 @@ def test_pressure_preempts_work_and_unloads_only_dynamic_models(_root):
     assert result["pressure_interrupted_jobs"] == ["task-work"]
     assert checkpoint.call_count == 1
     assert unload.call_count == 1
-    assert systemctl_calls[0] == ("stop", "agent-ecosystem.service")
+    assert systemctl_calls[0] == ("stop", "agent-ecosystem.path")
 
 
 @with_root
@@ -1816,16 +1839,16 @@ def test_pressure_release_restart_failure_keeps_dispatch_halted(root):
             patch("ecosystem.resource_control.load_state", return_value=state), \
             patch("ecosystem.resource_control._user_systemctl",
                   side_effect=in_memory_systemctl(
-                      missing_process_unit="agent-ecosystem.service")), \
+                      ambiguous_unit="agent-executors.target")), \
             patch("ecosystem.resource_control.time.monotonic",
                   side_effect=(100.0, 100.0, 100.0, 160.0)), \
             patch("ecosystem.resource_control.time.sleep", side_effect=sleeps.append):
         result = resource_control.tick()
 
     assert result["mode"] == "pressure"
-    assert "live process" in result["pressure_error"]
+    assert "target" in result["pressure_error"]
     assert read_job(root, interrupted)["state"] == "interrupted"
-    assert sleeps == [0.75]
+    assert sleeps == []
 
 
 def _leased_operator_setup(root):
@@ -1974,7 +1997,7 @@ def test_pressure_closes_gate_before_checkpoint(_root):
                side_effect=lambda *args: events.append("gate") or {"mode": "draining"}), \
           patch("ecosystem.resource_control.checkpoint_running_jobs",
                 side_effect=lambda *args: events.append("checkpoint") or []), \
-          patch("ecosystem.resource_control._stop_user_units", return_value={"ok": True}), \
+          patch("ecosystem.resource_control._stop_managed_clients", return_value={"ok": True}), \
           patch("ecosystem.resource_control.unload_dynamic_models", return_value=[]), \
           patch("ecosystem.resource_control.save_state"):
         resource_control.enter_pressure({"mode": "normal"}, {"at": "now"})

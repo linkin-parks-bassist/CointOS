@@ -36,39 +36,5 @@
       "workload_class": "work",
       "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks"]
     }
-  ],
-  "workspaces": [
-    {
-      "id": "cointos",
-      "path": "/home/david/Projects/CointOS",
-      "provenance": "personal",
-      "mode": "active",
-      "ambient_read_paths": [
-        "/home/david/Projects/CointOS/.knowledge",
-        "/home/david/Projects/CointOS/ecosystem",
-        "/home/david/Projects/CointOS/roles",
-        "/home/david/Projects/CointOS/tests"
-      ],
-      "ambient_write_paths": [
-        "/home/david/Projects/CointOS/.knowledge"
-      ]
-    },
-    {
-      "id": "pigen",
-      "path": "/home/david/Projects/pigen",
-      "provenance": "personal",
-      "mode": "active",
-      "topic_branch_commits": true,
-      "push_topic_branch": true,
-      "open_pull_request": true,
-      "merge_requires_explicit_approval": true
-    },
-    {
-      "id": "kestrel-interface-style-reference",
-      "path": "/home/david/Projects/reference_projects/kestrel-interface-ab1b88db9612",
-      "provenance": "personal-human-written-reference",
-      "mode": "immutable-reference",
-      "commit": "ab1b88db9612cf177d991a9855bbdbe56f0b1244"
-    }
   ]
 }

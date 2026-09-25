@@ -158,12 +158,18 @@ def _finish(root, worker, gate, lease, clock, issued=False):
 
 
 def _close_unissued_worker(root, record_path, record, lease, clock):
-    """Close a worker lease whose attempt could never call the backend."""
+    """Close a worker lease whose attempt could never call the backend.
+
+    Returns True only when the lease is quiescent after the close attempt.
+    A lease that the observation contract leaves non-quiescent (for example a
+    drain that requires checkpoint_observed) retains the record for
+    verification instead of claiming closure; no checkpoint is invented.
+    """
     if lease.get('state') == 'quiescent':
         record.update(state='cancelled', reason='caller_terminated',
                       reconciliation={'next_check': 'none'})
         cli.atomic_json(record_path, record)
-        return
+        return True
     process = lease.get('process')
     if process is None:
         # Only reached with explicit spawn_intent=False, proving no Popen was
@@ -184,10 +190,15 @@ def _close_unissued_worker(root, record_path, record, lease, clock):
     if lease.get('state') != 'release_requested':
         workload_control.release_worker(
             root, lease['lease_id'], {'state': 'run_terminated', 'returncode': None}, clock)
-    workload_control.observe_workers(root, [observation], clock)
+    state = workload_control.observe_workers(root, [observation], clock)
+    if state['leases'].get(lease['lease_id'], {}).get('state') != 'quiescent':
+        _retain(record_path, record, 'verify_worker_checkpoint',
+                'caller_terminated; worker lease is not yet quiescent')
+        return False
     record.update(state='cancelled', reason='caller_terminated',
                   reconciliation={'next_check': 'none'})
     cli.atomic_json(record_path, record)
+    return True
 
 
 def _reconcile_issued(root, record_path, record, clock):
@@ -211,7 +222,8 @@ def _reconcile_issued(root, record_path, record, clock):
     if lease is not None and lease.get('state') != 'quiescent':
         if lease.get('process') is None:
             raise InferenceWaiting('worker process identity is missing')
-        _close_unissued_worker(root, record_path, record, lease, clock)
+        if not _close_unissued_worker(root, record_path, record, lease, clock):
+            return
     record.update(state='completed',
                   reason='caller_terminated; backend termination verified on reconciliation')
     cli.atomic_json(record_path, record)
@@ -269,8 +281,9 @@ def _reconcile_record(root, record_path, record, clock):
             return 'retained'
         if capacity_lease is not None and capacity_lease.get('state') != 'released':
             inference_capacity.withdraw_unissued_sequence(root, capacity_lease['lease_id'], clock)
-        _close_unissued_worker(root, record_path, record, worker_lease, clock)
-        return 'recovered'
+        if _close_unissued_worker(root, record_path, record, worker_lease, clock):
+            return 'recovered'
+        return 'retained'
     record['inference_lease_id'] = capacity_lease['lease_id']
     _reconcile_issued(root, record_path, record, clock)
     return 'recovered' if record.get('state') == 'completed' else 'retained'
@@ -356,6 +369,13 @@ def request(model: str, messages: list[dict], max_tokens: int, timeout: float = 
         if cancelled and cancelled():
             record['state'] = 'cancelled'; cli.atomic_json(record_path, record)
             raise InterruptedError('native inference cancelled while waiting')
+        from ecosystem import resource_control
+        if resource_control.mode() in {'pressure', 'emergency'}:
+            reason = 'resource control is halting native admission'
+            if record.get('state') != 'waiting' or record.get('reason') != reason:
+                record.update(state='waiting', reason=reason)
+                cli.atomic_json(record_path, record)
+            sleeper(1.0); continue
         try:
             inventory = refresh()
             policy = json.loads((root / 'config/resource-policy.json').read_text())
@@ -368,11 +388,23 @@ def request(model: str, messages: list[dict], max_tokens: int, timeout: float = 
             record.update(state='waiting', reason=(route or {}).get('exclusion_reasons', ['model_not_loaded']))
             cli.atomic_json(record_path, record); sleeper(.1); continue
         if not route.get('loaded'):
-            decision = {**route, 'action': 'load', 'model': model,
-                        'context_tokens': route['context_tokens_per_sequence'],
-                        'reason': 'managed inference requires unloaded model', 'valid': True}
             try:
-                models.realize(decision, inventory)
+                # The executor uses this same residency lock. Re-evaluate
+                # after acquiring it so two callers cannot both act on the
+                # same stale unloaded-model observation.
+                with models.realization_lock(root):
+                    fresh_inventory = refresh()
+                    fresh_policy = json.loads((root / 'config/resource-policy.json').read_text())
+                    fresh_route = next(
+                        (item for item in models.safe_routes(fresh_inventory, fresh_policy, routing)
+                         if item.get('model_id') == model), None)
+                    if (fresh_route and fresh_route.get('state') == 'admitted'
+                            and not fresh_route.get('loaded')):
+                        decision = {**fresh_route, 'action': 'load', 'model': model,
+                                    'context_tokens': fresh_route['context_tokens_per_sequence'],
+                                    'reason': 'managed inference requires unloaded model',
+                                    'valid': True}
+                        models.realize(decision, fresh_inventory)
             except (OSError, ValueError, RuntimeError) as error:
                 record.update(state='waiting', reason=f'model realization: {error}')
                 cli.atomic_json(record_path, record); sleeper(.1); continue

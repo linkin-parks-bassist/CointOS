@@ -10,7 +10,7 @@ import os
 from contextlib import contextmanager
 from pathlib import Path
 
-from ecosystem import inference_policy, models
+from ecosystem import inference_policy, models, workload_control
 
 
 STATE_VERSION = 1
@@ -337,17 +337,28 @@ def reserve_sequence(
     from ecosystem.inference_proxy import reconcile_available_capacity
     reconcile_available_capacity(root, clock)
     with _locked_states(root) as (worker_state, state, save):
-        worker_lease = _validate_worker_lease(worker_state, validated)
+        worker_lease = _validate_worker_lease(root, worker_state, validated)
         worker_request = worker_lease["request"]
+        transition = state.get("backend_profile_transition")
+        if transition is not None:
+            if (type(transition) is not dict
+                    or type(transition.get("model_id")) is not str
+                    or not transition["model_id"]):
+                raise ValueError("invalid backend profile transition")
+            if transition["model_id"] == validated["route"].get("model_id"):
+                return {"state": "deferred", "reasons": ["backend_profile_transition"]}
         for field in (
             "requirements", "prompt_tokens", "tool_tokens", "max_output_tokens",
             "handoff_tokens",
         ):
             if field in worker_request:
                 validated[field] = _durable_copy(worker_request[field])
-        normalized_route = models.validate_route(
-            validated["route"], inventory, resource_policy, worker_request,
-        )
+        prior = _lease_for_request(state, validated["request_id"])
+        parked = prior is not None and prior["state"] in {
+            "released", "ready_for_revalidation"}
+        validate = models.rebind_parked_route if parked else models.validate_route
+        normalized_route = validate(
+            validated["route"], inventory, resource_policy, worker_request)
         if normalized_route.get("state") != "admitted":
             return {
                 "state": "deferred",
@@ -369,7 +380,6 @@ def reserve_sequence(
             validated["authority_profile"], now - enqueued_monotonic,
             operator_session=validated["operator_session"],
         )
-        prior = _lease_for_request(state, validated["request_id"])
         if prior is not None:
             if (_stable_sequence_request(prior["request"])
                     != _stable_sequence_request(validated)):
@@ -566,7 +576,7 @@ def reacquire_sequence(root: Path, lease_id: str, inventory: dict, clock) -> dic
         if lease is None:
             raise ValueError("unknown inference allocation")
         request = _durable_copy(lease["request"])
-        worker = _validate_worker_lease(workers, request)
+        worker = _validate_worker_lease(root, workers, request)
         _validate_registered_process(worker)
         if lease["state"] == "released":
             lease["state"] = "ready_for_revalidation"
@@ -753,13 +763,15 @@ def _validate_sequence_request(request: object, policy: dict, scheduling: dict) 
     return durable
 
 
-def _validate_worker_lease(worker_state: dict, request: dict) -> dict:
-    if worker_state.get("mode") != "open":
-        raise ValueError("worker admission is closed")
+def _validate_worker_lease(root: Path, worker_state: dict, request: dict) -> dict:
     lease = worker_state.get("leases", {}).get(request["worker_lease_id"])
     if lease is None or lease.get("state") not in {"starting", "active"}:
         raise ValueError("worker lease is not admitted")
     worker_request = lease.get("request", {})
+    if (worker_state.get("mode") != "open"
+            and not workload_control._emergency_survivor_admitted(
+                root, worker_state, worker_request)):
+        raise ValueError("worker admission is closed")
     if worker_request.get("workload_class") != request["workload_class"]:
         raise ValueError("worker and inference workload classes differ")
     if worker_request.get("request_id") != request["worker_request_id"]:

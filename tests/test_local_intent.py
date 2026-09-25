@@ -1,5 +1,4 @@
 import unittest
-from pathlib import Path
 
 from ecosystem.control_agent import respond
 from ecosystem.presentation import sanitize_notification
@@ -31,6 +30,31 @@ def test_control_agent_can_finish_without_duplicate_reply():
                           "content": None, "tool_calls": [tool_call("finish_silently")]
                       })
     assert outcome == {"followup": None}
+
+
+def test_control_agent_cannot_silently_drop_promised_reasoning_result():
+    answers = iter([
+        {"content": None, "tool_calls": [tool_call("finish_silently")]},
+        {"content": None, "tool_calls": [tool_call(
+            "publish_followup", '{"message":"Here is the proof."}', "call-two")]},
+    ])
+    captured = []
+
+    def infer(**arguments):
+        captured.append(arguments["messages"])
+        return next(answers)
+
+    outcome = respond(
+        "Prove the Sylow theorems", [],
+        "I'll need to check the exact reasoning steps to provide a rigorous proof.",
+        {}, lambda *_arguments: {}, infer=infer,
+    )
+
+    assert outcome == {"followup": "Here is the proof."}
+    assert any(
+        item.get("role") == "user" and "only promised later work" in item.get("content", "")
+        for item in captured[-1]
+    )
 
 
 def test_control_agent_queue_schema_and_handler_allow_omitted_role():
@@ -85,7 +109,7 @@ def test_fast_response_receives_the_durable_control_plane_identity():
     assert "David's private Telegram-facing control plane" in system
     assert "You are not a generic internet chatbot" in system
     assert "Do not end messages with generic opt-in chatbot questions" in system
-    assert (Path.home() / "AGENTS.md").read_text().strip() in system
+    assert "Mandatory knowledge-tree bootstrap" not in system
 
 
 def test_fast_response_removes_generic_chatbot_followup_tail():
@@ -115,6 +139,7 @@ def load_tests(_loader, _tests, _pattern):
     functions = [
         test_control_agent_uses_tool_then_publishes_material_followup,
         test_control_agent_can_finish_without_duplicate_reply,
+        test_control_agent_cannot_silently_drop_promised_reasoning_result,
         test_control_agent_queue_schema_and_handler_allow_omitted_role,
         test_fast_response_is_small_and_forbids_action_claims,
         test_fast_response_receives_the_durable_control_plane_identity,

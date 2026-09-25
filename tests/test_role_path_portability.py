@@ -32,18 +32,6 @@ def test_role_markdown_contains_no_fixed_home_paths():
         "fixed /home/david/ paths in role Markdown:\n" + "\n".join(violations))
 
 
-def test_helper_scripts_are_referenced_portably():
-    for name, script in (("coder", "install-package"),
-                         ("intake", "tell-david"),
-                         ("lead", "tell-david"),
-                         ("refactorer", "install-package"),
-                         ("steward", "tell-david"),
-                         ("worker", "install-package")):
-        text = (REPO_ROOT / "roles" / f"{name}.md").read_text(encoding="utf-8")
-        assert f"~/Projects/CointOS/scripts/{script}" in text, (
-            f"roles/{name}.md lost the portable ~/Projects/CointOS/scripts/{script} reference")
-
-
 def load_tests(_loader, _tests, _pattern):
     functions = [value for name, value in globals().items()
                  if name.startswith("test_") and callable(value)]

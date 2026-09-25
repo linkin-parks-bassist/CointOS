@@ -9,7 +9,7 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
-from ecosystem import cli, conversation, control_turns
+from ecosystem import cli, conversation, control_turns, resource_control
 from ecosystem.control_runtime import friendly_status, recent_errors_text, status_text
 from ecosystem.inference import request as inference_request
 from ecosystem.managed_inference import request as managed_request
@@ -18,12 +18,13 @@ from ecosystem.resource_control import active_chat_model
 
 
 DISASTER_FALLBACK = "the local response system has failed to answer this for five minutes. that's not normal."
+RESOURCE_HOLD_REPLY = ("I got your message, but CointOS is in resource emergency/pressure mode "
+                       "and local inference is paused. Your request is retained for when the gate reopens.")
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
-WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
-FAST_SYSTEM = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
+FAST_SYSTEM = f"""{CONTROL_ROLE.read_text(encoding='utf-8')}
 
-{CONTROL_ROLE.read_text(encoding='utf-8')}
-
+You are David's private Telegram-facing control plane. You are not a generic internet chatbot.
+Do not end messages with generic opt-in chatbot questions.
 You are Cointelprofessional's fast conversational front and first-stage router.
 Consider David's message in its recent conversational context. Decide whether a
 visible reply is natural and whether deeper inspection, reasoning, tools, or action
@@ -166,8 +167,11 @@ def accept_update(token: str, update: dict, allowed: set[int],
     identifier = turn["id"]
     conversation.append(sender, "user", incoming, source_id=f"{identifier}:user")
     if not created and turn.get("front_state") == "generating":
-        control_turns.mark_front_failed(identifier, "gateway restarted during fast generation")
-        return True
+        if resource_control.dispatch_halted():
+            turn = control_turns.mark_front_ready(identifier, RESOURCE_HOLD_REPLY, True)
+        else:
+            control_turns.mark_front_failed(identifier, "gateway restarted during fast generation")
+            return True
     if not created and turn.get("front_state") == "sending":
         control_turns.mark_front_delivery_unknown(identifier, "gateway restarted during Telegram delivery")
         return True
@@ -179,10 +183,13 @@ def accept_update(token: str, update: dict, allowed: set[int],
         cli.audit("control_turn.front_attempted", turn_id=identifier, user_id=sender)
         control_turns.mark_front_attempt(identifier)
         try:
-            history = [entry for entry in conversation.recent(sender, max_messages=6, max_characters=2500)
-                       if entry.get("content") != DISASTER_FALLBACK]
-            decision = generate_front_decision(
-                history, infer=infer, inference_context=inference_context)
+            if resource_control.dispatch_halted():
+                decision = {"response": RESOURCE_HOLD_REPLY, "deep_required": True}
+            else:
+                history = [entry for entry in conversation.recent(sender, max_messages=6, max_characters=2500)
+                           if entry.get("content") != DISASTER_FALLBACK]
+                decision = generate_front_decision(
+                    history, infer=infer, inference_context=inference_context)
             initial = decision["response"]
             if initial is None:
                 control_turns.mark_front_silent(identifier, decision["deep_required"])

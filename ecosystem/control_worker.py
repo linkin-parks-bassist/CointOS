@@ -5,7 +5,7 @@ import os
 import signal
 import time
 
-from ecosystem import cli, conversation, control_turns
+from ecosystem import cli, conversation, control_turns, resource_control
 from ecosystem.control_agent import respond
 from ecosystem.control_runtime import execute_tool, live_context
 from ecosystem.telegram import reply
@@ -65,6 +65,9 @@ def main() -> None:
     while not stopping:
         _reap(active)
         control_turns.recover_interrupted()
+        if resource_control.dispatch_halted():
+            time.sleep(1.0)
+            continue
         while True:
             identifier = control_turns.reserve_next(os.getpid())
             if not identifier:

@@ -1,5 +1,5 @@
 [Unit]
-Description=Inspect agent ecosystem health and enqueue periodic stewardship
+Description=Inspect agent ecosystem health
 [Service]
 Type=oneshot
 Slice=background.slice

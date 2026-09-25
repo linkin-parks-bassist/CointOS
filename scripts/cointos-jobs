@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""List active or recently updated managed CointOS jobs without reading work output."""
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ecosystem.job_inspection import ACTIVE_STATES, compact, iter_jobs, summarize_job
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--active", action="store_true", help="show active jobs (default)")
+    group.add_argument("--recent", type=int, metavar="N", help="show N most recently updated jobs")
+    group.add_argument("--state", action="append", help="show jobs in this state; repeatable")
+    parser.add_argument("--root", type=Path, default=Path.home() / ".CointOS")
+    parser.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+    args = parser.parse_args()
+    if args.recent is not None and args.recent < 1:
+        parser.error("--recent must be positive")
+
+    jobs = list(iter_jobs(args.root))
+    if args.recent is not None:
+        jobs.sort(key=lambda job: (job.get("updated_at", ""), job.get("id", "")), reverse=True)
+        jobs = jobs[:args.recent]
+    else:
+        states = set(args.state or ACTIVE_STATES)
+        jobs = [job for job in jobs if job.get("state") in states]
+        jobs.sort(key=lambda job: (job.get("created_at", ""), job.get("id", "")))
+
+    summaries = [summarize_job(args.root, job) for job in jobs]
+    if args.json:
+        print(json.dumps(summaries, indent=2, sort_keys=True))
+        return
+    if not jobs:
+        print("no matching managed tasks")
+        return
+    for job, summary in zip(jobs, summaries):
+        print(f"{summary['id']}  {summary['state']:<24} "
+              f"runner={summary['runner']['state']:<14} model={compact(summary['model'], 24)}")
+
+
+if __name__ == "__main__":
+    main()

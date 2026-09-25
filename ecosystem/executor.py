@@ -1,4 +1,4 @@
-"""Serialized local OpenCode executor for prepared role-context jobs."""
+"""Durably claimed local OpenCode executor for prepared role-context jobs."""
 from __future__ import annotations
 
 import fcntl
@@ -11,10 +11,14 @@ import time
 from pathlib import Path
 
 from ecosystem import cli
+from ecosystem import acceptance
 from ecosystem import evidence
+from ecosystem import job_outcomes
+from ecosystem import models
 from ecosystem import opencode_client
 from ecosystem import task_contracts
 from ecosystem import time_policy
+from ecosystem import workload_control
 from ecosystem.inference_capacity import reserve_sequence, constrain_launch_capacity
 from ecosystem.inference_proxy import (
     cancel as cancel_proxy,
@@ -297,6 +301,33 @@ def _required_job_field(job: dict, name: str):
     return value
 
 
+def _persist_job(path: Path, job: dict) -> None:
+    """Publish executor state without erasing concurrent task-control writes.
+
+    Cancellation and child enqueue own fields under task-enqueue.lock. The
+    executor re-adopts those fields inside the same lock for every job write.
+    Lock order is executor.lock then task-enqueue.lock when both are held.
+    """
+    with (cli.ROOT / "state/task-enqueue.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _adopt_durable_reservation_state(job, path)
+        try:
+            durable = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            durable = None
+        if (type(durable) is dict and durable.get("id") == job.get("id")
+                and durable.get("state") == "interrupted"):
+            # Resource checkpoint owns this state after stopping a running
+            # lane. Closing/accounting the runner may continue, but no phase
+            # write may silently turn the checkpoint back into runnable work.
+            job["state"] = "interrupted"
+            for field in ("interrupted_by", "interruption_reason", "updated_at",
+                          "opencode_session", "resume_available"):
+                if field in durable:
+                    job[field] = durable[field]
+        cli.atomic_json(path, job)
+
+
 def _claim_execution(job: dict, clock) -> None:
     """Initialize a job's durable execution claim. Values already present on
     the record are authoritative and are never rewritten; replay reuses them."""
@@ -552,7 +583,12 @@ def launch_runner_round(
 ) -> dict:
     """Compose one trusted R1/R3/R4 runner admission before OpenCode can exec."""
     root = cli.ROOT
-    if job.get("state") == "ready":
+    owner = process_identity(os.getpid())
+    job.update(
+        executor_owner_pid=owner["pid"],
+        executor_owner_start_ticks=owner["start_ticks"],
+    )
+    if job.get("state") in {"ready", "claimed"}:
         generation = int(job.get("runner_generation", 0)) + 1
         _claim_execution(job, clock)
         job.update(
@@ -571,9 +607,11 @@ def launch_runner_round(
         # Close replay evidence belongs to the allocation generation it closed.
         job.pop("runner_close_outcome", None)
         job.pop("runner_close_state", None)
-        cli.atomic_json(job_path, job)
+        job.pop("runner_round_outcome", None)
+        job.pop("runner_logical_finalized_generation", None)
+        _persist_job(job_path, job)
     elif job.get("state") != "runner_starting":
-        raise ValueError("runner round requires ready or runner_starting job")
+        raise ValueError("runner round requires claimed or runner_starting job")
 
     worker_request = job.get("runner_worker_request")
     if worker_request is None:
@@ -583,7 +621,7 @@ def launch_runner_round(
     elif type(worker_request) is not dict:
         raise ValueError("invalid durable runner worker request")
     job["runner_phase"] = "capacity_preflight"
-    cli.atomic_json(job_path, job)
+    _persist_job(job_path, job)
     try:
         capacity_record = _validate_worker_capacity(
             route_record, root, observe_capacity=observe_capacity,
@@ -594,10 +632,10 @@ def launch_runner_round(
         job.update(
             state="ready", updated_at=cli.now(),
             runner_deferred_reasons=[f"{type(error).__name__}: {error}"])
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         return {"state": "deferred", "job": job}
     job["runner_phase"] = "r1_acquire_intent"
-    cli.atomic_json(job_path, job)
+    _persist_job(job_path, job)
     worker_lease = None
     launch_record = None
     inference_lease = None
@@ -608,18 +646,18 @@ def launch_runner_round(
         if worker_lease.get("state") == "deferred":
             job.update(state="ready", updated_at=cli.now(),
                        runner_deferred_reasons=worker_lease.get("reasons", []))
-            cli.atomic_json(job_path, job)
+            _persist_job(job_path, job)
             return {"state": "deferred", "job": job}
         job["worker_lease_id"] = worker_lease["lease_id"]
         job["runner_phase"] = "r1_acquired"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
 
         opencode = opencode_environment(root, capacity_record, b"\0" * 32)
         environment = os.environ.copy()
         environment.update(opencode["environment"])
         environment["AGENT_JOB_ID"] = job["id"]
         job["runner_phase"] = "spawn_intent"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         launch_record = launch(
             opencode["fd"], command, environment,
             stdin=stdin, stdout=stdout, stderr=stderr,
@@ -629,9 +667,9 @@ def launch_runner_round(
             executor_start_ticks=launch_record["start_ticks"],
             executor_pgid=launch_record["pgid"],
         )
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         job["runner_phase"] = "process_register_intent"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         register(
             root, worker_lease["lease_id"], launch_record["pid"],
             launch_record["start_ticks"], clock,
@@ -642,13 +680,13 @@ def launch_runner_round(
             register_operator_process(root, worker_request["operator_session_id"],
                                       launch_record["pid"], launch_record["start_ticks"], clock)
         job["runner_phase"] = "process_registered"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         sequence_request = _runner_sequence_request(
             root, job, worker_lease, worker_request, route_record,
         )
         job["runner_sequence_request"] = sequence_request
         job["runner_phase"] = "r3_reserve_intent"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         inference_lease = reserve(root, sequence_request, inventory, clock)
         while inference_lease.get("state") in {
             "waiting_for_preemption", "ready_for_revalidation",
@@ -658,7 +696,7 @@ def launch_runner_round(
                 inference_lease_id=inference_lease["lease_id"],
                 updated_at=cli.now(),
             )
-            cli.atomic_json(job_path, job)
+            _persist_job(job_path, job)
             if (worker_request["deadline_monotonic"] is not None
                     and clock() >= worker_request["deadline_monotonic"]):
                 outcome = gated_child_cleanup(launch_record)
@@ -671,7 +709,7 @@ def launch_runner_round(
                                        clock, release, observe)
                 job.update(state="ready", updated_at=cli.now(),
                            runner_deferred_reasons=["acquisition deadline; request retained"])
-                cli.atomic_json(job_path, job)
+                _persist_job(job_path, job)
                 return {"state": "deferred", "job": job}
             sleeper(0.05)
             inventory = refresh_inventory()
@@ -690,7 +728,7 @@ def launch_runner_round(
                     executor_pgid=launch_record["pgid"],
                     reconciliation_reason="gated process group termination is unresolved",
                 )
-                cli.atomic_json(job_path, job)
+                _persist_job(job_path, job)
                 return {"state": "reconciliation_required", "job": job}
             pending = inference_lease.get("pending_acquisition")
             if pending:
@@ -703,7 +741,7 @@ def launch_runner_round(
             )
             job.update(state="ready", updated_at=cli.now(),
                        runner_deferred_reasons=inference_lease.get("reasons", []))
-            cli.atomic_json(job_path, job)
+            _persist_job(job_path, job)
             return {"state": "deferred", "job": job}
         if (inference_lease.get("state") not in {"starting", "active"}
                 or type(inference_lease.get("backend_sequence")) is not int
@@ -711,7 +749,7 @@ def launch_runner_round(
             raise ValueError("inference reservation is not credential-ready")
         job["inference_lease_id"] = inference_lease["lease_id"]
         job["runner_phase"] = "r3_reserved"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         expected = (
             route_record["model_id"], route_record["context_tokens_per_sequence"],
             route_record["max_output_tokens"],
@@ -721,19 +759,19 @@ def launch_runner_round(
             inference_lease.get("max_output_tokens"),
         )
         job["runner_phase"] = "credential_issue_intent"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         issue(root, inference_lease,
               lambda credential: populate(opencode, credential), clock)
         credential_issued = True
         job["runner_phase"] = "credential_issued"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         if actual != expected:
             raise ValueError("inference lease limits differ from admitted route")
         job["runner_phase"] = "gate_release_intent"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         release_gate(launch_record)
         job["runner_phase"] = "gate_released"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         job.update(
             state="running", runner_phase="running", updated_at=cli.now(),
             worker_lease_id=worker_lease["lease_id"],
@@ -744,7 +782,7 @@ def launch_runner_round(
             dispatch_count=int(job.get("dispatch_count", 0)) + 1,
         )
         job.pop("runner_deferred_reasons", None)
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         return {
             "state": "running", "launch": launch_record,
             "worker_lease": worker_lease, "inference_lease": inference_lease,
@@ -757,7 +795,7 @@ def launch_runner_round(
                 inference_lease_id=inference_lease["lease_id"],
                 reconciliation_reason=f"{type(error).__name__}: {error}",
             )
-            cli.atomic_json(job_path, job)
+            _persist_job(job_path, job)
             if launch_record is not None:
                 gated_child_cleanup(launch_record)
             if credential_issued:
@@ -796,7 +834,7 @@ def launch_runner_round(
                     executor_pgid=launch_record["pgid"],
                     reconciliation_reason="gated process group termination is unresolved",
                 )
-                cli.atomic_json(job_path, job)
+                _persist_job(job_path, job)
                 raise
             worker_outcome = {
                 "state": "failed",
@@ -833,7 +871,7 @@ def launch_runner_round(
                     }], clock)
             job.update(state="ready", updated_at=cli.now(),
                        runner_deferred_reasons=[f"{type(error).__name__}: {error}"])
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         raise
 
 
@@ -861,7 +899,7 @@ def close_runner_round(
     if saved_outcome is None:
         job["runner_close_outcome"] = json.loads(json.dumps(child_outcome, sort_keys=True))
         job["runner_phase"] = "close_intent"
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
     inference_lease = context["inference_lease"]
     worker_lease = context["worker_lease"]
     launch_record = context["launch"]
@@ -873,7 +911,7 @@ def close_runner_round(
             inference_lease_id=inference_lease["lease_id"],
             reconciliation_reason="runner process group termination is unresolved",
         )
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         return {"state": "reconciliation_required"}
     evidence = termination(root, inference_lease["lease_id"])
     if evidence is None:
@@ -883,7 +921,7 @@ def close_runner_round(
             inference_lease_id=inference_lease["lease_id"],
             reconciliation_reason="verified backend termination is unavailable",
         )
-        cli.atomic_json(job_path, job)
+        _persist_job(job_path, job)
         return {"state": "reconciliation_required"}
     revoked = revoke(root, inference_lease["lease_id"], evidence, clock)
     if revoked.get("state") != "revoked" \
@@ -900,22 +938,58 @@ def close_runner_round(
                runner_closed_generation=job.get("runner_generation"),
                runner_close_state=final_state)
     job.pop("executor_pid", None)
-    cli.atomic_json(job_path, job)
+    _persist_job(job_path, job)
     return {"state": final_state, "credential": revoked}
 
 
 def queue_notifications(job: dict) -> None:
-    from ecosystem.outbox import enqueue
-    for path in (cli.ROOT / "state/jobs").glob("outbox-*.json"):
-        existing = json.loads(path.read_text(encoding="utf-8"))
-        if existing.get("result_of") == job["id"] and existing.get("state") != "delivered":
-            return
-    recipients = [value for value in os.environ.get("AGENT_TELEGRAM_ALLOWED_USER_IDS", "").split(",") if value.strip()]
+    from ecosystem.outbox import enqueue_result, result_recipients
+    recipients = job.get("result_notification_recipients")
+    if recipients is None:
+        recipients = result_recipients()
     for recipient in recipients:
-        enqueue(int(recipient), depends_on=job["id"], result_of=job["id"])
+        enqueue_result(int(recipient), job["id"])
+
+
+def _finalize_run_finished(job: dict, path: Path) -> None:
+    """Publish the logical result of a verified, successful runner close."""
+    if not job.get("verifies"):
+        from ecosystem.outbox import result_recipients
+        job.setdefault("result_notification_recipients", result_recipients())
+    job["runner_logical_finalized_generation"] = job.get("runner_generation")
+    if job.get("verifies"):
+        from ecosystem.verification import finalize
+        target = finalize(job)
+        if job["state"] == "run_finished":
+            job.update(state="completed", updated_at=cli.now())
+            _persist_job(path, job)
+        queue_notifications(target)
+    elif job.get("verification_requested") is True:
+        from ecosystem.verification import enqueue
+        job.update(state="awaiting_verification", updated_at=cli.now())
+        _persist_job(path, job)
+        enqueue(job)
+    else:
+        gate = acceptance.artifact_failure(job.get("task_contract"))
+        if gate is not None:
+            job.update(state="failed", logical_run_state="terminal",
+                       error=gate, updated_at=cli.now())
+            cli.audit("task.acceptance_failed", job_id=job["id"], error=gate)
+        else:
+            job.update(state="completed", logical_run_state="terminal",
+                       completed_at=cli.now(), updated_at=cli.now())
+        _persist_job(path, job)
+        queue_notifications(job)
 
 
 def _process_alive(job: dict) -> bool:
+    owner_pid = job.get("executor_owner_pid")
+    owner_start_ticks = job.get("executor_owner_start_ticks")
+    if type(owner_pid) is int and type(owner_start_ticks) is int:
+        try:
+            return process_identity(owner_pid)["start_ticks"] == owner_start_ticks
+        except (FileNotFoundError, PermissionError, OSError, ValueError):
+            return False
     pid = job.get("executor_pid")
     if isinstance(pid, int):
         try:
@@ -963,16 +1037,235 @@ def _stop_recovered_runner(job: dict, timeout: float | None = None) -> bool | No
 
 
 def recover_abandoned_jobs() -> int:
+    """Reconcile dead owners under the same lock used by durable claims."""
+    cli.initialize()
+    with (cli.ROOT / "state/executor.lock").open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _recover_abandoned_jobs_locked()
+
+
+def _recover_early_runner_prefix(path: Path, job: dict) -> None:
+    """Resolve an ownerless R1 prefix before returning its job to ready.
+
+    A crash between acquire_worker and persisting worker_lease_id is possible,
+    so the durable request identity, not only the job field, locates the lease.
+    Only a provably never-spawned/quiescent lease permits retry. Contradictory
+    process evidence remains reconciliation_required and blocks unload.
+    """
+    request_id = job.get("runner_worker_request_id")
+    reason = None
+    lease = None
+    if type(request_id) is not str or not request_id:
+        reason = "early runner prefix has no durable worker request identity"
+    else:
+        try:
+            lease = workload_control.find_worker_lease_by_request(cli.ROOT, request_id)
+        except (OSError, ValueError) as error:
+            reason = f"worker lease lookup failed: {type(error).__name__}: {error}"
+    expected = job.get("worker_lease_id")
+    if reason is None and expected and (lease is None or lease.get("lease_id") != expected):
+        reason = "early runner worker lease identity does not match durable request"
+    if reason is None and lease is not None:
+        process = lease.get("process")
+        if process is not None:
+            # An early phase should precede spawn intent. A registered process
+            # contradicts that phase; stop only an exact kernel identity, then
+            # retain reconciliation for backend/credential proof.
+            pid = process.get("pid") if type(process) is dict else None
+            ticks = process.get("process_start_ticks") if type(process) is dict else None
+            group_alive = None
+            if type(pid) is int and type(ticks) is int:
+                try:
+                    identity = process_identity(pid)
+                    if identity["start_ticks"] == ticks and identity["pgid"] == pid:
+                        group_alive = _stop_recovered_runner({
+                            "executor_pid": pid, "executor_start_ticks": ticks,
+                            "executor_pgid": pid,
+                        })
+                except (OSError, ValueError):
+                    pass
+            job["recovery_process_group_alive"] = group_alive
+            reason = "early runner phase contradicts registered process identity"
+        elif lease.get("state") != "quiescent":
+            try:
+                workload_control.release_worker(
+                    cli.ROOT, lease["lease_id"],
+                    {"state": "failed", "error": "executor disappeared before runner spawn"},
+                    time.monotonic,
+                )
+                workload_control.observe_workers(cli.ROOT, [{
+                    "lease_id": lease["lease_id"], "never_spawned": True,
+                    "process_group_alive": False,
+                    "backend_request_active": False,
+                    "inference_lease_active": False,
+                }], time.monotonic)
+                settled = workload_control.find_worker_lease_by_request(
+                    cli.ROOT, request_id)
+                if settled is None or settled.get("state") != "quiescent":
+                    reason = "early runner worker lease did not become quiescent"
+            except (OSError, RuntimeError, ValueError) as error:
+                reason = f"early runner worker lease could not close: {type(error).__name__}: {error}"
+    if reason is not None:
+        job.update(state="reconciliation_required", updated_at=cli.now(),
+                   reconciliation_reason=reason)
+        _persist_job(path, job)
+        cli.audit("task.reconciliation_required", job_id=job["id"],
+                  runner_phase=job.get("runner_phase"), reason=reason)
+        return
+    stamp = cli.now()
+    if job.get("cancellation_requested_at"):
+        job.update(state="cancelled", logical_run_state="terminal",
+                   cancelled_at=stamp, updated_at=stamp)
+        event = "task.cancelled"
+    else:
+        job.update(state="ready", updated_at=stamp,
+                   abandoned_dispatch_recovered_at=stamp)
+        event = "task.early_runner_recovered"
+    for field in ("worker_lease_id", "executor_pid", "executor_start_ticks",
+                  "executor_pgid", "executor_owner_pid", "executor_owner_start_ticks"):
+        job.pop(field, None)
+    _persist_job(path, job)
+    cli.audit(event, job_id=job["id"], runner_phase=job.get("runner_phase"))
+
+
+def _recover_closed_round(path: Path, job: dict) -> bool:
+    """Replay a dead owner's post-close policy from generation-bound evidence.
+
+    Legacy records without an observed round result are left untouched: their
+    budget/preemption decision cannot be reconstructed from process exit alone.
+    """
+    envelope = job.get("runner_round_outcome")
+    if envelope is None:
+        return False
+    generation = job.get("runner_generation")
+    closed = job.get("runner_close_outcome")
+    result = envelope.get("result") if type(envelope) is dict else None
+    valid = (
+        type(generation) is int
+        and type(envelope) is dict
+        and envelope.get("runner_generation") == generation
+        and job.get("runner_closed_generation") == generation
+        and type(closed) is dict
+        and closed.get("state") == "reaped"
+        and closed.get("process_group_alive") is False
+        and type(result) is dict
+        and type(result.get("returncode")) is int
+        and closed.get("returncode") == result["returncode"]
+        and type(result.get("preempted")) is bool
+        and type(result.get("usage")) is dict
+        and (result.get("session") is None
+             or type(result.get("session")) is str)
+        and ("budget_checkpoint" not in result
+             or (type(result["budget_checkpoint"]) is dict
+                 and type(result["budget_checkpoint"].get("reason")) is str
+                 and bool(result["budget_checkpoint"]["reason"])))
+        and (not result["preempted"]
+             or (type(result.get("reason")) is str
+                 and bool(result["reason"])))
+        and job.get("runner_close_state") == (
+            "run_finished" if result["returncode"] == 0 else "failed")
+        and job.get("state") == job.get("runner_close_state")
+    )
+    if not valid:
+        job.update(state="reconciliation_required", updated_at=cli.now(),
+                   reconciliation_reason="post-close round evidence is inconsistent",
+                   post_close_outcome_review_required=True)
+        _persist_job(path, job)
+        cli.audit("task.reconciliation_required", job_id=job["id"],
+                  reason=job["reconciliation_reason"])
+        return True
+    if _complete_requested_cancellation(job, path, result):
+        return True
+    if result.get("budget_checkpoint"):
+        checkpoint = result["budget_checkpoint"]
+        job = job_outcomes.budget_checkpoint_job(
+            job, checkpoint, result.get("session"), cli.now())
+        continuation = job["state"] == "ready"
+        _persist_job(path, job)
+        cli.audit("task.budget_continuation_queued" if continuation
+                  else "task.budget_checkpoint", job_id=job["id"],
+                  reason=checkpoint["reason"])
+        return True
+    if result["preempted"]:
+        job = job_outcomes.preempted_job(
+            job, result.get("session"), result["reason"], cli.now())
+        _persist_job(path, job)
+        cli.audit("task.preempted", job_id=job["id"],
+                  reason=result["reason"],
+                  resume_available=bool(result.get("session")))
+        return True
+    if job["state"] == "run_finished":
+        _finalize_run_finished(job, path)
+    else:
+        if not job.get("verifies"):
+            from ecosystem.outbox import result_recipients
+            job.setdefault("result_notification_recipients", result_recipients())
+        job["runner_logical_finalized_generation"] = generation
+        _persist_job(path, job)
+        if job.get("verifies"):
+            from ecosystem.verification import finalize
+            queue_notifications(finalize(job))
+        else:
+            queue_notifications(job)
+    cli.audit("task.post_close_recovered", job_id=job["id"], state=job["state"])
+    return True
+
+
+def _recover_abandoned_jobs_locked() -> int:
     recovered = 0
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         try:
             job = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
+        if (job.get("kind") == "agent-task"
+                and job.get("state") in {"run_finished", "failed"}
+                and job.get("runner_round_outcome") is not None
+                and job.get("runner_closed_generation") == job.get("runner_generation")
+                and job.get("runner_logical_finalized_generation")
+                    != job.get("runner_generation")):
+            if not _process_alive(job) and _recover_closed_round(path, job):
+                recovered += 1
+            continue
+        unclosed_failed_round = (
+            job.get("state") == "failed"
+            and job.get("runner_round_outcome") is not None
+            and job.get("runner_logical_finalized_generation")
+                != job.get("runner_generation")
+        )
         if (job.get("kind") != "agent-task"
-                or job.get("state") not in {
-                    "runner_starting", "running", "reconciliation_required",
-                }):
+                or (job.get("state") not in {
+                    "claimed", "runner_starting", "running",
+                    "reconciliation_required",
+                } and not unclosed_failed_round)):
+            continue
+        # Recovery also runs from watchdog processes while an executor owns a
+        # round. Preserve every phase of a healthy foreign owner, including a
+        # persisted close intent. Exact PID/start-tick identity prevents a
+        # recycled PID from keeping an abandoned round alive.
+        if _process_alive(job):
+            continue
+        if job.get("post_close_outcome_review_required"):
+            continue
+        if job.get("state") == "claimed":
+            # No runner or inference lease exists yet. A dead executor's
+            # durable claim can return to the ready queue unless cancellation
+            # was requested while the owner still held it.
+            stamp = cli.now()
+            cancellation = job.get("cancellation_requested_at")
+            if type(cancellation) is str and cancellation:
+                job.update(state="cancelled", logical_run_state="terminal",
+                           cancelled_at=stamp, updated_at=stamp)
+                event = "task.cancelled"
+            else:
+                job.update(state="ready", updated_at=stamp,
+                           abandoned_dispatch_recovered_at=stamp)
+                event = "task.abandoned_claim_recovered"
+            job.pop("executor_owner_pid", None)
+            job.pop("executor_owner_start_ticks", None)
+            _persist_job(path, job)
+            cli.audit(event, job_id=job["id"])
+            recovered += 1
             continue
         if (job.get("runner_close_outcome") is not None
                 and job.get("worker_lease_id") and job.get("inference_lease_id")):
@@ -998,24 +1291,14 @@ def recover_abandoned_jobs() -> int:
                 except (OSError, RuntimeError, ValueError):
                     closed = {"state": "reconciliation_required"}
                 if closed["state"] != "reconciliation_required":
+                    if (job.get("state") in {"run_finished", "failed"}
+                            and job.get("runner_round_outcome") is not None
+                            and _recover_closed_round(path, job)):
+                        recovered += 1
+                        continue
                     pending_preemption = job.pop("pending_preemption_reason", None)
                     session = job.get("opencode_session") or opencode_session_id(
                         cli.ROOT / job.get("output", ""))
-                    if pending_preemption and session:
-                        job.update(
-                            state="ready", logical_run_state="continuing",
-                            opencode_session=session, resume_available=True,
-                            last_preemption_reason=pending_preemption,
-                            preemption_count=int(job.get("preemption_count", 0)) + 1,
-                            updated_at=cli.now(),
-                        )
-                        job.pop("reconciliation_reason", None)
-                        job.pop("executor_pid", None)
-                        cli.atomic_json(path, job)
-                        cli.audit("task.preempted", job_id=job["id"],
-                                  reason=pending_preemption, resume_available=True)
-                        recovered += 1
-                        continue
                     cancellation = job.get("cancellation_requested_at")
                     if type(cancellation) is str and cancellation:
                         stamp = cli.now()
@@ -1029,9 +1312,22 @@ def recover_abandoned_jobs() -> int:
                         )
                         job.pop("reconciliation_reason", None)
                         job.pop("executor_pid", None)
-                        cli.atomic_json(path, job)
+                        _persist_job(path, job)
                         cli.audit("task.cancelled", job_id=job["id"],
                                   reason="cancellation completed during reconciliation")
+                    elif pending_preemption and session:
+                        job.update(
+                            state="ready", logical_run_state="continuing",
+                            opencode_session=session, resume_available=True,
+                            last_preemption_reason=pending_preemption,
+                            preemption_count=int(job.get("preemption_count", 0)) + 1,
+                            updated_at=cli.now(),
+                        )
+                        job.pop("reconciliation_reason", None)
+                        job.pop("executor_pid", None)
+                        _persist_job(path, job)
+                        cli.audit("task.preempted", job_id=job["id"],
+                                  reason=pending_preemption, resume_available=True)
                     else:
                         session = job.get("opencode_session") or opencode_session_id(
                             cli.ROOT / job.get("output", ""))
@@ -1045,7 +1341,7 @@ def recover_abandoned_jobs() -> int:
                             )
                             job.pop("reconciliation_reason", None)
                             job.pop("executor_pid", None)
-                            cli.atomic_json(path, job)
+                            _persist_job(path, job)
                             cli.audit(
                                 "task.restart_recovered", job_id=job["id"],
                                 resume_available=True,
@@ -1054,13 +1350,8 @@ def recover_abandoned_jobs() -> int:
                     continue
             job["recovery_process_group_alive"] = group_alive
             job.update(state="reconciliation_required", updated_at=cli.now())
-            cli.atomic_json(path, job)
+            _persist_job(path, job)
             recovered += 1
-            continue
-        # This routine also runs from the periodic watchdog while the executor
-        # service is healthy.  A live runner is not abandoned: never cancel its
-        # inference lease or stop its process group during reconciliation.
-        if _process_alive(job):
             continue
         if (job.get("state") == "runner_starting"
                 and job.get("runner_phase") not in {
@@ -1080,7 +1371,7 @@ def recover_abandoned_jobs() -> int:
                     f"restart cannot resolve admission prefix {job.get('runner_phase')!r}"
                 ),
             )
-            cli.atomic_json(path, job)
+            _persist_job(path, job)
             cli.audit("task.reconciliation_required", job_id=job["id"],
                       runner_phase=job.get("runner_phase"))
             recovered += 1
@@ -1127,7 +1418,7 @@ def recover_abandoned_jobs() -> int:
                         )
                         job.pop("reconciliation_reason", None)
                         job.pop("executor_pid", None)
-                        cli.atomic_json(path, job)
+                        _persist_job(path, job)
                         cli.audit(
                             "task.cancelled", job_id=job["id"],
                             reason="cancellation completed during restart recovery",
@@ -1146,7 +1437,7 @@ def recover_abandoned_jobs() -> int:
                         )
                         job.pop("reconciliation_reason", None)
                         job.pop("executor_pid", None)
-                        cli.atomic_json(path, job)
+                        _persist_job(path, job)
                         cli.audit(
                             "task.restart_recovered", job_id=job["id"],
                             resume_available=True,
@@ -1157,12 +1448,14 @@ def recover_abandoned_jobs() -> int:
                 state="reconciliation_required", updated_at=cli.now(),
                 reconciliation_reason="runner disappeared after inference reservation",
             )
-            cli.atomic_json(path, job)
+            _persist_job(path, job)
             cli.audit("task.reconciliation_required", job_id=job["id"],
                       inference_lease_id=job["inference_lease_id"])
             recovered += 1
             continue
         if job.get("state") == "runner_starting":
+            _recover_early_runner_prefix(path, job)
+            recovered += 1
             continue
         output = cli.ROOT / job.get("output", "")
         session = job.get("opencode_session") or opencode_session_id(output)
@@ -1178,7 +1471,7 @@ def recover_abandoned_jobs() -> int:
         job.pop("executor_pid", None)
         job.update(state="queued", model=None, model_reason="Pending model-mediated routing.",
                    updated_at=cli.now(), abandoned_dispatch_recovered_at=cli.now())
-        cli.atomic_json(path, job)
+        _persist_job(path, job)
         cli.audit("task.abandoned_dispatch_recovered", job_id=job["id"],
                   resume_available=bool(session))
         recovered += 1
@@ -1321,8 +1614,45 @@ def _adopt_durable_reservation_state(job: dict, job_path: Path) -> None:
 def _persist_parent_job(job: dict, job_path: Path) -> None:
     """Persist the cached parent without clobbering its durable reservation
     state written under task-enqueue.lock."""
-    _adopt_durable_reservation_state(job, job_path)
-    cli.atomic_json(job_path, job)
+    _persist_job(job_path, job)
+
+
+def _complete_requested_cancellation(job: dict, job_path: Path,
+                                     outcome: dict) -> bool:
+    """Make a durable cancellation terminal after the runner is closed.
+
+    Cancellation must win over every continuation policy, including a budget
+    checkpoint observed during the same runner round.
+    """
+    try:
+        current = json.loads(job_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    cancellation = current.get("cancellation_requested_at")
+    if type(cancellation) is not str or not cancellation:
+        return False
+    session = outcome.get("session")
+    if session:
+        job["opencode_session"] = session
+        job["resume_available"] = True
+    elif not job.get("opencode_session"):
+        job["resume_available"] = False
+    job["cancellation_requested_at"] = cancellation
+    if "cancellation_reason" in current:
+        job["cancellation_reason"] = current["cancellation_reason"]
+    job.pop("executor_pid", None)
+    job.pop("pending_preemption_reason", None)
+    job.pop("reconciliation_reason", None)
+    stamp = cli.now()
+    reason = outcome.get("reason") or "cancellation completed after runner close"
+    job.update(state="cancelled", logical_run_state="terminal",
+               cancelled_at=stamp, updated_at=stamp,
+               last_preemption_reason=reason,
+               runner_close_state="cancelled")
+    _persist_job(job_path, job)
+    cli.audit("task.cancelled", job_id=job["id"], reason=reason)
+    print(f"{job['id']} cancelled: {reason}")
+    return True
 
 
 def _run_preemptibly(process: subprocess.Popen, command: list[str], job: dict,
@@ -1467,6 +1797,43 @@ def _resume_without_handoff(job: dict) -> bool:
     return True
 
 
+def _durably_claim_job(path: Path, job: dict) -> bool:
+    """Transfer one selected job from the queue to this exact executor.
+
+    Caller holds state/executor.lock. The atomic state/identity write must
+    complete before releasing it; subsequent stages own only this record.
+    """
+    with (cli.ROOT / "state/task-enqueue.lock").open("w") as task_lock:
+        fcntl.flock(task_lock, fcntl.LOCK_EX)
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        if (current.get("id") != job.get("id")
+                or current.get("state") != job.get("state")
+                or current.get("state") not in {"ready", "runner_starting"}):
+            return False
+        if current.get("cancellation_requested_at"):
+            stamp = cli.now()
+            current.update(state="cancelled", logical_run_state="terminal",
+                           cancelled_at=stamp, updated_at=stamp)
+            cli.atomic_json(path, current)
+            cli.audit("task.cancelled", job_id=current["id"],
+                      reason="cancellation completed before runner launch")
+            return False
+        job.clear()
+        job.update(current)
+        owner = process_identity(os.getpid())
+        job.update(
+            state="claimed" if job["state"] == "ready" else "runner_starting",
+            executor_owner_pid=owner["pid"],
+            executor_owner_start_ticks=owner["start_ticks"],
+            claimed_at=cli.now(), updated_at=cli.now(),
+        )
+        cli.atomic_json(path, job)
+        return True
+
+
 def execute_next(run=subprocess.run) -> bool:
     cli.initialize()
     if (cli.ROOT / "state/PAUSED").exists():
@@ -1474,17 +1841,18 @@ def execute_next(run=subprocess.run) -> bool:
         return False
     lock_path = cli.ROOT / "state/executor.lock"
     with lock_path.open("w") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print("executor already active")
-            return False
-        recover_abandoned_jobs()
+        # The lock now covers only recovery, selection, and the durable claim.
+        # Concurrent lanes wait for that short transaction, then reselect a
+        # different ready job instead of disappearing until the next timer.
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _recover_abandoned_jobs_locked()
         ready = []
         for path in sorted((cli.ROOT / "state/jobs").glob("*.json")):
             job = json.loads(path.read_text(encoding="utf-8"))
             if (job.get("kind") == "agent-task"
                     and job["state"] in {"ready", "runner_starting"}
+                    and (job["state"] != "runner_starting"
+                         or not _process_alive(job))
                     and job_admitted_in_current_mode(job)):
                 ready.append((path, job))
         if ready:
@@ -1496,23 +1864,28 @@ def execute_next(run=subprocess.run) -> bool:
                 cli.audit("scheduler.admission_deferred", reason=str(error))
                 print(str(error))
                 return False
+            if not _durably_claim_job(path, job):
+                return False
+            # The record, not this lock, now protects ownership. Realizing a
+            # model and running OpenCode may take hours; another executor can
+            # claim a different ready job while this one remains live-owned.
+            fcntl.flock(lock, fcntl.LOCK_UN)
             if not _resume_without_handoff(job):
                 reason = "legacy context rollover has no retained OpenCode session; review recovery manually"
                 job.update(state="queued", model_reason=reason, updated_at=cli.now())
-                cli.atomic_json(path, job)
+                _persist_job(path, job)
                 cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
                 print(f"{job['id']} routing deferred: {reason}")
                 return False
-            if resource_mode() == "emergency":
-                emergency = json.loads((cli.ROOT / "config/resource-policy.json").read_text(
-                    encoding="utf-8"))["emergency"]
-                decision = {
-                    "action": "use_loaded", "model": emergency["chat_model"],
-                    "context_tokens": emergency["chat_context_tokens"], "valid": True,
-                    "reason": "Emergency policy mechanically assigns the sole survivor model.",
-                }
-            else:
+            try:
                 decision = route(job, inventory)
+            except Exception as error:
+                reason = f"model routing failed before runner launch: {type(error).__name__}: {error}"
+                job.update(state="ready", model_reason=reason, updated_at=cli.now())
+                _persist_job(path, job)
+                cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                print(f"{job['id']} routing deferred: {reason}")
+                return False
             job.setdefault("routing_decisions", []).append({"at": cli.now(), **decision})
             job["resource_snapshot"] = inventory
             if decision["action"] == "defer":
@@ -1521,48 +1894,69 @@ def execute_next(run=subprocess.run) -> bool:
                 job.pop("prompt", None)
                 if job.get("opencode_session") and job.get("context_state") in (None, "running"):
                     job["context_state"] = "paused_for_resources"
-                cli.atomic_json(path, job)
+                _persist_job(path, job)
                 cli.audit("task.routing_deferred", job_id=job["id"], reason=decision["reason"])
                 print(f"{job['id']} routing deferred: {decision['reason']}")
                 return False
             model_changed = decision["model"] != job.get("model")
             if model_changed:
-                from ecosystem.roles import render_context
                 job.update(model=decision["model"], model_reason=decision["reason"])
                 prompt_path = cli.ROOT / "state/jobs" / f"{job['id']}.prompt.md"
-                cli.atomic_text(prompt_path, render_context(
-                    job.get("role"), job["task"], job["id"], job["model"],
-                    job["model_reason"], job.get("agent_name", "Agent"),
-                    task_contract=job.get("task_contract")))
+                cli.atomic_text(prompt_path, job["task"].strip() + "\n")
                 job["prompt"] = str(prompt_path.relative_to(cli.ROOT))
                 job.setdefault("original_prompt", job["prompt"])
             else:
                 job["model_reason"] = decision["reason"]
-            try:
-                realization = realize(decision, inventory)
-            except Exception as error:
-                reason = f"model route could not be realized safely: {type(error).__name__}: {error}"
-                job.update(state="queued", model=None, model_reason=reason, updated_at=cli.now())
-                job.pop("prompt", None)
-                cli.atomic_json(path, job)
-                cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
-                print(f"{job['id']} routing deferred: {reason}")
-                return False
-            job["model_realization"] = {"at": cli.now(), **realization}
-            # Realization may load or reclaim a model.  Runner admission must
-            # account from that verified post-realization residency, not the
-            # pre-load snapshot that routed the request.
-            inventory = snapshot()
-            job["resource_snapshot"] = inventory
-            decision = route(job, inventory)
-            if (decision.get("action") == "defer"
-                    or decision.get("model") != realization.get("model")):
-                reason = "post-realization route has not converged on the realized model"
-                job.update(state="ready", model_reason=reason, updated_at=cli.now())
-                cli.atomic_json(path, job)
-                cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
-                print(f"{job['id']} routing deferred: {reason}")
-                return False
+            # Shared realization ownership includes native/control callers.
+            # Never hold this lock through runner admission.
+            with models.realization_lock(cli.ROOT):
+                # Another executor may have loaded or reclaimed residency
+                # while this lane waited for the model lock. Reject a stale
+                # route and let a later pass select from fresh facts.
+                try:
+                    fresh_inventory = snapshot()
+                    fresh_decision = route(job, fresh_inventory)
+                except Exception as error:
+                    reason = f"pre-realization route refresh failed: {type(error).__name__}: {error}"
+                    job.update(state="ready", model_reason=reason, updated_at=cli.now())
+                    _persist_job(path, job)
+                    cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                    print(f"{job['id']} routing deferred: {reason}")
+                    return False
+                if (fresh_decision.get("action") == "defer"
+                        or fresh_decision.get("model") != decision.get("model")):
+                    reason = "route changed before model realization"
+                    job.update(state="ready", model_reason=reason,
+                               updated_at=cli.now())
+                    _persist_job(path, job)
+                    cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                    print(f"{job['id']} routing deferred: {reason}")
+                    return False
+                inventory = fresh_inventory
+                decision = fresh_decision
+                try:
+                    realization = realize(decision, inventory)
+                except Exception as error:
+                    reason = f"model route could not be realized safely: {type(error).__name__}: {error}"
+                    job.update(state="queued", model=None, model_reason=reason, updated_at=cli.now())
+                    job.pop("prompt", None)
+                    _persist_job(path, job)
+                    cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                    print(f"{job['id']} routing deferred: {reason}")
+                    return False
+                job["model_realization"] = {"at": cli.now(), **realization}
+                # Runner admission must use verified post-realization residency.
+                inventory = snapshot()
+                job["resource_snapshot"] = inventory
+                decision = route(job, inventory)
+                if (decision.get("action") == "defer"
+                        or decision.get("model") != realization.get("model")):
+                    reason = "post-realization route has not converged on the realized model"
+                    job.update(state="ready", model_reason=reason, updated_at=cli.now())
+                    _persist_job(path, job)
+                    cli.audit("task.routing_deferred", job_id=job["id"], reason=reason)
+                    print(f"{job['id']} routing deferred: {reason}")
+                    return False
             job.setdefault("routing_decisions", []).append(
                 {"at": cli.now(), "phase": "post_realization", **decision})
             job["model_reason"] = decision["reason"]
@@ -1579,10 +1973,15 @@ def execute_next(run=subprocess.run) -> bool:
             selected = job.get("model") or os.environ.get(
                 "AGENT_EXECUTOR_MODEL", "Qwen3.5-4B-GGUF")
             model = selected if "/" in selected else f"Lemonade/{selected}"
+            resume_session = job.get("opencode_session")
+            # A fresh session must start in its contracted workspace so native
+            # project instructions and startup-hook orientation use that root.
+            # Retained legacy sessions were created under the home directory.
+            run_directory = (str(Path.home()) if resume_session else
+                             task_contracts.validate_task_contract(job["task_contract"])["scope"]["workspace"])
             command = [str(Path.home() / ".local/bin/opencode"), "run", "--auto",
                        "--format", "json", "--title", f"agent-job:{job['id']}",
-                       "--model", model, "--dir", str(Path.home())]
-            resume_session = job.get("opencode_session")
+                       "--model", model, "--dir", run_directory]
             if resume_session:
                 command.extend(["--session", resume_session])
                 resume_path = cli.ROOT / "state/jobs" / f"{job['id']}.resume.md"
@@ -1638,6 +2037,13 @@ def execute_next(run=subprocess.run) -> bool:
                     # no later branch (including reconciliation_required) can
                     # discard accounting.
                     job["budget_usage"] = outcome["usage"]
+                    # A dead executor may leave close complete but logical
+                    # continuation unpublished. Preserve the observed result
+                    # with its generation before starting physical close.
+                    job["runner_round_outcome"] = {
+                        "runner_generation": job.get("runner_generation"),
+                        "result": outcome,
+                    }
                     retained_session = outcome.get("session") or opencode_session_id(output_path)
                     if retained_session:
                         job["opencode_session"] = retained_session
@@ -1651,34 +2057,21 @@ def execute_next(run=subprocess.run) -> bool:
                     if closed["state"] == "reconciliation_required":
                         print(f"{job['id']} requires inference reconciliation")
                         return True
+                    if _complete_requested_cancellation(job, path, outcome):
+                        return True
                     if outcome.get("budget_checkpoint"):
                         checkpoint = outcome["budget_checkpoint"]
-                        # Preserve the client session; semantic handoff generation is deferred.
-                        session = outcome.get("session")
-                        if session:
-                            job["opencode_session"] = session
-                        if job.get("opencode_session"):
-                            job.update(state="ready",
-                                       logical_run_state="continuing",
-                                       budget_outcome=checkpoint,
-                                       resume_available=True,
-                                       budget_usage={},
-                                       updated_at=cli.now())
-                            job.pop("executor_pid", None)
-                            cli.atomic_json(path, job)
+                        job = job_outcomes.budget_checkpoint_job(
+                            job, checkpoint, outcome.get("session"), cli.now())
+                        continuation = job["state"] == "ready"
+                        _persist_job(path, job)
+                        if continuation:
                             cli.audit("task.budget_continuation_queued",
                                       job_id=job["id"],
                                       reason=checkpoint["reason"])
                             print(f"{job['id']} budget checkpoint "
                                   f"({checkpoint['reason']}): continuation queued")
                             return True
-                        job.update(state="checkpoint_required",
-                                   logical_run_state="terminal",
-                                   budget_outcome=checkpoint,
-                                   resume_available=bool(job.get("opencode_session")),
-                                   updated_at=cli.now())
-                        job.pop("executor_pid", None)
-                        cli.atomic_json(path, job)
                         cli.audit("task.budget_checkpoint", job_id=job["id"],
                                   reason=checkpoint["reason"],
                                   state=job["state"])
@@ -1687,40 +2080,14 @@ def execute_next(run=subprocess.run) -> bool:
                         return True
                     if outcome["preempted"]:
                         current = json.loads(path.read_text(encoding="utf-8"))
-                        cancellation = current.get("cancellation_requested_at")
-                        if type(cancellation) is str and cancellation:
-                            if outcome.get("session"):
-                                job["opencode_session"] = outcome["session"]
-                                job["resume_available"] = True
-                            else:
-                                job["resume_available"] = False
-                            job["cancellation_requested_at"] = cancellation
-                            if "cancellation_reason" in current:
-                                job["cancellation_reason"] = current["cancellation_reason"]
-                            job.pop("executor_pid", None)
-                            stamp = cli.now()
-                            job.update(state="cancelled", logical_run_state="terminal",
-                                       cancelled_at=stamp, updated_at=stamp,
-                                       last_preemption_reason=outcome["reason"])
-                            cli.atomic_json(path, job)
-                            cli.audit("task.cancelled", job_id=job["id"],
-                                      reason=outcome["reason"])
-                            print(f"{job['id']} cancelled: {outcome['reason']}")
+                        if _complete_requested_cancellation(job, path, outcome):
                             return True
                         if current.get("state") == "interrupted":
                             print(f"{job['id']} interrupted by resource control")
                             return True
-                        if outcome.get("session"):
-                            job["opencode_session"] = outcome["session"]
-                            job["resume_available"] = True
-                        else:
-                            job["resume_available"] = False
-                        job.pop("executor_pid", None)
-                        job.pop("pending_preemption_reason", None)
-                        job.update(state="ready", updated_at=cli.now(),
-                                   last_preemption_reason=outcome["reason"],
-                                   preemption_count=int(job.get("preemption_count", 0)) + 1)
-                        cli.atomic_json(path, job)
+                        job = job_outcomes.preempted_job(
+                            job, outcome.get("session"), outcome["reason"], cli.now())
+                        _persist_job(path, job)
                         cli.audit("task.preempted", job_id=job["id"],
                                   reason=outcome["reason"],
                                   resume_available=bool(outcome.get("session")))
@@ -1728,28 +2095,14 @@ def execute_next(run=subprocess.run) -> bool:
                         return True
                     result = subprocess.CompletedProcess(command, outcome["returncode"])
                 current = json.loads(path.read_text(encoding="utf-8"))
-                cancellation = current.get("cancellation_requested_at")
-                if type(cancellation) is str and cancellation:
-                    session = opencode_session_id(output_path)
-                    if session:
-                        job["opencode_session"] = session
-                    job["cancellation_requested_at"] = cancellation
-                    if "cancellation_reason" in current:
-                        job["cancellation_reason"] = current["cancellation_reason"]
-                    job.pop("executor_pid", None)
-                    stamp = cli.now()
-                    job.update(state="cancelled", logical_run_state="terminal",
-                               cancelled_at=stamp, updated_at=stamp,
-                               last_preemption_reason="cancellation completed as runner exited")
-                    cli.atomic_json(path, job)
-                    cli.audit("task.cancelled", job_id=job["id"],
-                              reason="cancellation completed as runner exited")
-                    print(f"{job['id']} cancelled as runner exited")
+                session = opencode_session_id(output_path)
+                if _complete_requested_cancellation(
+                        job, path, {"session": session,
+                                    "reason": "cancellation completed as runner exited"}):
                     return True
                 if current.get("state") == "interrupted":
                     print(f"{job['id']} interrupted by resource control")
                     return True
-                session = opencode_session_id(output_path)
                 if session:
                     job["opencode_session"] = session
                 job.pop("executor_pid", None)
@@ -1773,26 +2126,21 @@ def execute_next(run=subprocess.run) -> bool:
                     job.update(state="failed", updated_at=cli.now(),
                                error=detail)
             job.pop("executor_pid", None)
+            if job["state"] == "failed" and not job.get("verifies"):
+                from ecosystem.outbox import result_recipients
+                job.setdefault("result_notification_recipients", result_recipients())
+            if job["state"] == "failed" and job.get("runner_round_outcome"):
+                job["runner_logical_finalized_generation"] = job.get("runner_generation")
             _persist_parent_job(job, path)
             cli.audit(f"task.{job['state']}", job_id=job["id"], output=job["output"], exit_code=job.get("exit_code"))
-            if job.get("verifies"):
+            if job["state"] == "reconciliation_required":
+                print(f"{job['id']} requires inference reconciliation")
+                return True
+            if job["state"] == "run_finished":
+                _finalize_run_finished(job, path)
+            elif job["state"] == "failed" and job.get("verifies"):
                 from ecosystem.verification import finalize
-                target = finalize(job)
-                if job["state"] == "run_finished":
-                    job.update(state="completed", updated_at=cli.now())
-                    cli.atomic_json(path, job)
-                queue_notifications(target)
-            elif (job["state"] == "run_finished"
-                  and job.get("verification_requested") is True):
-                from ecosystem.verification import enqueue
-                job.update(state="awaiting_verification", updated_at=cli.now())
-                cli.atomic_json(path, job)
-                enqueue(job)
-            elif job["state"] == "run_finished":
-                job.update(state="completed", logical_run_state="terminal",
-                           completed_at=cli.now(), updated_at=cli.now())
-                cli.atomic_json(path, job)
-                queue_notifications(job)
+                queue_notifications(finalize(job))
             else:
                 queue_notifications(job)
             print(f"{job['id']} {job['state']}")

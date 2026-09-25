@@ -1,6 +1,7 @@
 """Live inventory, model-mediated routing, and deterministic safety validation."""
 from __future__ import annotations
-import glob, http.client, ipaddress, json, math, os, re, shlex, subprocess, time, urllib.request
+import fcntl, glob, http.client, ipaddress, json, math, os, re, shlex, subprocess, time, urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from ecosystem import context_layout
@@ -8,6 +9,43 @@ from ecosystem.opencode_capacity import launch_fingerprint
 
 BASE = os.environ.get("LEMONADE_BASE_URL", "http://127.0.0.1:13305")
 RESOURCE_POLICY_PATH = Path(__file__).resolve().parents[1] / "config/resource-policy.json"
+
+
+@contextmanager
+def realization_lock(root: Path):
+    """Serialize observation, model load/reclamation, and reobservation.
+
+    Callers must refresh their route inside this lock before realizing an
+    unloaded model. This lock governs model residency, not worker lifetime or
+    per-sequence inference allocation.
+    """
+    path = root / "state/model-realization.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        yield
+
+
+def profile_transition_pending(root: Path, model_id: str,
+                               control_model: str | None = None) -> bool:
+    """Keep work-model realization from racing a fenced reload recovery."""
+    path = Path(root) / "state/inference-capacity.json"
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return False
+    if type(state) is not dict:
+        raise ValueError("invalid inference capacity state")
+    transition = state.get("backend_profile_transition")
+    if transition is None:
+        return False
+    if (type(transition) is not dict
+            or type(transition.get("model_id")) is not str
+            or not transition["model_id"]):
+        raise ValueError("invalid backend profile transition")
+    return (transition["model_id"] == model_id
+            or (model_id != control_model
+                and transition["model_id"] != control_model))
 
 def _get(path: str) -> dict:
     with urllib.request.urlopen(BASE + path, timeout=10) as response:
@@ -737,7 +775,15 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     advertised = model.get("context", model.get("advertised_context_tokens"))
     quantum = model.get("supported_context_quantum")
     model_parallel = model.get("parallel_sequences")
-    parallel = model_parallel if _positive_integer(model_parallel) else _policy_value(policy, "parallel_requests", 1)
+    if _positive_integer(model_parallel):
+        parallel = model_parallel
+    else:
+        dynamic = policy.get("dynamic_models")
+        by_model = dynamic.get("parallel_requests_by_model") \
+            if isinstance(dynamic, dict) else None
+        model_specific = by_model.get(model_id) if isinstance(by_model, dict) else None
+        parallel = model_specific if _positive_integer(model_specific) \
+            else _policy_value(policy, "parallel_requests", 1)
     context_mode = model.get("context_mode")
     if context_mode is None:
         context_mode = "fixed"
@@ -946,6 +992,49 @@ def safe_routes(inventory: dict, policy: dict, request: dict) -> list[dict]:
     if not isinstance(models, list):
         return [{"state": "deferred", "model_id": None,
                  "exclusion_reasons": ["inventory:models"]}]
+    if (request.get("authority_profile") == "sole_survivor"
+            and request.get("role") == "sole_survivor"):
+        from ecosystem import resource_control
+        if resource_control.mode() == "emergency":
+            emergency = policy.get("emergency", {})
+            selected = emergency.get("chat_model") if type(emergency) is dict else None
+            context = emergency.get("chat_context_tokens") if type(emergency) is dict else None
+            reserves = emergency.get("context_reserves") if type(emergency) is dict else None
+            names = ("prompt_tokens", "tool_tokens", "max_output_tokens",
+                     "handoff_tokens")
+            if (type(selected) is not str or not selected
+                    or type(context) is not int or context <= 0
+                    or type(reserves) is not dict or set(reserves) != set(names)
+                    or any(type(reserves[name]) is not int or reserves[name] < 0
+                           for name in names)
+                    or reserves["max_output_tokens"] <= 0
+                    or sum(reserves.values()) > context):
+                return [{"state": "deferred", "model_id": selected,
+                         "exclusion_reasons": ["emergency:invalid_profile"]}]
+            emergency_request = {
+                **request,
+                "requirements": {"required_capabilities": [],
+                                 "minimum_context_tokens": 0},
+                **reserves,
+            }
+            routes = []
+            for item in models:
+                if type(item) is not dict:
+                    routes.append({"state": "deferred", "model_id": None,
+                                   "exclusion_reasons": ["inventory:model_record"]})
+                    continue
+                if item.get("id") != selected:
+                    routes.append({"state": "deferred", "model_id": item.get("id"),
+                                   "exclusion_reasons": ["emergency:reserved_model"]})
+                    continue
+                candidate = _model_route(item, inventory, policy, emergency_request)
+                if (candidate.get("state") == "admitted"
+                        and (candidate.get("loaded") is not True
+                             or candidate.get("context_tokens_per_sequence", 0) < context)):
+                    candidate = {**candidate, "state": "deferred",
+                                 "exclusion_reasons": ["emergency:resident_context"]}
+                routes.append(candidate)
+            return routes
     return [_model_route(item, inventory, policy, request) if isinstance(item, dict)
             else {"state": "deferred", "model_id": None,
                   "exclusion_reasons": ["inventory:model_record"]}
@@ -1003,6 +1092,33 @@ def validate_route(route: dict, fresh_inventory: dict, policy: dict, request: di
                          "backend_context_tokens",
                          "parallel_sequences", "context_tokens_per_sequence")
     changed = [field for field in allocation_fields if fresh.get(field) != route.get(field)]
+    if changed:
+        return {**fresh, "state": "deferred",
+                "exclusion_reasons": [f"route_changed:{field}" for field in changed]}
+    return fresh
+
+
+def rebind_parked_route(route: dict, fresh_inventory: dict, policy: dict,
+                        request: dict) -> dict:
+    """Rebind a parked run to a new pool without changing its launch promise.
+
+    The backend may have been reincarnated with a different physical sequence
+    count. A retained OpenCode session may use it only if its model, context
+    mode, per-request context and output allocation are still exact matches.
+    """
+    routes = safe_routes(fresh_inventory, policy, request)
+    fresh = next((item for item in routes
+                  if item.get("model_id") == route.get("model_id")), None)
+    if fresh is None:
+        return {"state": "deferred", "model_id": route.get("model_id"),
+                "exclusion_reasons": ["model:disappeared"]}
+    if fresh.get("state") != "admitted":
+        return fresh
+    promise_fields = ("model_id", "parameter_count", "model_bytes",
+                      "context_mode", "context_tokens_per_sequence",
+                      "max_output_tokens")
+    changed = [field for field in promise_fields
+               if fresh.get(field) != route.get(field)]
     if changed:
         return {**fresh, "state": "deferred",
                 "exclusion_reasons": [f"route_changed:{field}" for field in changed]}
@@ -1083,6 +1199,9 @@ def realize(decision: dict, inventory: dict) -> dict:
         raise ValueError(
             f"invalid inventory control model {control_model!r}: "
             "must be None or a nonempty string")
+    if profile_transition_pending(Path(__file__).resolve().parents[1],
+                                  model_id, control_model):
+        raise RuntimeError(f"backend profile transition pending for {model_id!r}")
     if candidate.get("loaded"):
         if model_id != control_model and candidate.get("pinned"):
             subprocess_result = subprocess.run(

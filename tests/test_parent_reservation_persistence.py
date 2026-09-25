@@ -1,4 +1,4 @@
-"""Regression: cached parent write-back clobbers a durable child reservation.
+"""Verify cached parent write-back preserves a durable child reservation.
 
 R5 shared budget enforcement: execute_next caches the parent job in memory
 for the whole runner round and, before close, persists that cached copy
@@ -7,17 +7,16 @@ managed caller that enqueues a child during the launch window reaches the
 real cli.enqueue_child, which reloads the parent under task-enqueue.lock,
 deducts the child's 300 task_seconds from the parent's 600
 remaining_budget, and durably records child_reservations plus the child
-task. The cached write-back then overwrites the reserved parent with the
-stale 600s budget, losing the reduced remaining_budget and
-child_reservations while the durable child still exists.
+task. The executor must re-adopt that durable reservation before writing
+the cached parent back.
 
 The test drives the real execute_next and _run_preemptibly against a
 harmless real subprocess. The fake launch starts that subprocess and calls
 the real enqueue_child on the cached parent before returning; the fake
-close neither writes nor mutates the parent. Expected RED: the durable
-parent keeps 600 instead of the reserved 300 task_seconds. The managed
-enqueue_child caller is not wired yet; this is composition readiness, not
-observed live damage.
+close neither writes nor mutates the parent. The expected durable parent
+budget is 300 task_seconds, with the child reservation preserved. The
+managed enqueue_child caller is not wired yet; this tests composition
+readiness, not observed live damage.
 """
 import hashlib
 import json
@@ -31,7 +30,7 @@ from unittest.mock import patch
 
 from ecosystem import cli
 from ecosystem.executor import execute_next
-from tests.test_mvp_task_contracts import accepted_workspace_policy, contract
+from tests.test_mvp_task_contracts import accepted_authority_policy, contract
 
 PARENT_ID = "task-parent"
 CHILD_KEY = "test:parent-reservation"
@@ -65,7 +64,7 @@ def test_parent_reservation_survives_cached_parent_write_back():
         for relative in ("ecosystem", "workspace_notes", "roles", "logs/runs"):
             (root / relative).mkdir(parents=True, exist_ok=True)
         (root / "roles/_base.md").write_text("# Base Agent\n", encoding="utf-8")
-        accepted_workspace_policy(root)
+        accepted_authority_policy(root)
         (root / "state/jobs" / f"{PARENT_ID}.prompt.md").write_text(
             "do the work", encoding="utf-8")
         parent = {
@@ -122,7 +121,8 @@ def test_parent_reservation_survives_cached_parent_write_back():
             patch("ecosystem.executor.route", return_value={
                 "action": "run", "model": "test-model", "reason": "test",
                 "context_tokens": 1024}),
-            patch("ecosystem.executor.realize", return_value={"state": "realized"}),
+            patch("ecosystem.executor.realize",
+                  return_value={"state": "realized", "model": "test-model"}),
             patch("ecosystem.executor.job_admitted_in_current_mode",
                   return_value=True),
             patch("ecosystem.executor.cancel_proxy",

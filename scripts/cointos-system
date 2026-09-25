@@ -16,10 +16,13 @@ triggers=(
   agent-ecosystem.path
   agent-ecosystem.timer
   agent-watchdog.timer
+  agent-backend-profile.timer
 )
 oneshots=(
   agent-ecosystem.service
+  agent-executors.target
   agent-watchdog.service
+  agent-backend-profile.service
 )
 all_units=("${triggers[@]}" "${oneshots[@]}" "${long_running[@]}")
 start_units=("${long_running[@]}" "${triggers[@]}")

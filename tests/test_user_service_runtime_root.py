@@ -20,8 +20,10 @@ DECLARATION = f"{ENV_NAME}={PORTABLE_VALUE}"
 # runtime state. agent-models.service launches only the external Lemonade
 # binary, and the .path, .timer, and .slice units launch no Python code.
 EXPECTED_UNITS = (
+    "agent-backend-profile.service",
     "agent-control-worker.service",
     "agent-ecosystem.service",
+    "agent-executor@.service",
     "agent-inference-proxy.service",
     "agent-notifier.service",
     "agent-resource-guard.service",

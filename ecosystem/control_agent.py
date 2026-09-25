@@ -13,7 +13,6 @@ from ecosystem.resource_control import active_chat_model
 
 
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
-WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
 DEEP_OUTPUT_TOKENS = 32000
 
 
@@ -35,6 +34,17 @@ TOOLS = [
 TERMINAL_TOOLS = {"publish_followup", "finish_silently"}
 
 
+def _initial_defers_completion(response: str | None) -> bool:
+    """Recognize a front reply that promises work instead of supplying the result."""
+    if not isinstance(response, str):
+        return False
+    normalized = response.lower().replace("’", "'")
+    return any(marker in normalized for marker in (
+        "i'll ", "i will ", "i need to ", "let me ", "i'm checking ",
+        "i'm working on ", "need to check ", "need to inspect ",
+    ))
+
+
 def respond(message: str, history: list[dict[str, str]], initial_response: str | None,
             live: dict, execute: Callable[[str, dict], dict],
             infer: Callable[..., dict] | None = None,
@@ -42,9 +52,7 @@ def respond(message: str, history: list[dict[str, str]], initial_response: str |
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.8-27B-GGUF"))
     initial_was_delivered = isinstance(initial_response, str) and bool(initial_response.strip())
     initial = initial_response.strip() if initial_was_delivered else "No initial response was delivered."
-    system = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
-
-{CONTROL_ROLE.read_text(encoding='utf-8')}
+    system = f"""{CONTROL_ROLE.read_text(encoding='utf-8')}
 
 You are Cointelprofessional's deep control turn, running outside the Telegram
 polling path. A fast model has already had the opportunity to reply. Understand
@@ -55,7 +63,9 @@ Use publish_followup only for material new information: an action actually taken
 a dispatched agent, an exact factual answer, a consequential question or warning,
 a correction, or a result. Use finish_silently when the initial response already
 handled ordinary conversation. Never send a second acknowledgement or paraphrase
-of the first reply. Do not mention internal IDs unless asked. Never claim an action
+of the first reply. An acknowledgement or promise to check, reason, prove, inspect,
+or act is not a completed answer: publish the requested result. Do not mention
+internal IDs unless asked. Never claim an action
 unless a tool result says it occurred. Do not emit the transport-owned five-minute
 failure sentence. Tool and terminal records are internal and never shown as JSON.
 
@@ -65,6 +75,7 @@ Live context at deep-turn start:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
+    successful_tool_action = False
     while True:
         assistant = (infer(model=model, messages=messages, tools=TOOLS,
                            max_tokens=DEEP_OUTPUT_TOKENS, timeout=None, temperature=0.35)
@@ -99,6 +110,8 @@ Live context at deep-turn start:
                         result = execute(name, arguments)
                     except Exception as error:
                         result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
+                    if isinstance(result, dict) and result.get("ok") is True:
+                        successful_tool_action = True
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
                              "name": name, "content": json.dumps(result, separators=(",", ":"))})
         if len(terminal) > 1:
@@ -110,6 +123,11 @@ Live context at deep-turn start:
                 if not initial_was_delivered:
                     messages.append({"role": "user", "content":
                                      "No initial response was delivered. Use publish_followup with a visible reply."})
+                    continue
+                if _initial_defers_completion(initial_response) and not successful_tool_action:
+                    messages.append({"role": "user", "content":
+                                     "The initial response only promised later work; it did not answer the request. "
+                                     "Use publish_followup with the requested result."})
                     continue
                 return {"followup": None}
             followup = arguments.get("message")

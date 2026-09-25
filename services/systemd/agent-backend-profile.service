@@ -1,0 +1,22 @@
+[Unit]
+Description=Reconcile qualified local backend parallel profile
+PartOf=agent-executors.target
+After=agent-models.service
+ConditionPathExists=%h/.CointOS/state/backend-profile-automation.enabled
+
+[Service]
+Type=oneshot
+TimeoutStartSec=6min
+Slice=background.slice
+Nice=10
+CPUWeight=10
+IOWeight=10
+IOSchedulingClass=idle
+WorkingDirectory=%h/Projects/CointOS
+Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
+ExecStart=%h/Projects/CointOS/scripts/cointos-profile reconcile
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+RestrictSUIDSGID=true

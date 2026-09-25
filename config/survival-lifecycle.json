@@ -15,6 +15,7 @@
     "activation_sources": [
       {"required": true, "unit": "agent-ecosystem.path"},
       {"required": true, "unit": "agent-ecosystem.timer"},
+      {"required": true, "unit": "agent-backend-profile.timer"},
       {"required": true, "unit": "agent-watchdog.timer"}
     ],
     "control_services": [
@@ -30,6 +31,8 @@
     ],
     "ordinary_services": [
       {"required": true, "unit": "agent-ecosystem.service"},
+      {"required": true, "unit": "agent-executors.target"},
+      {"required": true, "unit": "agent-backend-profile.service"},
       {"required": true, "unit": "agent-watchdog.service"}
     ]
   }

@@ -4,18 +4,18 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from ecosystem import cli, conversation, control_turns
 from ecosystem.facts import lifecycle
 from ecosystem.identity import active_names
 from ecosystem.models import snapshot
 from ecosystem.roles import list_roles, safe_role_label
-from ecosystem.task_contracts import accepted_workspace_policy
 
 
 def _prompt_lifecycle_facts() -> dict:
     facts = lifecycle()
-    active_states = {"queued", "ready", "running", "awaiting_verification"}
+    active_states = {"queued", "ready", "claimed", "runner_starting", "running", "awaiting_verification"}
     recent = []
     for fact in facts.get("recent_agents", []):
         if fact.get("state") not in active_states:
@@ -49,7 +49,7 @@ def status_text() -> str:
         if not isinstance(state, str):
             continue
         counts[state] = counts.get(state, 0) + 1
-        if job.get("kind") == "agent-task" and state in {"queued", "ready", "running", "awaiting_verification"}:
+        if job.get("kind") == "agent-task" and state in {"queued", "ready", "claimed", "runner_starting", "running", "awaiting_verification"}:
             role = safe_role_label(job.get("role")) or "unassigned"
             line = f"{job['id']}: {job['state']} / {role} / {job.get('model') or 'unspecified'}"
             if job["state"] == "running":
@@ -75,7 +75,7 @@ def friendly_status() -> str:
             continue
         if isinstance(job.get("state"), str):
             jobs.append(job)
-    active = [job for job in jobs if job.get("kind") == "agent-task" and job.get("state") in {"queued", "ready", "running", "awaiting_verification"}]
+    active = [job for job in jobs if job.get("kind") == "agent-task" and job.get("state") in {"queued", "ready", "claimed", "runner_starting", "running", "awaiting_verification"}]
     if active:
         opening = "; ".join(
             f"{job.get('agent_name') or 'an older unnamed agent'} is {job['state']} on {job.get('task', 'something')[:120]}"
@@ -131,21 +131,23 @@ def _action_key(name: str, arguments: dict) -> str:
 def _contact_task_contract(identifier: str, key: str, task: str,
                            workspace_selector: object = None) -> dict:
     """Convert an authenticated control turn into accepted executable authority."""
-    try:
-        policy = accepted_workspace_policy(cli.ROOT)
-    except ValueError:
-        policy = {"workspaces": []}
-    active = [item for item in policy["workspaces"] if item.get("mode") == "active"]
     if workspace_selector is None:
-        root = active[0]["path"] if active else str(cli.ROOT.resolve())
+        root = cli.ROOT.resolve()
+        manifest = root / ".cointos-install.json"
+        if manifest.exists():
+            try:
+                installed = json.loads(manifest.read_text(encoding="utf-8"))
+                source = Path(installed["source"]["root"])
+            except (OSError, ValueError, KeyError, TypeError) as error:
+                raise ValueError("installed source checkout is unavailable") from error
+            if not source.is_absolute() or not source.is_dir():
+                raise ValueError("installed source checkout is unavailable")
+            root = source.resolve()
+        root = str(root)
     elif isinstance(workspace_selector, str) and workspace_selector.strip():
-        selector = workspace_selector.strip()
-        workspace = next(
-            (item for item in active if selector in {item["id"], item["path"]}), None
-        )
-        root = workspace["path"] if workspace is not None else str(Path(selector).expanduser().resolve())
+        root = str(Path(workspace_selector.strip()).expanduser().resolve())
     else:
-        raise ValueError("workspace must be a non-empty id or path")
+        raise ValueError("workspace must be a non-empty path")
     return {
         "objective": task,
         "scope": {"workspace": root, "read_paths": [root], "write_paths": [root]},
@@ -185,7 +187,7 @@ def _task_progress(user_id: int, agent_name: object = None) -> dict:
         records = [job for job in records if job.get("agent_name") == agent_name]
     else:
         active = [job for job in records
-                  if job.get("state") in {"queued", "ready", "running", "awaiting_verification"}]
+                  if job.get("state") in {"queued", "ready", "claimed", "runner_starting", "running", "awaiting_verification"}]
         records = active if active else records
     if not records:
         return {"ok": True, "found": False}

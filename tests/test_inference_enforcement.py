@@ -9,11 +9,13 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from ecosystem.inference_proxy import (
-    _finish_claim, _record_backend_identity, _record_claim_slot_evidence,
+    _can_adopt_released_sequence, _finish_claim, _record_backend_identity,
+    _record_claim_slot_evidence,
     _slot_ended_idle_termination, authorize_proxy_request, cancel,
     completed_run_termination, forward_proxy_response, handle_proxy_request,
     issue_proxy_credential, opencode_environment, populate_opencode_credential,
-    read_proxy_request, revoke_proxy_credential, serve_one_connection,
+    read_proxy_request, reconcile_available_capacity, revoke_proxy_credential,
+    serve_one_connection,
 )
 from ecosystem.opencode_capacity import effective_inference_capacity, launch_fingerprint
 
@@ -56,6 +58,64 @@ def fixture():
 def body(**changes):
     return {"model": "model-a", "context_tokens": 4096, "max_tokens": 128,
             "stream": False, **changes}
+
+
+def test_released_sequence_adoption_requires_exact_dead_binding():
+    binding = {"lease_id": "inference-1", "incarnation": "original"}
+    credential = {"state": "closing", "in_flight": {},
+                  "binding": {"release_binding": binding,
+                              "process": {"pid": 123, "process_start_ticks": 1}}}
+    lease = {"lease_id": "inference-1", "state": "released",
+             "expected_release_binding": binding,
+             "release_observer_identity": "observer:inference-backend",
+             "observed_release": {"schema_version": 1, "binding": binding,
+                                  "kind": "reconciled_absent",
+                                  "observer_identity": "observer:inference-backend",
+                                  "evidence_id": "prior-r3-release",
+                                  "accepted_monotonic": 10.0}}
+    with patch("ecosystem.inference_proxy._bound_process_ended", return_value=True):
+        assert _can_adopt_released_sequence("inference-1", credential, lease)
+        assert not _can_adopt_released_sequence("inference-other", credential, lease)
+        assert not _can_adopt_released_sequence(
+            "inference-1", {**credential, "in_flight": {"claim": {}}}, lease)
+        assert not _can_adopt_released_sequence(
+            "inference-1", credential, {**lease, "state": "active"})
+        assert not _can_adopt_released_sequence(
+            "inference-1", credential,
+            {**lease, "observed_release": {**lease["observed_release"],
+                                           "binding": {"lease_id": "other"}}})
+    with patch("ecosystem.inference_proxy._bound_process_ended", return_value=False):
+        assert not _can_adopt_released_sequence("inference-1", credential, lease)
+
+
+def test_reconciliation_adopts_prior_release_without_releasing_again():
+    with fixture() as value:
+        root, lease_id = value["root"], value["lease_id"]
+        binding = {"lease_id": lease_id, "incarnation": "original"}
+        lease = {**value["lease"], "state": "released",
+                 "expected_release_binding": binding,
+                 "release_observer_identity": "observer:inference-backend",
+                 "observed_release": {"schema_version": 1, "binding": binding,
+                                      "kind": "reconciled_absent",
+                                      "observer_identity": "observer:inference-backend",
+                                      "evidence_id": "prior-r3-release",
+                                      "accepted_monotonic": 10.0}}
+        capacity_path = root / "state/inference-capacity.json"
+        capacity_path.write_text(json.dumps({"version": 1, "generation": 1,
+                                             "leases": {lease_id: lease}}))
+        proxy_path = root / "state/inference-proxy.json"
+        proxy_path.write_text(json.dumps({"version": 1, "generation": 1,
+            "credentials": {lease_id: {"state": "closing", "digest": "old-bearer",
+                "in_flight": {}, "binding": {"release_binding": binding,
+                    "process": {"pid": 123, "process_start_ticks": 1}}}}}))
+        with patch("ecosystem.inference_proxy._bound_process_ended", return_value=True):
+            result = reconcile_available_capacity(root, lambda: 11.0)
+        record = json.loads(proxy_path.read_text())["credentials"][lease_id]
+        assert result["reconciled_credentials"] == [lease_id]
+        assert result["released"] == []
+        assert record["state"] == "revoked" and record["digest"] == ""
+        assert record["released_sequence"] == lease
+        assert json.loads(capacity_path.read_text())["leases"][lease_id] == lease
 
 
 def issue(value):
@@ -403,6 +463,76 @@ def test_sse_chunks_are_forwarded_without_a_false_end():
         lambda: 12.0)
     assert b"data: one\n\n" in sent and result["evidence_id"] == "end-1"
     assert len(observed) == 1
+
+
+def test_json_response_larger_than_evidence_buffer_is_forwarded():
+    chunk = b"x" * 65536
+    remaining = iter([chunk] * 129 + [b""])
+    forwarded = []
+    upstream = types.SimpleNamespace(
+        status=200, getheader=lambda _name, default: "application/json",
+        read1=lambda maximum: next(remaining))
+    connection = types.SimpleNamespace(sendall=lambda data: forwarded.append(len(data)))
+    result = forward_proxy_response(connection, upstream,
+        {"backend_sequence": 1}, None, lambda: 12.0)
+    assert result["bytes_forwarded"] == 129 * len(chunk)
+    assert sum(forwarded[1:]) == result["bytes_forwarded"]
+    assert result["response_finished"] is False
+
+
+def test_admitted_claim_is_finished_when_proxy_preflight_fails():
+    admission = {"status": 200, "claim_id": "claim-1",
+                 "lease": {"lease_id": "inference-1", "model_id": "model-a"}}
+    for failing_step in ("_normalize_survivor_system_messages",
+                         "validate_loopback_base"):
+        connection = MagicMock()
+        with patch("ecosystem.inference_proxy.read_proxy_request",
+                   return_value=({}, body())), \
+             patch("ecosystem.inference_proxy.authorize_proxy_request",
+                   return_value=admission), \
+             patch("ecosystem.inference_proxy._finish_claim") as finish, \
+             patch("ecosystem.inference_proxy._send_json") as send_error, \
+             patch("ecosystem.inference_proxy." + failing_step,
+                   side_effect=ValueError("preflight failed")):
+            serve_one_connection(connection, Path("/unused-proxy-test-root"),
+                                 {"backend_base": "http://127.0.0.1:8000"}, lambda: 12.0)
+        finish.assert_called_once_with(Path("/unused-proxy-test-root"),
+                                       "inference-1", "claim-1", False, {},
+                                       unittest.mock.ANY)
+        send_error.assert_called_once()
+        connection.close.assert_called_once()
+
+
+def test_proxy_does_not_append_error_response_after_forwarding_starts():
+    connection = MagicMock()
+    upstream_connection = MagicMock()
+    admission = {"status": 200, "claim_id": "claim-1",
+                 "lease": {"lease_id": "inference-1", "model_id": "model-a",
+                           "backend_sequence": 1}}
+    def fail_after_headers(socket, *_args):
+        socket.sendall(b"HTTP/1.1 200 OK\r\n\r\n")
+        raise OSError("upstream read failed")
+    with patch("ecosystem.inference_proxy.read_proxy_request",
+               return_value=({}, body())), \
+         patch("ecosystem.inference_proxy.authorize_proxy_request",
+               return_value=admission), \
+         patch("ecosystem.inference_proxy.backend_snapshot", return_value=None), \
+         patch("ecosystem.inference_proxy.http.client.HTTPConnection",
+               return_value=upstream_connection), \
+         patch("ecosystem.inference_proxy._register_upstream"), \
+         patch("ecosystem.inference_proxy._record_backend_identity"), \
+         patch("ecosystem.inference_proxy._record_claim_slot_evidence"), \
+         patch("ecosystem.inference_proxy._unregister_upstream"), \
+         patch("ecosystem.inference_proxy.forward_proxy_response",
+               side_effect=fail_after_headers), \
+         patch("ecosystem.inference_proxy._finish_claim") as finish, \
+         patch("ecosystem.inference_proxy._send_json") as send_error:
+        serve_one_connection(connection, Path("/unused-proxy-test-root"),
+                             {"backend_base": "http://127.0.0.1:8000/v1"}, lambda: 12.0)
+    finish.assert_called_once()
+    send_error.assert_not_called()
+    connection.sendall.assert_called_once_with(b"HTTP/1.1 200 OK\r\n\r\n")
+    connection.close.assert_called_once()
 
 
 def snapshot(model_id="model-a", pid=4242):

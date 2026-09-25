@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import fcntl
+import os
 import re
 import uuid
 from collections.abc import Callable
@@ -10,6 +12,41 @@ from ecosystem import cli
 
 
 TERMINAL_STATES = {"completed", "failed", "rejected", "cancelled"}
+
+
+def result_recipients() -> list[int]:
+    """Snapshot the configured result recipients before terminal publication."""
+    recipients = []
+    invalid = 0
+    for raw in os.environ.get("AGENT_TELEGRAM_ALLOWED_USER_IDS", "").split(","):
+        value = raw.strip()
+        if not value:
+            continue
+        try:
+            recipient = int(value)
+        except ValueError:
+            invalid += 1
+            continue
+        if recipient not in recipients:
+            recipients.append(recipient)
+    if invalid:
+        cli.audit("outbox.recipient_config_invalid", invalid_count=invalid)
+    return recipients
+
+
+def enqueue_result(user_id: int, result_job_id: str) -> tuple[str, bool]:
+    """Ensure one result notification per recipient, regardless of delivery state."""
+    lock_path = cli.ROOT / "state/outbox-enqueue.lock"
+    with lock_path.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for path in sorted((cli.ROOT / "state/jobs").glob("outbox-*.json")):
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if (existing.get("kind") == "outbound-message"
+                    and existing.get("result_of") == result_job_id
+                    and existing.get("user_id") == user_id):
+                return existing["id"], False
+        return enqueue(user_id, depends_on=result_job_id,
+                       result_of=result_job_id), True
 
 
 def mark_interrupted_deliveries_unknown() -> int:
@@ -76,14 +113,19 @@ def render(job: dict, dependency_job: dict | None) -> str:
     if output_path and output_path.exists():
         clean = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", output_path.read_text(encoding="utf-8", errors="replace")).strip()
     name = dependency_job.get("agent_name", "The agent")
+    verified = (type(dependency_job.get("verification_job")) is str
+                and bool(dependency_job["verification_job"])
+                and type(dependency_job.get("verification")) is dict
+                and dependency_job["verification"].get("accepted") is True)
     if dependency_job["state"] == "completed":
-        header = f"{name}'s work passed an independent check."
+        header = (f"{name}'s work passed an independent check." if verified
+                  else f"{name}'s work completed.")
     elif dependency_job["state"] == "rejected":
         header = f"{name}'s run ended, but an independent check did not accept the work."
     else:
         header = f"{name} ran into trouble with the earlier work and it may need attention."
     verification = dependency_job.get("verification_summary")
-    if verification:
+    if verification and (verified or dependency_job["state"] == "rejected"):
         header += f"\n\nVerification: {verification}"
     show_output = clean and dependency_job["state"] != "rejected"
     return header + ("\n\nResult (tail):\n" + clean[-3000:] if show_output else "")
@@ -97,9 +139,12 @@ def drain(send: Callable[[int, str], None],
         if job["state"] not in {"waiting", "queued"}:
             continue
         if job.get("attempts", 0) >= 3:
+            if job.get("error"):
+                job["last_failure"] = job["error"]
             job.update(state="failed", updated_at=cli.now(), error="notification generation or delivery failed three times")
             cli.atomic_json(path, job)
-            cli.audit("outbox.exhausted", job_id=job["id"], user_id=job["user_id"])
+            cli.audit("outbox.exhausted", job_id=job["id"], user_id=job["user_id"],
+                      last_failure=job.get("last_failure"))
             continue
         dependency_job = dependency(job)
         if job.get("depends_on") and (not dependency_job or dependency_job.get("state") not in TERMINAL_STATES):

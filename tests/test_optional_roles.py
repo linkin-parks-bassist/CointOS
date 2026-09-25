@@ -32,16 +32,14 @@ def write_workspace_policy(root: Path) -> None:
                    "effects": ["read_scoped_files"]},
                   {"id": "contact_requested", "workload_class": "work",
                    "effects": ["read_scoped_files", "write_scoped_files", "run_scoped_checks"]},
-              ],
-              "workspaces": [{"id": "test", "path": str(root.resolve()),
-                              "provenance": "personal", "mode": "active"}]}
+              ]}
     canonical = json.dumps(values, sort_keys=True, separators=(",", ":")).encode()
     snapshot = {"schema_version": 1, "values": values,
                 "digest": hashlib.sha256(canonical).hexdigest(),
                 "activated_at": "2026-09-05T00:00:00+00:00",
-                "source_path": str((root / "config/workspaces.json").resolve())}
+                "source_path": str((root / "config/authority-profiles.json").resolve())}
     (root / "config").mkdir(exist_ok=True)
-    (root / "config/workspaces.json").write_text(json.dumps(values), encoding="utf-8")
+    (root / "config/authority-profiles.json").write_text(json.dumps(values), encoding="utf-8")
     (root / "state/workspaces-policy.json").write_text(json.dumps(snapshot), encoding="utf-8")
 
 
@@ -193,7 +191,8 @@ def test_unsafe_role_label_is_absent_from_live_control_prompt(root):
         return {"content": None, "tool_calls": [{
             "id": "done",
             "type": "function",
-            "function": {"name": "finish_silently", "arguments": "{}"},
+            "function": {"name": "publish_followup",
+                         "arguments": json.dumps({"message": "The job is queued."})},
         }]}
 
     with patch("ecosystem.control_runtime.snapshot", return_value={"models": []}), \

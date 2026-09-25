@@ -61,6 +61,16 @@ def audit(event: str, **fields: object) -> None:
         os.fsync(stream.fileno())
 
 
+def wake_dispatch(root: Path = ROOT) -> None:
+    """Signal only new executable work, not every job phase transition."""
+    path = Path(root) / "state/agent-enqueue.wakeup"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as stream:
+        stream.write(now() + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def initialize() -> None:
     for relative in DIRS:
         (ROOT / relative).mkdir(parents=True, exist_ok=True)
@@ -81,7 +91,8 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
                  idempotency_key: str | None = None,
                  prefer_models_other_than: list[str] | None = None,
                  task_contract: dict | None = None,
-                 verification_requested: bool = False) -> str:
+                 verification_requested: bool = False,
+                 verifies_target_id: str | None = None) -> str:
     from ecosystem.identity import validate, generate
     from ecosystem.roles import resolve_role
     from ecosystem.task_contracts import default_task_contract, resolve_task_intake
@@ -95,6 +106,9 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
     validated_contract = intake["task_contract"]
     if type(verification_requested) is not bool:
         raise ValueError("verification request must be boolean")
+    if verifies_target_id is not None and (type(verifies_target_id) is not str
+                                           or not verifies_target_id):
+        raise ValueError("verifier target must be a nonempty job ID")
     if type(task) is not str or task.strip() != validated_contract["objective"]:
         raise ValueError("task differs from validated objective")
     job_id = (f"task-{hashlib.sha256(idempotency_key.encode()).hexdigest()[:16]}"
@@ -112,6 +126,8 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
                 raise ValueError("idempotency key reused with a different task contract")
             if saved.get("verification_requested", False) != verification_requested:
                 raise ValueError("idempotency key reused with a different verification request")
+            if saved.get("verifies") != verifies_target_id:
+                raise ValueError("idempotency key reused with a different verifier target")
             return job_id
         resolved_role = resolve_role(role) if not agent_name else None
         identity_role = resolved_role["label"] if resolved_role and resolved_role["known"] else "agent"
@@ -141,10 +157,13 @@ def enqueue_task(role: str | None, task: str, source: str = "local-cli", model: 
             job["user_directed_origin"] = user_directed_origin
         if idempotency_key:
             job["idempotency_key"] = idempotency_key
+        if verifies_target_id is not None:
+            job["verifies"] = verifies_target_id
         atomic_json(job_path, job)
     audit("task.queued", job_id=job_id, role=role, source=source,
           requested_model=model, requested_model_reason=job["requested_model_reason"],
           agent_name=agent_name)
+    wake_dispatch()
     return job_id
 
 
@@ -229,6 +248,7 @@ def enqueue_child(parent_job: dict, child_contract: dict, idempotency_key: str) 
         atomic_json(child_path, child_job)
     audit("task.child_queued", job_id=child_id, parent_job_id=parent_id,
           source_key=validated["source_key"])
+    wake_dispatch()
     return child_id
 
 
@@ -240,8 +260,15 @@ def request_task_cancellation(source: str, agent_name: str | None = None) -> dic
     candidates = []
     lock_path = ROOT / "state/task-enqueue.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open("w") as lock:
+    executor_lock_path = ROOT / "state/executor.lock"
+    verification_lock_path = ROOT / "state/verification-finalize.lock"
+    with executor_lock_path.open("a") as executor_lock, lock_path.open("w") as lock, \
+         verification_lock_path.open("a") as verification_lock:
+        # Claim and cancellation must not cross between reading and publishing a
+        # job transition. Keep the same lock order as the executor claim path.
+        fcntl.flock(executor_lock, fcntl.LOCK_EX)
         fcntl.flock(lock, fcntl.LOCK_EX)
+        fcntl.flock(verification_lock, fcntl.LOCK_EX)
         for path in (ROOT / "state/jobs").glob("*.json"):
             try:
                 record = json.loads(path.read_text(encoding="utf-8"))
@@ -253,7 +280,9 @@ def request_task_cancellation(source: str, agent_name: str | None = None) -> dic
                 continue
             if record.get("source") != source:
                 continue
-            if record.get("state") not in {"queued", "ready", "running", "awaiting_verification"}:
+            if record.get("state") not in {"queued", "ready", "claimed",
+                                           "runner_starting", "running",
+                                           "awaiting_verification"}:
                 continue
             if agent_name is not None and record.get("agent_name") != agent_name:
                 continue
@@ -263,7 +292,8 @@ def request_task_cancellation(source: str, agent_name: str | None = None) -> dic
             return {"ok": True, "found": False, "cancelled": False}
         _, path, record = max(candidates, key=lambda item: item[0])
         timestamp = now()
-        if record.get("state") == "running":
+        if record.get("state") in {"claimed", "runner_starting", "running"}:
+            current_state = record["state"]
             record.update(cancellation_requested_at=timestamp,
                           cancellation_reason="authenticated contact requested cancellation",
                           updated_at=timestamp)
@@ -271,7 +301,7 @@ def request_task_cancellation(source: str, agent_name: str | None = None) -> dic
             event = "task.cancellation_requested"
             result = {"ok": True, "found": True, "cancelled": False,
                       "cancellation_requested": True,
-                      "agent_name": record.get("agent_name"), "state": "running"}
+                      "agent_name": record.get("agent_name"), "state": current_state}
         else:
             record.update(state="cancelled", logical_run_state="terminal",
                           cancelled_at=timestamp,
@@ -299,6 +329,23 @@ def amend_latest_task(source: str, role: str | None, task: str, model: str | Non
     validated_contract = intake["task_contract"]
     if type(task) is not str or task.strip() != validated_contract["objective"]:
         raise ValueError("task differs from validated objective")
+    executor_lock_path = ROOT / "state/executor.lock"
+    enqueue_lock_path = ROOT / "state/task-enqueue.lock"
+    executor_lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with executor_lock_path.open("a") as executor_lock, enqueue_lock_path.open("a") as enqueue_lock:
+        fcntl.flock(executor_lock, fcntl.LOCK_EX)
+        fcntl.flock(enqueue_lock, fcntl.LOCK_EX)
+        amended = _amend_latest_task_locked(source, role, task, model, model_reason,
+                                            idempotency_key, validated_contract, intake)
+    if amended is not None:
+        wake_dispatch()
+    return amended
+
+
+def _amend_latest_task_locked(source: str, role: str | None, task: str,
+                              model: str | None, model_reason: str,
+                              idempotency_key: str | None, validated_contract: dict,
+                              intake: dict) -> str | None:
     candidates = []
     for path in (ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
@@ -331,7 +378,15 @@ def amend_latest_task(source: str, role: str | None, task: str, model: str | Non
 
 
 def prepare_next() -> None:
-    from ecosystem.roles import render_context
+    """Publish at most one ready task under the executor transition lock."""
+    lock_path = ROOT / "state/executor.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        _prepare_next_locked()
+
+
+def _prepare_next_locked() -> None:
     from ecosystem.models import route, snapshot
     from ecosystem.resource_control import job_admitted_in_current_mode
     from ecosystem.scheduler import priority, scheduling_document
@@ -358,7 +413,7 @@ def prepare_next() -> None:
             continue
         job.update(model=decision["model"], model_reason=decision["reason"],
                    context_tokens=decision["context_tokens"])
-        prompt = render_context(job.get("role"), job["task"], job["id"], job.get("model", "unspecified"), job.get("model_reason", ""), job.get("agent_name", "Agent"), job.get("task_contract"))
+        prompt = job["task"].strip() + "\n"
         prompt_path = ROOT / "state/jobs" / f"{job['id']}.prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         job.update(state="ready", updated_at=now(), prompt=str(prompt_path.relative_to(ROOT)))
@@ -483,12 +538,25 @@ def run_once() -> None:
 def status() -> None:
     initialize()
     counts: dict[str, int] = {}
+    agent_counts: dict[str, int] = {}
+    by_kind: dict[str, dict[str, int]] = {}
     for path in (ROOT / "state/jobs").glob("*.json"):
         if path.name.endswith(".opencode.json"):
             continue
-        state = json.loads(path.read_text(encoding="utf-8"))["state"]
+        record = json.loads(path.read_text(encoding="utf-8"))
+        kind = record.get("kind")
+        state = record.get("state")
+        if kind not in {"agent-task", "outbound-message", "idea-intake"} \
+                or type(state) is not str:
+            continue
         counts[state] = counts.get(state, 0) + 1
-    print(json.dumps({"paused": (ROOT / "state/PAUSED").exists(), "jobs": counts}, indent=2))
+        kind_counts = by_kind.setdefault(kind, {})
+        kind_counts[state] = kind_counts.get(state, 0) + 1
+        if kind == "agent-task":
+            agent_counts[state] = agent_counts.get(state, 0) + 1
+    print(json.dumps({"paused": (ROOT / "state/PAUSED").exists(),
+                      "jobs": counts, "managed_agent_jobs": agent_counts,
+                      "by_kind": by_kind}, indent=2))
 
 
 def main() -> None:

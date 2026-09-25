@@ -32,7 +32,8 @@ def acquire_worker(root: Path, request: dict, clock: Callable[[], float]) -> dic
             if prior["request"] != validated:
                 raise ValueError("worker request identity mismatch")
             return prior.copy()
-        if state["mode"] != "open":
+        if state["mode"] != "open" and not _emergency_survivor_admitted(
+                root, state, validated):
             reason = "drain" if state["mode"] == "draining" else state["mode"]
             return {"state": "deferred", "reasons": [reason]}
         lease_id = _lease_id(validated["request_id"], state["generation"])
@@ -49,6 +50,47 @@ def acquire_worker(root: Path, request: dict, clock: Callable[[], float]) -> dic
         state["leases"][lease_id] = lease
         save()
         return lease.copy()
+
+
+def _emergency_survivor_admitted(root: Path, gate: dict, request: dict) -> bool:
+    """Keep the drain closed except for its recorded emergency repair job."""
+    if (gate.get("mode") != "draining"
+            or gate.get("owner") != {"owner_identity": "resource-control",
+                                     "covered_paths": []}
+            or request.get("authority_profile") != "sole_survivor"
+            or request.get("role") != "sole_survivor"
+            or request.get("workload_class") != "repair"):
+        return False
+    root = Path(root)
+    try:
+        resource = json.loads((root / "state/resource-control.json").read_text(
+            encoding="utf-8"))
+        if (resource.get("mode") != "emergency"
+                or resource.get("emergency_phase") not in {"survivor_ready", "active"}
+                or resource.get("sole_survivor_job") != request["job_id"]):
+            return False
+        job = json.loads((root / "state/jobs" / f"{request['job_id']}.json").read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return (job.get("id") == request["job_id"]
+            and job.get("source") == f"resource-emergency:{resource.get('incident_id')}"
+            and job.get("authority_profile") == "sole_survivor"
+            and job.get("role") == "sole_survivor"
+            and job.get("model") == request["model_id"]
+            and job.get("owner_identity") == request["owner_identity"])
+
+
+def find_worker_lease_by_request(root: Path, request_id: str) -> dict | None:
+    """Read one durable lease without creating or altering admission state."""
+    if type(request_id) is not str or not request_id:
+        raise ValueError("worker request identity is required")
+    with _locked_state(root) as (state, _save):
+        matches = [lease for lease in state["leases"].values()
+                   if lease.get("request", {}).get("request_id") == request_id]
+        if len(matches) > 1:
+            raise ValueError("duplicate worker leases for one request identity")
+        return json.loads(json.dumps(matches[0])) if matches else None
 
 
 def register_process(

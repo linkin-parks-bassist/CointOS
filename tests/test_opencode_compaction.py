@@ -10,6 +10,7 @@ from unittest.mock import patch
 from ecosystem import cli
 from ecosystem.executor import execute_next
 from ecosystem.resource_control import opencode_session_id
+from ecosystem.task_contracts import default_task_contract
 
 
 def test_session_lookup_skips_non_event_json():
@@ -32,6 +33,7 @@ def _execute_context_case(context_state="running", session="ses_compaction", bud
             "model": "test-model", "role": "worker", "task": "do the work",
             "attempts": 1, "agent_generation": 2, "prompt": prompt,
             "original_prompt": prompt, "context_state": context_state,
+            "task_contract": default_task_contract("do the work", cli.ROOT, "test:context"),
         }
         if session:
             job["opencode_session"] = session
@@ -66,7 +68,7 @@ def _execute_context_case(context_state="running", session="ses_compaction", bud
             patch("ecosystem.executor.resource_mode", return_value="normal"),
             patch("ecosystem.executor.route", return_value={"action": "run", "model": "test-model",
                                                            "reason": "test", "context_tokens": 1000}),
-            patch("ecosystem.executor.realize", return_value={"state": "realized"}),
+            patch("ecosystem.executor.realize", return_value={"state": "realized", "model": "test-model"}),
             patch("ecosystem.executor.launch_runner_round", side_effect=launch),
             patch("ecosystem.executor._run_preemptibly", return_value=outcome),
             patch("ecosystem.executor.gated_child_wait", return_value={"state": "reaped"}),

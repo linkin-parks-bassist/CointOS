@@ -9,7 +9,7 @@ from unittest.mock import patch
 from ecosystem import cli, conversation, control_turns
 from ecosystem.control_worker import _reap, process_turn
 from ecosystem.telegram import accept_update, deliver_due_disaster_fallbacks
-from tests.test_mvp_task_contracts import accepted_workspace_policy, contract
+from tests.test_mvp_task_contracts import accepted_authority_policy, contract
 
 
 def update(identifier=81, text="hello"):
@@ -121,8 +121,9 @@ def test_delivered_generation_cancels_disaster_fallback(_root):
     assert sent == []
 
 
-def _telegram_dispatches_accepted_contact_work(root: Path, identifier: int, role_marker: object) -> None:
-    accepted_workspace_policy(root, profiles=("contact_requested",))
+def _telegram_dispatches_accepted_contact_work(root: Path, identifier: int, role_marker: object,
+                                                workspace: str | None = None,
+                                                expected_default: str | None = None) -> None:
     accept_update("token", update(identifier, "inspect it"), {42},
                   send=lambda *_arguments: None,
                   infer=lambda **_arguments: {"content": '{"response":"I’ll inspect it.","deep_required":true}'})
@@ -133,6 +134,8 @@ def _telegram_dispatches_accepted_contact_work(root: Path, identifier: int, role
     arguments = {"task": "inspect the invariant", "agent_name": "Noether"}
     if role_marker is not _OMITTED:
         arguments["role"] = role_marker
+    if workspace is not None:
+        arguments["workspace"] = workspace
 
     def controller(_message, _history, _initial, _live, execute):
         result = execute("queue_task", arguments)
@@ -146,6 +149,9 @@ def _telegram_dispatches_accepted_contact_work(root: Path, identifier: int, role
     job = json.loads(jobs[0].read_text())
     assert job["task"] == "inspect the invariant"
     assert job["authority_profile"] == "contact_requested"
+    expected_workspace = (str(Path(workspace).expanduser().resolve()) if workspace is not None
+                          else expected_default or str(root.resolve()))
+    assert job["scope"]["workspace"] == expected_workspace
 
 
 _OMITTED = object()
@@ -153,12 +159,17 @@ _OMITTED = object()
 
 @with_root
 def test_telegram_dispatch_accepts_omitted_role_from_trusted_contact(root):
-    _telegram_dispatches_accepted_contact_work(root, 82, _OMITTED)
+    _telegram_dispatches_accepted_contact_work(root, 82, _OMITTED, str(root / "contact_notes"))
 
 
 @with_root
 def test_telegram_dispatch_accepts_null_role_from_trusted_contact(root):
-    _telegram_dispatches_accepted_contact_work(root, 83, None)
+    source = root / "source-checkout"
+    source.mkdir()
+    (root / ".cointos-install.json").write_text(
+        json.dumps({"source": {"root": str(source)}}), encoding="utf-8")
+    _telegram_dispatches_accepted_contact_work(root, 83, None,
+                                                expected_default=str(source.resolve()))
 
 
 @with_root
@@ -168,7 +179,7 @@ def test_telegram_dispatch_accepts_unknown_role_from_trusted_contact(root):
 
 @with_root
 def test_idempotent_task_key_does_not_duplicate_work(root):
-    accepted_workspace_policy(root)
+    accepted_authority_policy(root)
     roles = root / "roles"
     roles.mkdir()
     (roles / "worker.md").write_text(
@@ -188,7 +199,7 @@ def test_idempotent_task_key_does_not_duplicate_work(root):
 
 @with_root
 def test_replayed_amendment_does_not_modify_a_newer_task(root):
-    accepted_workspace_policy(root)
+    accepted_authority_policy(root)
     roles = root / "roles"
     roles.mkdir()
     (roles / "worker.md").write_text(

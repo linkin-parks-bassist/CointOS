@@ -79,8 +79,7 @@ def test_upgrade_preserves_state_and_local_configuration():
         metadata = json.loads((prefix / installer.MANIFEST).read_text())
         assert metadata['source']['revision']
         assert 'config/opencode-capacity.json' in metadata['preserved_config']
-        text = (prefix / 'roles/worker.md').read_text()
-        assert str(prefix / 'scripts/tell-david') in text
+        assert not (prefix / 'AGENTS.md').exists()
         assert str(prefix / 'scripts/ecosystem') in (prefix / 'services/systemd/agent-ecosystem.service').read_text()
 
 
@@ -128,6 +127,55 @@ def test_dry_run_and_bad_destination_do_not_write_payload():
             pass
         else:
             raise AssertionError('symlink destination must fail')
+
+
+def test_path_links_expose_installed_commands_without_clobbering():
+    with tempfile.TemporaryDirectory() as temporary:
+        base = Path(temporary)
+        prefix, bin_dir = base / 'runtime', base / 'bin'
+        installer.install(ROOT, prefix)
+        installer.link_commands(prefix, bin_dir)
+        installer.link_commands(prefix, bin_dir)
+        for name, script in installer.PATH_COMMANDS.items():
+            assert (bin_dir / name).readlink() == prefix / 'scripts' / script
+        result = subprocess.run(['ecosystem', 'status'], cwd=base,
+                                env=dict(os.environ, PATH=str(bin_dir) + ':' + os.environ['PATH']),
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert 'managed_agent_jobs' in result.stdout
+        jobs_dir = prefix / 'state/jobs'
+        (jobs_dir / 'audit.json').write_text('{"state":"ready"}')
+        (jobs_dir / 'task.json').write_text('{"kind":"agent-task","state":"queued"}')
+        result = subprocess.run(['ecosystem', 'status'], cwd=base,
+                                env=dict(os.environ, PATH=str(bin_dir) + ':' + os.environ['PATH']),
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        counts = json.loads(result.stdout[result.stdout.index('{'):])
+        assert counts['managed_agent_jobs'] == {'queued': 1}
+        assert 'ready' not in counts['jobs']
+        (bin_dir / 'cointos-jobs').unlink()
+        (bin_dir / 'cointos-jobs').write_text('unrelated command')
+        try:
+            installer.link_commands(prefix, bin_dir)
+        except ValueError as error:
+            assert 'refusing to replace unrelated command' in str(error)
+        else:
+            raise AssertionError('unrelated command must survive')
+        assert (bin_dir / 'cointos-jobs').read_text() == 'unrelated command'
+
+
+def test_links_only_does_not_redeploy():
+    with tempfile.TemporaryDirectory() as temporary:
+        base = Path(temporary)
+        prefix, bin_dir = base / 'runtime', base / 'bin'
+        installer.install(ROOT, prefix)
+        manifest = (prefix / installer.MANIFEST).read_bytes()
+        result = subprocess.run([str(ROOT / 'scripts/install-cointos'), '--prefix', str(prefix),
+                                 '--bin-dir', str(bin_dir), '--links-only'],
+                                capture_output=True, text=True)
+        assert result.returncode == 0, result.stderr
+        assert (prefix / installer.MANIFEST).read_bytes() == manifest
+        assert (bin_dir / 'ecosystem').readlink() == prefix / 'scripts/ecosystem'
 
 
 def test_conflicting_knowledge_stops_upgrade_before_replacement():
@@ -202,6 +250,8 @@ def load_tests(_loader, _tests, _pattern):
         test_upgrade_preserves_state_and_local_configuration,
         test_failed_replacement_restores_previous_payload,
         test_dry_run_and_bad_destination_do_not_write_payload,
+        test_path_links_expose_installed_commands_without_clobbering,
+        test_links_only_does_not_redeploy,
         test_conflicting_knowledge_stops_upgrade_before_replacement,
         test_noninteractive_install_grants_only_its_knowledge_root,
     ))

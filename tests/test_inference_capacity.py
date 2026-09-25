@@ -345,6 +345,28 @@ def ended_observation(lease, observed_monotonic, generation=1,
     }
 
 
+def test_work_model_limit_counts_models_not_parallel_sequences():
+    policy = {**capacity_policy(), "total_sequences": 3}
+    host = {"available_host_bytes": 100 * GIB, "gtt_used_bytes": 0,
+            "gtt_total_bytes": 100 * GIB, "gtt_total_fresh": True}
+    resident = [{"model_id": "model-a", "model_bytes": 1 * GIB,
+                 "work_model": True}]
+    leases = [{"workload_class": "work", "backend_sequence": sequence,
+               "allocation_bytes": 0,
+               "route": {"model_id": "model-a", "model_bytes": 1 * GIB,
+                         "loaded": True}}
+              for sequence in (1, 2)]
+    same_model = resource_envelope(host, resident, leases, policy)
+    assert same_model["safe"] is True
+    assert same_model["resident_work_models"] == 1
+    assert same_model["proposed_work_models"] == 1
+    other = {**leases[1], "route": {"model_id": "model-b",
+                                    "model_bytes": 1 * GIB, "loaded": False}}
+    two_models = resource_envelope(host, resident, [leases[0], other], policy)
+    assert two_models["safe"] is False
+    assert two_models["proposed_work_models"] == 2
+
+
 def test_work_cannot_consume_reserved_front_sequence():
     result = resource_envelope(
         {"available_host_bytes": 80 * GIB, "gtt_used_bytes": 20 * GIB,

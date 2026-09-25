@@ -140,13 +140,23 @@ def validate_task_contract(raw: dict) -> dict:
                    or type(item.get("kind")) is not str or not item["kind"].strip()
                    for item in acceptance)):
         raise ValueError("acceptance must be a list of structured checks")
+    budget = validate_budget(raw["budget"])
+    # A root task accepted directly from David is bounded by its requested
+    # scope and stop condition, not by arbitrary execution slices.  Preserve
+    # maximum_children as an authority/delegation bound, but prevent a custom
+    # caller from accidentally reintroducing lifetime ceilings that interrupt
+    # otherwise healthy work.  Specialized bounded authority profiles retain
+    # their explicit budgets.
+    if authority == "contact_requested" and parent_job_id is None:
+        for field in BUDGET_FIELDS[:-1]:
+            budget[field] = None
     result = {
         "objective": objective,
         "scope": validate_scope(raw["scope"]),
         "authority_profile": authority,
         "requirements": validate_requirements(raw["requirements"]),
         "acceptance": acceptance,
-        "budget": validate_budget(raw["budget"]),
+        "budget": budget,
         "source_key": source_key,
         "parent_job_id": parent_job_id,
         "stop_condition": stop_condition,
@@ -154,15 +164,14 @@ def validate_task_contract(raw: dict) -> dict:
     return _durable_copy(result, "task contract")
 
 
-def validate_workspace_policy(values: dict) -> dict:
-    if type(values) is not dict or set(values) != {"version", "authority_profiles", "workspaces"}:
-        raise ValueError("invalid workspace authority policy")
+def validate_authority_policy(values: dict) -> dict:
+    if type(values) is not dict or set(values) != {"version", "authority_profiles"}:
+        raise ValueError("invalid authority profile policy")
     if values["version"] != 1:
-        raise ValueError("invalid workspace authority policy version")
+        raise ValueError("invalid authority profile policy version")
     profiles = values["authority_profiles"]
-    workspaces = values["workspaces"]
-    if type(profiles) is not list or type(workspaces) is not list:
-        raise ValueError("invalid workspace authority policy")
+    if type(profiles) is not list:
+        raise ValueError("invalid authority profile policy")
     profile_ids = []
     for profile in profiles:
         if type(profile) is not dict or set(profile) != {"id", "effects", "workload_class"}:
@@ -177,35 +186,26 @@ def validate_workspace_policy(values: dict) -> dict:
             raise ValueError("invalid authority profile effects")
     if len(profile_ids) != len(set(profile_ids)):
         raise ValueError("duplicate authority profile")
-    workspace_paths = []
-    for workspace in workspaces:
-        if type(workspace) is not dict:
-            raise ValueError("invalid workspace policy entry")
-        for field in ("id", "path", "provenance", "mode"):
-            _nonempty_text(workspace.get(field), f"workspace {field}")
-        workspace_paths.append(_canonical_absolute_path(workspace["path"], "workspace path"))
-    if len(workspace_paths) != len(set(workspace_paths)):
-        raise ValueError("duplicate workspace path")
-    return _durable_copy(values, "workspace authority policy")
+    return _durable_copy(values, "authority profile policy")
 
 
-def accepted_workspace_policy(root: Path) -> dict:
+def accepted_authority_policy(root: Path) -> dict:
     from survival.json_codec import decode_json_object
 
     root = Path(root).resolve()
     try:
         configured = decode_json_object(
-            (root / "config/workspaces.json").read_bytes(), "workspace authority policy"
+            (root / "config/authority-profiles.json").read_bytes(), "authority profile policy"
         )
-        return validate_workspace_policy(configured)
+        return validate_authority_policy(configured)
     except (OSError, ValueError) as error:
-        raise ValueError("workspace authority policy is unavailable") from error
+        raise ValueError("authority profile policy is unavailable") from error
 
 
 def _resolved_authority(contract: dict, root: Path) -> tuple[dict, dict]:
     validated = validate_task_contract(contract)
     try:
-        policy = accepted_workspace_policy(root)
+        policy = accepted_authority_policy(root)
     except ValueError:
         policy = {"authority_profiles": []}
     profile = next((item for item in policy["authority_profiles"]

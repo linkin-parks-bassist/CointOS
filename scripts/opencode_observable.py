@@ -38,7 +38,7 @@ def start_server(binary, directory, env, log_path):
     descriptor = os.open(log_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     with os.fdopen(descriptor, 'wb') as log:
         process = subprocess.Popen(
-            [binary, 'serve', '--pure', '--hostname', '127.0.0.1', '--port', '0',
+            [binary, 'serve', '--hostname', '127.0.0.1', '--port', '0',
              '--mdns=false'], cwd=directory, env=env, stdin=subprocess.DEVNULL,
             stdout=log, stderr=log, pass_fds=descriptors)
     try:
@@ -70,27 +70,46 @@ def create_session(url, directory, title):
     return identifier
 
 
-def session_parts(url, directory, session):
+def session_messages(url, directory, session):
     query = urllib.parse.urlencode({'directory': str(directory)})
     with urllib.request.urlopen(
             f'{url}/session/{session}/message?{query}', timeout=10) as response:
         messages = json.load(response)
     if not isinstance(messages, list):
         raise RuntimeError('invalid OpenCode session message response')
+    return messages
+
+
+def session_parts(url, directory, session):
     parts = []
-    for message in messages:
+    for message in session_messages(url, directory, session):
         if not isinstance(message, dict) or not isinstance(message.get('parts'), list):
             continue
         parts.extend(part for part in message['parts'] if isinstance(part, dict))
     return parts
 
 
-def await_server_finish(url, directory, session, seen_part_ids):
+def session_status(url, directory):
+    query = urllib.parse.urlencode({'directory': str(directory)})
+    with urllib.request.urlopen(f'{url}/session/status?{query}', timeout=10) as response:
+        status = json.load(response)
+    if not isinstance(status, dict):
+        raise RuntimeError('invalid OpenCode session status response')
+    return status
+
+
+def await_server_finish(url, directory, session, seen_part_ids,
+                        baseline_assistant_ids):
     """Mirror server-side orchestration after an attached CLI exits."""
     seen = set(seen_part_ids)
     last_text = None
     while True:
-        for part in session_parts(url, directory, session):
+        messages = session_messages(url, directory, session)
+        parts = [part for message in messages
+                 if isinstance(message, dict)
+                 and isinstance(message.get('parts'), list)
+                 for part in message.get('parts', []) if isinstance(part, dict)]
+        for part in parts:
             identifier = part.get('id')
             if isinstance(identifier, str) and identifier in seen:
                 continue
@@ -119,6 +138,16 @@ def await_server_finish(url, directory, session, seen_part_ids):
                     return {'returncode': 0, 'length': True,
                             'incomplete': False,
                             'continuation_required': False}
+        fresh_error = any(
+            isinstance(message, dict)
+            and isinstance(message.get('info'), dict)
+            and message['info'].get('role') == 'assistant'
+            and message['info'].get('id') not in baseline_assistant_ids
+            and message['info'].get('error') is not None
+            for message in messages)
+        if fresh_error and session not in session_status(url, directory):
+            return {'returncode': 1, 'length': False,
+                    'incomplete': False, 'continuation_required': False}
         time.sleep(0.1)
 
 
@@ -294,10 +323,19 @@ def main():
                   file=sys.stderr, flush=True)
         length_recoveries = 0
         while True:
-            baseline_part_ids = {
-                part['id'] for part in session_parts(url, directory, session)
-                if isinstance(part.get('id'), str)
-            }
+            baseline_messages = session_messages(url, directory, session)
+            baseline_part_ids = {part['id'] for message in baseline_messages
+                                 if isinstance(message, dict)
+                                 and isinstance(message.get('parts'), list)
+                                 for part in message.get('parts', [])
+                                 if isinstance(part, dict)
+                                 and isinstance(part.get('id'), str)}
+            baseline_assistant_ids = {message['info']['id']
+                                      for message in baseline_messages
+                                      if isinstance(message, dict)
+                                      and isinstance(message.get('info'), dict)
+                                      and message['info'].get('role') == 'assistant'
+                                      and isinstance(message['info'].get('id'), str)}
             client = subprocess.Popen(client_command+['--attach', url], cwd=directory,
                                       env=client_env, stdin=subprocess.PIPE,
                                       stdout=subprocess.PIPE)
@@ -312,7 +350,8 @@ def main():
                 }), file=sys.stderr, flush=True)
                 outcome = await_server_finish(
                     url, directory, session,
-                    baseline_part_ids | outcome['part_ids'])
+                    baseline_part_ids | outcome['part_ids'],
+                    baseline_assistant_ids)
             if outcome.get('incomplete'):
                 # An explicit incomplete handoff ends the turn at a semantic
                 # boundary without finishing the task.  Resume the same

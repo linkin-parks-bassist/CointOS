@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 from pathlib import Path
 
 from ecosystem import cli
@@ -29,7 +30,9 @@ Write exactly one JSON object to `{path}` with this shape:
 {{"accepted": true_or_false, "summary": "plain factual result", "claims": ["..."],
   "evidence": ["reproducible observation"], "checks": ["command or inspection and outcome"]}}
 Use `accepted: false` when work is incomplete, misleading, stale, untested where
-testing matters, or the evidence is insufficient. Do not omit the verdict file."""
+testing matters, or the evidence is insufficient. For `accepted: true`, provide
+a nonblank summary and at least one nonblank string in each of `claims`,
+`evidence`, and `checks`. Do not omit the verdict file."""
     root = cli.ROOT.resolve()
     contract = {
         "objective": task,
@@ -46,12 +49,12 @@ testing matters, or the evidence is insufficient. Do not omit the verdict file."
         "stop_condition": "Stop after one schema-valid evidence-backed verdict.",
     }
     job_id = cli.enqueue_task("verifier", task, source=f"verification:{target_id}",
+                              idempotency_key=f"verification:{target_id}",
                               prefer_models_other_than=[target.get("model", "")],
-                              task_contract=contract)
+                              task_contract=contract,
+                              verifies_target_id=target_id)
     verifier_path = cli.ROOT / "state/jobs" / f"{job_id}.json"
     verifier = json.loads(verifier_path.read_text(encoding="utf-8"))
-    verifier["verifies"] = target_id
-    cli.atomic_json(verifier_path, verifier)
     cli.audit("verification.queued", target_job_id=target_id, verifier_job_id=job_id,
               prefer_models_other_than=verifier.get("prefer_models_other_than", []))
     return job_id
@@ -65,21 +68,51 @@ def read_verdict(target_id: str) -> tuple[bool, dict | None, str]:
         verdict = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         return False, None, f"invalid verifier verdict: {type(error).__name__}"
-    valid = isinstance(verdict.get("accepted"), bool) and isinstance(verdict.get("summary"), str)
-    valid = valid and all(isinstance(verdict.get(key), list) for key in REQUIRED_LISTS)
+    if type(verdict) is not dict:
+        return False, None, "verifier verdict did not satisfy its schema"
+    summary = verdict.get("summary")
+    valid = (type(verdict.get("accepted")) is bool
+             and type(summary) is str and bool(summary.strip()))
+    valid = valid and all(
+        type(verdict.get(key)) is list
+        and all(type(item) is str and bool(item.strip())
+                for item in verdict[key])
+        for key in REQUIRED_LISTS)
     if not valid:
         return False, verdict, "verifier verdict did not satisfy its schema"
-    return verdict["accepted"], verdict, verdict["summary"].strip()
+    if verdict["accepted"] and any(not verdict[key] for key in REQUIRED_LISTS):
+        return False, verdict, "accepted verifier verdict lacks claims, evidence, or checks"
+    return verdict["accepted"], verdict, summary.strip()
 
 
 def finalize(verifier: dict) -> dict:
+    from ecosystem.outbox import result_recipients
+    verifier_state = verifier.get("state")
+    if verifier_state not in {"run_finished", "completed", "failed"}:
+        raise ValueError("verifier runner has no terminal outcome")
     target_path = cli.ROOT / "state/jobs" / f"{verifier['verifies']}.json"
-    target = json.loads(target_path.read_text(encoding="utf-8"))
-    accepted, verdict, summary = read_verdict(target["id"])
-    target.update(state="completed" if accepted else "rejected", updated_at=cli.now(),
-                  verification_job=verifier["id"], verification_summary=summary,
-                  verification=verdict)
-    cli.atomic_json(target_path, target)
+    lock_path = cli.ROOT / "state/verification-finalize.lock"
+    with lock_path.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        target = json.loads(target_path.read_text(encoding="utf-8"))
+        if target.get("verification_job") == verifier["id"] \
+                and target.get("state") in {"completed", "rejected"}:
+            return target
+        if target.get("state") != "awaiting_verification":
+            raise ValueError("verifier target is not awaiting verification")
+        target.setdefault("result_notification_recipients", result_recipients())
+        accepted, verdict, summary = read_verdict(target["id"])
+        if verifier_state == "failed":
+            if accepted:
+                verdict = {**verdict, "accepted": False}
+                summary = "verifier runner failed; accepted verdict ignored"
+            else:
+                summary = f"verifier runner failed; {summary}"
+            accepted = False
+        target.update(state="completed" if accepted else "rejected", updated_at=cli.now(),
+                      verification_job=verifier["id"], verification_summary=summary,
+                      verification=verdict)
+        cli.atomic_json(target_path, target)
     cli.audit("verification.accepted" if accepted else "verification.rejected",
               target_job_id=target["id"], verifier_job_id=verifier["id"], summary=summary)
     return target

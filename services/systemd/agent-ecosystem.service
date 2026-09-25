@@ -1,5 +1,5 @@
 [Unit]
-Description=Process local agent ecosystem inbox once
+Description=Process local agent ecosystem inbox and dispatch executor lanes
 
 [Service]
 Type=oneshot
@@ -12,7 +12,7 @@ WorkingDirectory=%h/Projects/CointOS
 EnvironmentFile=-%h/.config/agent-ecosystem/telegram.env
 Environment=COINTOS_RUNTIME_ROOT=%h/.CointOS
 ExecStart=%h/Projects/CointOS/scripts/ecosystem run-once
-ExecStart=%h/Projects/CointOS/scripts/executor
+ExecStart=%h/Projects/CointOS/scripts/dispatch-executors
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full

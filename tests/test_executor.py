@@ -965,13 +965,7 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
             reaped = gated_child_cleanup(record, 0.01)
         self.assertEqual(reaped["state"], "reaped")
 
-    def test_executor_prepares_base_context_without_a_role(self):
-        roles = self.root / "roles"
-        roles.mkdir(exist_ok=True)
-        (roles / "_base.md").write_text(
-            "# Base Agent\n\n## Mission\nComplete the assigned task safely.\n",
-            encoding="utf-8",
-        )
+    def test_executor_prepares_task_only_prompt_without_a_role(self):
         job_id = cli.enqueue_task(
             None, "Inspect", agent_name="Noether",
             task_contract=self.task_contract("Inspect"),
@@ -984,8 +978,7 @@ open(sys.argv[1], 'w', encoding='utf-8').write(json.dumps({
                 patch("ecosystem.models.route", return_value=decision):
             cli.prepare_next()
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
-        self.assertIn("# Base Agent", prompt)
-        self.assertNotIn("unknown role", prompt.lower())
+        self.assertEqual(prompt, "Inspect\n")
 
     def _close_fixture(self):
         root = self.root

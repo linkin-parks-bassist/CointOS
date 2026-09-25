@@ -16,15 +16,66 @@ GENERATION_PROPERTIES = ("MainPID", "ActiveState", "ExecMainStartTimestampMonoto
                          "ExecStart", "FragmentPath")
 
 def reconcile_verifications() -> list[str]:
-    from ecosystem.verification import enqueue
+    from ecosystem.verification import enqueue, finalize
+    from ecosystem.executor import queue_notifications
     jobs = [json.loads(path.read_text(encoding="utf-8")) for path in (cli.ROOT / "state/jobs").glob("*.json")]
-    linked = {job.get("verifies") for job in jobs if job.get("verifies")}
+    linked = {job.get("verifies"): job for job in jobs if job.get("verifies")}
     repaired = []
     for job in jobs:
-        if job.get("kind") == "agent-task" and job.get("state") == "awaiting_verification" and job["id"] not in linked:
+        if job.get("kind") != "agent-task" or job.get("state") != "awaiting_verification":
+            continue
+        verifier = linked.get(job["id"])
+        if verifier is None:
             verifier_id = enqueue(job)
             repaired.append(job["id"])
             cli.audit("watchdog.verification_relinked", target_job_id=job["id"], verifier_job_id=verifier_id)
+        elif (verifier.get("state") == "failed"
+              and type(verifier.get("runner_generation")) is int
+              and verifier.get("runner_closed_generation") == verifier["runner_generation"]
+              and verifier.get("runner_logical_finalized_generation") == verifier["runner_generation"]
+              and verifier.get("runner_close_state") == "failed"
+              and type(verifier.get("runner_close_outcome")) is dict
+              and verifier["runner_close_outcome"].get("state") == "reaped"
+              and verifier["runner_close_outcome"].get("process_group_alive") is False):
+            try:
+                target = finalize(verifier)
+            except ValueError:
+                # A cancellation or another terminal transition won the race.
+                continue
+            queue_notifications(target)
+            repaired.append(job["id"])
+            cli.audit("watchdog.verification_finalized", target_job_id=job["id"], verifier_job_id=verifier["id"])
+    return repaired
+
+
+def reconcile_result_notifications() -> list[str]:
+    """Repair committed terminal notification intents without replaying sends."""
+    from ecosystem.outbox import TERMINAL_STATES, enqueue_result
+    repaired = []
+    existing = set()
+    for path in (cli.ROOT / "state/jobs").glob("outbox-*.json"):
+        message = json.loads(path.read_text(encoding="utf-8"))
+        if (message.get("kind") == "outbound-message"
+                and message.get("result_of") is not None):
+            existing.add((message["result_of"], message.get("user_id")))
+    for path in (cli.ROOT / "state/jobs").glob("*.json"):
+        job = json.loads(path.read_text(encoding="utf-8"))
+        if (job.get("kind") != "agent-task"
+                or job.get("state") not in TERMINAL_STATES
+                or type(job.get("result_notification_recipients")) is not list):
+            continue
+        for recipient in job["result_notification_recipients"]:
+            if type(recipient) is not int or recipient <= 0:
+                continue
+            key = (job["id"], recipient)
+            if key in existing:
+                continue
+            _outbox_id, created = enqueue_result(recipient, job["id"])
+            existing.add(key)
+            if created:
+                repaired.append(job["id"])
+                cli.audit("watchdog.result_notification_relinked",
+                          job_id=job["id"], user_id=recipient)
     return repaired
 
 def service_state(name: str) -> str:
@@ -105,7 +156,7 @@ def service_generation_health() -> dict:
     else: action = "none"
     return {"stamp": stamp, "counts": counts, "units": units, "mixed": mixed, "action": action}
 
-def findings(config: dict) -> list[str]:
+def findings(config: dict, notification_health=None) -> list[str]:
     now = datetime.now(timezone.utc)
     found = []
     if service_state("agent-telegram.service") != "active": found.append("Telegram gateway is not active.")
@@ -120,12 +171,14 @@ def findings(config: dict) -> list[str]:
         found.append(f"Model inventory handshake failed: {type(error).__name__}: {error}")
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
-        if job.get("kind") == "agent-task" and job.get("state") == "running":
+        if job.get("kind") == "agent-task" and job.get("state") in {"claimed", "runner_starting", "running"}:
             age = (now - datetime.fromisoformat(job["updated_at"])).total_seconds()
-            if age >= config["running_job_warn_seconds"]: found.append(f"{job['id']} has run for {int(age)} seconds.")
-            output = cli.ROOT / job.get("output", "")
-            if output.exists() and now.timestamp() - output.stat().st_mtime >= config["output_idle_warn_seconds"]:
-                found.append(f"{job['id']} output has not advanced for at least {config['output_idle_warn_seconds']} seconds.")
+            if age >= config["running_job_warn_seconds"]:
+                found.append(f"{job['id']} has remained {job['state']} for {int(age)} seconds.")
+            if job["state"] == "running":
+                output = cli.ROOT / job.get("output", "")
+                if output.exists() and now.timestamp() - output.stat().st_mtime >= config["output_idle_warn_seconds"]:
+                    found.append(f"{job['id']} output has not advanced for at least {config['output_idle_warn_seconds']} seconds.")
         if job.get("kind") == "agent-task" and job.get("state") == "awaiting_verification":
             age = (now - datetime.fromisoformat(job["updated_at"])).total_seconds()
             linked = [candidate for candidate in (cli.ROOT / "state/jobs").glob("*.json")
@@ -141,16 +194,32 @@ def findings(config: dict) -> list[str]:
             try: event = json.loads(line)
             except json.JSONDecodeError: continue
             age = (now - datetime.fromisoformat(event["at"])).total_seconds()
-            if age <= config["event_error_window_seconds"] and event.get("event") in {"telegram.error", "outbox.delivery_failed"}:
+            if age <= config["event_error_window_seconds"] and event.get("event") == "telegram.error":
                 recent_errors.append(event.get("event"))
         if len(recent_errors) >= config["event_error_threshold"]:
-            found.append(f"Recent event log contains an error storm: {len(recent_errors)} transport/delivery errors in {config['event_error_window_seconds']} seconds.")
+            found.append(f"Recent event log contains an error storm: {len(recent_errors)} transport errors in {config['event_error_window_seconds']} seconds.")
+    if isinstance(notification_health, dict):
+        counts = notification_health.get("counts")
+        if isinstance(counts, dict):
+            failed = counts.get("failed", 0)
+            delivery_unknown = counts.get("delivery_unknown", 0)
+            failed = failed if isinstance(failed, int) and not isinstance(failed, bool) and failed >= 0 else 0
+            delivery_unknown = delivery_unknown if isinstance(delivery_unknown, int) and not isinstance(delivery_unknown, bool) and delivery_unknown >= 0 else 0
+            if failed > 0 or delivery_unknown > 0:
+                found.append(f"Notification delivery needs review: failed={failed}, delivery_unknown={delivery_unknown}.")
     return found
 
 def pending_review() -> bool:
     for path in (cli.ROOT / "state/jobs").glob("*.json"):
         job = json.loads(path.read_text(encoding="utf-8"))
-        if job.get("source", "").startswith(SOURCE) and job.get("state") in {"queued", "ready", "running"}: return True
+        if job.get("source", "").startswith(SOURCE) and job.get("state") in {"queued", "ready", "claimed", "runner_starting", "running"}: return True
+    return False
+
+def user_directed_work_active() -> bool:
+    for path in (cli.ROOT / "state/jobs").glob("*.json"):
+        job = json.loads(path.read_text(encoding="utf-8"))
+        if (job.get("kind") == "agent-task" and job.get("state") in {"queued", "ready", "claimed", "runner_starting", "running"}
+                and job.get("user_directed_origin") in cli.USER_DIRECTED_ORIGINS): return True
     return False
 
 def tick() -> str:
@@ -170,6 +239,7 @@ def tick() -> str:
         from ecosystem.executor import recover_abandoned_jobs
         managed_job_recovery = recover_abandoned_jobs()
         repaired_verifications = reconcile_verifications()
+        repaired_notifications = reconcile_result_notifications()
         from ecosystem.control_turns import recover_interrupted, observe_head
         control_recovery = recover_interrupted()
         control_head = observe_head()
@@ -182,8 +252,10 @@ def tick() -> str:
         generation_health = service_generation_health()
         last = datetime.fromisoformat(state["last_review_enqueued_at"]) if state.get("last_review_enqueued_at") else None
         due = not last or (now-last).total_seconds() >= config["steward_review_seconds"]
-        issues = findings(config)
-        if due and not pending_review() and not (cli.ROOT / "state/PAUSED").exists():
+        issues = findings(config, notification_health)
+        review_enabled = config.get("steward_review_enabled", True)
+        if (review_enabled and due and not pending_review()
+                and not user_directed_work_active() and not (cli.ROOT / "state/PAUSED").exists()):
             task_id, task_card, selection_reason = select(config, state, now=now)
             issue_text = "\n".join(f"- {item}" for item in issues) or "- No deterministic warning; perform the scheduled qualitative review."
             task = f"""Perform the periodic ecosystem sanity review.
@@ -222,11 +294,14 @@ Look for confusing or dishonest bot replies, missed context, jobs that did not p
                                       model_reason="Optional watchdog preference; central routing remains authoritative.",
                                       task_contract=contract)
             history = state.setdefault("task_last_selected", {}); history[task_id] = now.isoformat()
-            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health, last_service_generation_health=generation_health)
+            state.update(last_review_enqueued_at=now.isoformat(), last_job_id=job_id, last_task_id=task_id, last_task_reason=selection_reason, last_findings=issues, last_verification_repairs=repaired_verifications, last_notification_repairs=repaired_notifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health, last_service_generation_health=generation_health)
             cli.atomic_json(state_path, state); cli.audit("watchdog.steward_enqueued", job_id=job_id, findings=len(issues), task_id=task_id, selection_reason=selection_reason)
             return f"enqueued {job_id}"
-        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health, last_service_generation_health=generation_health)
+        state.update(last_tick_at=now.isoformat(), last_findings=issues, last_verification_repairs=repaired_verifications, last_notification_repairs=repaired_notifications, last_native_recovery=native_recovery, last_operator_recovery=operator_recovery, last_managed_job_recovery=managed_job_recovery, last_control_turn_recovery=control_recovery, last_control_turn_head=control_head, last_inference_capacity_reconciliation=capacity_reconciliation, last_worker_lease_health=lease_health, last_notification_health=notification_health, last_service_generation_health=generation_health)
         cli.atomic_json(state_path, state)
+        if not review_enabled:
+            return ("healthy; periodic review disabled" if not issues else
+                    f"findings={len(issues)}; periodic review disabled")
         return "healthy; review not due" if not issues else f"findings={len(issues)}; review already pending"
 
 if __name__ == "__main__": print(tick())

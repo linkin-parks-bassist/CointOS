@@ -18,7 +18,7 @@ def active_names() -> set[str]:
             job = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        if job.get("state") in {"queued", "ready", "running"} and job.get("agent_name"):
+        if job.get("state") in {"queued", "ready", "claimed", "runner_starting", "running"} and job.get("agent_name"):
             active.add(job["agent_name"])
     return active
 

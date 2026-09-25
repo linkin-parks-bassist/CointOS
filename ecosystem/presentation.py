@@ -13,15 +13,12 @@ from ecosystem.resource_control import active_chat_model
 
 
 CONTROL_ROLE = Path(__file__).resolve().parents[1] / "roles/_control-plane.md"
-WORKSPACE_INSTRUCTIONS = Path.home() / "AGENTS.md"
 
 
 def humanize_notification(raw: str, history: list[dict[str, str]] | None = None,
                           inference_context: dict | None = None) -> str:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.5-4B-GGUF"))
-    system = f"""{WORKSPACE_INSTRUCTIONS.read_text(encoding='utf-8')}
-
-{CONTROL_ROLE.read_text(encoding='utf-8')}
+    system = f"""{CONTROL_ROLE.read_text(encoding='utf-8')}
 
 Rewrite an internal agent notification as one concise Telegram message to David.
 Preserve consequential facts, requested decisions, failures, and useful results.

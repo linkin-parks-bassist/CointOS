@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+"""Show active managed jobs or one worker's durable log, read-only."""
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+
+ACTIVE_STATES = frozenset((
+    "queued", "ready", "claimed", "runner_starting", "running", "awaiting_verification",
+    "reconciliation_required",
+))
+
+
+def compact(value: object, limit: int) -> str:
+    line = " ".join(str(value).split())
+    return line if len(line) <= limit else line[: limit - 1] + "…"
+
+
+def tool_detail(value: object) -> str:
+    if not isinstance(value, dict):
+        return compact(value, 180)
+    if "command" in value:
+        return compact(value["command"], 180)
+    fields = ("filePath", "path", "pattern", "include", "name", "offset", "limit")
+    details = [f"{key}={compact(value[key], 120)}" for key in fields if key in value]
+    return " ".join(details) or "(input omitted)"
+
+
+def show_active(root: Path) -> None:
+    jobs = []
+    for path in (root / "state/jobs").glob("*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            print(f"unreadable job {path.name}: {error}", file=sys.stderr)
+            continue
+        if job.get("kind") == "agent-task" and job.get("state") in ACTIVE_STATES:
+            jobs.append(job)
+    if not jobs:
+        print("no active managed tasks")
+        return
+    for job in sorted(jobs, key=lambda item: (item.get("created_at", ""), item.get("id", ""))):
+        print(f"{job.get('id')}: state={job.get('state')} model={job.get('model')} "
+              f"task={compact(job.get('task', ''), 140)}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("job_id", nargs="?", help="managed task ID, for example task-abc123")
+    parser.add_argument("--active", action="store_true", help="list active managed tasks")
+    parser.add_argument("--tail", type=int, default=25, help="number of recent events")
+    parser.add_argument("--root", type=Path, default=Path.home() / ".CointOS")
+    args = parser.parse_args()
+    if args.active:
+        if args.job_id:
+            parser.error("provide either --active or a job_id")
+        show_active(args.root)
+        return
+    if not args.job_id:
+        parser.error("provide a job_id or --active")
+    if not re.fullmatch(r"task-[A-Za-z0-9-]+", args.job_id):
+        parser.error("job_id must be a managed task ID")
+    if args.tail < 1:
+        parser.error("--tail must be positive")
+
+    job_path = args.root / "state/jobs" / f"{args.job_id}.json"
+    log_path = args.root / "logs/runs" / f"{args.job_id}.opencode.log"
+    job = json.loads(job_path.read_text(encoding="utf-8"))
+    print(f"{args.job_id}: state={job.get('state')} model={job.get('model')} "
+          f"exit={job.get('exit_code')}")
+    if job.get("error"):
+        print(f"error: {compact(job['error'], 240)}")
+
+    events: list[str] = []
+    try:
+        stream = log_path.open(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        if job.get("state") in {"queued", "ready", "claimed", "runner_starting"}:
+            print("events=0 (worker log not created yet)")
+            return
+        raise SystemExit(f"worker log missing for {args.job_id}")
+    with stream:
+        for line in stream:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            part = event.get("part") or {}
+            kind = part.get("type")
+            if kind == "tool":
+                state = part.get("state") or {}
+                detail = tool_detail(state.get("input") or {})
+                events.append(f"tool {part.get('tool')}: {detail}")
+            elif kind == "text":
+                events.append("text: " + compact(part.get("text", ""), 220))
+            elif kind == "step-finish":
+                events.append(f"finish: {part.get('reason')}")
+            elif event.get("type") in {"worker_incomplete_handoff", "worker_capacity_verified"}:
+                events.append(str(event["type"]))
+    print(f"events={len(events)}")
+    for event in events[-args.tail:]:
+        print(event)
+
+
+if __name__ == "__main__":
+    main()
