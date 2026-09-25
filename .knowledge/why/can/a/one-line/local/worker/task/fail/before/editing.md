@@ -1,0 +1,12 @@
+---
+status: green
+revised_at: "2026-09-18T12:22:18+10:00"
+---
+
+A supervised Lyrebird run on 2026-09-18 reduced a Qwen3.8-27B local worker crumb to one literal comment-line replacement in one named file, with no tests, searches or secondary work. The observable session consumed about 21,779 input tokens before its first tool result because the runner injected the executable contract, binding global/project instructions, complete workspace registry and full coder role. It read the target file, emitted a normal tool-boundary step finish, then its process disappeared without making the one-line edit; the durable job became `reconciliation_required` when the executor service reconciled it.
+
+This does not show that Qwen3.8-27B was too large for the task or should be replaced with a smaller model. David explicitly states that Qwen3.8-27B is the minimum competent local worker and that 4B-class models are practically useless for this work. The task remains intentionally tiny because local-model capability must not be overestimated; tiny tasks and a competent 27B model are complementary requirements.
+
+A subsequent attempt incorrectly requested resident Qwen3.5-4B for a one-line edit. CointOS could not route it because its 16,384-token per-sequence allocation failed `context_reserve` and fell back to Qwen3.8-27B. That attempt preserved the coordinator error: switching to a weaker model did not solve task sizing or runner continuity. Do not route Lyrebird worker crumbs to 4B or 8B models. Use exact Qwen3.8-27B, keep each task to one very small closed transformation, and supervise actual tool/artifact progress.
+
+The infrastructure issue exposed here is reliable continuation after the first tool boundary and the very large injected prompt footprint, not permission to stop using Qwen3.8-27B. Investigate compact briefing only insofar as it reduces waste while preserving required instructions; do not design the small-model sequence as the target. Report exact selected model, prompt footprint, tool evidence and terminal/reconciliation state. Coordinator-side execution may preserve progress while the 27B worker lane is repaired, but the intended development loop remains supervised Qwen3.8-27B crumbs.

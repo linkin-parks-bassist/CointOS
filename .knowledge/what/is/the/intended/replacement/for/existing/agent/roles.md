@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T08:51:02+10:00"
+revised_at: "2026-09-26T09:01:59+10:00"
 ---
 
 Roles are being rebuilt from scratch around three classes (David). The current contents of `roles/` are not wanted. The target starting set is **Sole Survivor, Cointelprofessional, steward, manager and worker**. Roles then diversify within each class as practice shows the need.
@@ -14,9 +14,14 @@ Roles are being rebuilt from scratch around three classes (David). The current c
 
 The manager/worker split is how CointOS reconciles "agents act on their own judgement" with "local models get only small concrete tasks". Judgement about *what* to do is itself a managerial role's small, bounded task. Workers exercise judgement only about *how* to do their item.
 
-**Queues live in knowledge trees** (David's intended direction, pending how it works in practice). Each queued work item is a leaf whose answer holds the item's current brief and status. Managers write and reorder these leaves, and a worker's "look around" is reading them. An item leaf states current truth, never a progress log. The exact branch layout, the item leaf shape and how the GPU scheduler picks up items are not yet designed.
+**Queues live in knowledge trees** (David's intended direction; the layout is expected to take experimentation). Each queued work item is a leaf whose answer holds the item's current brief and status. Managers write and reorder these leaves, and a worker's "look around" is reading them. An item leaf states current truth, never a progress log. The layout is federated across trees:
 
-**Coin edits knowledge trees directly.** Cointelprofessional must have knowledge-tree read and edit capability so David can draft ideas, adjust queues and correct knowledge through Coin. Coin currently has no knowledge-tree tools; this is required work.
+- **Per-project trees:** project work items live in that project's own repository tree under `~/Projects/<repo>/.knowledge/`, alongside the project's knowledge.
+- **Installed CointOS tree:** `~/.CointOS/.knowledge/` holds the broader cross-project view of ongoing work and the system's own queue. Candidate branches are `what/is/queued/`, `what/is/pending/` and `what/is/urgent/`.
+
+The exact branches, the item leaf shape and how the scheduler picks up items remain experimental.
+
+**Coin edits knowledge trees directly, through the knowledge-tree MCP server.** Cointelprofessional gets the same `kt_*` tool surface agents use, not a bespoke wrapper, so David can draft ideas, adjust queues and correct knowledge through Coin. Coin is not an OpenCode session, so it has no MCP host of its own. Instead, `ecosystem/knowledge_tools.py` is a minimal stdio MCP client. For each deep control turn, `ecosystem/control_worker.py` starts `~/.knowledge/.tools/kt-mcp` with the installed CointOS tree as its local root. The 23 `kt_*` tools are appended to Coin's own tools in `ecosystem/control_agent.py`, and calls are forwarded to the server. If the server cannot start, Coin continues without the tools. The control-worker unit can write to `~/.knowledge`, `~/Projects` and `~/.local/state/knowledgetrees` so kt edits can succeed. Client access elicitation is not supported, so an access request returns a pending ID that Coin must confirm with David in conversation.
 
 Knowledge-tree machinery owns general behaviour (orientation, procedures, recording knowledge). Roles express only the distinct remaining responsibilities.
 

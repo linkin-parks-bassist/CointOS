@@ -45,10 +45,21 @@ def _initial_defers_completion(response: str | None) -> bool:
     ))
 
 
+def _knowledge_guidance(knowledge) -> str:
+    if knowledge is None:
+        return ""
+    return (
+        "Knowledge trees (kt_* tools) are CointOS's maintained knowledge, including work queues. "
+        "Use them to answer from checked knowledge and to record David's ideas, queue changes "
+        "and corrections. A leaf is a current answer, never a log.\n"
+        f"{knowledge.instructions}\n\n"
+    )
+
+
 def respond(message: str, history: list[dict[str, str]], initial_response: str | None,
             live: dict, execute: Callable[[str, dict], dict],
             infer: Callable[..., dict] | None = None,
-            inference_context: dict | None = None) -> dict:
+            inference_context: dict | None = None, knowledge=None) -> dict:
     model = active_chat_model(os.environ.get("AGENT_TELEGRAM_MODEL", "Qwen3.8-27B-GGUF"))
     initial_was_delivered = isinstance(initial_response, str) and bool(initial_response.strip())
     initial = initial_response.strip() if initial_was_delivered else "No initial response was delivered."
@@ -69,22 +80,23 @@ internal IDs unless asked. Never claim an action
 unless a tool result says it occurred. Do not emit the transport-owned five-minute
 failure sentence. Tool and terminal records are internal and never shown as JSON.
 
-Current message: {message}
+{_knowledge_guidance(knowledge)}Current message: {message}
 Initial response: {initial}
 Live context at deep-turn start:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
+    tools = TOOLS + (knowledge.tools if knowledge is not None else [])
     successful_tool_action = False
     while True:
-        assistant = (infer(model=model, messages=messages, tools=TOOLS,
+        assistant = (infer(model=model, messages=messages, tools=tools,
                            max_tokens=DEEP_OUTPUT_TOKENS, timeout=None, temperature=0.35)
                      if infer is not None else (
                          inference_request({**inference_context, "messages": messages,
-                                            "tools": TOOLS, "tool_choice": "auto", "timeout": None,
+                                            "tools": tools, "tool_choice": "auto", "timeout": None,
                                             "temperature": .35}, Path(__file__).resolve().parents[1], time.monotonic)
                          if inference_context is not None else
-                         managed_request(model, messages, DEEP_OUTPUT_TOKENS, timeout=None, tools=TOOLS,
+                         managed_request(model, messages, DEEP_OUTPUT_TOKENS, timeout=None, tools=tools,
                                          control=True)))
         calls = assistant.get("tool_calls") or []
         if not calls:
@@ -107,7 +119,9 @@ Live context at deep-turn start:
                     result = {"ok": True, "accepted": True}
                 else:
                     try:
-                        result = execute(name, arguments)
+                        result = (knowledge.call(name, arguments)
+                                  if knowledge is not None and name in knowledge.names
+                                  else execute(name, arguments))
                     except Exception as error:
                         result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
                     if isinstance(result, dict) and result.get("ok") is True:

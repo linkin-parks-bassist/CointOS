@@ -1,10 +1,25 @@
 ---
-status: green
-revised_at: "2026-09-26T08:11:26+10:00"
+status: "green"
+revised_at: "2026-09-26T09:02:51+10:00"
 ---
 
-The priority is dependable abundance-first local inference: authorized active requests receive physically available capacity while lower-priority work is suspended and retained when needed. Ghost state, stale metadata, version drift, duplicated admission and arbitrary ceilings must not become terminal denials.
+The plan is to reach the system defined in `what/is/cointos.md`: an autonomous, self-sustaining agent ecosystem that keeps the GPU busy with useful work without David's prompting.
 
-Dynamic managed-worker lanes are installed and bounded CointOS-only audits demonstrated two simultaneous workers plus queued dispatch. The model-neutral backend-profile policy, demand scheduler, qualification ledger, fenced reload/rollback and user timer are installed with automation enabled. An idle 2→1→2 reload, a terminal-clean parked-worker handoff, automatic 1→2 growth with two terminal-clean workers on distinct physical sequences, and automatic idle 2→1 shrink passed. The growth exposed a delayed executor wake; the installed durable repair passed a real shrink-triggered immediate wake and pending-marker clearance. A repaired automatic growth still needs observation. No named Qwen model or fixed slot count defines capacity: resident allocation, durable demand, generic policy, resource headroom and exact evidence-backed ceiling determine the target. Physical llama.cpp `--parallel` changes require unload/load and may lose KV.
+**Milestone 1: autonomy loop (current).** Build on the existing scheduler rather than hardening it further:
+- write the steward/manager/worker role classes;
+- put work queues in knowledge trees;
+- give Coin knowledge-tree tools;
+- add a spawner that starts an agent whenever capacity is free.
 
-Incident `20260925T162248Z-0` was recovered after David explicitly requested normal operation. The original and replacement Sole Survivors had failed artifact acceptance; a narrow operator recovery passed live health, reconciliation, gate-smoke, and dispatch-start checks. The guard now has installed, active automatic escalation of terminal failed survivors: durable predecessor identity, preserved retry history, exponential delay capped at one hour, and another dedicated small-model recovery worker when the incident record and resources are healthy. This does not silently reopen the gate or claim the conclusion artifact exists. Qualify it during a future safe, bounded incident exercise; do not manufacture an emergency under active user work. After safe recovery, qualify repaired automatic growth with useful CointOS-only jobs, pressure/emergency priority and sibling cancellation. Validate retry/rollback under real failure when safe, and measure throughput/MTP before claiming speed benefits. Do not reload an occupied worker mid-round or touch professional ingestion. Then consolidate memory reserves, proxy transport headroom, Cointelprofessional answer quality, quarantined metadata and role/work-dissolution architecture. Fractionally distil executor lifecycle by separating physical runner close from logical job-outcome transitions. Pure budget/preemption record functions now form one boundary; `how/should/executor/py/be/fractionally/distilled.md` owns the remaining extraction criteria. Do not split the file cosmetically or leave parallel cancellation routes. Keep user runtime under `~/.CointOS` and root survival-plane installation a separate coordinated boundary. Use focused checks and bounded live qualification. Verify changed safety invariants with existing focused tests and bounded direct checks; the global MVP policy still bars authoring new regression tests until David explicitly changes it. Only side-effect-free, subsecond predicates belong in KT startup proofs, never the full suite.
+Acceptance is judged by observation: left alone, the GPU stays busy, drafted ideas and queued work visibly advance in their repositories under `~/Projects/`, and the system does not fall over. The concrete steps are in `what/is/next.md`.
+
+**Milestone 2: stability and recovery.** Once agents are running continuously, fix what actually breaks under real load. Prove Sole Survivor recovery on a real or safely induced incident, and keep Coin essentially always available. Scheduler follow-ups (sibling cancellation, pressure priority, multi-model selection, MTP throughput, proxy transport limits, lease archival) are done only when real load shows they matter.
+
+**Milestone 3: the idea pipeline and role diversification.** Deepen the dissolution pipeline (`what/is/architecture/of/cointos.md`): multi-step chunking, review and audit at the right abstraction levels, and diversified roles within each class.
+
+**Standing constraints.**
+- No named Qwen model or fixed slot count defines capacity; resident allocation, durable demand, policy, headroom and evidence-backed ceilings do.
+- Physical llama.cpp `--parallel` changes need unload/load and may lose KV cache.
+- Keep user runtime under `~/.CointOS`; the root survival plane is a separate boundary.
+- The MVP policy bars authoring new regression tests until David changes it. Only side-effect-free, subsecond predicates belong in startup proofs.
+- Executor distillation criteria are in `how/should/executor/py/be/fractionally/distilled.md`; do not split files cosmetically.
