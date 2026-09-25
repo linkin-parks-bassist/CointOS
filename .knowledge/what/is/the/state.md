@@ -1,6 +1,6 @@
 ---
-status: green
-revised_at: "2026-09-26T09:02:28+10:00"
+status: "green"
+revised_at: "2026-09-26T09:42:35+10:00"
 ---
 
 State of CointOS against its definition in `what/is/cointos.md`. For live health, use `cointos-health --json`; this leaf is not a health check.
@@ -13,10 +13,12 @@ State of CointOS against its definition in `what/is/cointos.md`. For live health
 
 **What is unproven live.** Stability under sustained autonomous load; Sole Survivor recovery (both attempts in the last incident failed; the rewritten prompt and escalation have not run live); sibling cancellation; pressure priority; multi-model selection; throughput with MTP.
 
-**Cointelprofessional (Coin).** Telegram contact with a fast reply path and a deep control-turn worker. The deep turn has Coin's own tools (status, task progress, cancel, queue, dispatch pause/resume, forget conversation) plus the full `kt_*` knowledge-tree tool set via `ecosystem/knowledge_tools.py`. Tree tools have been verified in the unit's sandbox but not yet exercised by Coin in a live conversation.
+**Cointelprofessional (Coin).** Telegram contact with a fast reply path and a deep control-turn worker. The deep turn has Coin's own tools (status, task progress, cancel, queue, dispatch pause/resume, forget conversation) plus the full `kt_*` knowledge-tree tool set via `ecosystem/knowledge_tools.py`. Coin has used them live over Telegram: a lookup and a leaf write both succeeded. Each call is audited as `control.kt_tool`.
 
-**What is missing against the definition.**
-- **Roles:** all `roles/*.md` files are empty. The target steward/manager/worker classes are not written (`what/is/the/intended/replacement/for/existing/agent/roles.md`).
-- **Knowledge-tree work queues:** no layout or item shape exists yet.
-- **Autonomous spawning:** nothing spawns agents when capacity is free. Work comes only from Telegram and the watchdog's periodic `steward-tasks/` deck, so the GPU idles without prompting.
-- **Idea pipeline:** no idea intake, and no chunking or state tracking.
+**Autonomy loop (live since 2026-09-26, first rounds unreviewed).**
+- **Roles:** `_base`, `_control-plane` (Coin), `sole_survivor`, `steward`, `manager` and `worker` are first drafts; prompts compose base, role and assignment (`what/is/the/intended/replacement/for/existing/agent/roles.md`).
+- **Queues:** project knowledge trees, under `what/is/{urgent,queued,drafted}/`.
+- **Spawner:** `agent-spawner.timer` is enabled and scans `~/Projects/CointOS` only (`how/does/the/cointos/spawner/choose/work.md`). The first manager survey is running on Qwen3.8-27B at roughly one tool call a minute; a steward waits for the second lane.
+- **Lane floor:** `profile_minimum_parallel_sequences: 2` keeps idle work models at two lanes, but no reload to two has been observed yet.
+- **Controls:** `cointos stop|go|halt|up` exist (`how/to/operate/cointos.md`); `halt` and `up` have not been exercised live.
+- **Mixed generations:** after the 2026-09-26 deployments only Coin's units (Telegram, control worker) were restarted. The proxy, resource guard and notifier still run the previous module generation until a whole-system `cointos-system restart`.

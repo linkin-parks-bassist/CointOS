@@ -1,13 +1,21 @@
 ---
-status: green
-revised_at: "2026-09-26T08:13:21+10:00"
+status: "green"
+revised_at: "2026-09-26T09:42:19+10:00"
 ---
 
 Stopping repository work does not mean leaving the deployed system in a preventably degraded state. Before handing off, check live resource mode, the authoritative durable work gate, relevant service health, and active recovery escalation. If emergency persists, keep the guard and dedicated survivor escalation running; distinguish physical-unsafety blockers from a terminal failed worker and never call a sticky emergency a clean operational state. Do not reopen an unsafe gate merely to report uptime.
 
+David's controls, via the `cointos` command (`~/.local/bin/cointos`, the installed `ecosystem.cli`):
+
+- `cointos stop`: pause dispatch (which also stops autonomous spawning) and cancel every active autonomous agent. David's own queued or running tasks and Sole Survivor are left alone; `--all` cancels David's tasks too. Coin keeps running.
+- `cointos go`: resume dispatch and spawning after `stop` or `pause`.
+- `cointos halt`: take CointOS fully offline immediately. It pauses dispatch, stops every `agent-*` user unit (timers and paths first, then Coin, Sole Survivor, executors and everything else), and unloads all models from Lemonade. Lemonade itself and root-owned services are untouched.
+- `cointos up`: clear the pause and start the whole system with `cointos-system start`.
+- `cointos pause` / `cointos resume`: pause or resume new dispatch only; running agents continue.
+
 Operate the complete user-session CointOS generation through installed `/home/david/.CointOS/scripts/cointos-system` (or the source counterpart before installation): `start`, `stop`, `restart`, and `status` are the supported whole-system actions. Use this boundary after installing code/configuration changes that affect running services. Do not restart individual CointOS units during an ordinary upgrade because that can leave old Python processes interpreting new on-disk configuration.
 
-The command owns resident models, inference proxy, resource guard, Telegram gateway, control worker, notifier, ecosystem path/timer, watchdog timer, and their triggered oneshots. Stop includes triggers and oneshots so they cannot reactivate a partial generation. Start reloads systemd and starts all long-running units plus triggers. Restart stops the whole set, reloads, then starts it. If any start fails, it stops the complete set rather than leaving a partially active system. `status` reports every expected long-running unit and trigger in one call.
+The command owns resident models, inference proxy, resource guard, Telegram gateway, control worker, notifier, ecosystem path/timer, watchdog timer, backend-profile timer, spawner timer, and their triggered oneshots. Stop includes triggers and oneshots so they cannot reactivate a partial generation. Start reloads systemd and starts all long-running units plus triggers. Restart stops the whole set, reloads, then starts it. If any start fails, it stops the complete set rather than leaving a partially active system. `status` reports every expected long-running unit and trigger in one call.
 
 This was required after installation moved physical reserve keys while a 24-hour-old control worker retained the previous module generation. One Telegram turn hot-retried `invalid inference capacity policy` more than 1,200 times. A whole-system restart loaded matching code/config, ended policy errors, and recovered the retained turn.
 
