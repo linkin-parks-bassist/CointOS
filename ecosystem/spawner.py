@@ -147,7 +147,7 @@ def tick() -> str:
             "objective": task,
             "scope": {"workspace": workspace, "read_paths": [workspace], "write_paths": [workspace]},
             "authority_profile": "ordinary",
-            "requirements": {"required_capabilities": ["reasoning", "tool-calling"],
+            "requirements": {"required_capabilities": ["tool-calling"],
                              "minimum_context_tokens": config["minimum_context_tokens"]},
             "acceptance": [],
             "budget": {"run_seconds": None, "task_seconds": None, "maximum_attempts": None,

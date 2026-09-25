@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -316,6 +317,53 @@ def request_task_cancellation(source: str, agent_name: str | None = None) -> dic
     return result
 
 
+def emergency_stop(include_user_work: bool = False) -> list[dict]:
+    """Pause dispatch and cancel active agents; Coin and Sole Survivor keep running."""
+    initialize()
+    (ROOT / "state/PAUSED").touch()
+    audit("ecosystem.emergency_stop", include_user_work=include_user_work)
+    results = []
+    for path in (ROOT / "state/jobs").glob("task-*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (job.get("kind") != "agent-task" or job.get("role") == "sole_survivor"
+                or job.get("state") not in {"queued", "ready", "claimed", "runner_starting",
+                                            "running", "awaiting_verification"}):
+            continue
+        if job.get("user_directed_origin") in USER_DIRECTED_ORIGINS and not include_user_work:
+            continue
+        if type(job.get("source")) is str and job["source"] and job.get("agent_name"):
+            results.append(request_task_cancellation(job["source"], job["agent_name"]))
+    return results
+
+
+def halt() -> list[str]:
+    """Take CointOS fully offline now: every agent unit, Coin and Sole Survivor included."""
+    initialize()
+    (ROOT / "state/PAUSED").touch()
+    audit("ecosystem.halt")
+    notes = []
+    for patterns in (["agent-*.timer", "agent-*.path"], ["agent-*"]):
+        done = subprocess.run(["systemctl", "--user", "stop", *patterns],
+                              capture_output=True, text=True)
+        if done.returncode:
+            notes.append(done.stderr.strip())
+    try:
+        from ecosystem.resource_control import unload_all_models
+        unload_all_models()
+    except Exception as error:  # halting must not stop on an unreachable backend
+        notes.append(f"model unload: {type(error).__name__}: {error}")
+    return notes
+
+
+def bring_up() -> int:
+    (ROOT / "state/PAUSED").unlink(missing_ok=True)
+    audit("ecosystem.up")
+    return subprocess.run([str(ROOT / "scripts/cointos-system"), "start"]).returncode
+
+
 def amend_latest_task(source: str, role: str | None, task: str, model: str | None = None,
                       model_reason: str = "", idempotency_key: str | None = None,
                       task_contract: dict | None = None) -> str | None:
@@ -562,7 +610,7 @@ def status() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ecosystem")
-    parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "enqueue", "prepare-next", "roles", "tell-david"))
+    parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "stop", "go", "halt", "up", "enqueue", "prepare-next", "roles", "tell-david"))
     parser.add_argument("--role", default="worker")
     parser.add_argument("--task")
     parser.add_argument("--task-contract")
@@ -571,6 +619,8 @@ def main() -> None:
     parser.add_argument("--model-reason", default="")
     parser.add_argument("--agent-name")
     parser.add_argument("--message")
+    parser.add_argument("--all", action="store_true",
+                        help="stop: also cancel David's own queued/running agent tasks")
     parser.add_argument("--severity", choices=("info", "warning", "question", "approval"), default="info")
     parser.add_argument("--needs-response", action="store_true")
     args = parser.parse_args()
@@ -582,6 +632,20 @@ def main() -> None:
         initialize(); (ROOT / "state/PAUSED").touch(); audit("ecosystem.paused"); print("paused")
     elif args.command == "resume":
         (ROOT / "state/PAUSED").unlink(missing_ok=True); audit("ecosystem.resumed"); print("resumed")
+    elif args.command == "stop":
+        results = emergency_stop(args.all)
+        print(f"stopped: dispatch paused, {len(results)} agent(s) cancelled"
+              + ("" if args.all else " (your own tasks left alone; use --all to include them)")
+              + "\nresume with: cointos go")
+    elif args.command == "go":
+        (ROOT / "state/PAUSED").unlink(missing_ok=True); audit("ecosystem.resumed"); wake_dispatch()
+        print("resumed: dispatch and autonomous spawning are running")
+    elif args.command == "halt":
+        for note in halt():
+            print(note)
+        print("halted: all CointOS services stopped and models unloaded\nbring it back with: cointos up")
+    elif args.command == "up":
+        raise SystemExit(bring_up())
     elif args.command == "enqueue":
         if not args.task:
             parser.error("enqueue requires --task")

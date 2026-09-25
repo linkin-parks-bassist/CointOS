@@ -61,10 +61,12 @@ def assess_profiles(root: Path, jobs: list[dict], inventory: dict,
     estimate = dynamic.get("estimated_kv_bytes_per_token")
     dwell = dynamic.get("profile_minimum_dwell_seconds", 300)
     failure_cooldown = dynamic.get("profile_failure_cooldown_seconds", 3600)
+    minimum_lanes = dynamic.get("profile_minimum_parallel_sequences", 1)
     if (type(headroom) is not int or headroom < 0
             or type(estimate) is not int or estimate <= 0
             or type(dwell) is not int or dwell < 0
-            or type(failure_cooldown) is not int or failure_cooldown < 0):
+            or type(failure_cooldown) is not int or failure_cooldown < 0
+            or type(minimum_lanes) is not int or minimum_lanes < 1):
         return {"state": "wait", "reason": "profile_policy_unavailable"}
     candidates = sorted(
         (item for item in inventory["models"]
@@ -96,8 +98,8 @@ def assess_profiles(root: Path, jobs: list[dict], inventory: dict,
         try:
             work_ceiling = inference_policy.load_inference_policy(
                 Path(root) / "config/inference.cfg", model_id=model_id)["work_slots"]
-            demand = backend_profile_policy.model_demand(
-                jobs, model_id, route_for_job)
+            demand = max(backend_profile_policy.model_demand(jobs, model_id, route_for_job),
+                         minimum_lanes)
             plan = backend_profiles.plan_parallel_profile(
                 profile, demand, work_ceiling, qualified, headroom, estimate)
         except (OSError, KeyError, RuntimeError, ValueError):
