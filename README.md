@@ -49,3 +49,28 @@ The installer copies service templates; it does not enable services, restart
 processes, install privileged resource controls or deploy model weights.
 Installed commands can be called from any directory, for example
 `~/.CointOS/scripts/ecosystem --help`.
+For the default `~/.CointOS` prefix, installation also links `ecosystem`,
+`cointos` (an alias for `ecosystem`), `cointos-jobs`, `cointos-job-info`,
+`cointos-profile`, `cointos-health`, and `cointos-incident`
+into `~/.local/bin`. Ensure that directory is on your shell `PATH` to run
+`ecosystem status` or `cointos-jobs --active` from anywhere. Existing unrelated
+commands are never replaced. Use `--no-path-links` to skip these links, or
+`--bin-dir /absolute/path` to link a custom installation into another directory.
+`./scripts/install-cointos --links-only` exposes an existing default installation
+without replacing its running code or restarting services.
+
+`cointos-health` reads the installed resource gate, loaded model recipes, and
+worker/inference/proxy lease-state counts without changing them. Add `--json` for
+machine-readable output; it does not display job prompts or worker output.
+`cointos-incident [INCIDENT_ID] --json` gives a bounded view of one immutable
+resource-incident snapshot and its current gate, without dumping large one-line
+ledgers or asserting that recovery is safe. Omit the ID to inspect the current
+incident; use `cointos-health` for current backend and lease counts.
+
+`cointos-profile status` shows the resident physical slot profile and its exact
+qualified ceiling. `cointos-profile plan` shows the current demand, dwell and
+qualification decision without reloading a model. `qualify-current` records a reviewed live capability;
+`resize-qualified` performs a fenced manual transition. Automatic profile
+reconciliation remains off until `cointos-profile enable-automation` is run after
+live transition qualification. `disable-automation` stops future automatic
+profile changes without interrupting current inference.
