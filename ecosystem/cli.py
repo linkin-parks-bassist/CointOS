@@ -610,7 +610,7 @@ def status() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ecosystem")
-    parser.add_argument("command", choices=("init", "scan", "run-once", "status", "pause", "resume", "stop", "go", "halt", "up", "enqueue", "prepare-next", "roles", "tell-david"))
+    parser.add_argument("command", choices=("init", "scan", "run-once", "status", "agents", "jobs", "counts", "pause", "resume", "stop", "go", "halt", "up", "enqueue", "prepare-next", "roles", "tell-david"))
     parser.add_argument("--role", default="worker")
     parser.add_argument("--task")
     parser.add_argument("--task-contract")
@@ -619,6 +619,7 @@ def main() -> None:
     parser.add_argument("--model-reason", default="")
     parser.add_argument("--agent-name")
     parser.add_argument("--message")
+    parser.add_argument("-n", "--limit", type=int, default=20, help="jobs: how many to show")
     parser.add_argument("--all", action="store_true",
                         help="stop: also cancel David's own queued/running agent tasks")
     parser.add_argument("--severity", choices=("info", "warning", "question", "approval"), default="info")
@@ -627,7 +628,10 @@ def main() -> None:
     if args.command == "init": initialize()
     elif args.command == "scan": print(f"queued={scan()}")
     elif args.command == "run-once": run_once()
-    elif args.command == "status": status()
+    elif args.command in ("status", "agents", "jobs"):
+        from ecosystem.views import show
+        show(args.command, args.limit)
+    elif args.command == "counts": status()
     elif args.command == "pause":
         initialize(); (ROOT / "state/PAUSED").touch(); audit("ecosystem.paused"); print("paused")
     elif args.command == "resume":
