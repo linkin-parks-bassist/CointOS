@@ -1,11 +1,17 @@
 ---
 status: "green"
-revised_at: "2026-09-26T09:42:19+10:00"
+revised_at: "2026-09-26T09:52:01+10:00"
 ---
 
 Stopping repository work does not mean leaving the deployed system in a preventably degraded state. Before handing off, check live resource mode, the authoritative durable work gate, relevant service health, and active recovery escalation. If emergency persists, keep the guard and dedicated survivor escalation running; distinguish physical-unsafety blockers from a terminal failed worker and never call a sticky emergency a clean operational state. Do not reopen an unsafe gate merely to report uptime.
 
-David's controls, via the `cointos` command (`~/.local/bin/cointos`, the installed `ecosystem.cli`):
+David's views and controls, via the `cointos` command (`~/.local/bin/cointos`, the installed `ecosystem.cli`). The views are rendered by `ecosystem/views.py`, whose data functions a future web view should reuse:
+
+- `cointos status`: one-screen dashboard of health or pause state, loaded models and their lanes, live agents, queue counts per spawner project, spawner activity, and any down services. The old queue counts are `cointos counts`.
+- `cointos agents`: every live agent, with role, state, age, origin (you, via Coin, auto·survey and so on), workspace, model, tool-call count, time since last output, and what it is working on.
+- `cointos jobs [-n N]`: the N most recently updated jobs with outcome, and failure reasons in red.
+
+Run the installed command, not `python3 -m ecosystem.cli` inside the source checkout: that resolves the checkout's own stray `state/` directory, which is not the live runtime.
 
 - `cointos stop`: pause dispatch (which also stops autonomous spawning) and cancel every active autonomous agent. David's own queued or running tasks and Sole Survivor are left alone; `--all` cancels David's tasks too. Coin keeps running.
 - `cointos go`: resume dispatch and spawning after `stop` or `pause`.
