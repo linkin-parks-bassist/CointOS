@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:37:15+10:00"
-scope: "local"
-source: "David user-observed run deaths and compaction behavior; inspected launch code; read-only live capacity derivation and isolated no-inference server API discovery, 2026-09-14"
-updated_at: "2026-09-14T22:42:45+10:00"
+status: green
+revised_at: "2026-09-14T22:42:45+10:00"
 ---
 
 OpenCode should perform its normal automatic compactions within the retained agent session. David reports observing that these compactions achieve the behavior he originally wanted from separate handoffs; custom CointOS context handoffs are deferred.

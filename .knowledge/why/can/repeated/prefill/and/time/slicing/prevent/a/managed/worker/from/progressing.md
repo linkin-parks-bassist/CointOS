@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T13:37:35+10:00"
-scope: "project local"
-source: "ecosystem/executor.py and installed task-af1fb27399d66898 preemption evidence 2026-09-17"
-updated_at: "2026-09-17T19:51:46+10:00"
+status: green
+revised_at: "2026-09-17T19:51:46+10:00"
 ---
 
 A managed local worker previously could make no forward progress when retained-session prefill consumed nearly the entire fairness slice. `ReservePolicyDeduplicator` was dispatched seven times over about 33 minutes, repeatedly stopped with `300-second time slice expired while other work is waiting`, and made no source edit before cancellation.

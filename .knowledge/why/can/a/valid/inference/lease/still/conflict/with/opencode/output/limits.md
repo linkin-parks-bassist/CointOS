@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:38:56+10:00"
-scope: "local"
-source: "David explicit conversation direction and inspected/changed capacity validation, encoder and proxy binding code, 2026-09-14"
+status: green
+revised_at: "2026-09-14T22:38:56+10:00"
 ---
 
 A lease fitting the backend's larger cap does not mean OpenCode may request that larger cap. The previous validate_launch_capacity returned the live record unchanged even if the lease allowed less output; opencode_environment encoded the record's larger output, whereas _validate_request_binding requires body.max_tokens to equal the lease max_output_tokens. A 128-token lease versus a 2048-token record can therefore produce incompatible requests. This is a source-level integration defect, not a reproduced cause of David's live session deaths.

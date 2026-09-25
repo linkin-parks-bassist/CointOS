@@ -1,12 +1,7 @@
 ---
-verified_at: '2026-09-11T16:37:17+10:00'
-verified_by: codex /root
-scope: project local
-source: David request 2026-09-11; filesystem and Git inventory during directory migration
-verification: Verified 566 ignored evidence files occupy 29 MB under
-  /home/david/.CointOS/development/sdd; historical versioned reports remain in Git.
-review_when: Recheck when development evidence retention or the CointOS runtime
-  layout changes.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T16:37:17+10:00'
 ---
 
 Generated development packets, transcripts, diffs, and viewer records live under

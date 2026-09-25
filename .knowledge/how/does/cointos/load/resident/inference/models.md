@@ -1,7 +1,6 @@
 ---
-status: "unverified"
-updated_at: "2026-09-16T03:39:40+10:00"
-source: "ecosystem/models.py; tests/test_model_admission.py; observable worker finals; direct missing-quantum route check 2026-09-16"
+status: green
+revised_at: "2026-09-16T03:39:40+10:00"
 ---
 
 The live model-inventory entry point is `ecosystem.models.snapshot(root=None, clock=None)`; the module has no `inventory()` function. `snapshot` returns the document consumed by `ids`, `admission`, routing, and `realize`.

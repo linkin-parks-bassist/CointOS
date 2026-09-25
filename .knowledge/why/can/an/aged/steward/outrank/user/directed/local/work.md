@@ -1,11 +1,7 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T21:11:44+10:00"
-scope: "project local"
-source: "ecosystem/cli.py and scheduler.py; mapper tasks task-befb283c26344463 and task-d6d9e2b8eb3f4b25; installed task-b27cce9dfd664d16 scheduling observation 2026-09-17"
-checked_at: "2026-09-17T22:24:00+10:00"
-review_when: "Recheck when task creation channels, durable origin fields, or scheduling bands change; live-observe the next Telegram-created deep task."
-updated_at: "2026-09-17T22:24:12+10:00"
+status: green
+revised_at: "2026-09-17T22:24:12+10:00"
+checked_at: '2026-09-17T22:24:00+10:00'
 ---
 
 A manually requested local mapper job was previously overtaken by older periodic Steward work because the durable job scheduler did not classify the manual request as user-driven. `scheduler.priority(job, scheduling, now)` called `effective_priority` without user-directed provenance, so unknown roles used default priority 250 and aged periodic work could reach 253.

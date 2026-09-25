@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:38:58+10:00"
-scope: "local"
-source: "Installed two-generation same-session context reroute and semantic JSON-error exit evidence 2026-09-15"
-updated_at: "2026-09-17T10:26:30+10:00"
+status: green
+revised_at: "2026-09-17T10:26:30+10:00"
 ---
 
 scripts/opencode_observable.py accepts an unattached opencode run command with explicit --dir and --title. After capacity read-back it either uses --session or creates a session via the scoped server /session API, injects that exact ID into the client command, and publishes a private view record containing session_id, URL, directory, server PID and exact attach command before inference. worker_view_ready repeats that record on stderr. The wrapper waits for the attached client and stops its server/client in finally. A managed user runner can persist session_id from its owned view record before suspension and relaunch with the same --session; it must not guess the newest session from shared storage or replay the original user prompt. The wrapper supports run commands, not arbitrary TUI/serve/attach commands.

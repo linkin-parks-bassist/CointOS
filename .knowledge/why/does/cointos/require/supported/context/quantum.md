@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T01:22:38+10:00"
-scope: "local"
-source: "exact source diff; observable worker finals; 48 existing model-admission tests; direct 70000-token missing-quantum route and validate_route check"
-updated_at: "2026-09-16T02:57:18+10:00"
+status: green
+revised_at: "2026-09-16T02:57:18+10:00"
 ---
 
 CointOS requires every model record to carry a positive `supported_context_quantum`, rejects routes without it, and rounds the selected per-sequence context down to a multiple. This field is not supplied by Lemonade's unloaded-model registry, so it prevents otherwise size/context/capability-qualified downloaded models from reaching the existing load producer.

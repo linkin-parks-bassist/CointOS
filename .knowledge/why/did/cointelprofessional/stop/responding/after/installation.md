@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T16:21:54+10:00"
-scope: "local"
-source: "telegram-999135394 durable record; 2026-09-17 audit JSONL; installed/source inference_capacity loaders; live service restart qualification"
+status: green
+revised_at: "2026-09-17T16:21:54+10:00"
 ---
 
 Telegram turn `telegram-999135394` received message `h`; its fast response failed and its deep path entered more than 1,200 attempts, each raising `ValueError: invalid inference capacity policy` roughly twice per second. The installed configuration had moved physical reserve keys from `inference_capacity` to `physical_capacity`, while the long-running `agent-control-worker.service` process still held the previous Python module generation. The installed current loader validated the same configuration successfully, proving a mixed running-code/config generation rather than invalid current files.

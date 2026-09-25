@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T05:44:57+10:00"
-scope: "local"
-source: "ecosystem/resource_control.py request_recovery; 57 existing resource-control tests; installed recovery 2026-09-16"
-updated_at: "2026-09-16T05:46:27+10:00"
+status: green
+revised_at: "2026-09-16T05:46:27+10:00"
 ---
 
 When an emergency reached `model_loaded` but Sole Survivor preparation failed before `sole_survivor_job` was recorded, `resource-control recover` now accepts the empty job identity as an explicit local operator recovery. It labels the actor `operator:failed-survivor-recovery` and retains the normal live resource-health check, interrupted-lease reconciliation, work-gate smoke transition, and service-start verification. If a survivor job exists, the exact `AGENT_JOB_ID` requirement remains. Other missing-survivor states remain refused.

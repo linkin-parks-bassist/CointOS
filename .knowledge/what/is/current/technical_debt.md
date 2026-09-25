@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local
-source: current source tree; pre-99318d9 Git history
-verification: Retained only unresolved structural themes still visible in current code.
-review_when: Recheck after consolidation, schema, lifecycle, or adapter refactors.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T18:43:14+10:00'
 ---
 
 The repository remains a prototype with overlapping ownership. Several modules mix

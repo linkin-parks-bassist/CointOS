@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T04:32:14+10:00"
-scope: "local"
-source: "current ecosystem/control_agent.py and focused qualification through 2026-09-16"
-updated_at: "2026-09-17T09:56:37+10:00"
+status: green
+revised_at: "2026-09-17T09:56:37+10:00"
 ---
 
 CointOS no longer limits Cointelprofessional to six tool rounds. `control_agent.respond` uses an open loop and continues until the model selects exactly one valid terminal tool. Bare prose, invalid or multiple terminal calls, ordinary tool results, and empty terminal payloads receive corrective context and another inference round.

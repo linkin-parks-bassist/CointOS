@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T12:52:51+10:00"
-scope: "project local"
-source: "David explicit Strix Halo hardware capability; models.py and inference_capacity.py repair plus installed live snapshot 2026-09-17"
+status: green
+revised_at: "2026-09-17T12:52:51+10:00"
 ---
 
 On this 128 GB unified-memory Strix Halo host, David confirms that 100 GiB is currently available at the hardware level for GPU allocation. The configured `physical_capacity.gtt_limit_bytes = 107374182400` is the qualified allocation boundary.

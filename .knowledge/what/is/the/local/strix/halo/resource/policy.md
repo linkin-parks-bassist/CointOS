@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-15T22:09:16+10:00"
-scope: "project local"
-source: "config/resource-policy.json; ecosystem/models.py; ecosystem/inference_capacity.py; ecosystem/resource_control.py; task-4894b791ecbcbafc report 2026-09-17"
-updated_at: "2026-09-17T14:59:53+10:00"
+status: green
+revised_at: "2026-09-17T14:59:53+10:00"
 ---
 
 This CointOS host is a Strix Halo machine with nominal 128 GB unified LPDDR5 memory. Linux has reported 134149070848 bytes (124.936 GiB) of physical RAM. David explicitly confirms that 100 GiB is available at the hardware level for GPU use; the configured 100 GiB GPU boundary represents that capability. A 64 GiB value observed through one amdgpu GTT sysfs domain is not evidence that hardware GPU allocation is capped at 64 GiB and must not reduce the 100 GiB ceiling. Fresh observations still govern current pressure and occupancy.

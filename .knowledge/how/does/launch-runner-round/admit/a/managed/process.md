@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:44:45+10:00"
-scope: "local"
-source: "63 focused operator/executor/session tests; SIGTERM regression; source boundary"
-updated_at: "2026-09-15T00:05:28+10:00"
+status: green
+revised_at: "2026-09-15T00:05:28+10:00"
 ---
 
 ecosystem/executor.py launch_runner_round requires job, durable job path, route, fresh inventory and command plus keyword-only stdin/stdout/stderr (pass None to inherit streams). It initializes durable runner generation/request identities, derives and verifies OpenCode capacity before worker acquisition, acquires a worker, builds the credential-bearing ephemeral OpenCode config, spawns a gated process and registers its identity. For an operator-backed job it registers the same child in the operator registry before reserving inference, so the live authoritative process resolves user priority. It reserves/revalidates inference, issues credentials and only then opens the exec gate. Waiting and capacity errors preserve ready demand; failed/unknown cleanup records reconciliation_required. Its returned running context includes launch/worker/inference records for close_runner_round. Capacity/host observation and process operations are injectable seams for isolated tests; injected inference bypass is forbidden. The automatic user runner inherits normal terminal streams and uses the same admission boundary.

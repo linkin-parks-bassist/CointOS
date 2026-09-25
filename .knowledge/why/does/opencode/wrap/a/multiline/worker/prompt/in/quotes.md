@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-scope: "CointOS project"
-review_when: Recheck when OpenCode changes run positional or stdin input behavior.
-updated_at: "2026-09-16T17:02:29+10:00"
-source: "installed executor prompt qualification 2026-09-16"
+status: green
+revised_at: "2026-09-16T17:02:29+10:00"
 ---
 
 OpenCode 1.18.31's `run [message..]` implementation deliberately wraps every positional argument containing a space in literal double quotes before sending it as the text part. This is OpenCode argument rendering, not shell display. The same implementation reads non-TTY stdin and uses piped text verbatim when no positional message is supplied.

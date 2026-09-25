@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:57:44+10:00"
-scope: "local"
-source: "Actual unit inventory, drained core inactive check and successful installer 2026-09-15"
-updated_at: "2026-09-15T08:53:19+10:00"
+status: green
+revised_at: "2026-09-15T08:53:19+10:00"
 ---
 
 On 2026-09-14 David explicitly requested activation. Installed proxy, Telegram gateway, control workers, notifier, resource guard, inbox path and ecosystem/watchdog timers were started. Ecosystem/watchdog are oneshots and legitimately return inactive/dead after success; timers remain active. Activation exposed historical OpenCode sidecar status enumeration and null legacy scheduling authority defects, repaired in cli.status and scheduler.priority, deployed at a drained service boundary. Restarting agent-models loaded the configured pinned small control model while preserving Qwen3.8-27B at one 131072-token slot; small4B runs two 16384-token sequences. A real installed managed request returned READY and durably closed sequence/worker; the default fast control path also returned visible text locally. No test Telegram message was sent. Fresh active states had zero restart counts and no warning-level service journal entries. This verifies startup and basic inference, not saturated priority, end-to-end Telegram, restart recovery or semantic task completion. Next check: real request handling and saturation/recovery qualification.

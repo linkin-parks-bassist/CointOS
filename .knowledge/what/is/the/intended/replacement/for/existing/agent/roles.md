@@ -1,17 +1,23 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:24:37+10:00"
-scope: "local"
-source: "David explicit design direction in conversation 2026-09-14; existing context-preparation contract inspected"
-updated_at: "2026-09-18T12:03:04+10:00"
+status: "green"
+revised_at: "2026-09-26T08:51:02+10:00"
 ---
 
-David's explicit direction on 2026-09-14 is to mostly scrap the existing roles and rebuild from nearly scratch, because much of their intended behavior is subsumed by general knowledge-tree machinery. This supersedes treating the existing role hierarchy as the target architecture; it does not assert that role files or runtime code have already been removed.
+Roles are being rebuilt from scratch around three classes (David). The current contents of `roles/` are not wanted. The target starting set is **Sole Survivor, Cointelprofessional, steward, manager and worker**. Roles then diversify within each class as practice shows the need.
 
-The dynamic parallel-agent design should therefore support durable agents with redesigned roles, shared knowledge-tree procedures, task-specific briefs, explicit authority and independent inference state. Any retained specialization needs a concrete behavior not already owned by knowledge-tree machinery. Agent identity, scheduling, inference residency, tool authority and independent verification remain separate design concerns even when static roles disappear.
+- **Steward class:** dedicated to keeping the system itself alive and healthy. It includes:
+  - **Sole Survivor:** automated incident diagnosis and recovery. It smartly and quickly takes the system down and brings it back up.
+  - **Cointelprofessional ("Coin"):** the always-available remote-control and contact surface.
+  - **Steward roles:** routine system maintenance.
+- **Managerial class:** creates and maintains priority queues of work. It turns David's drafted ideas, submitted to-dos and project needs into ordered, small, elaborated, manageable chunks, and it reviews and audits results. Decomposition (the dissolution pipeline in `what/is/architecture/of/cointos.md`) and "what should happen next" judgement live here.
+- **Worker class:** takes items from those queues and carries them out: implementation, testing and similar concrete steps.
 
-Next design work: inventory existing role responsibilities, identify what is already owned by knowledge-tree procedures, and derive the minimal remaining agent/client contract alongside the full-context snapshot contract. Exact replacement behavior and an implementation sequence are not yet specified. Do not mechanically preserve the old roles in a new scheduler plan.
+The manager/worker split is how CointOS reconciles "agents act on their own judgement" with "local models get only small concrete tasks". Judgement about *what* to do is itself a managerial role's small, bounded task. Workers exercise judgement only about *how* to do their item.
 
-Implementation boundary 2026-09-18: at David's direction all 19 Markdown files under `roles/` were deliberately emptied while retaining filenames, registered role identities, capability selection in code, task contracts, workspace instructions, and `roles/schema.json`. `roles.py` accepts empty bodies for all 15 registered roles and the unknown-role base fallback. The source and installed runtime both carry the blank role set, and the full user-session generation was restarted because Telegram imports `_control-plane.md` at process start. Installed checks found 19 empty Markdown files, 15 registered roles resolving empty context, and six generation members `ok`.
+**Queues live in knowledge trees** (David's intended direction, pending how it works in practice). Each queued work item is a leaf whose answer holds the item's current brief and status. Managers write and reorder these leaves, and a worker's "look around" is reading them. An item leaf states current truth, never a progress log. The exact branch layout, the item leaf shape and how the GPU scheduler picks up items are not yet designed.
 
-David clarification 2026-09-14: roles will still be needed. The intended change is a substantial shakeup of their responsibilities compared with the current written roles, not elimination of roles. Knowledge-tree machinery should own the general behaviors it subsumes; redesigned roles should express the remaining distinct responsibilities. The exact role set and boundaries are still to be designed.
+**Coin edits knowledge trees directly.** Cointelprofessional must have knowledge-tree read and edit capability so David can draft ideas, adjust queues and correct knowledge through Coin. Coin currently has no knowledge-tree tools; this is required work.
+
+Knowledge-tree machinery owns general behaviour (orientation, procedures, recording knowledge). Roles express only the distinct remaining responsibilities.
+
+**Current runtime:** all 19 Markdown files under `roles/` are empty in source and installed runtime, so agents receive no role-specific guidance. `ecosystem/roles.py` still registers 15 legacy role labels, all with the same neutral advisory capability baseline; role context grants no execution authority. Autonomous work currently comes only from the watchdog's periodic `steward-tasks/` deck: ten maintenance-review cards chosen by `ecosystem/steward_tasks.py` from weights and maximum intervals in `config/watchdog.json`. That deck is cron-like templating. It should become steward-class work, with anything project-shaped moving to managerial queues. Keep deterministic watchdog liveness checks and trusted scheduling provenance as system mechanisms, separate from roles.

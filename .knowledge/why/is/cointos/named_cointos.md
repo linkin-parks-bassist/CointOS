@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local
-source: David's account recorded 2026-09-04 and clarified 2026-09-09; accepted scheduling decisions 0016 and 0019
-verification: Preserved the stable naming provenance and canonical terms.
-review_when: Recheck only if David revises the naming or product identity.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T18:43:14+10:00'
 ---
 
 The name evolved through `Cointelprofessional` → `Cointelpro` → `Coin` →

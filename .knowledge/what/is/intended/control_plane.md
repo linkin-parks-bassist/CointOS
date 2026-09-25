@@ -1,9 +1,6 @@
 ---
-scope: project local
-source: "pre-99318d9 Git history; David conversational non-response intent clarification 2026-09-16"
-review_when: Recheck when contact, messaging, or control-plane implementation changes.
-status: "unverified"
-updated_at: "2026-09-18T00:15:05+10:00"
+status: green
+revised_at: "2026-09-18T00:15:05+10:00"
 ---
 
 `Cointelprofessional` is the permanent Telegram-facing control-plane identity. It

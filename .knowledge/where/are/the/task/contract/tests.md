@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T04:14:41+10:00"
-scope: "local"
-source: "bounded rg of tests and unittest import failure on 2026-09-16"
+status: green
+revised_at: "2026-09-16T04:14:41+10:00"
 ---
 
 Task-contract validation checks are in `tests/test_mvp_task_contracts.py`; the importable unittest module is `tests.test_mvp_task_contracts`. Budget accounting checks are separately in `tests/test_execution_budget.py` as `tests.test_execution_budget`.

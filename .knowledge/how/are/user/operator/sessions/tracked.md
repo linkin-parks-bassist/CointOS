@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:31:58+10:00"
-scope: "local"
-source: "Installed gated abandoned-controller recovery and live RECOVERY_OK/clean-closure evidence 2026-09-15"
-updated_at: "2026-09-15T17:55:33+10:00"
+status: green
+revised_at: "2026-09-15T17:55:33+10:00"
 ---
 
 ecosystem/operator_session.py owns state/operator-sessions.json with acquire/register/release/observe/reconcile procedures. A session binds a trusted request, model and PID/start ticks; active operator sessions protect model ownership and resolve the user_driven scheduling band. run_command now routes local opencode run commands through operator_inference.run for physical acquisition; unrelated command tools retain the original gate/registration path. Simple cointos-opencode run arguments automatically create bookkeeping IDs and use ~/.CointOS without manual --root/session/request fields. Automatic inference must derive user priority from a live matching operator-session process record rather than trust an arbitrary caller flag. Stale/dead records currently need explicit reconciliation.

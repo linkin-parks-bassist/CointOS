@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:40:40+10:00"
-scope: "local"
-source: "Independently inspected current source and design decisions in this turn; isolated real OpenCode read-back and named tests; 2026-09-14"
+status: green
+revised_at: "2026-09-14T22:40:40+10:00"
 ---
 
 After spawning an isolated loopback OpenCode server but before creating/publishing its agent session or starting the attached run client, the supervisor reads /config and /provider with the exact directory query. verify_server_capacity requires auto-compaction enabled, the selected small/compaction model, an enabled compaction agent, and the expected transport baseURL. It finds exactly one Lemonade provider and requires its selected resolved model context/input/output limits to equal the launch record.

@@ -1,15 +1,10 @@
 ---
-status: "unresolved"
-created_at: "2026-09-17T20:30:41+10:00"
-scope: "local"
-source: "task-a7bd8e22058c4418 one-file retention mapping 2026-09-17"
-updated_at: "2026-09-17T20:43:29+10:00"
+status: green
+revised_at: "2026-09-26T04:10:49+10:00"
 ---
 
-Installed `worker_lease_health` first reported 2,084 quiescent leases in generation 3 with mode open. `workload_control.py` never deletes or bounds `state["leases"]`; every dirty save rewrites the whole accumulated document.
+The installed `workload-control.json` currently has 2,253 quiescent worker leases and no active ones in a 2.86 MB document. A read-only `jq` parse took about 0.02 seconds on this host; that does not measure atomic rewrite latency or prove retention is a present throughput bottleneck. `ecosystem/workload_control.py` reads the whole document under its lock and rewrites it on a dirty save.
 
-Quiescent leases are fully stopped and reconciled, so they do not block drain or smoke admission. They still serve two replay contracts: `acquire_worker` scans every lease by request ID to return an idempotent prior result, and late `release_worker` or observation replay resolves an exact lease ID rather than failing unknown-lease. Active and ambiguous states (`starting`, `active`, `observed_stopped`, `release_requested`, `dead_unreconciled`) must never be pruned.
+Quiescent entries remain part of exact replay semantics: `acquire_worker` searches prior request IDs to return an idempotent result, and late `release_worker` or observation calls resolve the exact lease ID. Every non-quiescent state must also remain available to safety checks. Monotonic timestamps in old records are not a cross-boot age order, and the JSON writer sorts lease keys, so neither timestamp nor document order is a safe pruning rule. The existing records do not carry a boot identity with those timestamps, and there is no established maximum delay for legitimate replay.
 
-The safe mechanical shape is to retain every non-quiescent lease plus a bounded newest tail of quiescent leases ordered by `quiescent_monotonic` with insertion order as the deterministic tiebreaker, pruning only at the single `_locked_state.save()` durable-write choke point. `quiescent_monotonic` is set on every transition to quiescent. `worker_lease_health` would then report the retained tail.
-
-Unresolved blocker: no evidence yet defines the replay window or a justified retention count, and an unexplained hardcoded cap would recreate scarcity-shaped policy. Next check: observe the maximum legitimate delay between initial release and duplicate acquire/release/observation replays, then put the chosen retention policy in configuration with its rationale and qualify that active/reconciliation evidence is never removed.
+Do not prune the live file by age or newest-tail count. First measure real write/lock cost and replay age from authorized, minimally scoped evidence. If retention is material, design an archive or index that preserves exact request-ID and lease-ID replay and crash consistency while keeping non-quiescent leases in the hot ledger. A new cross-boot ordering key could help future policy, but it cannot retroactively date ambiguous historical records.

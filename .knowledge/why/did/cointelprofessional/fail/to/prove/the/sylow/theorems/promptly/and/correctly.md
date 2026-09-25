@@ -1,12 +1,7 @@
 ---
-status: "unresolved"
-created_at: "2026-09-16T15:14:30+10:00"
-updated_at: "2026-09-16T17:23:12+10:00"
-scope: "project local"
-source: "source cancellation repair and direct qualification 2026-09-16"
+status: green
+revised_at: "2026-09-23T19:29:45+10:00"
 checked_at: "2026-09-16T15:35:00+10:00"
-blocker: "Transport truncation, cancellation interruption, and the arbitrary deep elapsed deadline are repaired. One model answer is insufficient to choose a general mathematical verification policy."
-next_check: "Observe the next naturally long deep turn through cancellation/preemption if applicable, then decide whether demanding proofs need a verifier/reviewer stage or stronger routed model."
 ---
 
 For Telegram turn telegram-999135390 on 2026-09-16, the fast Qwen3.5 routing tool call was truncated under the 96-token output ceiling and rejected with an unterminated JSON string. No fast response was delivered. Deep Qwen3.8 inspected status, its first attempt later timed out and requeued, the five-minute disaster fallback fired, and the second attempt delivered after roughly 17 minutes. The delivered proof was not reliable: the existence argument omitted the free-action fact that makes the subset stabilizer order divide p^a and invoked induction without establishing the needed claim; the conjugacy argument inferred containment from normalization; and the count argument claimed a unique fixed Sylow subgroup without proving that two mutually normalized Sylow p-subgroups generate a p-subgroup. Recovery prevented message loss, but latency and mathematical correctness failed.
@@ -17,4 +12,11 @@ Native run correlation isolated the deep delay. The first attempt entered severa
 
 The proxy repair now calls `shutdown(socket.SHUT_RDWR)` on each registered upstream socket before closing its HTTP connection, ignoring the expected `OSError` race when a socket is already closed. It changes no credential or termination semantics. The existing 45 inference-enforcement checks pass in 2.836 seconds, `py_compile` and `git diff --check` pass, and a direct socketpair/thread check proved that `cancel()` wakes a thread blocked in `recv()` within one second while returning the existing `cancellation_requested` state. Installed end-to-end timeout qualification and mathematical verification policy remain unresolved.
 
-The deep elapsed deadline is removed in source and installed assets on 2026-09-16. Cointelprofessional passes `timeout=None` through managed admission to the HTTP client, so a healthy long generation is no longer cancelled merely because 180 seconds elapsed. Explicit caller cancellation and priority preemption remain operative and use the repaired socket-shutdown path. Ordinary callers retain the compatibility default. Mathematical verification policy remains the only unresolved part of this incident.
+The deep elapsed deadline is removed in source and installed assets. Cointelprofessional passes `timeout=None` through managed admission to the HTTP client, so a healthy long generation is no longer cancelled merely because 180 seconds elapsed. Explicit caller cancellation and priority preemption remain operative and use the repaired socket-shutdown path. Ordinary callers retain the compatibility default.
+
+A repeat `Prove the Sylow theorems` turn on 2026-09-23 exposed a different completion failure. Turn `telegram-999135409` routed correctly with `deep_required: true`, delivered a preliminary response promising a rigorous proof, ran one deep Qwen3.8 attempt, and then accepted `finish_silently` without publishing the proof. The missing invariant was in `control_agent.respond`: any nonempty initial response allowed silent completion even when that response explicitly deferred the result.
+
+Source and installed `ecosystem/control_agent.py` now identify common promise/defer phrasing in the initial response. A deep turn that tries `finish_silently` after such a preliminary response, without any successful nonterminal tool action, is instructed to publish the requested result instead. The deep prompt also states that an acknowledgement or promise to check, reason, prove, inspect, or act is not a completed answer. Genuine completed conversation can still finish silently, and an existing successful tool-action path retains its prior behavior. The focused local-intent and control-turn suites pass 21 tests; `py_compile`, `git diff --check`, and source/installed SHA-256 agreement pass. The installed generation was restarted active with the change. A fresh Telegram proof turn has not yet live-qualified the guard.
+
+Blocker: Transport truncation, cancellation interruption, the arbitrary deep elapsed deadline, and the newly observed silent-drop path are repaired. A fresh live reasoning turn must qualify visible follow-up behavior, and demanding mathematical answers still lack a general evidence-based verifier/reviewer policy.
+Next check: Send a fresh sustained-reasoning Telegram request whose fast reply defers the result and verify that a rejected silent terminal choice is followed by a visible complete answer; independently review mathematical correctness before treating the proof itself as qualified.

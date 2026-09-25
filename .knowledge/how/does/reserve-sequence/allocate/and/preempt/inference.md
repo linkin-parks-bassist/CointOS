@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:33:30+10:00"
-scope: "local"
-source: "Installed generation311-to314 live tool-call park/reacquire evidence and Qwen3.5 context failure 2026-09-15"
-updated_at: "2026-09-15T13:29:43+10:00"
+status: green
+revised_at: "2026-09-15T13:29:43+10:00"
 ---
 
 ecosystem/inference_capacity.py reserve_sequence takes an authoritative worker-backed request, fresh inventory and monotonic clock. It loads resource/inference/scheduling policy, locks workload state before capacity state, validates worker ownership/class/authority/stop method, recomputes the route and checks worker limits. A replay retains the same request identity; a released victim wakes a waiter only to ready_for_revalidation, never directly to inference. Active slots remain occupied until release_sequence accepts a fresh bound attestation. Reservations persist context/output/backend sequence, priority, request and expected_release_binding. Current changes derive user priority from a live operator record matching the authoritative worker process/owner, never caller operator_session booleans, and apply lower-priority preemption to model-slot contention as well as class slots. Preemption records waiting_for_preemption on the requester and preemption_requested on the victim, without simultaneous use. For known byte envelopes it selects enough lower-priority victims to make the proposed envelope safe, records every victim, and waits for all releases before revalidation. Unknown facts remain waiting. Operator priority requires live non-zombie kernel PID/start-tick identity even when registry and worker records match. Caller operator_session flags are stripped. Four dedicated acquisition-priority tests cover trusted priority, cross-class model contention, unissued withdrawal and multi-victim byte reclamation; they do not qualify live GPU behavior. Focused test_inference_capacity.py passes after these changes.

@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:33:30+10:00"
-scope: "local"
-source: "ecosystem/models.py; tests/test_model_admission.py; 780-test run single stale assertion"
-updated_at: "2026-09-14T23:48:50+10:00"
+status: green
+revised_at: "2026-09-14T23:48:50+10:00"
 ---
 
 ecosystem/models.py safe_routes interprets every inventory model without calling inference; validate_route recomputes its matching model and rejects changed parameter/byte/context-mode/pool/slot/per-sequence allocation fields. _model_route requires verified fresh model and resource-envelope evidence, requested capabilities and minimum context, and nonnegative per-request prompt/tool/output/handoff allowances. Request reserves override dynamic policy defaults. Fixed contexts derive pool/parallel once; proven shared contexts use the observed per-sequence cap and pool. Resident preallocated KV has zero incremental KV demand; nonresident model load includes model/transient bytes. choose_route selects the greatest verified parameter count, then context and explicit preference. models.route can invoke a routing model and must not be used from automatic native acquisition because that would recursively require inference. A requested loaded model can instead be selected directly from safe_routes while retaining its actual per-request output allowance.

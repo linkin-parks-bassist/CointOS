@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-15T22:14:34+10:00"
-scope: "CointOS project"
-source: "ecosystem/models.py BASE, ecosystem/resource_control.py _lemonade_request, and config/model-policy.json inspected 2026-09-15"
+status: green
+revised_at: "2026-09-15T22:14:34+10:00"
 ---
 
 The CointOS Lemonade management API defaults to `http://127.0.0.1:13305`.

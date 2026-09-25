@@ -1,10 +1,9 @@
 ---
-status: "unverified"
-scope: project local
-source: "scripts/cointos-system; telegram-999135394; live systemd restart/status 2026-09-17"
-review_when: Recheck when user service membership, installation boundaries, or service dependencies change.
-updated_at: "2026-09-17T16:25:12+10:00"
+status: green
+revised_at: "2026-09-26T08:13:21+10:00"
 ---
+
+Stopping repository work does not mean leaving the deployed system in a preventably degraded state. Before handing off, check live resource mode, the authoritative durable work gate, relevant service health, and active recovery escalation. If emergency persists, keep the guard and dedicated survivor escalation running; distinguish physical-unsafety blockers from a terminal failed worker and never call a sticky emergency a clean operational state. Do not reopen an unsafe gate merely to report uptime.
 
 Operate the complete user-session CointOS generation through installed `/home/david/.CointOS/scripts/cointos-system` (or the source counterpart before installation): `start`, `stop`, `restart`, and `status` are the supported whole-system actions. Use this boundary after installing code/configuration changes that affect running services. Do not restart individual CointOS units during an ordinary upgrade because that can leave old Python processes interpreting new on-disk configuration.
 
@@ -12,4 +11,4 @@ The command owns resident models, inference proxy, resource guard, Telegram gate
 
 This was required after installation moved physical reserve keys while a 24-hour-old control worker retained the previous module generation. One Telegram turn hot-retried `invalid inference capacity policy` more than 1,200 times. A whole-system restart loaded matching code/config, ended policy errors, and recovered the retained turn.
 
-For one manual intake pass use installed `scripts/ecosystem run-once`; inspect queue counts with installed `scripts/ecosystem status`. Live state and append-only run evidence are under `~/.CointOS`, not the checkout. Credentials remain in protected environment files and never on command lines. Root-owned survival-plane services remain a separate authority boundary and are not controlled by this user-session command.
+For one manual intake pass use installed `scripts/ecosystem run-once`; inspect queue counts with installed `scripts/ecosystem status`. Use installed `cointos-health` (or `scripts/cointos-health`) for a read-only resource-gate, loaded-model recipe, and worker/inference/proxy lease-state count snapshot; `--json` emits the same projection for scripts. It reads current runtime records and fresh Lemonade health, does not display prompts or worker output, and does not recover or restart anything. Live state and append-only run evidence are under `~/.CointOS`, not the checkout. Credentials remain in protected environment files and never on command lines. Root-owned survival-plane services remain a separate authority boundary and are not controlled by this user-session command.

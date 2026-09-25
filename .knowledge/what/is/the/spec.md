@@ -1,9 +1,6 @@
 ---
-scope: project local
-source: "David explicit CointOS work-dissolution vision and small-local-task constraint 2026-09-15"
-review_when: Recheck when repository requirements or the proof-verifier contract changes.
-status: "unverified"
-updated_at: "2026-09-16T10:45:44+10:00"
+status: green
+revised_at: "2026-09-26T08:11:26+10:00"
 ---
 
 The repository's product contracts live under `what/is/intended/`, with the public
@@ -23,6 +20,8 @@ David clarification: roles remain necessary, but their responsibilities will be 
 David amendment: defer custom context handoffs and fresh-session continuation; OpenCode owns compaction within retained sessions. Native inference snapshots remain a separate coarse-grained scheduling goal. See `why/are/cointos/context/handoffs/deferred.md`.
 
 Every observable local launch must derive fresh backend/client capacity, constrain it to any admitted lease, override stale context/input/output claims, and verify OpenCode resolved limits before inference. Normal OpenCode compaction is enabled on the qualified selected model. Native snapshots preserve the current inference working state; normal compaction may deliberately change that state before a snapshot. Snapshotting and compaction are separate mechanisms. Implementation details and remaining reconfiguration limits are in `why/must/opencode/launch/capacity/be/verified/end/to/end.md`.
+
+Availability contract: a request to stop development does not authorize leaving a deployed CointOS generation in a preventably broken or emergency-stuck state. The Sole Survivor is an automated, dedicated incident-diagnosis and repair mechanism. A failed survivor must trigger durable, rate-limited escalation to another recovery attempt while resources permit; failure is not a normal steady state or a handoff that requires David to notice and restart it. The guard must keep unsafe ordinary work gated, preserve failure evidence, and allow recovery only after checked postconditions. Physical unsafety or failed infrastructure can delay escalation, but must remain visible and retryable rather than being treated as completion.
 
 Restoration sequencing: managed live parallelism comes first, then live preemptive Cointelprofessional with bounded remote operations, then full-spec implementation. A useful first restoration may use bounded concurrency and normal OpenCode session recovery; it must not silently shrink promised per-agent contexts or claim exact native state restoration. Detailed milestone acceptance is in `what/is/the/plan.md`.
 

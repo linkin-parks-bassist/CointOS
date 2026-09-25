@@ -1,7 +1,6 @@
 ---
-status: "unverified"
-updated_at: "2026-09-17T19:58:49+10:00"
-source: "installed task-7beb8f3fe0cbb26f durable JSONL 2026-09-17"
+status: green
+revised_at: "2026-09-17T19:58:49+10:00"
 ---
 
 `ReserveConstantReader` was given a one-file, three-value, read-only task. Its executor JSONL showed repeated completed `read` calls for the identical file, each followed by `step_finish: tool-calls`, an empty text event, and a new step. The wrapper then treated each attached-client tool-call finish as incomplete and submitted a continuation prompt in the exact retained session.

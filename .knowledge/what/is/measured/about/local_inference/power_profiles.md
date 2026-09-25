@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local host measurement
-source: controlled measurements recorded 2026-09-04 in Git history for power-profile-benchmarks.md
-verification: Preserved only the controlled protocol and comparison; excluded incomparable live observations.
-review_when: Re-measure after firmware, backend, model, or hardware changes.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T18:43:14+10:00'
 ---
 
 With Qwen3.6-35B-A3B-MTP Q4_K_XL, a fixed 36-token prompt, 512-token deterministic

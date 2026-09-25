@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-review_when: "Recheck after any Qwen3.8 recipe-option update or model reload."
-updated_at: "2026-09-16T00:38:35+10:00"
-source: "fresh Lemonade health recipe_options and effective launch_command after controlled merge_args=false reload 2026-09-16"
+status: green
+revised_at: "2026-09-16T00:38:35+10:00"
 ---
 
 Lemonade's saved registry metadata for `Qwen3.8-27B-GGUF` contained `--reasoning-budget 2048`, first observed in the system journal on 2026-09-09 alongside manually changed context and parallel settings. No CointOS source or Git history contains this argument, and no rationale or benchmark was found. The actor that originally persisted it remains unknown.

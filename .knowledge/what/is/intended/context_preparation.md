@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local
-source: pre-99318d9 Git history; David knowledge-tree amendments 2026-09-11
-verification: Reconciled the older prepared-context proposal with the current mandatory semantic knowledge-tree workflow.
-review_when: Recheck when context compilation or knowledge roles are implemented.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T18:43:14+10:00'
 ---
 
 Task context should contain the governing brief and small verified facts needed to

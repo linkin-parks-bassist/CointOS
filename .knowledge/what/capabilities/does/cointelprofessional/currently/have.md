@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T10:35:57+10:00"
-scope: "project local"
-source: "ecosystem/telegram.py, control_turns.py, inference_capacity.py and live Qwen3.5 probes inspected 2026-09-16; 794 source tests"
-updated_at: "2026-09-16T11:30:39+10:00"
+status: green
+revised_at: "2026-09-25T17:32:19+10:00"
 ---
 
 Cointelprofessional has a fast routing/contact stage on Qwen3.5 and a deep/action
@@ -31,8 +28,8 @@ authority profile and a durable task contract. The tool may select an active
 workspace by configured id or canonical path, otherwise the first active workspace
 is used. Role, model, and agent name are optional hints.
 
-Cancellation/preemption and a broader typed operating surface are still absent.
-Status exposes active progress, but there is no dedicated per-task progress query.
+Caller-scoped cancellation is available for queued, ready, running, and awaiting-verification agent tasks. Running cancellation safely closes the runner and resources, and now takes precedence over a simultaneous finite-budget continuation. General arbitrary preemption and a broader typed operating surface remain incomplete.
+`inspect_task_progress` provides a dedicated caller-scoped durable task-progress query in addition to aggregate status.
 Deep failures and dead deep workers retain and requeue the turn without a fixed
 attempt ceiling; the former three-attempt terminal gate and ten-minute SIGALRM are
 removed.

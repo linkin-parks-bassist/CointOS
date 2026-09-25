@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T18:32:26+10:00"
-scope: "local"
-source: "installed job task-a0c41c340fc64b1f, released inference leases, executor.py repair, and exact-session live recovery 2026-09-17"
-updated_at: "2026-09-17T18:37:47+10:00"
+status: green
+revised_at: "2026-09-17T18:37:47+10:00"
 ---
 
 On 2026-09-17 managed job `task-a0c41c340fc64b1f` was SIGTERM-terminated after ordinary tool work. Its exact OpenCode session `ses_f5185dc4fffe35QqWdheR4e2Mi` survived and both physical leases were durably released, but the durable job cycled through `reconciliation_required` and `failed` instead of resuming.

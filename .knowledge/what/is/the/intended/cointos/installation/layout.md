@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:55:57+10:00"
-scope: "local"
-source: "David installation instruction 2026-09-14; ecosystem/cli.py ROOT and source-path audit"
-updated_at: "2026-09-14T23:00:51+10:00"
+status: green
+revised_at: "2026-09-14T23:00:51+10:00"
 ---
 
 The development checkout lives at `~/Projects/CointOS`. An installation script should deploy all required executable code and runtime configuration, including role prompts and support files, into `~/.CointOS`. Installed services must run that deployed installation without depending on the development checkout. `scripts/install-cointos` now implements this direct-copy layout; operational services remain separate.

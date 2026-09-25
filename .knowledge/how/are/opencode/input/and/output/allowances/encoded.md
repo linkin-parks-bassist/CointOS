@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:40:40+10:00"
-scope: "local"
-source: "Independently inspected current source and design decisions in this turn; isolated real OpenCode read-back and named tests; 2026-09-14"
-updated_at: "2026-09-14T22:42:45+10:00"
+status: green
+revised_at: "2026-09-14T22:42:45+10:00"
 ---
 
 apply_opencode_capacity receives a validated capacity record. It overwrites the selected model limit with context = opencode_context_tokens, output = opencode_output_tokens, and input = context - output. Output must be positive and strictly below context. Input is the allowance with the selected maximum output reserved, not a second independent context pool. Explicit input also replaces stale inherited input claims, which would survive ordinary recursive config merging if omitted.

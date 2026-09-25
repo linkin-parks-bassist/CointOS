@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:32:29+10:00"
-scope: "local"
-source: "David explicit conversation direction 2026-09-14; inspected and changed executor, prompts, policy, capacity derivation; focused test results"
+status: green
+revised_at: "2026-09-14T22:32:29+10:00"
 ---
 
 CointOS context handoffs and forced fresh-session continuation are deferred by David's explicit direction on 2026-09-14. David reports OpenCode compaction is satisfactory and long-running agents are working well. OpenCode should own context compaction within retained sessions pending future review; handoff development is not a current priority.

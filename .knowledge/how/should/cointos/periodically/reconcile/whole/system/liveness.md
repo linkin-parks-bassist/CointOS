@@ -1,21 +1,17 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T16:31:05+10:00"
-scope: "local"
-source: "installed watchdog qualification; mapper tasks task-b27cce9dfd664d16 and task-9c1195d706e64c88; live systemctl show 2026-09-17"
-updated_at: "2026-09-17T23:28:21+10:00"
-review_when: "Recheck when installer transaction order, whole-system membership, or systemd service shapes change."
+status: green
+revised_at: "2026-09-26T05:42:32+10:00"
 ---
 
 CointOS requires a mandatory periodic higher-order sanity pass across every durable queue and ownership system. Local state-machine validity is insufficient: the pass must ask whether accepted work is making progress, whether logical ownership agrees with live processes/backend capacity, whether already-visible or obsolete work still consumes scarce execution, whether newer high-priority work is trapped behind stale work, and whether code/config/service generations agree.
 
 The pass should call subsystem-owned reconcilers rather than duplicate their transition logic, then evaluate cross-system invariants over control turns, managed jobs, native inference runs, worker leases, inference leases/proxy credentials, operator sessions, notifications, and service generation. Safe repairs include recovering dead owners, releasing proven ghosts, rescheduling retained work, and retiring execution that is already semantically satisfied. Unknown occupancy or ambiguous delivery must be retained and escalated, not guessed away.
 
-A reconciler designed for service-start recovery must distinguish dead ownership from concurrent inspection. `executor.recover_abandoned_jobs()` is also called by the live periodic watchdog, so it must test `_process_alive(job)` before cancelling an inference lease or stopping a runner process group. The former ordering killed a healthy observable Qwen worker on three consecutive ticks. The installed repair preserves live runners; manual qualification retained the same PID, inference lease, and OpenCode session.
+A reconciler designed for service-start recovery must distinguish dead ownership from concurrent inspection. `executor.recover_abandoned_jobs()` is also called by the live periodic watchdog, so it must test `_process_alive(job)` before cancelling an inference lease or stopping a runner process group. The former ordering killed a healthy observable Qwen worker on three consecutive ticks. The installed repair preserves live runners; manual qualification retained the same PID, inference lease, and OpenCode session. Source and installed runtime now strengthen that rule for future multi-executor ownership: every runner round records the executor owner’s PID and kernel start ticks, recovery checks that exact identity before every recovery branch including persisted close intent, and PID reuse is not treated as ownership. The fast synthetic proof passes from both source and installed scripts after the 2026-09-25 whole-system deployment. The narrow executable claim is `does/cointos/recovery/preserve/a/close-intent/job/owned/by/an/exact/live/executor.md`.
 
 Every pass must persist a compact health snapshot with observations, repairs, unresolved incidents, and the next check. Repeated unresolved incidents should become visible operator incidents rather than endless hot retries or silent queueing. High-priority Cointelprofessional/user work trapped behind a non-resource controller limit is itself unhealthy even when every individual record is schema-valid.
 
-Wired so far: `watchdog.tick` persists control-turn recovery/head, managed-job recovery, native and operator recovery, inference-capacity reconciliation, worker-lease health, and notification health on both state-write paths. Subsystem owners perform their own transitions. Deterministic finding collection runs every tick while qualitative Steward enqueue remains governed by `steward_review_seconds`.
+Wired so far: `watchdog.tick` persists control-turn recovery/head, managed-job recovery, native and operator recovery, inference-capacity reconciliation, worker-lease health, notification-intent repair and health, and service-generation health on both state-write paths. Subsystem owners perform their own transitions. Deterministic checks and finding collection still run every tick. The optional qualitative Steward enqueue is disabled in source and installed `config/watchdog.json` by `steward_review_enabled: false`, pending ordinary-role redesign; the code defaults the switch to true for older configs. An installed direct watchdog tick after deployment returned `findings=2; periodic review disabled` and did not enqueue a task. The two findings concern incomplete downloaded-model catalogue integration and retained failed/unknown notifications; they remain visible in `state/watchdog.json`.
 
 `workload_control.worker_lease_health(root)` is read-only and returns mode, generation, and exact lease counts grouped by state. Its first installed snapshot exposed 2,084 quiescent leases; retention policy is unresolved at `why/are/quiescent/worker/leases/retained.md`.
 
@@ -31,4 +27,4 @@ Implemented and installed in commits `481405b` and `369673e`: the installer atom
 
 Live qualification after a whole-system restart on 2026-09-17 observed all six units as `ok`, with installed-prefix executable paths and start times after generation `369673e`'s stamp; the aggregate was `counts: {ok: 6}`, `mixed: false`, `action: none`.
 
-Remaining work: define the common subsystem result schema, make repeated unresolved incidents visible operator incidents, and consume notification health in findings rather than the dead `outbox.delivery_failed` event name.
+Remaining work: define the common subsystem result schema and make repeated unresolved incidents visible operator incidents. Notification health is already consumed by `findings`: installed `watchdog.tick` reported `failed=22, delivery_unknown=1` after the disabled-review deployment. The existing failed/unknown finding remains diagnostic; new terminal jobs with an explicit recipient snapshot now get idempotent missing-outbox repair, without retrying historical failed or ambiguous sends. Owner: `how/does/cointos/avoid/duplicate/result/notifications.md`.

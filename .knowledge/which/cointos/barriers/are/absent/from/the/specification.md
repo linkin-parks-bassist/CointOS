@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T10:35:58+10:00"
-scope: "project local"
-source: "spec/intended leaves, Git history, production source, and installed qualification through 2026-09-16"
-updated_at: "2026-09-17T09:55:56+10:00"
+status: green
+revised_at: "2026-09-17T09:55:56+10:00"
 ---
 
 At least nineteen production barriers or ceilings lacked a clause in the current specification and lacked measured physical or protocol necessity. They have been removed or replaced with retained continuation:

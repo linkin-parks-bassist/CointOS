@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T04:48:55+10:00"
-scope: "local"
-source: "current control-agent source, installed service configuration, and focused qualification through 2026-09-16"
-updated_at: "2026-09-17T09:55:56+10:00"
+status: green
+revised_at: "2026-09-17T09:55:56+10:00"
 ---
 
 CointOS no longer limits deep control output to 1400 tokens. The failed first attempt to raise the allowance exposed the real issue: deep work was still bound to exact-model Qwen3.5, whose context could not fit the prepared request plus a 32000-token output reserve. The final repair separates the lanes: Qwen3.5 remains the low-prefill first-contact model, while the deep/action service selects Qwen3.8 and requests the canonical 32000-token allowance.

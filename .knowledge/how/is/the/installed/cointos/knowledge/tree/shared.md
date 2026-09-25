@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:59:39+10:00"
-scope: "local"
-source: "David instruction to copy and globally expose KT; kt register/access help; root access contract"
-updated_at: "2026-09-14T23:04:15+10:00"
+status: green
+revised_at: "2026-09-14T23:04:15+10:00"
 ---
 
 Copy the project `.knowledge` tree into the CointOS installation and register its canonical installed root with standalone KT under the name `cointos`. Installing CointOS automatically grants lookup from every project, including noninteractive agent installs. David explicitly authorized this blanket package policy on 2026-09-14. The grant covers the installed CointOS root only; other roots and standalone KT ownership are unchanged.

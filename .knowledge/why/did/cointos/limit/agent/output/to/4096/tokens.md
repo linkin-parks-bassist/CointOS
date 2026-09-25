@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-15T21:58:24+10:00"
-scope: "project local"
-source: "git show/blame commit 2e4377b; current uncommitted operator_inference.py; retained OpenCode session finish events 2026-09-15"
+status: green
+revised_at: "2026-09-15T21:58:24+10:00"
 ---
 
 The 4096-token general-worker ceiling had no recorded workload rationale. Commit `2e4377b` introduced `config/opencode-capacity.json` on 2026-09-12 while adding pre-launch capacity validation; it supplied `output_reserve_tokens: 4096` as a bare constant. The accompanying tests proved that a configured bound was enforced but did not test whether the bound was large enough for sustained tool-using agent work. Newer uncommitted `ecosystem/operator_inference.py` copied 4096 into managed worker requests.

@@ -1,29 +1,12 @@
 ---
-scope: project local
-source: "explicit activation; fresh systemctl/journal; real installed work and default control inference; runtime cleanup evidence 2026-09-14"
-review_when: Recheck after persisted-state layout, service names, or backend endpoints change.
-status: "unverified"
-updated_at: "2026-09-14T23:57:45+10:00"
+status: green
+revised_at: "2026-09-26T08:01:23+10:00"
 ---
 
-Live truth is not in historical plans, reports, or commits. Its physical home is
-`/home/david/.CointOS`: live records are under `~/.CointOS/state` and append-only
-run evidence is under `~/.CointOS/logs`. There are intentionally no repository
-compatibility paths. Code that still assumes repo-relative `state/` or `logs/` is
-not safe to run and the affected services remain stopped until that assumption is
-refactored. Establish truth from the smallest applicable combination of current
-state records, append-only run JSONL,
-`systemctl --user`, current process identity, and fresh
-Lemonade/backend observations. Configuration under `config/` expresses policy or
-desired values, not proof that a service loaded them. A process exit of zero is not
-semantic completion; inspect the durable outcome and required artifacts.
+Live CointOS truth resides in `/home/david/.CointOS`: durable records under `state/`, append-only run evidence under `logs/`, and installed executable/config assets under the same prefix. There are intentionally no checkout compatibility paths for `state/` or `logs/`. Use the smallest applicable combination of current records, run JSONL, `systemctl --user`, process identity, and fresh Lemonade/backend observations. Configuration is policy, not proof a service loaded it; process exit zero is not semantic task completion. Never rewrite JSONL to summarize it.
 
-Use `how/to/operate/cointos.md` for the relevant observation boundary, then query
-only the named service/state owner. Never rewrite JSONL while summarizing or
-reconciling.
+The installed `state/resource-control.json` currently reports `mode=normal` after an explicitly requested operator recovery of incident `20260925T162248Z-0`. The authoritative durable `state/workload-control.json` gate is open. The resource guard service is active/running. This is volatile: re-read exact records and live service/process state before acting. Do not infer recovery from resource headroom or a successful oneshot. See `what/is/the/state.md`, `what/is/next.md`, and `why/does/cointos/ordinary/work/remain/halted/despite/healthy/resources.md`.
 
-Current installation audit 2026-09-14: current code/assets are deployed into ~/.CointOS. Four divergent KT spine owners were reconciled revision-safely; reviewed runtime constraints are retained. Eleven rendered service/path/timer definitions were backed up and adopted under ~/.config/systemd/user, then daemon-reloaded. Loaded ecosystem/Telegram/control/watchdog/proxy commands and working directories now target ~/.CointOS. Installed CLI and proxy --help checks pass. Source-derived cli.ROOT resolves the installed root when imported from that installation.
+Installed application services run from `/home/david/.CointOS`, but verify loaded `ExecStart` and `WorkingDirectory` per unit when service identity matters. Ecosystem and watchdog oneshots normally return inactive between triggers. Importing installed `ecosystem` sets `cli.ROOT` to the installed root, not the checkout. The source checkout is `/home/david/Projects/CointOS`; `.cointos-install.json` records it. Source/runtime knowledge trees may diverge, so code deployments have used `scripts/install-cointos --preserve-installed-knowledge --no-register`, then compared affected installed files with source rather than overwriting runtime knowledge. Services are unchanged by that invocation unless explicitly restarted.
 
-Services were activated at David explicit request. Proxy, Telegram gateway, control workers, notifier, resource guard, inbox path and ecosystem/watchdog timers are active, with zero observed restart counts. Ecosystem and watchdog oneshots complete successfully and then return inactive/dead. Historical queued tasks missing routing metadata remain deferred. Startup compatibility defects in status sidecar enumeration and missing/null legacy authority were repaired and deployed.
-
-agent-models was restarted to restore pinned Qwen3.5-4B, now two 16384-token sequences, while preserving Qwen3.8-27B at one 131072-token slot. Installed managed work inference returned READY, with released sequence and quiescent worker verified. Default fast control inference returned visible text locally. No test Telegram message was sent. Startup/basic inference is verified; saturated priority, Telegram exchange and restart recovery remain outstanding. See what/is/broken.md and how/were/installed/cointos/services/brought/online.md.
+Resource control reports its pinned Qwen3.5-4B emergency model ready; a fresh Lemonade health read showed that model loaded, backend alive/ready and pinned at total context 65536 with `--parallel 2`. Reconfirm health before later reliance on physical residency. Read-only `cointos-health --json` projects the current gate, loaded recipe and lease-state counts; `cointos-incident [ID] --json` projects a bounded immutable incident snapshot plus current gate without claiming recovery is safe. The qualified ordinary Qwen3.8-27B policy is two 131072-token MTP slots; four slots previously exceeded the 60 GiB GTT emergency limit and three-slot loading remains unqualified. This is a replaceable model-specific fact, not a hardcoded system slot count. Startup, ordinary work, saturated priority, emergency recovery, and continuation have different qualification status; use the owning speed, resource and state leaves instead of extrapolating from one check.

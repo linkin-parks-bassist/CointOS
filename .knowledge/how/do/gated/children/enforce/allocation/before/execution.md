@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:33:30+10:00"
-scope: "local"
-source: "exact executor gated config-FD ownership and failure boundaries 2026-09-15"
-updated_at: "2026-09-15T04:11:37+10:00"
+status: green
+revised_at: "2026-09-15T04:11:37+10:00"
 ---
 
 ecosystem/executor.py gated_child_launch starts a process in a new session blocked on a private gate pipe, validates PID/start ticks/PGID, and optionally passes one config memfd. The child cannot exec until gated_child_release writes a one-byte authorization after revalidating identity. Release closes parent gate/config descriptors; the child retains its inherited config fd. gated_child_wait returns a cached reaped outcome including process_group_alive. gated_child_cleanup closes gates, signals only the matching owned process group, bounds TERM/KILL waits, reaps and retains reconciliation_required when absence cannot be proved. Config fd None provides the same gate without credential storage. These primitives support a short-lived native inference child so its allocation can be closed without terminating the long-lived Telegram gateway.

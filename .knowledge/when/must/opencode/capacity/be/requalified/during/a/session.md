@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:40:40+10:00"
-scope: "local"
-source: "Independently inspected current source and design decisions in this turn; isolated real OpenCode read-back and named tests; 2026-09-14"
+status: green
+revised_at: "2026-09-14T22:40:40+10:00"
 ---
 
 A launch record describes a particular backend incarnation, per-request allocation, client version and admitted allowance. Changing slots/context/KV layout, model/backend process, client version or selected inference/compaction model requires requalification. Startup read-back does not continuously observe every later request, and this implementation does not safely hot-update an existing OpenCode server's capacity beliefs.

@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:40:41+10:00"
-scope: "local"
-source: "current executor, execution-budget, task-constructor, and installed qualification evidence through 2026-09-16"
-updated_at: "2026-09-17T09:55:56+10:00"
+status: green
+revised_at: "2026-09-17T09:55:56+10:00"
 ---
 
 Deferring custom semantic handoffs is independent of budget representation. OpenCode owns normal compaction within the retained session. Ordinary agent constructors now use unlimited task/run/output/attempt/evidence dimensions, so they do not stop merely because an arbitrary slice elapsed.

@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T05:06:44+10:00"
-scope: "local"
-source: "current steward, lead, worker, intake, and chunker prompts inspected 2026-09-16"
-updated_at: "2026-09-17T09:56:37+10:00"
+status: green
+revised_at: "2026-09-17T09:56:37+10:00"
 ---
 
 Active role prompts no longer impose arbitrary minute, attempt, or fallback-marker limits. Steward, lead, worker, and intake work until their assigned scope and acceptance conditions are complete or a concrete blocker requires a resumable handoff. Elapsed time and attempt count do not prove completion.

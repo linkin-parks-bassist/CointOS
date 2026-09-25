@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:54:59+10:00"
-scope: "local"
-source: "David relocation instruction; scoped path-reference audit 2026-09-14"
-updated_at: "2026-09-14T22:56:18+10:00"
+status: green
+revised_at: "2026-09-14T22:56:18+10:00"
 ---
 
 The requested source checkout destination is `/home/david/Projects/CointOS`, replacing the former `~/agent-ecosystem` checkout. Mutable CointOS runtime state/logs remain under `/home/david/.CointOS`; standalone global knowledge trees remain under `/home/david/.knowledge`. Relocation must preserve Git metadata and uncommitted/untracked work.

@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local
-source: scripts/install-package; services/privileged/agent-package-install; pre-99318d9 Git history
-verification: Checked the repository entry points and recorded their authority boundary; no package installation run.
-review_when: Recheck when the privileged wrapper or sudo policy changes.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T18:43:14+10:00'
 ---
 
 Use `scripts/install-package NAME...` for explicitly authorized packages from

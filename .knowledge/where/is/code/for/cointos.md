@@ -1,17 +1,20 @@
 ---
-scope: project local
-source: current repository paths; pre-99318d9 Git history; ecosystem/inference_proxy.py opencode_environment; ecosystem/executor.py launch_runner_round capacity preflight; ecosystem/inference_capacity.py validate_launch_capacity; config/opencode-capacity.json
-review_when: Recheck after module moves, interface extraction, or a system-map reconciliation.
-status: "unverified"
-updated_at: "2026-09-14T22:42:45+10:00"
+status: green
+revised_at: "2026-09-26T03:36:47+10:00"
 ---
 
 Start at the narrow owner for the concern; do not read all modules.
 
 - Intake and task contracts: `ecosystem/cli.py`, `ecosystem/task_contracts.py`.
-- Execution and acceptance: `ecosystem/executor.py`, `ecosystem/verification.py`.
-  OpenCode owns active context compaction; `ecosystem/continuation.py` is a deferred
-  experiment disconnected from execution. Regression tests: `tests/test_opencode_compaction.py`.
+- Execution and acceptance: `ecosystem/executor.py`, `ecosystem/acceptance.py`,
+  `ecosystem/verification.py`. The plain `run_finished` completion path calls
+  `acceptance.artifact_failure` for deterministic contract checks; the executor
+  alone applies the resulting job transition to state
+  `failed` with a clear `error` reason when a declared `kind == "artifact"` item is
+  missing, empty, or has no explicit path; verifier, command/handoff kinds, and
+  exact-session continuation are untouched. OpenCode owns active context compaction;
+  `ecosystem/continuation.py` is a deferred experiment disconnected from execution.
+  Regression tests: `tests/test_opencode_compaction.py`.
 - Model facts and routing: `ecosystem/models.py`,
   `ecosystem/inference_policy.py`.
 - Live OpenCode capacity record (pure derivation from fresh incarnation-bound
@@ -49,7 +52,7 @@ Start at the narrow owner for the concern; do not read all modules.
   `ecosystem/notifier.py`.
 - Model-independent survival plane: `survival/`, especially `gateway.py`,
   `guardian.py`, and `lifecycle.py`.
-- Launch/configuration adapters: `scripts/`, `services/`, and `config/`.
+- Launch/configuration adapters: `scripts/`, `services/`, and `config/`. Read-only installed health/lease projection: `scripts/cointos-health` (PATH link from `scripts/install-cointos`); it does not mutate resource control.
 - Matching tests: `tests/test_<owner>.py`; process-level survival checks are under
   `tests/integration/`.
 

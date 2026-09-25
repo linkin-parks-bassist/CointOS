@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local
-source: current survival code; pre-99318d9 Git history
-verification: Distilled stable boundaries and excluded historical incident chronology and unaccepted deployment claims.
-review_when: Recheck after survival-plane activation, lifecycle-schema changes, or resource-control redesign.
+status: green
+revised_at: "2026-09-26T08:12:29+10:00"
+checked_at: "2026-09-11T18:43:14+10:00"
 ---
 
 The survival plane is a model-independent, root-owned boundary for authenticated
@@ -14,7 +11,7 @@ consumer have separate identities and filesystem authority. Requests, phase
 transitions, attempts, results, and incidents are durable and replay-safe; ambiguous
 external delivery is reported as unknown, never silently retried as safe.
 
-Lifecycle commands advance only after observed postconditions. Recovery remains
+Lifecycle commands advance only after observed postconditions. A Sole Survivor failure is an escalation trigger, not a terminal steady state or a reason to wait for David to notice; successor recovery agents remain dedicated to diagnosis and repair, with durable identity, evidence, and backoff. Recovery remains
 restrictive until required services, model health, job reconciliation, and previous
 activation/pause state are independently established. Kernel OOM increments are
 immediate emergencies; non-OOM pressure requires sustained evidence. Root-owned

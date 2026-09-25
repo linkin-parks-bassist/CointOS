@@ -1,19 +1,12 @@
 ---
-scope: project local
-status: "unverified"
-source: "David explicit #1 implementation priority 2026-09-14"
-review_when: Recheck after each restoration milestone or priority change.
-updated_at: "2026-09-14T23:31:58+10:00"
+status: green
+revised_at: "2026-09-26T05:49:26+10:00"
 ---
 
-Current #1 priority (David 2026-09-14): fix automatic, priority-aware inference acquisition. Legitimate sole-survivor, Cointelprofessional and user sessions must obtain service by suspending lower-priority blockers and retaining their work for later resume. Complete production wiring and meaningful boundary tests before broader live parallelism restoration.
+Current operating priority is dependable local work with minimal hosted-token supervision. CointOS should accept durable bounded tasks, dispatch qualified local workers concurrently when capacity supports it, retain sessions through interruption, and make actual work—not repeated restarts or ghost reservations—progress. Agent prompts contain the assigned task text; the OpenCode KT hook supplies bootstrap. The workspace registry and AGENTS.md prompt path were retired at David's direction; Steward remains an ordinary role for later role redesign.
 
-David's current priority order is:
+Inference capacity is the immediate focus. The installed user-service generation ran two simultaneous CointOS-only Qwen3.8 workers on separate 131072-token MTP sequences, completed both, then automatically started and completed a queued third; all leases closed. Throughput varied: a prior solo worker reached roughly 21 visible tokens/s, while David observed roughly 13 during the recent concurrent and later solo portions, despite MTP being live. The cause is not isolated. Four full-context slots exceeded the GTT emergency maximum, and three-slot loading hit PSI pressure; neither is qualified. The backend-profile scheduler, fenced reload/rollback and timer are installed. Bounded CointOS-only audits showed automatic 1→2 growth, idle 2→1 shrink and two simultaneous workers, but the repaired dispatch wake and cross-model candidate scan still need post-incident live qualification. A fixed Qwen slot count must not define scheduling; changing physical `--parallel` needs a safe backend reload and may cost KV re-prefill.
 
-1. Restore up-and-running parallel agents with managed allocation, starting with the smallest useful concurrency target. Correct backend/OpenCode limits and normal compaction are prerequisites. Advanced exact-state switching is deferred beyond this restoration.
-2. Restore Cointelprofessional as a live, responsive and preemptive Telegram control plane, with bounded remote system-operating capabilities using the same scheduler and allocation manager.
-3. Continue implementing the full spec, including the role shakeup and eventual complete inference-state residency scheduling.
+The broader target is abundance-first, priority-aware inference: authorized high-priority requests obtain physically available capacity while lower-priority work is suspended and retained for resumption. Routing, acquisition, park/reacquire, cancellation and several recovery paths have focused or live evidence, but saturation, every Telegram exchange, Sole Survivor emergency recovery, all incomplete handoffs, and dynamic backend reload are not globally qualified. One supervised worker continued in the same OpenCode session after an explicit incomplete handoff and completed; that is one observed case.
 
-Immediate implementation begins with the actual launch-path/backend/memory audit and runtime-root prerequisites, then qualification of two concurrent agents without silent context shrinkage. The recent capacity fixes improve the foundation but do not yet demonstrate restored live parallelism. Do not confuse queued serialization with concurrent service or ordinary OpenCode resume with exact KV checkpoint restoration.
-
-The concrete stages and acceptance checks are in `what/is/the/plan.md`. Keep context handoffs deferred, budgets enforced and allocation stable through qualified runs until runtime requalification/recovery exists. Record fine-grained invariants and design decisions in KT. This update changes priority and planning; no service activation or backend change has occurred.
+Immediate work and blockers are in `what/is/next.md`; implementation and qualification evidence are in `what/is/the/state.md`. Memory reserves, proxy payload ceilings, Cointelprofessional quality, quarantined backend facts, and broader role redesign follow the scheduling/recovery milestone. Do not treat a passing test or one worker run as whole-system qualification.

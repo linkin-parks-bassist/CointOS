@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:55:58+10:00"
-scope: "local"
-source: "ecosystem/cli.py status; actual runtime sidecar key inspection and KeyError"
+status: green
+revised_at: "2026-09-25T23:32:28+10:00"
 ---
 
-cli.status scans state/jobs/*.json and assumes each has a state field, but historical task-*.opencode.json files in that directory contain OpenCode provider configuration without job state. This makes installed status raise KeyError before reporting jobs. Exclude .opencode.json sidecars from job enumeration rather than deleting historical configuration or inventing job state. Fresh installed status reproduced the failure 2026-09-14. Check other job enumerators for the same assumption before activation.
+`ecosystem status` scans `state/jobs/*.json`. Historical `task-*.opencode.json` files contain OpenCode provider configuration, not job state, and must be skipped. The installed status also counts kindless local audit records as jobs: their `ready` and `run_finished` states are not runnable managed work. After David authorized removal, the exact ten kindless `ready` local audit records were moved from `state/jobs` to the recoverable `state/archive/stale-kindless-ready-20260925/`; no real managed task was moved. Kindless `run_finished` audit records remain, so the installed flat count is still not a managed-work count. Source `cli.status` excludes sidecars and unknown/kindless records, retaining a flat count of recognized records and reporting `managed_agent_jobs` plus `by_kind`; this source fix awaits a drained deployment. Until then use installed `cointos-jobs --active` for actual managed tasks. Do not delete historical records merely to make a count appear clean.

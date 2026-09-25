@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T03:39:21+10:00"
-scope: "local"
-source: "ecosystem/models.py route and realize plus controlled preflight on 2026-09-16"
+status: green
+revised_at: "2026-09-16T03:39:21+10:00"
 ---
 
 `ecosystem.models.realize(decision, inventory)` consumes the public decision envelope produced by `ecosystem.models.route`, not the internal record returned directly by `choose_route`.

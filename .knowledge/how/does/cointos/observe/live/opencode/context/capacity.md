@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:40:40+10:00"
-scope: "local"
-source: "Independently inspected current source and design decisions in this turn; isolated real OpenCode read-back and named tests; 2026-09-14"
-updated_at: "2026-09-14T22:42:45+10:00"
+status: green
+revised_at: "2026-09-14T22:42:45+10:00"
 ---
 
 The launch producer reads Lemonade /v1/models and /api/v1/health, selects a downloaded registry model and resident backend, then reads that backend's /v1/models and /props. observe_opencode_backend_capacity reuses _observed_model_record to require model-name/path agreement, a live PID/launch command, tool-capability consistency, parameter/size metadata agreement and a supported allocation layout. meta.n_ctx, launch --ctx-size/--parallel and total_slots determine per-request capacity; meta.n_ctx_train is a model ceiling, not the current allocation.

@@ -1,13 +1,10 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T02:58:02+10:00"
-scope: "local"
-source: "current resource policy, model routing source, focused checks, and installed live unloaded-model qualification 2026-09-16"
-updated_at: "2026-09-17T09:57:03+10:00"
+status: green
+revised_at: "2026-09-26T01:47:59+10:00"
 ---
 
-For an unloaded model, `parallel_sequences` comes from explicit dynamic load policy because Lemonade's downloaded-model registry does not describe a live slot layout. `config/resource-policy.json` currently sets `dynamic_models.parallel_requests` to one. Unloaded metadata verification does not require a registry parallel field; `_model_route` uses a positive observed/model value when one exists, otherwise the positive dynamic-policy value.
+An unloaded model has no live slot layout in Lemonade's downloaded registry, so its first load uses explicit conservative dynamic policy. Installed `config/resource-policy.json` sets generic `dynamic_models.parallel_requests` to one and has no named Qwen slot override. `_model_route` retains support for an optional positive `parallel_requests_by_model[model_id]` when one is explicitly configured, but otherwise uses the generic value. Unloaded metadata verification does not require a registry parallel field.
 
-For a resident model, routing continues to use the backend-observed slot count and context layout. The value one is a conservative initial work-model layout that preserves the full verified 131072-token backend context for the current single observable Qwen worker. It is not an assertion that the hardware can never serve broader concurrency; future layouts should be qualified per model and context against observed demand and physical capacity.
+For a resident model, routing uses freshly observed backend slot count and context layout. Installed `backend_profile_policy` and `backend_profile_scheduler` can select a demand-sized physical profile up to an explicitly evidenced ceiling fingerprinted to exact weights, recipe and per-sequence context. The loaded Qwen3.8 backend has two observed 131072-token MTP sequences, an evidence-backed runtime ceiling of two, and passed an idle manual 2→1→2 reload; this is not a permanent Qwen constant. Automatic demand-driven growth remains disabled pending parked-worker and pressure qualification. A conservative initial slot is not a claim that hardware can never serve more.
 
-Installed live qualification carried `parallel_sequences: 1` through an unloaded DeepSeek-Qwen3-8B route, reclaimed idle Qwen3.8 under GTT pressure, loaded and verified DeepSeek, then reclaimed it and restored Qwen3.8 pinned at 131072 while Qwen3.5 remained resident. The former missing-registry-field and route-pressure barriers are closed.
+Prior DeepSeek qualification carried `parallel_sequences: 1` through an unloaded route, reclaimed idle Qwen3.8 under GTT pressure, loaded and verified DeepSeek, then reclaimed it and restored Qwen3.8 at 131072 while control remained resident.

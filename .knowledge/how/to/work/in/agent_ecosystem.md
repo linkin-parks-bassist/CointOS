@@ -1,10 +1,7 @@
 ---
-verified_at: '2026-09-11T18:43:14+10:00'
-verified_by: codex /root
-scope: project local
-source: 'git show 8edeadd^:AGENTS.md; current project knowledge; David policy clarifications 2026-09-11; ~/.knowledge/how/to/use/git/for/agent_work.md'
-verification: Reconciled repository guidance with current status, semantic knowledge ownership, David's non-work Git-policy reversal, and repository-copy invariant.
-review_when: Recheck when repository policy, activation authority, or project scope changes.
+status: green
+revised_at: "2026-09-20T08:44:30+10:00"
+checked_at: '2026-09-11T18:43:14+10:00'
 ---
 
 Treat this repository as personal, local-only orchestration infrastructure. Do not

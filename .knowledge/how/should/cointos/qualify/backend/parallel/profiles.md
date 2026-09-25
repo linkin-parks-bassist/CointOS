@@ -1,0 +1,8 @@
+---
+status: green
+revised_at: "2026-09-26T02:14:10+10:00"
+---
+
+A physical parallel ceiling is a reviewed capability for one exact resident model/recipe/per-sequence context, not a permanent Qwen constant or free-memory inference. Installed `backend_profile_policy.py` fingerprints the observed recipe normalized to one sequence plus measured model bytes, parameter count, ID and promised per-sequence context. `cointos-profile qualify-current --model ID --evidence TEXT` records an evidenced runtime ceiling; changed weights, recipe or context cannot inherit it. Generic work-slot policy and fresh KV headroom further bound growth but cannot qualify a target. Qwen3.8 currently has an evidence-backed ceiling of two from clean simultaneous CointOS-only workers. Manual idle 2→1→2 reload and a terminal-clean parked-worker 2→1 handoff retained 131072 tokens per sequence and MTP recipe.
+
+The installed `agent-backend-profile.timer`/`.service` has automation enabled by its marker. A two-job demand caused automatic 1→2 growth while one worker was parked; both jobs subsequently held distinct physical sequences, completed exit 0, reaped exact process groups and released their leases. The first growth exposed a missing executor wake; the installed durable wake repair subsequently passed a real automatic idle 2→1 shrink and immediate ecosystem path trigger, leaving no marker or fence. A repaired automatic growth is still to be observed. Installed `cointos-profile status` and `plan` are read-only; `resize-qualified` requests a bounded manual transition and `disable-automation` gates future automatic changes. Three sequences previously caused PSI pressure and remain unqualified. Pressure/emergency interaction, throughput and KV retention are not yet live-qualified.

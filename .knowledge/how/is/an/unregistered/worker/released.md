@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T23:47:54+10:00"
-scope: "local"
-source: "scoped workload-control shared state and lock implementation 2026-09-15"
-updated_at: "2026-09-15T05:13:51+10:00"
+status: green
+revised_at: "2026-09-15T05:13:51+10:00"
 ---
 
 ecosystem/workload_control.py release_worker validates and persists one replay-consistent outcome and moves the lease to release_requested unless already observed_stopped. An acquired worker whose process is None can become quiescent through observe_workers with an attested stopped observation after release; registered workers require matching process and backend/inference absence evidence. Do not assume release_worker alone removes occupancy. Automatic native launch setup must retain acquired worker identity before spawning and close it if setup fails.

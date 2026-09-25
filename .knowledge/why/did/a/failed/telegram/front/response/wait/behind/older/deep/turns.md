@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T16:29:40+10:00"
-scope: "local"
-source: "installed source repairs and durable worker evidence 2026-09-17"
-updated_at: "2026-09-17T19:53:59+10:00"
+status: green
+revised_at: "2026-09-17T19:53:59+10:00"
 ---
 
 Telegram turn `telegram-999135398` (`t3st`) failed its fast Qwen3.5 path with `JSONDecodeError: Expecting value` and entered deep_state queued with no visible response. `agent-control-worker.service` was configured with exactly two workers; both were occupied by older recovered deep turns (`telegram-999135396` and `telegram-999135397`). The inference scheduler never saw the newer turn until one controller finished, so control-worker process count became a head-of-line gate in front of the actual priority/resource scheduler.

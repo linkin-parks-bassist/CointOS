@@ -1,9 +1,6 @@
 ---
-scope: project local
-source: "David dispatch-barrier policy correction 2026-09-15 and front-reservation clarification implemented 2026-09-16"
-review_when: Recheck when scheduling architecture changes or an implementation is accepted.
-status: "unverified"
-updated_at: "2026-09-16T11:30:39+10:00"
+status: green
+revised_at: "2026-09-26T00:32:36+10:00"
 ---
 
 CointOS schedules durable logical agents over finite physical GPU execution slots while treating this host's verified 128 GB-class unified-memory capacity as abundant, as specified by `what/is/the/local/strix/halo/resource/policy.md`. Agent identity, context capacity, backend request, physical slot,
@@ -15,8 +12,10 @@ The canonical post-MVP switching model is to preserve complete compatible infere
 state, release physical occupancy, and later restore that state without replaying
 the full prompt. Disk, RAM, and GPU are residency tiers; immutable model weights may
 be shared. This architecture is accepted intent, not proof that the current runtime
-implements it. For now local Qwen dispatch is manually serialized as documented in
-the global local-agent launch procedure.
+implements it. The user-service dynamic-lane generation is now installed and has
+shown two simultaneous CointOS workers on distinct backend sequences; completion,
+queue drain and stop/recovery paths still need qualification. A named Qwen model
+or fixed slot count must not define the scheduler.
 
 David restoration priority 2026-09-14: first recover useful bounded live parallelism with managed allocation and accurate OpenCode limits. Exact native inference-state switching is not a prerequisite for this milestone. Two agents must actually make concurrent progress; excess work queues, cleanup verifies resource release, and no promised context shrinks silently. The previous manually serialized practice is historical baseline, not the current target. See `what/is/the/plan.md`.
 

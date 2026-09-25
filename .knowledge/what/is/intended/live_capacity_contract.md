@@ -1,9 +1,6 @@
 ---
-scope: project local
-source: "David exact harness/backend agreement and prevention-first SADS clarification 2026-09-15; current capacity implementation"
-review_when: Recheck after each accepted live-capacity implementation stage.
-status: "unverified"
-updated_at: "2026-09-15T22:09:32+10:00"
+status: green
+revised_at: "2026-09-15T22:09:32+10:00"
 ---
 
 The host-level abundance and reserve policy is `what/is/the/local/strix/halo/resource/policy.md`; apply it before choosing worker ceilings.

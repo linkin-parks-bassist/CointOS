@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:54:59+10:00"
-scope: "local"
-source: "David instruction 2026-09-14; intended/context_preparation and architecture contracts"
+status: green
+revised_at: "2026-09-14T22:54:59+10:00"
 ---
 
 Knowledge trees remain independently usable and maintained, while serving as a core CointOS component. CointOS should integrate their public procedures and interfaces rather than absorb their implementation or fork a competing memory system. This ownership boundary is David's requirement; the exact integration design is still open.

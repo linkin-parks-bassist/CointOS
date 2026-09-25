@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T13:06:43+10:00"
-scope: "project local"
-source: "inference_proxy.py repair; installed time-slice/restart recovery with exact PID evidence 2026-09-17"
-updated_at: "2026-09-18T12:35:10+10:00"
+status: green
+revised_at: "2026-09-18T12:35:10+10:00"
 ---
 
 `completed_run_termination()` previously proved closure only when the same recorded backend identity could be observed idle, or when prior request-completion evidence already existed. If Lemonade restarted that backend between cancellation and reconciliation, `backend_snapshot()` exposed a new PID/start-tick identity on the same endpoint. Same-identity slot probes correctly refused to attribute the new backend's idle state to the old request, but there was no path accepting the stronger fact that the exact old backend process had ended. The credential remained `closing`, inference stayed allocated, and the retained worker stayed `reconciliation_required` indefinitely.

@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-17T14:00:57+10:00"
-scope: "local"
-source: "scripts/opencode_observable.py; direct import probe 2026-09-17"
-updated_at: "2026-09-17T14:26:31+10:00"
+status: green
+revised_at: "2026-09-17T14:26:31+10:00"
 ---
 
 There is currently no importable `tests.test_opencode_observable` module and no dedicated test file for `scripts/opencode_observable.py`. Existing indirect coverage exercises it through managed/executor launch paths. For a narrow wrapper-only change during MVP bringup, run `python3 -m py_compile scripts/opencode_observable.py`, the relevant existing managed/executor suites, and a bounded direct check of the changed pure stream-classification behavior. Do not invent a regression-test module solely to satisfy the probe.

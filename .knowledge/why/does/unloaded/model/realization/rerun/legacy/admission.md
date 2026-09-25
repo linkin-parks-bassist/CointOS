@@ -1,10 +1,7 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T17:07:26+10:00"
-scope: "local"
-source: "ecosystem/executor.py and installed task-f37644773fa62fbd admission 2026-09-17"
-checked_at: "2026-09-17T20:20:00+10:00"
-updated_at: "2026-09-17T20:31:36+10:00"
+status: green
+revised_at: "2026-09-17T20:31:36+10:00"
+checked_at: '2026-09-17T20:20:00+10:00'
 ---
 
 `models.realize` previously validated that its selected unloaded route matched a fresh inventory and coherent backend allocation, then called the older `admission(model_id, inventory)` before `load_model_with_idle_reclamation`. That legacy function separately read GB-form `desktop_and_control_reserve_gb`, `model_load_transient_reserve_gb`, `unknown_model_reserve_gb`, and `gpu_boundary.gtt_limit_gb`, duplicating the byte-form capacity policy used by safe routing and inference allocation. Its unknown-model fallback alone reserved 64 GiB and could make the legacy arithmetic require 108 GiB (`32 + 12 + 64`) before considering the actual model or idle reclamation.

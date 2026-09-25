@@ -1,9 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T16:17:51+10:00"
-updated_at: "2026-09-17T12:34:09+10:00"
-scope: "project local"
-source: "installed queue no-starvation qualification 2026-09-16"
+status: "green"
+revised_at: "2026-09-26T08:21:02+10:00"
 checked_at: "2026-09-16T16:23:00+10:00"
 ---
 
@@ -16,4 +13,4 @@ Installed qualification passes: one preparation pass retained and reported both 
 
 A second starvation form was repaired during installed saturation qualification on 2026-09-17. `_waiting_jobs` treated any `queued` record as preemption-worthy before routing proved it runnable. The same old watchdog record, still missing requirements and metadata, received priority 699 and killed a valid priority-552 resumed worker twenty times. Preemption candidates are now only `ready` jobs: preparation may retain and report an unroutable queued record, while only prepared runnable demand can interrupt active work. The existing preemption fixture now truthfully uses `ready`; four focused preemption checks pass.
 
-Runtime disposition 2026-09-17: the old watchdog record was agent `Kaelen`, created 2026-09-04 with a prompt targeting the retired `/home/david/agent-ecosystem` checkout. A second old Telegram-owned Admin record existed solely to delete that Kaelen job. Both lacked current routing requirements, stayed queued, and polluted Cointelprofessional lifecycle summaries even after scheduler starvation was repaired. They were terminalized through caller-scoped `request_task_cancellation`; both durable records now remain as `cancelled/terminal` history and no longer appear as current queued work.
+Runtime disposition 2026-09-17: the old watchdog record, created 2026-09-04 with a prompt targeting the retired `/home/david/agent-ecosystem` checkout, and a second old Telegram-owned Admin record that existed solely to delete it, both lacked current routing requirements, stayed queued, and polluted Cointelprofessional lifecycle summaries. They were terminalized through caller-scoped `request_task_cancellation`.

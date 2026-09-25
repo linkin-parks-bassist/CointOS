@@ -1,9 +1,6 @@
 ---
-scope: project local
-status: "unverified"
-source: "Direct source/runtime change and focused existing checks 2026-09-15"
-review_when: Recheck when client limit observation or backend capacity derivation changes.
-updated_at: "2026-09-15T11:54:56+10:00"
+status: green
+revised_at: "2026-09-15T11:54:56+10:00"
 ---
 
 OpenCode package versions are observable identity, not an inference-admission allowlist. A version absent from `config/opencode-capabilities.json` must not block or strand benign local work. `qualified_opencode_capability` records the literal nonempty version and supplies no additional client ceiling for an unknown version; fresh backend capacity, any observed backend output ceiling, and configured output reserve still bound each request.

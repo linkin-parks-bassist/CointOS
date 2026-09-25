@@ -1,9 +1,6 @@
 ---
-scope: project local
-source: "Live supervised tiny-task dispatch observation on Qwen3.8 2026-09-15"
-review_when: Recheck when component ownership or durable flow changes.
-status: "unverified"
-updated_at: "2026-09-15T11:58:21+10:00"
+status: green
+revised_at: "2026-09-15T11:58:21+10:00"
 ---
 
 CointOS represents work as versioned filesystem records and append-only events.

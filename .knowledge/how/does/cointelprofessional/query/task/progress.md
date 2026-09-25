@@ -1,11 +1,7 @@
 ---
-status: "unverified"
-created_at: "2026-09-16T15:33:25+10:00"
-updated_at: "2026-09-16T15:47:47+10:00"
-scope: "project local"
-source: "source implementation and direct injected checks 2026-09-16"
-checked_at: "2026-09-16T15:46:00+10:00"
-review_when: "Recheck when control tools, job source ownership, or durable job progress fields change."
+status: green
+revised_at: "2026-09-16T15:47:47+10:00"
+checked_at: '2026-09-16T15:46:00+10:00'
 ---
 
 Cointelprofessional exposes `inspect_task_progress` for a direct durable progress query. The tool accepts an optional exact `agent_name`; its runtime only considers agent-task records whose source is the authenticated contact's `telegram:USER_ID`. With no name it selects the most recently updated active record in queued, ready, running, or awaiting_verification state, falling back to the caller's most recently updated submitted task. No match returns a truthful `found: false` result.

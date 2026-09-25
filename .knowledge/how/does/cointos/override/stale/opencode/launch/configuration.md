@@ -1,8 +1,6 @@
 ---
-status: "unverified"
-created_at: "2026-09-14T22:40:40+10:00"
-scope: "local"
-source: "Independently inspected current source and design decisions in this turn; isolated real OpenCode read-back and named tests; 2026-09-14"
+status: green
+revised_at: "2026-09-14T22:40:40+10:00"
 ---
 
 prepare_environment copies the environment, reads an inherited OPENCODE_CONFIG JSON document if present, then recursively merges OPENCODE_CONFIG_CONTENT; incoming dicts merge while non-dicts replace. It subsequently overwrites capacity-related fields from fresh observations, preserving unrelated inherited settings such as permissions and credentials. Invalid/malformed config fails launch; JSONC inherited custom files are not currently parsed by this Python boundary.
