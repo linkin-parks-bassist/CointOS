@@ -77,8 +77,8 @@ def test_short_jobs_rotate_without_starvation():
     now = datetime.now(timezone.utc)
     doc = scheduling_policy()
     old_coder = make_job("old", "small", (now - timedelta(minutes=30)).isoformat(),
-                         role="coder")
-    new_coder = make_job("new", "small", now.isoformat(), role="coder")
+                         role="worker")
+    new_coder = make_job("new", "small", now.isoformat(), role="worker")
     assert priority(old_coder, doc, now) == 580
     assert priority(new_coder, doc, now) == 550
     path, chosen, _ = choose([(Path("new"), new_coder),

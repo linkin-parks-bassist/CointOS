@@ -22,7 +22,7 @@ def _fixed_home_violations():
 def test_role_markdown_files_exist():
     paths = _role_markdown_paths()
     assert paths, "no role Markdown found under roles/"
-    for name in ("coder", "intake", "lead", "refactorer", "steward", "worker"):
+    for name in ("_base", "_control-plane", "manager", "sole_survivor", "steward", "worker"):
         assert REPO_ROOT / "roles" / f"{name}.md" in paths, f"missing roles/{name}.md"
 
 

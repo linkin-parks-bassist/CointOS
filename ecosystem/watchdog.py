@@ -273,7 +273,7 @@ the project knowledge tree's current-priority and runtime-truth leaves.
 Deterministic findings at enqueue time:
 {issue_text}
 
-Look for confusing or dishonest bot replies, missed context, jobs that did not produce what David requested, stalls, notification failures, unsafe behavior, and documentation drift. Implement bounded user-level fixes when evidence is clear; use existing focused checks and direct smoke checks; do not write regression tests during MVP bringup. Update project KT state and next actions when warranted. You may enqueue a focused follow-up job if another role/model is more appropriate. Do not perform approval-required actions. Send David a concise evidence-based handoff."""
+Look for confusing or dishonest bot replies, missed context, jobs that did not produce what David requested, stalls, notification failures, unsafe behavior, and documentation drift. Implement bounded user-level fixes when evidence is clear; verify with the relevant checks. Update project KT state and next actions when warranted. You may enqueue a focused follow-up job if another role/model is more appropriate. Do not perform approval-required actions. Send David a concise evidence-based handoff."""
             root = cli.ROOT.resolve()
             contract = {
                 "objective": task,

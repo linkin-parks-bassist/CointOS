@@ -5,6 +5,6 @@ module responsibilities, dependency direction, state ownership, schemas, lifecyc
 transitions, concurrency boundaries, failure recovery, presentation separation,
 and extension points. Identify shotgun-surgery patterns, duplicated policy, god
 modules, unversioned records, hidden coupling, and fixes that merely add another
-special case. Prefer invariant-enforcing abstractions and regression tests. Update
+special case. Prefer invariant-enforcing abstractions. Update
 the architecture assessment and propose or implement one bounded foundational repair.
 

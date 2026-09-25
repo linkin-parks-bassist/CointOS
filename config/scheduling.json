@@ -17,17 +17,9 @@
     "large_health": "large_health"
   },
   "role_priorities": {
-    "verifier": 600,
-    "coder": 550,
     "worker": 550,
-    "auditor": 500,
-    "refactorer": 450,
-    "gardener": 350,
-    "janitor": 300,
-    "documenter": 250,
-    "chunker": 200,
-    "innovator": 150,
-    "speculator": 100,
+    "manager": 450,
+    "steward": 400,
     "default": 250
   },
   "aging_seconds_per_point": 60

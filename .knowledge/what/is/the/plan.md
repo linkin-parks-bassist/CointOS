@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T09:02:51+10:00"
+revised_at: "2026-09-26T09:11:42+10:00"
 ---
 
 The plan is to reach the system defined in `what/is/cointos.md`: an autonomous, self-sustaining agent ecosystem that keeps the GPU busy with useful work without David's prompting.
@@ -21,5 +21,5 @@ Acceptance is judged by observation: left alone, the GPU stays busy, drafted ide
 - No named Qwen model or fixed slot count defines capacity; resident allocation, durable demand, policy, headroom and evidence-backed ceilings do.
 - Physical llama.cpp `--parallel` changes need unload/load and may lose KV cache.
 - Keep user runtime under `~/.CointOS`; the root survival plane is a separate boundary.
-- The MVP policy bars authoring new regression tests until David changes it. Only side-effect-free, subsecond predicates belong in startup proofs.
+- Only side-effect-free, subsecond predicates belong in knowledge-tree startup proofs.
 - Executor distillation criteria are in `how/should/executor/py/be/fractionally/distilled.md`; do not split files cosmetically.

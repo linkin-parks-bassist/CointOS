@@ -92,7 +92,7 @@ class IntakeTest(unittest.TestCase):
             cli.run_once()
         self.assertEqual(caught.exception.code, 75)
 
-    def test_prepared_task_uses_plain_assigned_text(self):
+    def test_prepared_task_includes_role_guidance(self):
         roles = self.root / "roles"
         roles.mkdir()
         (roles / "worker.md").write_text("# Worker\n## Mission\nDo it.\n## Permissions\nRead.\n## Approval required\nWrites.\n## Handoff\nReport.\n")
@@ -106,7 +106,8 @@ class IntakeTest(unittest.TestCase):
                 patch("ecosystem.models.route", return_value=decision):
             cli.prepare_next()
         prompt = (self.root / f"state/jobs/{job_id}.prompt.md").read_text()
-        self.assertEqual(prompt, "Inspect the widget\n")
+        self.assertIn("# Worker", prompt)
+        self.assertTrue(prompt.endswith("Inspect the widget\n"))
 
     def test_pending_task_can_be_amended(self):
         roles = self.root / "roles"; roles.mkdir(exist_ok=True)

@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "projects": ["~/Projects/CointOS"],
+  "steward_workspace": "~/Projects/CointOS",
+  "max_active_agents": 2,
+  "item_cooldown_seconds": 1800,
+  "survey_interval_seconds": 3600,
+  "steward_interval_seconds": 1800,
+  "minimum_context_tokens": 65536,
+  "model": "Qwen3.8-27B-GGUF"
+}

@@ -19,6 +19,7 @@ from ecosystem import opencode_client
 from ecosystem import task_contracts
 from ecosystem import time_policy
 from ecosystem import workload_control
+from ecosystem.roles import build_prompt
 from ecosystem.inference_capacity import reserve_sequence, constrain_launch_capacity
 from ecosystem.inference_proxy import (
     cancel as cancel_proxy,
@@ -1902,7 +1903,7 @@ def execute_next(run=subprocess.run) -> bool:
             if model_changed:
                 job.update(model=decision["model"], model_reason=decision["reason"])
                 prompt_path = cli.ROOT / "state/jobs" / f"{job['id']}.prompt.md"
-                cli.atomic_text(prompt_path, job["task"].strip() + "\n")
+                cli.atomic_text(prompt_path, build_prompt(job.get("role"), job["task"]))
                 job["prompt"] = str(prompt_path.relative_to(cli.ROOT))
                 job.setdefault("original_prompt", job["prompt"])
             else:

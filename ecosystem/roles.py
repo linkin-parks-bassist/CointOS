@@ -28,7 +28,8 @@ def resolve_role(role: str | None) -> dict:
     spawnable = (path is not None and path.is_file()
                  and (not path.name.startswith("_") or label == "sole_survivor"))
     if not spawnable:
-        base = (roles / "_base.md").read_text(encoding="utf-8").strip()
+        base_path = roles / "_base.md"
+        base = base_path.read_text(encoding="utf-8").strip() if base_path.is_file() else ""
         return {"label": label, "known": False, "context": base,
                 "capabilities": ["tool-calling"]}
     return {"label": label, "known": True,
@@ -39,3 +40,16 @@ def resolve_role(role: str | None) -> dict:
 def load_role(role: str | None) -> str:
     """Compatibility wrapper returning safe advisory context without admission."""
     return resolve_role(role)["context"]
+
+
+def build_prompt(role: str | None, task: str) -> str:
+    """Compose an agent prompt: shared base, the role's guidance, then the task."""
+    base = cli.ROOT / "roles/_base.md"
+    parts = [base.read_text(encoding="utf-8").strip()] if base.is_file() else []
+    resolved = resolve_role(role) if role else {"known": False}
+    if resolved["known"] and resolved["context"]:
+        parts.append(resolved["context"])
+    parts = [part for part in parts if part]
+    if not parts:
+        return task.strip() + "\n"
+    return "\n\n".join([*parts, "## Your assignment\n\n" + task.strip()]) + "\n"

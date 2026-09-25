@@ -48,7 +48,7 @@ a nonblank summary and at least one nonblank string in each of `claims`,
         "source_key": f"verification:{target_id}", "parent_job_id": target_id,
         "stop_condition": "Stop after one schema-valid evidence-backed verdict.",
     }
-    job_id = cli.enqueue_task("verifier", task, source=f"verification:{target_id}",
+    job_id = cli.enqueue_task("manager", task, source=f"verification:{target_id}",
                               idempotency_key=f"verification:{target_id}",
                               prefer_models_other_than=[target.get("model", "")],
                               task_contract=contract,

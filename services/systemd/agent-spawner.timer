@@ -1,0 +1,9 @@
+[Unit]
+Description=Periodically spawn autonomous agents into spare capacity
+[Timer]
+OnBootSec=5m
+OnUnitActiveSec=1m
+RandomizedDelaySec=10s
+Unit=agent-spawner.service
+[Install]
+WantedBy=timers.target

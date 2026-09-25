@@ -59,7 +59,11 @@ class KnowledgeTools:
     def call(self, name: str, arguments: dict) -> dict:
         result = self._request("tools/call", {"name": name, "arguments": arguments})
         text = "\n".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
-        return {"ok": not result.get("isError", False), "output": text}
+        ok = not result.get("isError", False)
+        from ecosystem import cli
+        cli.audit("control.kt_tool", tool=name, ok=ok,
+                  target=arguments.get("address") or arguments.get("question"))
+        return {"ok": ok, "output": text}
 
     def close(self) -> None:
         if self._process.poll() is None:

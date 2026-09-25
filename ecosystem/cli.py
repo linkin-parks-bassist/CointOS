@@ -413,7 +413,8 @@ def _prepare_next_locked() -> None:
             continue
         job.update(model=decision["model"], model_reason=decision["reason"],
                    context_tokens=decision["context_tokens"])
-        prompt = job["task"].strip() + "\n"
+        from ecosystem.roles import build_prompt
+        prompt = build_prompt(job.get("role"), job["task"])
         prompt_path = ROOT / "state/jobs" / f"{job['id']}.prompt.md"
         prompt_path.write_text(prompt, encoding="utf-8")
         job.update(state="ready", updated_at=now(), prompt=str(prompt_path.relative_to(ROOT)))

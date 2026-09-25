@@ -1,6 +1,6 @@
 ---
-status: green
-revised_at: "2026-09-26T06:59:37+10:00"
+status: "green"
+revised_at: "2026-09-26T09:11:56+10:00"
 ---
 
 Use standard-library `unittest` in the current repository environment. Run the
@@ -24,7 +24,7 @@ The quiet summary (`Ran N tests`, `OK`, `FAILED`) is written to stderr, not
 stdout. Discarding stderr, or grepping only stdout, hides the result; run with
 `2>&1` when checking the summary.
 
-Test collection is mixed: `unittest.TestCase` classes and module-level functions exposed through `load_tests` are collected, but raw `def test_*` functions without `load_tests` are silently skipped by unittest discovery. A focused discovery of `tests/test_executor_cancellation.py` previously returned zero despite four functions. The missing adapters in backend-profile policy, executor cancellation, post-close recovery, round outcomes, and pure job outcomes now collect their existing functions; their combined focused run executes 27 existing checks. This repairs suite wiring rather than authoring new regression cases. `does/cointos/unittest/discovery/collect/27/existing/safety/checks.md` has a read-only, subsecond count proof, and `does/every/cointos/module/with/top-level/test/functions/declare/a/collection/adapter.md` guards future function-style modules against missing adapters. These KT proofs do not run temporary-root cases during startup. As observed on 2026-09-11,
+Test collection is mixed: `unittest.TestCase` classes and module-level functions exposed through `load_tests` are collected, but raw `def test_*` functions without `load_tests` are silently skipped by unittest discovery. A focused discovery of `tests/test_executor_cancellation.py` previously returned zero despite four functions. The missing adapters in backend-profile policy, executor cancellation, post-close recovery, round outcomes, and pure job outcomes now collect their existing functions; their combined focused run executes 27 existing checks. `does/cointos/unittest/discovery/collect/27/existing/safety/checks.md` has a read-only, subsecond count proof, and `does/every/cointos/module/with/top-level/test/functions/declare/a/collection/adapter.md` guards future function-style modules against missing adapters. These KT proofs do not run temporary-root cases during startup. As observed on 2026-09-11,
 `/usr/bin/python3 -m pytest` fails because pytest is not installed. A plan that
 spells a pytest command does not prove the runner exists; use the equivalent
 focused unittest command unless the environment is deliberately changed. Run
@@ -45,4 +45,4 @@ raise SystemExit(not result.wasSuccessful())
 
 Evidence: owned worker's per-name TypeError, current with_proxy/load_tests convention and coordinator suite selection16/1. Selection itself is not a passing test run.
 
-The global MVP development policy still prohibits authoring new regression tests across projects until David explicitly changes it. David's later request to integrate the test suite into KT guidance authorizes quick proofs using existing tests or tiny read-only predicates; it does not by itself authorize new regression-test authoring. Implement production code first and verify with existing focused checks and bounded direct smoke checks. Do not delete existing tests. Local workers may implement bounded changes; the coordinator reviews and runs integration checks.
+Add a test when it pins down behaviour that matters and would otherwise regress; do not add tests reflexively. Do not delete existing tests without reason.
