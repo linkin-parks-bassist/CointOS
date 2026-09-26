@@ -76,7 +76,7 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
     thought_id = secrets.token_hex(6)
     with LOCK:
         L["thoughts"][thought_id] = {"id": thought_id, "agent": agent, "class": klass, "owner": owner, "model": model,
-                                     "lane": None, "since": None, "waiting_since": now(), "warm": [], "reading": True,
+                                     "lane": None, "since": None, "waiting_since": now(), "warm": [], "reading": True, "opens_turn": False,
                                      "started_at": now(), "generated": 0, "prompt": len(rendered["tokens"])}
         RUNS[thought_id] = {"prompt": rendered["tokens"], "reader": rendered["reader"], "sampling": sampling,
                             "max": max_new, "generated": [], "queue": queue.Queue(), "cancelled": False}
@@ -155,8 +155,9 @@ def schedule() -> None:
         reading = not any(len(HELD[p]) >= len(tokens) - 1 for p in thought["warm"])
         # How much of its context the lane it holds has read (for progress).
         thought["held"] = len(HELD.get(thought["lane"]) or []) if thought["lane"] is not None else 0
-        if thought["reading"] and not reading and thought["lane"] is not None:
-            # The read is done: the turn's slice counts generating time only, from now.
+        if thought["reading"] and not reading and thought["lane"] is not None and thought["opens_turn"]:
+            # The turn's opening read is done: its slice counts from now. A thought continuing the
+            # turn (after a quick tool call) reads only the tool's result, and its slice runs on.
             L["lanes"][thought["lane"]]["turn_since"] = thought["since"] = now()
         thought["reading"] = reading
     wanted = scheduler.assign(CONFIG, L["lanes"], list(L["thoughts"].values()), now(), blocked())
@@ -179,7 +180,7 @@ def schedule() -> None:
             returning = scheduler.held_for(lane, now()) == thought["agent"] and lane.get("turn_agent") == thought["agent"]
             lane.update(turn_agent=thought["agent"], turn_since=lane["turn_since"] if returning else now(),
                         held_for=None, held_until=0)
-            thought.update(lane=position, since=lane["turn_since"], waiting_since=None)
+            thought.update(lane=position, since=lane["turn_since"], waiting_since=None, opens_turn=not returning)
     LOCK.notify_all()
 
 
