@@ -131,8 +131,8 @@ def fast_reply(message: str, history: list[dict], summary: str) -> tuple[str, bo
               'Reply as JSON: {"reply": "<your message to David>", "deeper": true|false}.')
     try:
         answer = complete(CONFIG["front_model"], [{"role": "system", "content": system}, *history,
-                                                  {"role": "user", "content": message}], timeout=12,
-                          max_tokens=500, temperature=0.4, response_format={"type": "json_object"},
+                                                  {"role": "user", "content": message}], timeout=SETTINGS["reply_seconds"],
+                          max_tokens=SETTINGS["reply_tokens"], temperature=0.4, response_format={"type": "json_object"},
                           chat_template_kwargs={"enable_thinking": False})
     except (OSError, ValueError, KeyError, urllib.error.URLError):
         traceback.print_exc()
@@ -216,12 +216,12 @@ def deep_turn(message: str, history: list[dict], first_reply: str, knowledge: di
     messages = [{"role": "system", "content": system}, *history, {"role": "user", "content": message}]
     tools = TOOLS + (knowledge["tools"] if knowledge else [])
     seen: dict[str, dict] = {}
-    for round_number in range(SETTINGS["max_tool_rounds"] + 3):
+    for round_number in range(SETTINGS["max_tool_rounds"] + SETTINGS["finishing_rounds"]):
         if round_number == SETTINGS["max_tool_rounds"]:
             tools = [t for t in TOOLS if t["function"]["name"] in TERMINAL]
             messages.append({"role": "user", "content": "Stop inspecting and finish now with `reply` or "
                                                         "`finish_silently`, using what you know."})
-        assistant = complete(CONFIG["work_model"], messages, timeout=1800, tools=tools, temperature=0.4)
+        assistant = complete(CONFIG["work_model"], messages, timeout=SETTINGS["deep_turn_seconds"], tools=tools, temperature=0.4)
         calls = assistant.get("tool_calls") or []
         messages.append({key: value for key, value in assistant.items() if key in ("role", "content", "tool_calls")})
         if not calls:

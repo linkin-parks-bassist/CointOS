@@ -7,6 +7,7 @@
   "port": 4200,
   "tick_seconds": 1,
   "model_check_seconds": 5,
+  "keepalive_seconds": 10,
   "work_model": "Qwen3.8-27B-GGUF",
   "front_model": "Qwen3.5-4B-GGUF",
   "models": {
@@ -83,13 +84,22 @@
     "telegram_env": "~/.config/agent-ecosystem/telegram.env",
     "history_messages": 20,
     "max_tool_rounds": 8,
-    "alert_poll_seconds": 5
+    "alert_poll_seconds": 5,
+    "reply_seconds": 12,
+    "reply_tokens": 500,
+    "deep_turn_seconds": 1800,
+    "finishing_rounds": 3
   },
   "viewers": {
     "max_viewers": 4,
     "terminal": [
       "gnome-terminal",
       "--"
-    ]
+    ],
+    "opening_seconds": 15
+  },
+  "dashboard": {
+    "live_hz": 10,
+    "live_chars": 600
   }
 }

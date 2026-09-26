@@ -14,9 +14,6 @@ from pathlib import Path
 from cointos.config import ROOT
 from cointos.state import CONFIG, L, log, now
 
-OPENING_SECONDS = 15  # a window just opened may take this long to show its process
-
-
 def open_windows() -> set[int]:
     """The slots whose viewer window is running, from the processes carrying COINTOS_VIEWER."""
     found = set()
@@ -45,7 +42,7 @@ def look_after(windows: set[int]) -> None:
     limit = CONFIG["viewers"]["max_viewers"]
     viewers, opening = L["viewers"], L["viewers_opening"]
     for slot, since in list(opening.items()):
-        if int(slot) in windows or now() - since > OPENING_SECONDS:
+        if int(slot) in windows or now() - since > CONFIG["viewers"]["opening_seconds"]:
             del opening[slot]
     for slot, agent in list(viewers.items()):
         if agent not in L["agents"] or (int(slot) not in windows and slot not in opening):

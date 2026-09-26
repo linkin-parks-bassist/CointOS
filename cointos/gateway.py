@@ -21,9 +21,6 @@ from cointos.config import ROOT
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, log, save
 
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
-KEEPALIVE_SECONDS = 10
-LIVE_CHARS = 600  # how much of an agent's current words the dashboard shows
-LIVE_HZ = 10  # how often the dashboard's live stream updates
 
 
 def identity(key: str) -> tuple[str, str, str]:
@@ -90,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def live(self):
-        """Stream, `LIVE_HZ` times a second, what changes fast: each agent's state, words, speed and
+        """Stream, `dashboard.live_hz` times a second, what changes fast: each agent's state, words, speed and
         progress, and the machine's memory. The page updates its agent cards and memory from it in
         place; the rest of the ledger it reads once a second."""
         self.send_response(200)
@@ -108,7 +105,7 @@ class Handler(BaseHTTPRequestHandler):
                     data = json.dumps(frame)
                 self.wfile.write(b"data: " + data.encode() + b"\n\n")
                 self.wfile.flush()
-                time.sleep(1 / LIVE_HZ)
+                time.sleep(1 / CONFIG["dashboard"]["live_hz"])
         except OSError:
             return  # the page went away
 
@@ -143,7 +140,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             while end is None:
                 try:
-                    item = run["queue"].get(timeout=KEEPALIVE_SECONDS)
+                    item = run["queue"].get(timeout=CONFIG["keepalive_seconds"])
                 except queue.Empty:
                     if stream:
                         self.wfile.write(b": waiting for a lane\n\n")
@@ -203,8 +200,8 @@ def show(agent: str, thought: dict) -> None:
     """Keep the end of what an agent is saying, for the dashboard's live view of it."""
     with LOCK:
         if agent in L["agents"]:
-            L["agents"][agent]["live"] = {"reasoning": thought["reasoning"][-LIVE_CHARS:],
-                                          "content": thought["content"][-LIVE_CHARS:], "phase": thought["phase"]}
+            L["agents"][agent]["live"] = {"reasoning": thought["reasoning"][-CONFIG["dashboard"]["live_chars"]:],
+                                          "content": thought["content"][-CONFIG["dashboard"]["live_chars"]:], "phase": thought["phase"]}
 
 
 class ApiError(ValueError):
