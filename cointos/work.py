@@ -185,14 +185,29 @@ def new_task(project: dict, kind: str, role: str, item: str | None, brief: str, 
 
 
 def next_task() -> str | None:
-    """The next task to run, creating it from the queues if needed. Caller holds LOCK."""
+    """The next task to run, creating it from the queues if needed; an item runs only once every
+    item it depends on is done on main (`queues.readiness`). Caller holds LOCK."""
     tasks = L["tasks"]
-    waiting = sorted((t for t in tasks.values() if t["status"] == "waiting"), key=lambda t: t["created_at"])
+    scanned = {project["name"]: queues.scan(project) for project in CONFIG["projects"]}
+    ready = {project: queues.readiness(items) for project, items in scanned.items()}
+    problems = {f"{project}:{item}": state for project, states in ready.items() for item, state in states.items()
+                if state not in ("ready", "waiting")}
+    for task_id, problem in problems.items():
+        if L["dependency_problems"].get(task_id) != problem:
+            alert(f"{task_id} can never start: {problem}.")
+    L["dependency_problems"] = problems
+
+    def runnable(task):
+        return not task.get("item") or ready.get(task["project"], {}).get(task["item"], "ready") == "ready"
+
+    waiting = sorted((t for t in tasks.values() if t["status"] == "waiting" and runnable(t)), key=lambda t: t["created_at"])
     if waiting:
         return waiting[0]["id"]
     candidates = []
     for project in CONFIG["projects"]:
-        for found in queues.scan(project):
+        for found in scanned[project["name"]]:
+            if ready[project["name"]][found["item"]] != "ready":
+                continue
             known = tasks.get(f"{project['name']}:{found['item']}")
             if known and (known["status"] in ("running", "waiting") or known["leaf_hash"] == found["hash"]):
                 continue

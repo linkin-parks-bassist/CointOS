@@ -45,7 +45,7 @@ def fresh(previous: dict) -> dict:
     return {
         "started_at": now(), "updated_at": now(), "paused": previous.get("paused", False),
         "models": {name: {"up": False, "launching": False, "problems": ["not checked yet"]} for name in CONFIG["models"]},
-        "lanes": lanes, "thoughts": {}, "agents": {}, "exiting": {}, "viewers": {}, "viewers_opening": {},
+        "lanes": lanes, "thoughts": {}, "agents": {}, "exiting": {}, "viewers": {}, "viewers_opening": {}, "dependency_problems": {},
         "viewers_showing": previous.get("viewers_showing", False),
         "snapshots": previous.get("snapshots", {}), "tasks": previous.get("tasks", {}),
         "memory": {}, "model_memory": {name: {"memory_gb": shape["memory_gb"], "weights_gb": shape["weights_gb"]}

@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-27T08:33:32+10:00"
+revised_at: "2026-09-27T09:35:55+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -78,6 +78,7 @@ The backend's `models()` is the source of truth for what is loaded, because the 
 
 - The spawner keeps up to `max_agents` agents alive, more than the number of lanes, because acting agents hold no lane.
 - Existing waiting tasks are resumed first. New work comes from knowledge-tree queues in the configured projects (`what/are/the/cointos/roles.md`), in this order: urgent then queued items (worker), drafted ideas (manager), a periodic survey (manager), maintenance (steward).
+- **Dependencies make the queue a tree, in the leaves themselves.** An item that needs others to land first says so on a line of its own after its status: `Depends on: what/is/queued/<item>.md` (paths or bare names, comma-separated). The spawner reads each project's queue from its main branch, where `done` is true, and starts an item (or resumes a waiting task for it) only once every item it depends on says done (`queues.readiness`, pure). Items without the line may run at once, in parallel. An item that can never become ready (an unknown or blocked dependency, or a cycle) alerts Coin once and shows in the self-check. Managers write the line when they break an idea down (`roles/manager.md`); a drafted idea is the tree's root.
 - Each agent works in its own git worktree on its own branch. Workers are instructed to commit their work together with the item's new status, merge the current main into their branch, and run `cointos merge` (fast-forward only) to land it, committing nothing afterwards; refusal is recorded as blocked. A resumed run is told it is finished only once landed. Settlement records `branch not merged` when later branch commits did not land; the worktree and branch are then kept.
 - Routine maintenance runs only if `maintenance_project` is also configured in `projects`; with sandbox-only scope no CointOS steward is spawned. Sole Survivor is off the current roadmap. The guard handles known recovery mechanically; David brings in a stronger remote agent for catastrophic diagnosis and repair.
 
@@ -110,6 +111,7 @@ Every tick the daemon checks these invariants over the ledger; a violation shows
 5. No agent repeats the same thought more than `max_identical_thoughts` times.
 6. Every agent process belongs to a ledger agent or an exiting one (`no stray agent processes`). The run supervisor owns unit exit detection, event draining and task settlement: process absence before settlement is expected, including successful completion. Unfinished runs still requeue or alert on exhausted attempts; silence recovery remains separate.
 7. Headroom is not negative and there is no distress.
+8. No queue item waits on a dependency that can never be done (`no item waits on a dead dependency`).
 
 ## Watching
 

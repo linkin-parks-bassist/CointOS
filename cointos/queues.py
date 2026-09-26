@@ -27,6 +27,49 @@ def status(text: str) -> str | None:
     return None
 
 
+def depends(text: str) -> list[str]:
+    """The items named on the leaf's `Depends on:` line: paths or bare names, comma-separated."""
+    for line in answer(text).splitlines():
+        found = re.match(r"\**Depends on:\**\s*(.+)", line.strip(), re.IGNORECASE)
+        if found:
+            return [name.strip(" `*") for name in found[1].split(",") if name.strip(" `*")]
+    return []
+
+
+def readiness(items: list[dict]) -> dict[str, str]:
+    """Each item's readiness from its `Depends on:` line: "ready" once every item it depends on
+    says done (the items are read from the project's main branch, where done is true); "waiting"
+    while any is still to come; otherwise the problem that keeps it from ever becoming ready (an
+    unknown or blocked dependency, or a cycle). Pure."""
+    paths = {item["item"]: item for item in items}
+    stems = {Path(item["item"]).stem: item["item"] for item in items}
+
+    def resolve(name):
+        return name if name in paths else stems.get(Path(name).stem)
+
+    def reaches(start, target, seen):
+        for name in paths[start].get("depends", []):
+            found = resolve(name)
+            if found == target or (found and found not in seen and reaches(found, target, seen | {found})):
+                return True
+        return False
+
+    result = {}
+    for item in items:
+        needed = item.get("depends", [])
+        unknown = [name for name in needed if resolve(name) is None]
+        if unknown:
+            result[item["item"]] = f"depends on unknown {', '.join(unknown)}"
+        elif reaches(item["item"], item["item"], {item["item"]}):
+            result[item["item"]] = "depends on itself through a cycle"
+        elif any(paths[resolve(name)]["status"] == "blocked" for name in needed):
+            result[item["item"]] = "depends on a blocked item: " + ", ".join(
+                resolve(name) for name in needed if paths[resolve(name)]["status"] == "blocked")
+        else:
+            result[item["item"]] = "ready" if all(paths[resolve(name)]["status"] == "done" for name in needed) else "waiting"
+    return result
+
+
 def read_item(root: Path, item: str) -> dict | None:
     """The item at `.knowledge/<item>` under `root`, or None."""
     try:
@@ -34,12 +77,12 @@ def read_item(root: Path, item: str) -> dict | None:
     except OSError:
         return None
     body = answer(text).strip()
-    return {"item": item, "status": status(text), "brief": body,
+    return {"item": item, "status": status(text), "depends": depends(text), "brief": body,
             "hash": hashlib.sha256(body.encode()).hexdigest()[:16]}
 
 
 def scan(project: dict) -> list[dict]:
-    """Every item leaf in the project's queues, as {item, kind, status, brief, hash}."""
+    """Every item leaf in the project's queues, as {item, kind, status, depends, brief, hash}."""
     items = []
     for kind in KINDS:
         directory = Path(project["path"]) / ".knowledge/what/is" / kind

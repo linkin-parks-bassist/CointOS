@@ -71,6 +71,9 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
                 if agent_id not in ledger["agents"] and agent_id not in ledger["exiting"]]
     check("no stray agent processes", problems)
 
+    check("no item waits on a dead dependency", [f"{item}: {problem}" for item, problem
+                                                  in (ledger.get("dependency_problems") or {}).items()])
+
     measured = ledger.get("memory") or {}
     problems = memory.distressed(config, measured) if measured else []
     if measured and measured["headroom_gb"] < 0:
