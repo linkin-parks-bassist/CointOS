@@ -46,6 +46,9 @@ def process_turn(identifier: str, send=reply, controller=respond) -> None:
     finally:
         if knowledge is not None:
             close_tools(knowledge)
+        # This turn's inference lane is free again; let waiting agents take it now
+        # rather than at the next fallback scan.
+        cli.wake_dispatch()
 
 
 def _reap(active: dict[int, str]) -> None:
