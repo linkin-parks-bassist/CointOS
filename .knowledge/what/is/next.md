@@ -1,11 +1,13 @@
 ---
-status: "green"
-revised_at: "2026-09-27T01:19:33+10:00"
+status: green
+revised_at: "2026-09-27T04:16:50+10:00"
 ---
 
-Single-task halt/resume, stalled-startup recovery, binary-search delivery (92 sandbox tests), and clean worker completion without false failure alerts are verified. Keep sandbox-only scope.
+Four workers on two lanes, main-branch settlement and the turn-slice fix are live (see `what/is/the/state.md`). Keep sandbox-only scope.
 
-1. Demonstrate Milestone 3 with four real agents sharing two work lanes, measured by completed thoughts, tool results and landed commits, including kill recovery within 30 seconds. Restart adoption already has ledger evidence; it is distinct from kill recovery and halt/up.
-2. Demonstrate Coin's real Telegram round trip and ten-message response timing under load. Service health alone does not establish replies; this requires David's test messages or explicit authorization to send test messages.
-3. Run and retain evidence for the uninterrupted unattended hour, then the full two-hour soak, desktop responsiveness, user-class priority and halt/up acceptance. Test shutdown snapshot persistence separately if claiming reboot recovery.
-4. After acceptance, David decides which real projects to add. Sole Survivor is off the current roadmap; catastrophic repair is David's remote intervention.
+1. Let the running multi-agent batch finish, and confirm live that `no agent starves` stays green with the turn-slice fix and that every item settles `done on main` with nothing stranded. Keep the queue fed so at least four agents stay live, which lets the same run count toward the unattended hour and two-hour soak.
+2. Kill recovery: SIGKILL an agent unit mid-run and time its task's resumption (under 30 s) with checks green afterwards. The harness refused this overnight; David runs it or authorizes it.
+3. David reviews: the `roles/worker.md` step reorder (status committed with the work, then land), and the kt front-matter fix on `~/Projects/knowledgetrees` branch `fix/one-status-form` (install only after his go). Decide whether HTTP/process plumbing timeouts move to config.
+4. Demonstrate Coin's real Telegram round trip and ten-message response timing under load; this needs David's messages or explicit authorization to send test messages.
+5. Workstation responsiveness and user-class priority under load, halt/up mid-soak, and a reboot test if claiming shutdown snapshot persistence.
+6. After acceptance, David decides which real projects to add. Sole Survivor is off the current roadmap; catastrophic repair is David's remote intervention.

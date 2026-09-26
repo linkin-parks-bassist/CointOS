@@ -1,6 +1,6 @@
 ---
-status: "green"
-revised_at: "2026-09-27T01:13:40+10:00"
+status: green
+revised_at: "2026-09-27T03:40:55+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -56,7 +56,7 @@ The first backend, for Lemonade-managed llama-server (`how/does/lemonade/serve/m
 
 ## Config and ledger
 
-- `config/cointos.json` is the intended sole owner of operational numbers, including models and their shapes, reservations, classes, `chunk_tokens`, `slice_seconds`, bounds, physical limits, spawner limits, intervals and ports. The current implementation still has constants outside it; see the gap in `what/is/the/state.md`.
+- `config/cointos.json` is the intended sole owner of operational numbers, including models and their shapes, reservations, classes, `chunk_tokens`, `slice_seconds`, bounds, physical limits, spawner limits, intervals, ports, the dashboard's live rate, viewer-opening grace and Coin's reply and deep-turn limits. Some HTTP and process-plumbing timeouts are still literals in code; see the gap in `what/is/the/state.md`.
 - `state/cointos.json` is the ledger, written atomically by the daemon only, holding the ledger lock through serialization and replacement so API and tick saves cannot overtake each other: agents (role, task, state: starting, reading, thinking, waiting or running; reasoning versus writing is in its live phase; lane; what it is doing), lanes (model, resident agent), saved contexts, recent history and self-check results. The CLI, the dashboard and Coin read it.
 
 ## Models
@@ -67,7 +67,7 @@ The backend's `models()` is the source of truth for what is loaded, because the 
 
 - **One owner per agent.** Each run is an independent transient `cointos-agent-<id>` systemd user unit running the OpenCode server and client. A daemon thread follows its event and exit files and settles the task. The run outlives a daemon restart.
 - **One way to end.** For daemon-directed stops, the agent first leaves the ledger with its task settled; then its systemd unit is stopped. Runs that end externally are settled when observed. Until `exit_grace_seconds` pass, it is listed as exiting. A task's snapshots are forgotten when the task is done or failed, since only then is its conversation over; a requeued task keeps them for its next run.
-- **Settling:** a run that ended by itself is finished when its item leaf says so (for surveys and maintenance, when the run stopped normally). Otherwise its task is requeued and the run counts against `max_runs_per_task`. API stops by David and guard stops pass `charge=False` and refund that run. CLI halt calls the daemon's halt API first, which uses the same uncharged settlement path for every live agent and saves the ledger before acknowledging. The existing stopping event prevents further admission; the prior pause setting is preserved.
+- **Settling:** a run that ended by itself is finished when its item leaf on the project's main branch says so (for surveys and maintenance, when the run stopped normally). Main is the one truth for `done`: a status set only on the task branch is undelivered. `blocked` is also accepted from the branch, because it can be why the branch could not land. Otherwise its task is requeued and the run counts against `max_runs_per_task`. API stops by David and guard stops pass `charge=False` and refund that run. CLI halt calls the daemon's halt API first, which uses the same uncharged settlement path for every live agent and saves the ledger before acknowledging. The existing stopping event prevents further admission; the prior pause setting is preserved.
 - **Silence:** `checks.silent_agents` is the shared predicate for recovery and self-check: no outstanding thought and no OpenCode event for `agent_silent_seconds` (currently 30). It covers startup, tools and between-request stalls. Reading, generating and lane waits are exempt because they have a thought. The tick stops silent runs and requeues their task, charging an unfinished attempt. This is an event-silence bound, so a long tool that emits no OpenCode event can also reach it.
 - **Looping:** an agent whose thoughts produce the same output more than `max_identical_thoughts` times in a row is stopped and its task requeued.
 - **David's own sessions** think through the gateway with a user key, in the user class. A user thought updates `user_last_thought`; the spawner starts no new background agents for `user_quiet_seconds` after that request began. This is a timed admission rule, not continuous hosted-session detection.
@@ -76,7 +76,7 @@ The backend's `models()` is the source of truth for what is loaded, because the 
 
 - The spawner keeps up to `max_agents` agents alive, more than the number of lanes, because acting agents hold no lane.
 - Existing waiting tasks are resumed first. New work comes from knowledge-tree queues in the configured projects (`what/are/the/cointos/roles.md`), in this order: urgent then queued items (worker), drafted ideas (manager), a periodic survey (manager), maintenance (steward).
-- Each agent works in its own git worktree on its own branch. Workers are instructed to commit, merge the current main into their branch, and run `cointos merge` (fast-forward only) to land it; refusal is recorded as blocked. Settlement accepts item status done or blocked as a finished ledger task, and records `branch not merged` when ancestry is absent. Thus ledger `done` alone does not prove delivery.
+- Each agent works in its own git worktree on its own branch. Workers are instructed to commit their work together with the item's new status, merge the current main into their branch, and run `cointos merge` (fast-forward only) to land it, committing nothing afterwards; refusal is recorded as blocked. A resumed run is told it is finished only once landed. Settlement records `branch not merged` when later branch commits did not land; the worktree and branch are then kept.
 - Routine maintenance runs only if `maintenance_project` is also configured in `projects`; with sandbox-only scope no CointOS steward is spawned. Sole Survivor is off the current roadmap. The guard handles known recovery mechanically; David brings in a stronger remote agent for catastrophic diagnosis and repair.
 
 ## Memory
