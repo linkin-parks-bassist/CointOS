@@ -161,6 +161,9 @@ def launch(config: dict, agent_id: str, task: dict, project: dict, key: str) -> 
     subprocess.run(["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit(agent_id)}",
                     f"--working-directory={ROOT}", f"--setenv=COINTOS_AGENT={agent_id}",
                     "--property=KillMode=control-group", "--property=TimeoutStopSec=15",
+                    # A runaway tool is killed inside its own agent, never by the machine's OOM
+                    # handling, which would pick the model server.
+                    f"--property=MemoryMax={config['memory']['agent_limit_gb']}G", "--property=MemorySwapMax=0",
                     sys.executable, "-m", "cointos.agents", str(directory)], check=True)
 
 
