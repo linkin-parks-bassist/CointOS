@@ -131,6 +131,8 @@ def finish(thought_id: str, how: str) -> None:
                         held_until=now() + CONFIG["scheduler"]["yield_grace_seconds"])
     run["queue"].put({"end": how})
     agent = L["agents"].get(thought["agent"])
+    if agent is not None:
+        agent["last_activity"] = now()  # thinking is activity: silence counts from its end
     if agent is not None and how == "done":
         said = digest(run["generated"])
         agent["repeats"] = agent["repeats"] + 1 if agent["last_thought"] == said else 1
@@ -291,11 +293,11 @@ def live(owner: str | None) -> bool:
     return owner is not None and (task is None or task["status"] in ("running", "waiting"))
 
 
-def switch(position: int, tokens: list[int], owner: str) -> None:
+def switch(position: int, tokens: list[int], owner: str) -> str | None:
     """Replace the lane's state with the best start for `tokens`: save the state it holds if
     that conversation goes on and it fits (snapshots give way, least recently run first); then
     restore the longest snapshot that begins `tokens`. Without one the context is cold and the
-    model reads it."""
+    model reads it. Returns the name of the snapshot restored, if any."""
     with LOCK:
         lane = dict(L["lanes"][position])
         held = HELD.get(position) or []
@@ -332,6 +334,7 @@ def switch(position: int, tokens: list[int], owner: str) -> None:
         L["lanes"][position].update(resident=owner)
         log("switch", model=lane["model"], lane=lane["index"], out=lane["resident"], saved=bool(save),
             into=owner, restored=restored or 0)
+    return candidates[0][1] if restored else None
 
 
 # ---------------------------------------------------------------- lanes
@@ -352,9 +355,10 @@ def worker(position: int) -> None:
             model, index, tokens = lane["model"], lane["index"], tokens_of(thought_id)
             warm = begins(HELD.get(position), tokens)
             shared = shared_prefix(thought_id, model) if not warm or len(HELD[position]) < len(tokens) - 1 else 0
+        restored = None
         try:
             if not warm:
-                switch(position, tokens, thought["owner"])
+                restored = switch(position, tokens, thought["owner"])
             held = len(HELD.get(position) or [])
             # Reading stops one token short: generating then extends the lane by exactly one token.
             # (Holding the whole context would make the model roll back one token to generate,
@@ -363,17 +367,24 @@ def worker(position: int) -> None:
                 end = min(len(tokens) - 1, held + read_chunk)
                 keep_shared = held < shared <= end and not saved_prefix(model, tokens[:shared])
                 upto = tokens[:shared if keep_shared else end]
-                BACKEND.prefill(CONFIG, model, index, upto)
+                BACKEND.prefill(CONFIG, model, index, upto, held)
                 if keep_shared:  # the start other contexts share: save it once, for all of them
                     save_prefix(position, upto)
                 elif len(upto) == len(tokens) - 1 and not run["generated"] and live(thought["owner"]):
                     keep(position, upto, thought["owner"], "checkpoint")  # the conversation as committed
                 result, holds = {"tokens": [], "done": False}, upto
             else:
-                result = BACKEND.think(CONFIG, model, index, tokens, min(chunk, run["max"] - len(run["generated"])),
+                result = BACKEND.think(CONFIG, model, index, tokens, held, min(chunk, run["max"] - len(run["generated"])),
                                        run["sampling"], run["queue"].put)
                 holds = tokens + result["tokens"][:-1] if result["tokens"] else tokens
             failure = None
+        except BACKEND.Lost as error:  # the server dropped the lane's state: it holds nothing known
+            result, holds, failure = {"tokens": [], "done": False}, [], None
+            with LOCK:
+                log("lane state lost", model=model, lane=index, detail=str(error), restored=restored)
+                if restored in L["snapshots"]:  # a snapshot the server does not keep is of no use
+                    L["snapshots"].pop(restored)
+                    BACKEND.forget(CONFIG, restored)
         except Exception as error:  # the backend failed under this thought
             traceback.print_exc()
             result, holds, failure = {"tokens": [], "done": False}, [], f"{type(error).__name__}: {error}"

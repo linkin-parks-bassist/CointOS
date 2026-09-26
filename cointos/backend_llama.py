@@ -6,9 +6,13 @@ Lemonade's load API and llama-server's token completions and slot snapshots
 - a completion with `n_predict: 0` leaves the lane holding exactly the tokens sent;
 - one stopped at `n_predict` leaves it holding every token sent but the last received, so
   continuing with all tokens received reads just one token;
-- nothing is ever cut: llama-server notices a closed connection only when it next writes,
-  which during a long read can be minutes later. Every call runs to its own end instead.
+- llama-server notices a closed connection only when it next writes. Completions here stream
+  prompt progress, which it writes at every batch, so a read abandoned at its first report
+  stops within one batch; otherwise every call runs to its own end;
+- the server can drop a lane's state between requests (seen after a restore, without any
+  warning). Its first progress report says how much it kept (`cache`), before it reads.
 """
+
 from __future__ import annotations
 
 import http.client
@@ -21,6 +25,11 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+class Lost(Exception):
+    """The server no longer holds the context the lane was known to hold, so this request
+    would read it all again: an unbounded step. Raised before the read starts."""
+
 
 _urls: dict[str, str] = {}  # model -> its llama-server, as last reported by Lemonade
 
@@ -132,22 +141,14 @@ def render(config: dict, model: str, conversation: dict) -> dict:
                                          "tools": conversation.get("tools") or []}}
 
 
-def prefill(config: dict, model: str, lane: int, tokens: list[int]) -> None:
-    """Make the lane hold exactly `tokens`, reading only what its state does not hold yet.
-    The caller keeps each call short by growing `tokens` a piece at a time."""
-    _server(model, "/completion", {"prompt": tokens, "n_predict": 0, "id_slot": lane, "cache_prompt": True},
-            timeout=None)
-
-
-def think(config: dict, model: str, lane: int, tokens: list[int], max_new: int, sampling: dict, on_tokens) -> dict:
-    """Extend a context on a lane by up to `max_new` tokens, calling `on_tokens(new)` as they
-    come. Returns {"tokens": the new tokens, "done": the thought ended, "rate": the model's own
-    generation speed for this call in tokens per second, or None if too short to tell}.
-    Afterwards the lane holds every token sent and received except the last one received."""
+def _complete(config: dict, model: str, lane: int, body: dict, held: int, on_tokens=None) -> dict:
+    """One streamed completion on a lane known to hold the first `held` tokens of its prompt.
+    Raises `Lost` if the server kept less than that, bar one read chunk (a hybrid model may
+    step back to a checkpoint), instead of reading the rest without bound."""
     target = urllib.parse.urlparse(_urls[model])
     connection = http.client.HTTPConnection(target.hostname, target.port, timeout=None)
-    body = {**sampling, "prompt": tokens, "n_predict": max_new, "stream": True, "id_slot": lane,
-            "cache_prompt": True, "return_tokens": True}
+    body = {**body, "stream": True, "return_progress": True, "id_slot": lane, "cache_prompt": True,
+            "return_tokens": True}
     result = {"tokens": [], "done": False, "rate": None}
     try:
         connection.request("POST", "/completion", json.dumps(body), {"Content-Type": "application/json"})
@@ -158,10 +159,16 @@ def think(config: dict, model: str, lane: int, tokens: list[int], max_new: int, 
             if not line.startswith(b"data: "):
                 continue
             event = json.loads(line[6:])
+            progress = event.get("prompt_progress")
+            if progress is not None:  # its "tokens" are placeholders, not generated tokens
+                if progress["cache"] < held - config["scheduler"]["read_chunk_tokens"]:
+                    raise Lost(f"{model} lane {lane} kept {progress['cache']} of {held} tokens")
+                continue
             new = event.get("tokens") or []
             if new:
                 result["tokens"] += new
-                on_tokens(new)
+                if on_tokens:
+                    on_tokens(new)
             if event.get("stop"):
                 result["done"] = event.get("stop_type") != "limit"
                 timings = event.get("timings") or {}
@@ -171,6 +178,22 @@ def think(config: dict, model: str, lane: int, tokens: list[int], max_new: int, 
     finally:
         connection.close()
     return result
+
+
+def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> None:
+    """Make the lane, known to hold `tokens[:held]`, hold exactly `tokens`, reading only what it
+    does not hold yet. The caller keeps each call short by growing `tokens` a piece at a time."""
+    _complete(config, model, lane, {"prompt": tokens, "n_predict": 0}, held)
+
+
+def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max_new: int, sampling: dict,
+          on_tokens) -> dict:
+    """Extend a context on a lane known to hold `tokens[:held]` by up to `max_new` tokens, calling
+    `on_tokens(new)` as they come. Returns {"tokens": the new tokens, "done": the thought ended,
+    "rate": the model's own generation speed for this call in tokens per second, or None if too
+    short to tell}. Afterwards the lane holds every token sent and received except the last one
+    received."""
+    return _complete(config, model, lane, {**sampling, "prompt": tokens, "n_predict": max_new}, held, on_tokens)
 
 
 def _snapshot(name: str) -> str:

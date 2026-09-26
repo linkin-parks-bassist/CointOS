@@ -64,6 +64,13 @@ class Turns(unittest.TestCase):
         lanes.schedule()
         self.assertEqual(lane["holder"], "a", "a cold agent is not pre-empted the moment it finishes reading")
 
+    def test_the_end_of_a_thought_restarts_the_silence_clock(self):
+        state.L["agents"]["a"] = {"last_activity": state.now() - 2400, "repeats": 0, "last_thought": None,
+                                  "thoughts": 0}
+        self.thought("a", [1, 2, 3])
+        lanes.finish("a", "failed")  # e.g. its model went away after a long thought
+        self.assertLess(state.now() - state.L["agents"]["a"]["last_activity"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
