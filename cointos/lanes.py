@@ -367,8 +367,10 @@ def worker(position: int) -> None:
                     keep(position, upto, thought["owner"], "checkpoint")  # the conversation as committed
                 result, holds = {"tokens": [], "done": False}, upto
             else:
+                began = time.monotonic()
                 result = BACKEND.think(CONFIG, model, index, tokens, min(chunk, run["max"] - len(run["generated"])),
                                        run["sampling"], run["queue"].put)
+                result["seconds"] = time.monotonic() - began
                 holds = tokens + result["tokens"][:-1] if result["tokens"] else tokens
             failure = None
         except Exception as error:  # the backend failed under this thought
@@ -380,6 +382,11 @@ def worker(position: int) -> None:
             thought["generated"] = len(run["generated"])
             HELD[position] = holds
             L["lanes"][position]["resident"] = thought["owner"]
+            agent = L["agents"].get(thought["agent"])
+            if agent is not None and result.get("seconds") and len(result["tokens"]) > 1:
+                # Generation speed, smoothed over steps: what the agent gets while it holds a lane.
+                step = len(result["tokens"]) / result["seconds"]
+                agent["rate"] = round(step if agent.get("rate") is None else 0.6 * agent["rate"] + 0.4 * step, 1)
             if failure and not lane["up"]:
                 pass  # its model went away; lanes_down made the thought wait for another lane
             elif failure:

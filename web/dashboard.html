@@ -41,6 +41,10 @@ main { max-width: 1260px; margin: auto; padding: 26px 16px 60px; }
   box-shadow: 0 0 26px -4px var(--c); animation: breathe 3.2s ease-in-out infinite; }
 .agent .orb.tools { border-style: solid; background: color-mix(in oklab, var(--c) 30%, transparent); }
 @keyframes breathe { 50% { transform: scale(1.08); } }
+.agent .rate { position: absolute; top: 16px; right: 20px; font: 900 20px/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -.03em; color: var(--dark-text); font-variant-numeric: tabular-nums; }
+.agent .rate small { font-size: 11px; font-weight: 500; color: var(--dark-soft); letter-spacing: 0; }
+.agent .rate.past { opacity: .35; }
 .agent .role { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--c); font-weight: 900; }
 .agent .work { font-size: 20px; font-weight: 900; letter-spacing: -.04em; line-height: 1.15; overflow-wrap: anywhere; }
 .agent .now { grid-column: 1 / -1; margin-top: 10px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -133,6 +137,7 @@ function renderAgents(L) {
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
       (kind === "tools" && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
     return `<article class="agent" style="--c:${colour(a.id)}"><div class="orb ${kind}"></div>` +
+      (a.rate ? `<div class="rate ${kind === "thinking" && a.state === "thinking" ? "" : "past"}">${a.rate.toFixed(1)}<small> tok/s</small></div>` : "") +
       `<div class="role">${esc(a.role)} · ${esc(a.project)}</div>` +
       `<div class="work">${esc(a.title.replace(/-/g, " "))}</div>` +
       `<div class="meta">${esc(a.id)} · up ${ago(a.started_at)} · ${a.thoughts} thoughts · run ${task.runs ?? "?"}</div>` +

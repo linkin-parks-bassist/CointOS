@@ -40,7 +40,7 @@
     }
   ],
   "scheduler": {
-    "chunk_tokens": 32,
+    "chunk_tokens": 96,
     "read_chunk_tokens": 1024,
     "slice_seconds": 30,
     "yield_grace_seconds": 15,
