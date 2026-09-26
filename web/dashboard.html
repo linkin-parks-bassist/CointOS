@@ -43,12 +43,15 @@ main { max-width: 1260px; margin: auto; padding: 26px 16px 60px; }
 @keyframes breathe { 50% { transform: scale(1.08); } }
 .agent .role { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--c); font-weight: 900; }
 .agent .work { font-size: 20px; font-weight: 900; letter-spacing: -.04em; line-height: 1.15; overflow-wrap: anywhere; }
-.agent .now { grid-column: 1 / -1; margin-top: 10px; margin-bottom: 4px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent .now { grid-column: 1 / -1; margin-top: 10px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent .now b { color: var(--c); }
 /* The agent's words as they stream, bottom-anchored like a terminal, at a fixed height. */
-.agent .live { grid-column: 1 / -1; margin-top: 10px; height: 6.4em; overflow: hidden; display: flex; flex-direction: column;
-  justify-content: flex-end; font: 12.5px/1.45 ui-monospace, monospace; background: var(--dark-2);
+.agent .live { position: relative; grid-column: 1 / -1; margin-top: 10px; height: 6.4em; overflow: hidden; display: flex;
+  flex-direction: column; justify-content: flex-end; font: 12.5px/1.45 ui-monospace, monospace; background: var(--dark-2);
   border: 1px solid var(--dark-line); padding: 8px 10px; }
+/* The oldest words fade into the box; the box itself keeps its edges. */
+.agent .live::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2.4em;
+  background: linear-gradient(var(--dark-2), transparent); pointer-events: none; }
 .agent .live i { color: var(--dark-soft); opacity: .75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent .live p { margin: 6px 0 0; color: var(--dark-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent .live p.tool { color: var(--c); }
