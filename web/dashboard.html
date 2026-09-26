@@ -198,7 +198,7 @@ function renderMachine(L) {
   // Used memory in the categorical order; free memory in quiet neutrals.
   const parts = [["Model weights", weights, "#2a78d6"], ["KV cache (live contexts)", kv, "#eb6834"],
                  ["Saved contexts", saved, "#1baf7a"], ["Desktop & other", other, "#eda100"],
-                 ["Free for CointOS", free, "#dcd4d1"], ["Kept free for you", kept, "#b9adaa"]];
+                 ["Free", free, "#dcd4d1"], ["OS Reserve", kept, "#b9adaa"]];
   const total = parts.reduce((n, p) => n + p[1], 0), r = 58, C = 2 * Math.PI * r, gap = 2;
   let at = 0;
   const arcs = parts.map(([name, gb, colour], i) => {
