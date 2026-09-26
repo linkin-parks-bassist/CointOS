@@ -162,8 +162,10 @@ def launch(config: dict, agent_id: str, task: dict, project: dict, key: str) -> 
                     f"--working-directory={ROOT}", f"--setenv=COINTOS_AGENT={agent_id}",
                     "--property=KillMode=control-group", "--property=TimeoutStopSec=15",
                     # A runaway tool is killed inside its own agent, never by the machine's OOM
-                    # handling, which would pick the model server.
+                    # handling, which would pick the model server. Only the tool dies (the largest
+                    # process); the agent sees it killed and carries on.
                     f"--property=MemoryMax={config['memory']['agent_limit_gb']}G", "--property=MemorySwapMax=0",
+                    "--property=OOMPolicy=continue",
                     sys.executable, "-m", "cointos.agents", str(directory)], check=True)
 
 
