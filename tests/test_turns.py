@@ -64,6 +64,25 @@ class Turns(unittest.TestCase):
         lanes.schedule()
         self.assertEqual(lane["holder"], "a", "a cold agent is not pre-empted the moment it finishes reading")
 
+    def finish_on_lane(self, agent, turn_began):
+        lane = state.L["lanes"][0]
+        lane.update(turn_agent=agent, turn_since=turn_began)
+        self.thought(agent, [1, 2, 3])
+        lanes.schedule()
+        lane["turn_since"] = turn_began
+        lanes.finish(agent, "done")  # its thought ended with a tool call
+        return lane
+
+    def test_past_its_slice_a_tool_call_is_a_plain_yield(self):
+        lane = self.finish_on_lane("a", state.now() - self.slice - 5)
+        self.assertIsNone(lane["held_for"], "the cooldown is over: the lane is not kept for a")
+
+    def test_inside_its_slice_a_tool_call_keeps_the_lane_but_never_past_the_slice(self):
+        turn_began = state.now() - self.slice + 3
+        lane = self.finish_on_lane("a", turn_began)
+        self.assertEqual(lane["held_for"], "a")
+        self.assertLessEqual(lane["held_until"], turn_began + self.slice)
+
     def test_the_end_of_a_thought_restarts_the_silence_clock(self):
         state.L["agents"]["a"] = {"last_activity": state.now() - 2400, "repeats": 0, "last_thought": None,
                                   "thoughts": 0}

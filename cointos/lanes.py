@@ -119,16 +119,19 @@ def cancel_agent(agent: str) -> None:
 
 def finish(thought_id: str, how: str) -> None:
     """End a thought and free its lane, whose state stays for whoever continues it. A thought
-    that ended by handing control back (a message or a tool call) keeps its lane held for its
-    agent for `yield_grace_seconds`, so a quick next thought continues the turn. Caller holds LOCK."""
+    that ended by handing control back (a message or a tool call) yields the lane, but while its
+    turn is inside its slice the lane stays held for its agent for `yield_grace_seconds` (never
+    past the slice's end), so a quick next thought continues the turn. Once the slice is over, a
+    tool call is a plain yield: the cooldown is finite. Caller holds LOCK."""
     thought = L["thoughts"].pop(thought_id)
     run = RUNS.pop(thought_id)
     if thought["lane"] is not None:
         lane = L["lanes"][thought["lane"]]
         lane.update(holder=None, free_since=now())
-        if how == "done":
+        slice_ends = lane["turn_since"] + CONFIG["scheduler"]["slice_seconds"]
+        if how == "done" and now() < slice_ends:
             lane.update(held_for=thought["agent"], held_class=thought["class"],
-                        held_until=now() + CONFIG["scheduler"]["yield_grace_seconds"])
+                        held_until=min(now() + CONFIG["scheduler"]["yield_grace_seconds"], slice_ends))
     run["queue"].put({"end": how})
     agent = L["agents"].get(thought["agent"])
     if agent is not None:
