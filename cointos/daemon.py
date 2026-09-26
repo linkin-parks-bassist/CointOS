@@ -148,10 +148,10 @@ def shutdown() -> None:
         for agent_id in list(L["agents"]):
             work.stop_agent(agent_id, "daemon stopping", requeue=True, charge=False)
         log("daemon stopped")
-    STOPPING.set()
+    STOPPING.set()  # lanes finish the step in flight and take no more
     with LOCK:
         LOCK.notify_all()
-    time.sleep(1)
+    lanes.save_all()
     save()
 
 

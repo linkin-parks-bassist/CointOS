@@ -213,6 +213,7 @@ def forget(config: dict, name: str) -> None:
 # ---------------------------------------------------------------- reading a thought
 
 MARKERS = ("</think>", "<tool_call>")
+END_OF_TURN = ("<|im_end|>", "<|endoftext|>")  # the model's end-of-turn tokens: the format, not the message
 
 
 def _withhold(text: str) -> str:
@@ -239,6 +240,8 @@ def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool)
     The split mirrors how the Qwen template renders an assistant turn, so that the next render
     reproduces these tokens exactly and the lane state can be continued."""
     text = _server(model, "/detokenize", {"tokens": tokens})["content"] if tokens else ""
+    for end in END_OF_TURN:
+        text = text.removesuffix(end)
     reasoning, rest = "", text
     if reader["thinking"]:
         if "</think>" in text:

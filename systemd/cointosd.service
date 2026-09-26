@@ -8,7 +8,7 @@ WorkingDirectory=@ROOT@
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 -m cointos.daemon
 KillMode=mixed
-TimeoutStopSec=30
+TimeoutStopSec=90
 Restart=on-failure
 RestartSec=3
 

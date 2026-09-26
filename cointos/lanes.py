@@ -18,6 +18,7 @@ import hashlib
 import queue
 import secrets
 import threading
+import time
 import traceback
 
 from cointos import memory, scheduler
@@ -371,6 +372,30 @@ def worker(position: int) -> None:
                 finish(thought_id, "done" if result["done"] else "cancelled" if run["cancelled"] else "limit")
             else:
                 schedule()
+
+
+def save_all() -> None:
+    """On a graceful stop: once the steps in flight have ended, save each lane's context whose
+    conversation goes on, so a restarted daemon resumes it warm instead of reading it again."""
+    for _ in range(600):
+        with LOCK:
+            if not BUSY:
+                break
+        time.sleep(0.1)
+    for position, lane in enumerate(L["lanes"]):
+        with LOCK:
+            held = HELD.get(position) or []
+            owner, model, index = lane["resident"], lane["model"], lane["index"]
+            wanted = (lane["up"] and held and live(owner)
+                      and not any(s["digest"] == digest(held) for s in L["snapshots"].values())
+                      and make_room(memory.snapshot_gb(L["snapshots"], model, len(held))))
+        if wanted:
+            name = secrets.token_hex(6)
+            saved = BACKEND.save(CONFIG, model, index, name)
+            with LOCK:
+                L["snapshots"][name] = {"owner": owner, "model": model, "tokens": len(held), "digest": digest(held),
+                                        "bytes": saved["bytes"], "last_run": now(), "tier": "memory"}
+                log("saved on stop", model=model, lane=index, owner=owner, tokens=len(held))
 
 
 def lanes_down(model: str) -> None:
