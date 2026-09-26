@@ -188,17 +188,17 @@ function renderMachine(L) {
       return `<div class="lane-row"><span class="name">${esc(short(name))}</span><span class="muted">lane ${l.index}</span>${who}</div>`;
     }).join("")).join("");
   const m = L.memory || {};
-  if (m.total_gb === undefined) { $("memory").innerHTML = ""; return; }
+  if (m.physical_gb === undefined) { $("memory").innerHTML = ""; return; }
+  const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
   const loaded = Object.entries(L.models).filter(([, model]) => model.up).map(([name]) => L.model_memory[name]);
-  const weights = loaded.reduce((n, x) => n + x.weights_gb, 0);
-  const kv = loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0);
-  const saved = Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0) / 1e9;
-  const free = Math.max(0, m.headroom_gb), kept = Math.max(0, m.available_gb - free);
-  const other = Math.max(0, m.total_gb - m.available_gb - weights - kv - saved);
-  // Used memory in the categorical order; free memory in quiet neutrals.
-  const parts = [["Model weights", weights, "#2a78d6"], ["KV cache (live contexts)", kv, "#eb6834"],
-                 ["Saved contexts", saved, "#1baf7a"], ["Operating System", other, "#eda100"],
-                 ["Free", free, "#dcd4d1"], ["OS Reserve", kept, "#b9adaa"]];
+  const weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
+  const kv = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
+  const saved = gib(Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0) / 1e9);
+  const free = gib(m.available_gb), physical = gib(m.physical_gb);
+  const system = Math.max(0, physical - weights - kv - saved - free);
+  // Clockwise from midnight: the operating system, CointOS's parts, then what is free.
+  const parts = [["Operating System", system, "#eda100"], ["Model weights", weights, "#2a78d6"],
+                 ["KV-cache", kv, "#eb6834"], ["Saved contexts", saved, "#1baf7a"], ["Free", free, "#d9cfcc"]];
   const total = parts.reduce((n, p) => n + p[1], 0), r = 58, C = 2 * Math.PI * r, gap = 2;
   let at = 0;
   const arcs = parts.map(([name, gb, colour], i) => {
@@ -211,7 +211,7 @@ function renderMachine(L) {
   MEMORY_PARTS = parts;
   $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
     `<svg viewBox="0 0 160 160" class="donut" onmouseleave="focusPart(-1)">${arcs}` +
-    `<text x="80" y="76" class="big" id="donut-value">${m.total_gb.toFixed(0)} GB</text>` +
+    `<text x="80" y="76" class="big" id="donut-value">${physical.toFixed(0)} GB</text>` +
     `<text x="80" y="96" class="small" id="donut-label">memory</text></svg>` +
     `<div class="legend">` + parts.map(([name, gb, colour], i) =>
       `<div class="item" data-i="${i}" onmouseenter="focusPart(${i})" onmouseleave="focusPart(-1)"><i style="background:${colour}"></i>` +

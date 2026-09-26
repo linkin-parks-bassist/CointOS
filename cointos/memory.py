@@ -5,7 +5,21 @@ happens only if it fits in the headroom, and snapshots give way first.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 GB = 1e9
+
+
+def physical_bytes() -> int:
+    """The machine's physical memory: its online memory blocks (MemTotal leaves out what the
+    firmware and the GPU's carve-out hold back at boot)."""
+    base = Path("/sys/devices/system/memory")
+    try:
+        size = int((base / "block_size_bytes").read_text(), 16)
+        online = sum((block / "online").read_text().strip() == "1" for block in base.glob("memory[0-9]*"))
+        return size * online
+    except (OSError, ValueError):
+        return 0
 
 
 def measure() -> dict:
@@ -20,7 +34,7 @@ def measure() -> dict:
         for line in stream:
             if line.startswith("full"):
                 psi = float(line.split()[1].split("=")[1])
-    return {"total_gb": round(values["MemTotal"] / GB, 1), "available_gb": round(values["MemAvailable"] / GB, 1),
+    return {"physical_gb": round((physical_bytes() or values["MemTotal"]) / GB, 1), "available_gb": round(values["MemAvailable"] / GB, 1),
             "swap_gb": round((values["SwapTotal"] - values["SwapFree"]) / GB, 2), "psi": psi}
 
 
