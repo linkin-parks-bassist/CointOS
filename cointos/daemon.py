@@ -13,7 +13,7 @@ import threading
 import time
 import traceback
 
-from cointos import agents, checks, gateway, lanes, memory, work
+from cointos import agents, checks, gateway, lanes, memory, viewers, work
 from cointos.config import LEDGER, read_json
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, fresh, log, now, save
 
@@ -120,10 +120,13 @@ def tick(timers: dict) -> None:
         timers["models"] = now()
         check_models()
     processes = agents.find_processes()
+    windows = viewers.open_windows() if CONFIG["viewers"]["max_viewers"] else set()
     with LOCK:
         guard()
         lanes.schedule()  # time is an input too: a slice runs out between events
         look_after_agents()
+        if CONFIG["viewers"]["max_viewers"]:
+            viewers.look_after(windows)
         if now() - timers["spawn"] >= CONFIG["spawner"]["interval_seconds"]:
             timers["spawn"] = now()
             try:

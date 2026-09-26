@@ -145,6 +145,45 @@ def watch(agent_id: str | None) -> None:
     os.execv(agents.OPENCODE, [agents.OPENCODE, "attach", agent["url"], "--session", agent["session"]])
 
 
+def view(slot: int) -> None:
+    """A viewer window: show, live, whichever agent the daemon gives slot `slot`; idle between agents."""
+    def title(text):
+        sys.stdout.write(f"\033]0;{text}\007")
+        sys.stdout.flush()
+
+    def assigned():
+        try:
+            state = call()
+        except (urllib.error.URLError, OSError, SystemExit):
+            return None
+        agent = state["agents"].get(state["viewers"].get(str(slot)))
+        return agent if agent and agent.get("url") and agent.get("session") else None
+
+    idle_shown = False
+    while True:
+        agent = assigned()
+        if agent is None:
+            if not idle_shown:
+                title(f"CointOS viewer {slot}: idle")
+                print(f"\033[2J\033[H\n  CointOS viewer {slot}\n\n  idle: the next agent to start appears here.")
+                idle_shown = True
+            time.sleep(2)
+            continue
+        idle_shown = False
+        title(f"CointOS {slot}: {agent['id']} on {agent['project']}: {agent['title']}")
+        child = subprocess.Popen([agents.OPENCODE, "attach", agent["url"], "--session", agent["session"]])
+        while child.poll() is None:
+            time.sleep(2)
+            current = assigned()
+            if current is None or current["id"] != agent["id"]:
+                child.terminate()
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    child.kill()
+        subprocess.run(["stty", "sane"], check=False)  # the TUI may leave the terminal in raw mode
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="cointos", description="Control CointOS.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +191,10 @@ def main(argv=None) -> None:
         sub.add_parser(name)
     sub.add_parser("jobs").add_argument("--all", action="store_true")
     sub.add_parser("watch", help="watch an agent live in OpenCode").add_argument("agent", nargs="?")
+    viewing = sub.add_parser("view", help="show agents live in pop-up windows: --all to open them, --off to stop")
+    viewing.add_argument("slot", type=int, nargs="?", help="be viewer window N (the daemon opens these)")
+    viewing.add_argument("--all", action="store_true", help="open a viewer for every active agent, and for new ones")
+    viewing.add_argument("--off", action="store_true", help="open no more viewers (open ones still show new agents)")
     stop = sub.add_parser("stop", help="pause autonomous agents (or stop one agent)")
     stop.add_argument("agent", nargs="?")
     sub.add_parser("halt").add_argument("--keep-coin", action="store_true")
@@ -189,6 +232,14 @@ def main(argv=None) -> None:
         print("starting: cointosd loads the models, then agents start as work is available")
     elif args.command == "watch":
         watch(args.agent)
+    elif args.command == "view":
+        if args.all or args.off:
+            call("viewers", {"show": args.all})
+            print("viewers: opening windows for active agents" if args.all else "viewers: no new windows")
+        elif args.slot is not None:
+            view(args.slot)
+        else:
+            raise SystemExit("usage: cointos view --all | --off")
     elif args.command == "merge":
         merge()
     elif args.command == "queue":

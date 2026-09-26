@@ -84,5 +84,12 @@
     "history_messages": 20,
     "max_tool_rounds": 8,
     "alert_poll_seconds": 5
+  },
+  "viewers": {
+    "max_viewers": 4,
+    "terminal": [
+      "gnome-terminal",
+      "--"
+    ]
   }
 }

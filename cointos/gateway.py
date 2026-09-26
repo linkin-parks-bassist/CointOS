@@ -191,6 +191,10 @@ def api(action: str, body: dict):
                 raise ApiError(f"no live agent {body.get('agent')!r}")
             work.stop_agent(body["agent"], "stopped by David", requeue=body.get("requeue", False), charge=False)
             return {"ok": True}
+        if action == "viewers":
+            L["viewers_showing"] = bool(body.get("show"))
+            log("viewers", showing=L["viewers_showing"])
+            return {"ok": True, "showing": L["viewers_showing"]}
         if action == "queue":
             project = work.project_named(body.get("project", ""))
             item = queues.add(project, body.get("kind", "queued"), body["name"], body["brief"])

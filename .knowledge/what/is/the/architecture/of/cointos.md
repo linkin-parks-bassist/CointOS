@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T22:14:04+10:00"
+revised_at: "2026-09-26T22:35:58+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -28,7 +28,8 @@ revised_at: "2026-09-26T22:14:04+10:00"
   4. A thought is placed on the cheapest lane open to it: the one it holds or that is held for it, then a warm one, then a free one, then an unreserved one.
 - **Contexts stay resident when nothing needs the lane.** When a thought ends, the agent's context stays on its lane. It is saved only when another agent needs that lane, so an agent that keeps a lane between thoughts pays nothing.
 - **Shared starts.** Agents of one role share a long common start (tools, system prompt, role). When a context being read shares at least `shared_prefix_tokens` with another context CointOS holds, the read stops exactly there once and saves that start as a shared snapshot. Every later context that begins with it restores it instead of reading it, through the ordinary longest-snapshot match.
-- **One snapshot per conversation.** Saving a context forgets its conversation's older snapshots, which are starts of it. A task's conversation is one line of history, so when its next thought starts, the task's snapshots that do not begin the new context (left by a run that stopped mid-thought) are forgotten too. Coin's and David's snapshots, which may belong to several conversations at once, leave by least recent use.
+- **Checkpoints and suspended states.** When a thought's context has been read, before it generates, the lane holds the conversation exactly as committed; it is saved then as the conversation's *checkpoint*. A thought stopped part way (switched out, or on a graceful stop) is saved as a *suspended* state. A run that dies or is stopped mid-thought abandons that thought; its conversation goes on from the checkpoint, so it loses only that thought's generation, never the read.
+- **One line of snapshots per conversation.** A checkpoint supersedes its conversation's older snapshots; a suspended state supersedes only older suspended ones, so the checkpoint outlives an abandoned thought. A task's conversation is one line of history, so when its next thought starts, the task's snapshots that do not begin the new context are forgotten. Coin's and David's snapshots, which may belong to several conversations at once, leave by least recent use.
 - **Reservation:** one lane of the front-desk model serves only Coin and Sole Survivor, so Coin's first reply never waits.
 - **Bound:** a thought generates at most `max_thought_tokens`.
 
@@ -107,4 +108,6 @@ Every tick the daemon checks these invariants over the ledger; a violation shows
 
 ## Watching
 
-The dashboard shows agents first: what each is working on, whether it is thinking, waiting or acting, and its last action. Lanes, models and memory appear as resources after the work. `cointos watch [AGENT]` attaches OpenCode's live view to an agent's session.
+The dashboard shows agents first: what each is working on, whether it is reading, thinking, waiting or acting, and its last action. Lanes, models and memory appear as resources after the work. `cointos watch [AGENT]` attaches OpenCode's live view to an agent's session.
+
+**Viewers** are pop-up terminal windows on David's desktop, each showing one live agent (`cointos view N` attaches OpenCode's live view to whichever agent holds slot N). The daemon gives each started agent a viewer: an idle open window first, so idle monitors are captured by new agents, else, while David has asked for them with `cointos view --all` (until `--off`), a new window, up to `max_viewers`. A window David closes frees its slot.

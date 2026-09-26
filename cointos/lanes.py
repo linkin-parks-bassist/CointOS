@@ -241,16 +241,36 @@ def saved_prefix(model: str, tokens: list[int]) -> bool:
 
 def save_prefix(position: int, tokens: list[int]) -> None:
     """Save a lane holding exactly a context start that several contexts share."""
+    if keep(position, tokens, "shared", "checkpoint"):
+        with LOCK:
+            log("shared prefix saved", model=L["lanes"][position]["model"], tokens=len(tokens))
+
+
+def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
+    """Save the lane's state (holding exactly `held`) as a snapshot of `owner`'s conversation, if
+    it fits. A *checkpoint* is a conversation as committed (a thought's context, read, before it
+    generates) and supersedes the conversation's older snapshots; a *suspended* state (a thought
+    stopped part way) supersedes only older suspended ones, so the checkpoint outlives a thought
+    that is abandoned. Returns whether it was saved."""
     with LOCK:
         model, index = L["lanes"][position]["model"], L["lanes"][position]["index"]
-        if not make_room(memory.snapshot_gb(L["snapshots"], model, len(tokens))):
-            return
+        wanted = digest(held)
+        if any(s["digest"] == wanted for s in L["snapshots"].values()):
+            return True
+        if not make_room(memory.snapshot_gb(L["snapshots"], model, len(held))):
+            return False
     name = secrets.token_hex(6)
     saved = BACKEND.save(CONFIG, model, index, name)
     with LOCK:
-        L["snapshots"][name] = {"owner": "shared", "model": model, "tokens": len(tokens), "digest": digest(tokens),
+        for older in [n for n, s in L["snapshots"].items()
+                      if s["owner"] == owner and s["model"] == model and s["tokens"] <= len(held)
+                      and (kind == "checkpoint" or s["kind"] == "suspended")
+                      and s["digest"] == digest(held[:s["tokens"]])]:
+            L["snapshots"].pop(older)
+            BACKEND.forget(CONFIG, older)
+        L["snapshots"][name] = {"owner": owner, "model": model, "tokens": len(held), "digest": wanted, "kind": kind,
                                 "bytes": saved["bytes"], "last_run": now(), "tier": "memory"}
-        log("shared prefix saved", model=model, tokens=len(tokens), gb=round(saved["bytes"] / memory.GB, 2))
+    return True
 
 
 def forget_owner(owner: str) -> None:
@@ -274,23 +294,12 @@ def switch(position: int, tokens: list[int], owner: str) -> None:
     with LOCK:
         lane = dict(L["lanes"][position])
         held = HELD.get(position) or []
-        save = bool(held) and live(lane["resident"]) and make_room(memory.snapshot_gb(L["snapshots"], lane["model"], len(held)))
+        worth = bool(held) and live(lane["resident"])
+    save = worth and keep(position, held, lane["resident"], "suspended")
+    with LOCK:
         candidates = sorted(((s["tokens"], name) for name, s in L["snapshots"].items()
                              if s["model"] == lane["model"] and s["tier"] != "moving" and s["tokens"] < len(tokens)
                              and digest(tokens[:s["tokens"]]) == s["digest"]), reverse=True)
-    if save:
-        name = secrets.token_hex(6)
-        saved = BACKEND.save(CONFIG, lane["model"], lane["index"], name)
-        with LOCK:
-            state = {"owner": lane["resident"], "model": lane["model"], "tokens": len(held),
-                     "digest": digest(held), "bytes": saved["bytes"], "last_run": now(), "tier": "memory"}
-            # A conversation needs only its newest snapshot: its earlier ones are starts of it.
-            for older in [n for n, s in L["snapshots"].items()
-                          if s["owner"] == state["owner"] and s["model"] == state["model"] and s["tokens"] <= len(held)
-                          and s["digest"] == digest(held[:s["tokens"]])]:
-                L["snapshots"].pop(older)
-                BACKEND.forget(CONFIG, older)
-            L["snapshots"][name] = state
     restored, broken = None, None
     for count, name in candidates[:1]:
         with LOCK:  # a snapshot on disk comes back to memory first, if it fits
@@ -347,11 +356,13 @@ def worker(position: int) -> None:
             # which it cannot do; it would read everything again.)
             if held < len(tokens) - 1:  # still reading its context: one more piece
                 end = min(len(tokens) - 1, held + read_chunk)
-                keep = held < shared <= end and not saved_prefix(model, tokens[:shared])
-                upto = tokens[:shared if keep else end]
+                keep_shared = held < shared <= end and not saved_prefix(model, tokens[:shared])
+                upto = tokens[:shared if keep_shared else end]
                 BACKEND.prefill(CONFIG, model, index, upto)
-                if keep:  # the start other contexts share: save it once, for all of them
+                if keep_shared:  # the start other contexts share: save it once, for all of them
                     save_prefix(position, upto)
+                elif len(upto) == len(tokens) - 1 and not run["generated"] and live(thought["owner"]):
+                    keep(position, upto, thought["owner"], "checkpoint")  # the conversation as committed
                 result, holds = {"tokens": [], "done": False}, upto
             else:
                 result = BACKEND.think(CONFIG, model, index, tokens, min(chunk, run["max"] - len(run["generated"])),
@@ -388,18 +399,11 @@ def save_all() -> None:
         time.sleep(0.1)
     for position, lane in enumerate(L["lanes"]):
         with LOCK:
-            held = HELD.get(position) or []
-            owner, model, index = lane["resident"], lane["model"], lane["index"]
-            wanted = (lane["up"] and held and live(owner)
-                      and not any(s["digest"] == digest(held) for s in L["snapshots"].values())
-                      and make_room(memory.snapshot_gb(L["snapshots"], model, len(held))))
-        if wanted:
-            name = secrets.token_hex(6)
-            saved = BACKEND.save(CONFIG, model, index, name)
+            held, owner = HELD.get(position) or [], lane["resident"]
+            worth = lane["up"] and bool(held) and live(owner)
+        if worth and keep(position, held, owner, "suspended"):
             with LOCK:
-                L["snapshots"][name] = {"owner": owner, "model": model, "tokens": len(held), "digest": digest(held),
-                                        "bytes": saved["bytes"], "last_run": now(), "tier": "memory"}
-                log("saved on stop", model=model, lane=index, owner=owner, tokens=len(held))
+                log("saved on stop", model=lane["model"], lane=lane["index"], owner=owner, tokens=len(held))
 
 
 def lanes_down(model: str) -> None:
