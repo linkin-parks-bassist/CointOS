@@ -16,13 +16,14 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from cointos import lanes, queues, work
+from cointos import lanes, memory, queues, work
 from cointos.config import ROOT
 from cointos.state import BACKEND, CONFIG, LOCK, L, log
 
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
 KEEPALIVE_SECONDS = 10
 LIVE_CHARS = 600  # how much of an agent's current words the dashboard shows
+LIVE_HZ = 10  # how often the dashboard's live stream updates
 
 
 def identity(key: str) -> tuple[str, str, str]:
@@ -61,6 +62,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ledger":
             with LOCK:
                 return self.reply(200, L)
+        if path == "/api/live":
+            return self.live()
         if path in ("/", "/index.html"):
             return self.reply(200, (ROOT / "web/dashboard.html").read_bytes(), "text/html; charset=utf-8")
         self.reply(404, {"error": "not found"})
@@ -85,6 +88,29 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(500, {"error": f"{type(error).__name__}: {error}"})
             except OSError:
                 pass
+
+    def live(self):
+        """Stream, `LIVE_HZ` times a second, what changes fast: each agent's state, words, speed and
+        progress, and the machine's memory. The page updates its agent cards and memory from it in
+        place; the rest of the ledger it reads once a second."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        try:
+            while True:
+                measured = memory.measure()
+                with LOCK:
+                    frame = {"agents": L["agents"], "thoughts": L["thoughts"],
+                             "runs": {a["id"]: L["tasks"].get(a["task"], {}).get("runs") for a in L["agents"].values()},
+                             "memory": {**L["memory"], **measured}, "models": L["models"], "model_memory": L["model_memory"],
+                             "saved_bytes": sum(s["bytes"] for s in L["snapshots"].values() if s["tier"] == "memory")}
+                    data = json.dumps(frame)
+                self.wfile.write(b"data: " + data.encode() + b"\n\n")
+                self.wfile.flush()
+                time.sleep(1 / LIVE_HZ)
+        except OSError:
+            return  # the page went away
 
     def think(self, body: dict):
         key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()

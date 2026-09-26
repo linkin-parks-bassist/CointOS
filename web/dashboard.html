@@ -142,28 +142,50 @@ function phase(L, a) {
   return ["tools", "Running", "its tools"];
 }
 
-function renderAgents(L) {
-  const agents = Object.values(L.agents).sort((a, b) => a.started_at - b.started_at);
+// Agent cards are built once and then updated in place (the live stream updates them ten
+// times a second), so animations run on, and hover and selection survive.
+function setText(el, value) { if (el.textContent !== value) el.textContent = value; }
+function setHTML(el, value) { if (el.dataset.html !== value) { el.dataset.html = value; el.innerHTML = value; } }
+
+function renderAgents(S) {
+  const agents = Object.values(S.agents).sort((a, b) => a.started_at - b.started_at);
+  let grid = $("agents").querySelector(".agents");
   if (!agents.length) {
-    $("agents").innerHTML = `<div class="empty">${L.paused ? "Agents are paused. <b>cointos go</b> lets them run again."
-      : "No agents right now. They start as work appears in the queues."}</div>`;
+    setHTML($("agents"), `<div class="empty">${S.paused ? "Agents are paused. <b>cointos go</b> lets them run again."
+      : "No agents right now. They start as work appears in the queues."}</div>`);
     return;
   }
-  $("agents").innerHTML = `<div class="agents">` + agents.map(a => {
-    const [kind, label, detail, share] = phase(L, a), task = L.tasks[a.task] || {};
+  if (!grid) { $("agents").innerHTML = `<div class="agents"></div>`; $("agents").dataset.html = ""; grid = $("agents").firstChild; }
+  const cards = new Map([...grid.children].map(card => [card.dataset.id, card]));
+  agents.forEach((a, index) => {
+    let card = cards.get(a.id);
+    if (!card) {
+      card = document.createElement("article");
+      card.className = "agent";
+      card.dataset.id = a.id;
+      card.innerHTML = `<div class="mark"></div><div class="rate"></div><div class="role"></div><div class="work"></div>` +
+        `<div class="meta"></div><div class="live"><div></div></div><div class="now"></div><div class="progress"><span></span></div>`;
+    }
+    if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
+    cards.delete(a.id);
+    const [kind, label, detail, share] = phase(S, a), q = selector => card.querySelector(selector);
+    const mark = q(".mark");
+    if (mark.className !== `mark ${kind}`) mark.className = `mark ${kind}`;
+    const rate = q(".rate");
+    setHTML(rate, a.rate && a.state === "thinking" ? `${a.rate.toFixed(1)}<small> tok/s</small>` : "");
+    setText(q(".role"), `${a.role} · ${a.project}`);
+    setText(q(".work"), a.title.replace(/-/g, " "));
+    setText(q(".meta"), `${a.id} · up ${ago(a.started_at)} · ${a.thoughts} thoughts · run ${S.runs[a.id] ?? "?"}`);
     const live = a.live || {};
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
-      (kind === "tools" && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
-    return `<article class="agent"><div class="mark ${kind}"></div>` +
-      (a.rate && a.state === "thinking" ? `<div class="rate">${a.rate.toFixed(1)}<small> tok/s</small></div>` : "") +
-      `<div class="role">${esc(a.role)} · ${esc(a.project)}</div>` +
-      `<div class="work">${esc(a.title.replace(/-/g, " "))}</div>` +
-      `<div class="meta">${esc(a.id)} · up ${ago(a.started_at)} · ${a.thoughts} thoughts · run ${task.runs ?? "?"}</div>` +
-      `<div class="live"><div>${words || (a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "")}</div></div>` +
-      `<div class="now"><b>${label}</b> ${esc(detail)}</div>` +
-      (share === undefined ? "" : `<div class="progress"><span style="width:${(share * 100).toFixed(1)}%"></span></div>`) +
-      `</article>`;
-  }).join("") + `</div>`;
+      ((kind === "tools" || !(live.reasoning || live.content)) && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
+    setHTML(q(".live > div"), words);
+    setHTML(q(".now"), `<b>${label}</b> ${esc(detail)}`);
+    const bar = q(".progress");
+    bar.style.display = share === undefined ? "none" : "";
+    if (share !== undefined) q(".progress span").style.width = `${(share * 100).toFixed(1)}%`;
+  });
+  cards.forEach(card => card.remove());
 }
 
 function renderWork(L) {
@@ -188,54 +210,62 @@ function renderMachine(L) {
         : `<span class="muted">${m.up ? "free" : m.launching ? "launching" : "down"}</span>`;
       return `<div class="lane-row"><span class="name">${esc(short(name))}</span><span class="muted">lane ${l.index}</span>${who}</div>`;
     }).join("")).join("");
-  const m = L.memory || {};
-  if (m.physical_gb === undefined) { $("memory").innerHTML = ""; return; }
+  renderMemory({memory: L.memory, models: L.models, model_memory: L.model_memory, guard: L.guard,
+                saved_bytes: Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0)});
+}
+
+const MEMORY_COLOURS = [["Operating System", "#28262b"], ["Model weights", "#9f3b52"], ["KV-cache", "#e9687e"],
+                        ["Saved contexts", "#ec98a5"], ["Free", "#ece3e0"]];
+
+function renderMemory(M) {
+  // The operating system in ink, CointOS's parts in steps of the site's rose (validated as an
+  // ordinal ramp), free memory as pale paper; clockwise from midnight. Built once, then updated.
+  const m = M.memory || {};
+  if (m.physical_gb === undefined) return;
   const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
-  const loaded = Object.entries(L.models).filter(([, model]) => model.up).map(([name]) => L.model_memory[name]);
+  const loaded = Object.entries(M.models).filter(([, model]) => model.up).map(([name]) => M.model_memory[name]);
   const weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
   const kv = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
-  const saved = gib(Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0) / 1e9);
-  const free = gib(m.available_gb), physical = gib(m.physical_gb);
+  const saved = M.saved_bytes / 2 ** 30, free = gib(m.available_gb), physical = gib(m.physical_gb);
   const system = Math.max(0, physical - weights - kv - saved - free);
-  // Clockwise from midnight: the operating system, CointOS's parts, then what is free.
-  // The operating system in ink, CointOS's parts in steps of the site's rose (validated as an
-  // ordinal ramp), free memory as pale paper.
-  const parts = [["Operating System", system, "#28262b"], ["Model weights", weights, "#9f3b52"],
-                 ["KV-cache", kv, "#e9687e"], ["Saved contexts", saved, "#ec98a5"], ["Free", free, "#ece3e0"]];
-  const total = parts.reduce((n, p) => n + p[1], 0), r = 58, C = 2 * Math.PI * r, gap = 2;
+  const values = [system, weights, kv, saved, free];
+  MEMORY_PARTS = MEMORY_COLOURS.map(([name, colour], i) => [name, values[i], colour]);
+  if (!$("donut")) {
+    $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
+      `<svg viewBox="0 0 160 160" class="donut" id="donut" onmouseleave="focusPart(-1)">` +
+      MEMORY_COLOURS.map(([, colour], i) => `<circle class="seg" data-i="${i}" r="58" cx="80" cy="80" fill="none" stroke="${colour}"` +
+        ` stroke-width="24" transform="rotate(-90 80 80)" onmouseenter="focusPart(${i})"></circle>`).join("") +
+      `<text x="80" y="76" class="big" id="donut-value"></text><text x="80" y="96" class="small" id="donut-label"></text></svg>` +
+      `<div class="legend">` + MEMORY_COLOURS.map(([name, colour], i) =>
+        `<div class="item" data-i="${i}" onmouseenter="focusPart(${i})" onmouseleave="focusPart(-1)"><i style="background:${colour}"></i>` +
+        `<span>${name}</span><b></b><em></em></div>`).join("") + `</div></div><div class="memfacts" id="memfacts"></div>`;
+  }
+  const total = values.reduce((n, v) => n + v, 0), C = 2 * Math.PI * 58, gap = 2;
   let at = 0;
-  const arcs = parts.map(([name, gb, colour], i) => {
-    const length = total ? gb / total * C : 0, arc = Math.max(0, length - gap);
-    const svg = `<circle class="seg" data-i="${i}" r="${r}" cx="80" cy="80" fill="none" stroke="${colour}" stroke-width="24"` +
-      ` stroke-dasharray="${arc} ${C - arc}" stroke-dashoffset="${-at}" transform="rotate(-90 80 80)"></circle>`;
+  document.querySelectorAll("#donut .seg").forEach((seg, i) => {
+    const length = total ? values[i] / total * C : 0, arc = Math.max(0, length - gap);
+    seg.setAttribute("stroke-dasharray", `${arc} ${C - arc}`);
+    seg.setAttribute("stroke-dashoffset", `${-at}`);
     at += length;
-    return svg;
-  }).join("");
-  MEMORY_PARTS = parts;
-  $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
-    `<svg viewBox="0 0 160 160" class="donut" onmouseleave="focusPart(-1)">${arcs}` +
-    `<text x="80" y="76" class="big" id="donut-value">${physical.toFixed(0)} GB</text>` +
-    `<text x="80" y="96" class="small" id="donut-label">memory</text></svg>` +
-    `<div class="legend">` + parts.map(([name, gb, colour], i) =>
-      `<div class="item" data-i="${i}" onmouseenter="focusPart(${i})" onmouseleave="focusPart(-1)"><i style="background:${colour}"></i>` +
-      `<span>${name}</span><b>${gb.toFixed(1)} GB</b><em>${total ? Math.round(gb / total * 100) : 0}%</em></div>`).join("") +
-    `</div></div>` +
-    `<div class="memfacts">pressure ${m.psi} · swap ${m.swap_gb} GB` +
-    (L.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (L.guard.killed ? ` · <b>work model killed</b>` : "") + `</div>`;
-  document.querySelectorAll(".donut .seg").forEach(seg => seg.onmouseenter = () => focusPart(+seg.dataset.i));
-  if (FOCUSED >= 0) focusPart(FOCUSED);  // the page redraws every 2 s; keep what the reader is looking at
+  });
+  document.querySelectorAll(".legend .item").forEach((item, i) => {
+    setText(item.querySelector("b"), `${values[i].toFixed(1)} GB`);
+    setText(item.querySelector("em"), `${total ? Math.round(values[i] / total * 100) : 0}%`);
+  });
+  setHTML($("memfacts"), `pressure ${m.psi} · swap ${m.swap_gb} GB` +
+    (M.guard && M.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (M.guard && M.guard.killed ? ` · <b>work model killed</b>` : ""));
+  focusPart(FOCUSED);
 }
 
 let MEMORY_PARTS = [], FOCUSED = -1;
 function focusPart(i) {
   FOCUSED = i;
-  const svg = document.querySelector(".donut");
-  if (!svg) return;
-  svg.querySelectorAll(".seg").forEach(seg => seg.style.opacity = i < 0 || +seg.dataset.i === i ? 1 : .35);
+  if (!$("donut")) return;
+  document.querySelectorAll("#donut .seg").forEach(seg => seg.style.opacity = i < 0 || +seg.dataset.i === i ? 1 : .35);
   document.querySelectorAll(".legend .item").forEach(item => item.classList.toggle("on", +item.dataset.i === i));
   const total = MEMORY_PARTS.reduce((n, p) => n + p[1], 0);
-  $("donut-value").textContent = i < 0 ? `${total.toFixed(0)} GB` : `${MEMORY_PARTS[i][1].toFixed(1)} GB`;
-  $("donut-label").textContent = i < 0 ? "memory" : MEMORY_PARTS[i][0].replace(/ \(.*\)/, "").toLowerCase();
+  setText($("donut-value"), i < 0 ? `${total.toFixed(0)} GB` : `${MEMORY_PARTS[i][1].toFixed(1)} GB`);
+  setText($("donut-label"), i < 0 ? "memory" : MEMORY_PARTS[i][0].toLowerCase());
 }
 
 function renderChecks(L) {
@@ -280,7 +310,8 @@ function render(L) {
     `${count("waiting")} task${count("waiting") === 1 ? "" : "s"} up next · ${count("done")} done` +
     (failing.length ? ` · <b>self-check red</b>` : "");
   $("alert").innerHTML = failing.map(c => esc(c.name + ": " + c.detail)).join("<br>");
-  renderAgents(L);
+  LAST = {paused: L.paused, guard: L.guard};
+  renderAgents({...L, runs: Object.fromEntries(Object.values(L.agents).map(a => [a.id, (L.tasks[a.task] || {}).runs]))});
   renderWork(L);
   renderMachine(L);
   renderChecks(L);
@@ -289,12 +320,19 @@ function render(L) {
     `<span class="what">${esc(sentence(h))}</span></div>`).join("");
 }
 
+let LAST = {paused: false, guard: {}};
 async function poll() {
   try { render(await (await fetch("/api/ledger", {cache: "no-store"})).json()); }
   catch (e) { $("stamp").textContent = "daemon unreachable"; }
-  setTimeout(poll, 2000);
+  setTimeout(poll, 1000);
 }
 poll();
+// Agent cards and memory, ten times a second.
+new EventSource("/api/live").onmessage = event => {
+  const F = JSON.parse(event.data);
+  renderAgents({...F, paused: LAST.paused});
+  renderMemory({...F, guard: LAST.guard});
+};
 </script>
 </body>
 </html>
