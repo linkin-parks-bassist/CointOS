@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T22:35:58+10:00"
+revised_at: "2026-09-26T23:18:35+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -8,7 +8,7 @@ revised_at: "2026-09-26T22:35:58+10:00"
 ## Concepts
 
 - **Agent:** a worker with a task, a role and a conversation (an OpenCode session), living until its run ends. Agents are what CointOS is about; everything else serves them.
-- **Thinking and acting:** an agent is always doing one of two things. It is *thinking* while the model extends its conversation, and *acting* while it runs the tools the model called (commands, file edits, knowledge-tree lookups). An agent that is thinking needs a lane; an acting agent does not.
+- **The four Rs:** an agent is always *Reading* (the model is reading its context into a lane), *Reasoning* (the model is thinking), *Writing* (the model is writing its message or tool calls), or *Running* (its tools run: commands, file edits, knowledge-tree lookups); or else *waiting* for a lane. Reading, reasoning and writing make up a thought, which needs a lane; a running agent needs none.
 - **Thought:** one span of thinking, from the agent's conversation to the point where the model hands back control with a message or tool calls. A thought can be interrupted and resumed any number of times.
 - **Context:** the agent's conversation as the model holds it: a token sequence and the lane state computed from it. A context is *resident* on a lane, *saved* as a snapshot, or *cold* (only its tokens are known, and the model must read them again). **A context is identified by its tokens**, not by who owns it: a lane is *warm* for a thought when the tokens its state holds begin the thought's tokens, and a snapshot is found by a digest of the tokens it holds. So concurrent conversations of one owner never collide, and an agent resuming a task's session (even after a daemon restart) finds that task's context. Owners (a task, Coin, David) serve only display and the forgetting of a finished task's snapshots.
 - **Lane:** one execution slot of a loaded model, holding at most one resident context. A model has a fixed number of lanes, set when it is launched.
@@ -68,7 +68,7 @@ The backend's `models()` is the source of truth for what is loaded, because the 
 - **One owner per agent.** A thread in the daemon starts the agent's OpenCode server and client as one process group, follows its events, and alone reports how its run ended.
 - **One way to end.** However an agent ends, it first leaves the ledger with its task settled; then its process group is stopped. Until `exit_grace_seconds` pass, it is listed as exiting. A task's snapshots are forgotten when the task is done or failed, since only then is its conversation over; a requeued task keeps them for its next run.
 - **Settling:** a run that ended by itself is finished when its item leaf says so (for surveys and maintenance, when the run stopped normally). Otherwise its task is requeued and the run counts against `max_runs_per_task`. Stops by David, the guard or a halt do not count.
-- **Silence:** an agent that has been acting (not thinking, not waiting) for `agent_silent_seconds` with no OpenCode event is stopped and its task requeued.
+- **Silence:** an agent that has been running its tools (not thinking, not waiting) for `agent_silent_seconds` with no OpenCode event is stopped and its task requeued.
 - **Looping:** an agent whose thoughts produce the same output more than `max_identical_thoughts` times in a row is stopped and its task requeued.
 - **David's own sessions** think through the gateway with a user key, in the user class. While one is active, the spawner starts no new background agents.
 

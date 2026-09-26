@@ -51,7 +51,7 @@ def show_status(state: dict) -> None:
     print(f"CointOS  up {ago(now - state['started_at'])}  {'PAUSED' if state['paused'] else 'running'}  "
           f"{len(agents)} agents  ({sum(a['state'] == 'reading' for a in agents)} reading, "
           f"{sum(a['state'] == 'thinking' for a in agents)} thinking, "
-          f"{sum(a['state'] == 'waiting' for a in agents)} waiting, {sum(a['state'] == 'acting' for a in agents)} acting)")
+          f"{sum(a['state'] == 'waiting' for a in agents)} waiting, {sum(a['state'] == 'running' for a in agents)} running)")
     print(f"work     {count('running')} in progress  {count('waiting')} up next  {count('done')} done  {count('failed')} gave up")
     m, guard = state["memory"], state["guard"]
     if m:

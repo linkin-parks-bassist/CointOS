@@ -106,10 +106,10 @@ def look_after_agents() -> None:
             mine = [t for t in L["thoughts"].values() if t["agent"] == agent_id]
             holding = [t for t in mine if t["lane"] is not None]
             agent["state"] = ("reading" if any(t["reading"] for t in holding) else "thinking" if holding
-                              else "waiting" if mine else "acting")
+                              else "waiting" if mine else "running")
             if mine:
                 agent["last_activity"] = now()
-        if agent["state"] == "acting" and now() - agent["last_activity"] > limits["agent_silent_seconds"]:
+        if agent["state"] == "running" and now() - agent["last_activity"] > limits["agent_silent_seconds"]:
             work.stop_agent(agent_id, "silent too long", requeue=True)
         elif agent["repeats"] > limits["max_identical_thoughts"]:
             work.stop_agent(agent_id, "repeating one thought", requeue=True)

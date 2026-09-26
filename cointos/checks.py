@@ -46,7 +46,7 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
 
     thinking = {t["agent"] for t in thoughts}
     check("no silent agent", [
-        f"{agent_id} acting silently for {now - agent['last_activity']:.0f}s"
+        f"{agent_id} running tools silently for {now - agent['last_activity']:.0f}s"
         for agent_id, agent in ledger["agents"].items()
         if agent_id not in thinking and now - agent["last_activity"] > limits["agent_silent_seconds"]])
 

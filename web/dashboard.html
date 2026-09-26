@@ -120,7 +120,7 @@ function phase(L, a) {
   }
   if (running) return ["thinking", (a.live || {}).phase === "writing" ? "Writing" : "Reasoning", `for ${ago(running.since)} on ${short(running.model)} · ${running.generated} tokens so far`];
   if (queued) return ["waiting", "Waiting for a lane", `for ${ago(queued.waiting_since)}`];
-  return ["tools", "Acting", "running its tools"];
+  return ["tools", "Running", "its tools"];
 }
 
 function renderAgents(L) {

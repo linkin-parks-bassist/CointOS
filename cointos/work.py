@@ -69,7 +69,7 @@ def agent_thread(agent_id: str, task: dict, key: str) -> None:
             if agent is None:
                 raise Ended
             if kind == "server":
-                agent.update(pid=value[0], url=value[1], state="acting")
+                agent.update(pid=value[0], url=value[1], state="running")
             elif kind == "session" and agent["session"] != value:
                 agent["session"] = value
                 L["tasks"][agent["task"]]["session"] = value

@@ -92,14 +92,14 @@ class Checks(unittest.TestCase):
         kept = {**lane(), "held_for": "x", "held_class": "background", "held_until": 110}
         self.assertEqual(self.failing(ledger([kept], [thought("a", "background", waiting_since=90)])), set())
 
-    def test_silent_only_while_acting(self):
-        agent = {"state": "acting", "last_activity": 0, "repeats": 1}
+    def test_silent_only_while_running_tools(self):
+        agent = {"state": "running", "last_activity": 0, "repeats": 1}
         self.assertIn("no silent agent", self.failing(ledger([], [], {"x": agent}), now=1000, processes={"x": [1]}))
         state = ledger([lane(holder="t")], [thought("t", "background", lane=0, agent="x")], {"x": agent})
         self.assertNotIn("no silent agent", self.failing(state, now=1000, processes={"x": [1]}))
 
     def test_agents_and_processes(self):
-        agent = {"state": "acting", "last_activity": 99, "repeats": 1}
+        agent = {"state": "running", "last_activity": 99, "repeats": 1}
         self.assertEqual(self.failing(ledger([], [], {"a": agent})), {"agents match processes"})
         self.assertEqual(self.failing(ledger([], [], {"a": {**agent, "state": "starting"}})), set())
         self.assertEqual(self.failing(ledger([], [], exiting={"b": 95}), processes={"b": [1]}), set())
