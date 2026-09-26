@@ -33,6 +33,11 @@ TOOLS = [
 ]
 
 TERMINAL_TOOLS = {"publish_followup", "finish_silently"}
+# A deep turn may inspect and act for this many rounds; after that only the
+# terminal tools remain, so every turn ends and releases its lane.
+MAXIMUM_TOOL_ROUNDS = 8
+# Knowledge-root access changes are David's decision at a terminal, not Coin's.
+EXCLUDED_KNOWLEDGE_TOOLS = {"kt_access_request", "kt_access_confirm", "kt_access_revoke"}
 
 
 def _initial_defers_completion(response: str | None) -> bool:
@@ -87,9 +92,19 @@ Live context at deep-turn start:
 {json.dumps(live, separators=(',', ':'))}"""
     messages = [{"role": "system", "content": system}, *history[-20:],
                 {"role": "user", "content": message}]
-    tools = TOOLS + (knowledge["tools"] if knowledge is not None else [])
+    tools = TOOLS + [tool for tool in (knowledge["tools"] if knowledge is not None else [])
+                     if tool["function"]["name"] not in EXCLUDED_KNOWLEDGE_TOOLS]
+    terminal_only = [tool for tool in TOOLS if tool["function"]["name"] in TERMINAL_TOOLS]
     successful_tool_action = False
+    rounds = 0
+    seen_calls: dict[str, dict] = {}
     while True:
+        rounds += 1
+        if rounds > MAXIMUM_TOOL_ROUNDS and tools is not terminal_only:
+            tools = terminal_only
+            messages.append({"role": "user", "content":
+                             "Stop inspecting. Answer now with publish_followup (or finish_silently) "
+                             "using what you already know."})
         assistant = (infer(model=model, messages=messages, tools=tools,
                            max_tokens=DEEP_OUTPUT_TOKENS, timeout=None, temperature=0.35)
                      if infer is not None else (
@@ -100,6 +115,9 @@ Live context at deep-turn start:
                          managed_request(model, messages, DEEP_OUTPUT_TOKENS, timeout=None, tools=tools,
                                          control=True)))
         calls = assistant.get("tool_calls") or []
+        if not calls and rounds > MAXIMUM_TOOL_ROUNDS + 2:
+            prose = (assistant.get("content") or "").strip()
+            return {"followup": prose or None}
         if not calls:
             messages.append(assistant)
             messages.append({"role": "user", "content":
@@ -118,6 +136,11 @@ Live context at deep-turn start:
                 if name in TERMINAL_TOOLS:
                     terminal.append((name, arguments))
                     result = {"ok": True, "accepted": True}
+                elif (signature := f"{name}:{json.dumps(arguments, sort_keys=True)}") in seen_calls:
+                    result = {**seen_calls[signature], "note": "You already made this exact call; "
+                              "use this result instead of repeating it."}
+                elif name in EXCLUDED_KNOWLEDGE_TOOLS or name not in {t["function"]["name"] for t in tools}:
+                    result = {"ok": False, "error": f"{name} is not available in this turn."}
                 else:
                     try:
                         result = (knowledge_tools.call(knowledge, name, arguments)
@@ -125,6 +148,8 @@ Live context at deep-turn start:
                                   else execute(name, arguments))
                     except Exception as error:
                         result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
+                    if isinstance(result, dict):
+                        seen_calls[signature] = result
                     if isinstance(result, dict) and result.get("ok") is True:
                         successful_tool_action = True
             messages.append({"role": "tool", "tool_call_id": call.get("id", ""),
