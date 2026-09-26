@@ -137,13 +137,14 @@ def look_after_agents() -> None:
 
 
 def tick(timers: dict) -> None:
+    with LOCK:
+        guard()  # memory is measured first: everything after asks whether something fits
     if now() - timers["models"] >= CONFIG["model_check_seconds"]:
         timers["models"] = now()
         check_models()
     processes = agents.find_processes()
     windows = viewers.open_windows() if CONFIG["viewers"]["max_viewers"] else set()
     with LOCK:
-        guard()
         lanes.schedule()  # time is an input too: a slice runs out between events
         look_after_agents()
         if CONFIG["viewers"]["max_viewers"]:
