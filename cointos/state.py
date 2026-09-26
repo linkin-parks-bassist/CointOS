@@ -33,7 +33,7 @@ def alert(text: str) -> None:
     """Tell David (through Coin, the dashboard and the history). Caller holds LOCK."""
     L["next_alert"] += 1
     L["alerts"].append({"id": L["next_alert"], "at": now(), "text": text})
-    del L["alerts"][:-50]
+    del L["alerts"][:-CONFIG["alerts_kept"]]
     log("alert", text=text)
 
 
@@ -49,7 +49,8 @@ def fresh(previous: dict) -> dict:
         "viewers_showing": previous.get("viewers_showing", False),
         "snapshots": previous.get("snapshots", {}), "tasks": previous.get("tasks", {}),
         "memory": {}, "model_memory": {name: {"memory_gb": shape["memory_gb"], "weights_gb": shape["weights_gb"]}
-                                        for name, shape in CONFIG["models"].items()}, "guard": {"distress_since": None, "killed": False, "blocked": False},
+                                        for name, shape in CONFIG["models"].items()}, "guard": {"rung": 0, "rung_at": 0, "calm_since": None, "distress_since": None,
+                                                        "killed": False, "blocked": False},
         "history": previous.get("history", []), "alerts": previous.get("alerts", []),
         "next_alert": previous.get("next_alert", 0), "checks": [], "failing": [],
         "user_last_thought": 0, "last_survey": previous.get("last_survey", {}),

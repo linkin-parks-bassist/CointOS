@@ -54,7 +54,9 @@
     "agent_limit_gb": 8,
     "max_psi": 1.0,
     "distress_seconds": 30,
-    "disk_snapshots_gb": 100
+    "disk_snapshots_gb": 100,
+    "shed_step_seconds": 3,
+    "calm_seconds": 120
   },
   "checks": {
     "idle_lane_seconds": 5,
@@ -89,7 +91,12 @@
     "reply_seconds": 12,
     "reply_tokens": 500,
     "deep_turn_seconds": 1800,
-    "finishing_rounds": 3
+    "finishing_rounds": 3,
+    "telegram_seconds": 40,
+    "long_poll_seconds": 25,
+    "send_attempts": 3,
+    "retry_pause_seconds": 2,
+    "error_pause_seconds": 5
   },
   "viewers": {
     "max_viewers": 4,
@@ -97,10 +104,29 @@
       "gnome-terminal",
       "--"
     ],
-    "opening_seconds": 15
+    "opening_seconds": 15,
+    "poll_seconds": 2,
+    "detach_seconds": 5
   },
   "dashboard": {
     "live_hz": 10,
     "live_chars": 600
-  }
+  },
+  "timeouts": {
+    "lemonade_health_seconds": 10,
+    "model_launch_seconds": 900,
+    "model_kill_seconds": 300,
+    "server_seconds": 60,
+    "render_seconds": 120,
+    "snapshot_seconds": 300,
+    "agent_start_seconds": 60,
+    "agent_stop_grace_seconds": 5,
+    "leftover_stop_grace_seconds": 2,
+    "api_seconds": 10,
+    "command_seconds": 300,
+    "stop_save_seconds": 60,
+    "mcp_close_seconds": 5
+  },
+  "alerts_kept": 50,
+  "result_chars": 2000
 }

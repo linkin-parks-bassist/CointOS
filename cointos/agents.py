@@ -10,7 +10,9 @@ import sys
 import time
 from pathlib import Path
 
-from cointos.config import ROOT, STATE, api_url
+from cointos.config import ROOT, STATE, api_url, load as load_config
+
+TIMEOUTS = load_config()["timeouts"]
 
 OPENCODE = str(Path.home() / ".local/bin/opencode")
 GLOBAL_OPENCODE = Path.home() / ".config/opencode/opencode.json"
@@ -120,7 +122,7 @@ def start_server(directory: Path, worktree: str, env: dict) -> tuple[subprocess.
                               cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                               process_group=0)
     log.close()
-    deadline = time.monotonic() + 60
+    deadline = time.monotonic() + TIMEOUTS["agent_start_seconds"]
     while time.monotonic() < deadline:
         if server.poll() is not None:
             raise RuntimeError(f"opencode serve exited with {server.returncode}")
@@ -130,7 +132,7 @@ def start_server(directory: Path, worktree: str, env: dict) -> tuple[subprocess.
             return server, found[1]
         time.sleep(0.2)
     stop_group(server.pid)
-    raise RuntimeError("opencode serve did not report a listening URL within 60s")
+    raise RuntimeError(f"opencode serve did not report a listening URL within {TIMEOUTS['agent_start_seconds']}s")
 
 
 def unit(agent_id: str) -> str:
@@ -254,7 +256,7 @@ def describe(part: dict) -> str | None:
     return None
 
 
-def stop_group(pgid: int, grace: float = 5) -> None:
+def stop_group(pgid: int, grace: float = TIMEOUTS["agent_stop_grace_seconds"]) -> None:
     """Stop a process group: TERM, then KILL whatever is left."""
     try:
         os.killpg(pgid, signal.SIGTERM)

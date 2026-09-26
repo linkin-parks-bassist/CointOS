@@ -69,32 +69,52 @@ def launch(name: str) -> None:
 
 # ---------------------------------------------------------------- memory
 
+RUNGS = ("normal", "saved contexts out of memory", "background agents stopped", "work model unloaded")
+
+
 def guard() -> None:
-    """Keep the one memory rule: snapshots give way when headroom goes negative; background
-    work waits while it stays negative; sustained distress stops background agents and kills
-    the work model until its memory fits again. Caller holds LOCK."""
+    """Give memory back while the machine needs it, one rung at a time, and take it again only
+    once things are calm (`what/is/the/architecture/of/cointos.md`, *Memory*). Headroom is the
+    leading signal: while it stays negative after saved contexts have left memory, climb a rung
+    and let the effect show before the next. Sustained pressure is a shortcut to the top. The
+    core (daemon, front-desk model, Coin) stays. Caller holds LOCK."""
     measured, server = memory.measure(), BACKEND.budget(CONFIG)
     L["memory"] = {**measured, "server": server, "headroom_gb": memory.headroom_gb(CONFIG, measured, server)}
-    state = L["guard"]
-    state["blocked"] = L["memory"]["headroom_gb"] < 0 and not lanes.make_room(0.0)
+    state, limits = L["guard"], CONFIG["memory"]
+    short = L["memory"]["headroom_gb"] < 0 and not lanes.make_room(0.0)  # rung 1 happens here, always
     distress = memory.distressed(CONFIG, measured)
-    if not distress:
-        state["distress_since"] = None
-        work_model = CONFIG["work_model"]
-        if state["killed"] and L["memory"]["headroom_gb"] >= CONFIG["models"][work_model]["memory_gb"]:
-            state["killed"] = False  # check_models launches it again
-            alert(f"Memory has recovered; launching {work_model} again.")
-        return
-    state["distress_since"] = state["distress_since"] or now()
-    if state["killed"] or now() - state["distress_since"] < CONFIG["memory"]["distress_seconds"]:
-        return
-    state["killed"] = True
-    alert("The machine is under memory distress (" + "; ".join(distress) + "): stopping background agents "
-          f"and killing {CONFIG['work_model']}.")
-    for agent_id, agent in list(L["agents"].items()):
-        if agent["class"] == "background":
-            work.stop_agent(agent_id, "memory distress", requeue=True, charge=False)
-    threading.Thread(target=BACKEND.kill, args=(CONFIG, CONFIG["work_model"]), daemon=True).start()
+    state["distress_since"] = (state["distress_since"] or now()) if distress else None
+    urgent = distress and now() - state["distress_since"] >= limits["distress_seconds"]
+    if short or distress:
+        state["calm_since"] = None
+        top = len(RUNGS) - 1
+        rung = top if urgent else min(top, max(state["rung"], 1) + 1) if short else state["rung"]
+        if rung > state["rung"] and now() - state["rung_at"] >= limits["shed_step_seconds"]:
+            climb(rung, "; ".join(distress) or f"headroom {L['memory']['headroom_gb']} GB")
+    else:
+        state["calm_since"] = state["calm_since"] or now()
+        work_model = CONFIG["models"][CONFIG["work_model"]]
+        fits = state["rung"] < 3 or L["memory"]["headroom_gb"] >= work_model["memory_gb"]
+        if state["rung"] > 0 and fits and now() - state["calm_since"] >= limits["calm_seconds"]:
+            down = state["rung"] - 1 if state["rung"] > 2 else 0  # rung 1 is not a state: it happens whenever needed
+            state.update(rung=down, rung_at=now(), calm_since=now())
+            alert(f"Memory is calm: back to {RUNGS[state['rung']]}.")
+    state["blocked"] = short or state["rung"] >= 2
+    state["killed"] = state["rung"] >= 3
+
+
+def climb(rung: int, why: str) -> None:
+    """Take the ladder up to `rung`, doing each rung's work on the way. Caller holds LOCK."""
+    state = L["guard"]
+    for step in range(state["rung"] + 1, rung + 1):
+        if step == 2:
+            for agent_id, agent in list(L["agents"].items()):
+                if agent["class"] == "background":
+                    work.stop_agent(agent_id, "memory needed", requeue=True, charge=False)
+        if step == 3:
+            threading.Thread(target=BACKEND.kill, args=(CONFIG, CONFIG["work_model"]), daemon=True).start()
+    state.update(rung=rung, rung_at=now())
+    alert(f"Giving memory back ({why}): {RUNGS[rung]}.")
 
 
 # ---------------------------------------------------------------- tick

@@ -19,7 +19,7 @@ BACKEND = importlib.import_module(CONFIG["backend"])
 UNITS = ["cointosd.service", "cointos-coin.service"]
 
 
-def call(action: str | None = None, body: dict | None = None, timeout: float = 10):
+def call(action: str | None = None, body: dict | None = None, timeout: float = CONFIG["timeouts"]["api_seconds"]):
     """GET the ledger, or POST an action."""
     url = configuration.api_url(CONFIG) + ("/api/ledger" if action is None else f"/api/{action}")
     data = None if action is None else json.dumps(body or {}).encode()
@@ -108,7 +108,7 @@ def halt(keep_coin: bool) -> None:
             print(f"could not kill {name}: {error}")
     for pids in agents.find_processes().values():
         for pid in pids:
-            agents.stop_group(pid, grace=2)
+            agents.stop_group(pid, grace=CONFIG["timeouts"]["leftover_stop_grace_seconds"])
     print("halted: daemon" + ("" if keep_coin else " and Coin") + " stopped, agents stopped, models killed"
           "\nbring it back with: cointos up")
 
@@ -172,18 +172,18 @@ def view(slot: int) -> None:
                 title(f"CointOS viewer {slot}: idle")
                 print(f"\033[2J\033[H\n  CointOS viewer {slot}\n\n  idle: the next agent to start appears here.")
                 idle_shown = True
-            time.sleep(2)
+            time.sleep(CONFIG["viewers"]["poll_seconds"])
             continue
         idle_shown = False
         title(f"CointOS {slot}: {agent['id']} on {agent['project']}: {agent['title']}")
         child = subprocess.Popen([agents.OPENCODE, "attach", agent["url"], "--session", agent["session"]])
         while child.poll() is None:
-            time.sleep(2)
+            time.sleep(CONFIG["viewers"]["poll_seconds"])
             current = assigned()
             if current is None or current["id"] != agent["id"]:
                 child.terminate()
                 try:
-                    child.wait(timeout=5)
+                    child.wait(timeout=CONFIG["viewers"]["detach_seconds"])
                 except subprocess.TimeoutExpired:
                     child.kill()
         subprocess.run(["stty", "sane"], check=False)  # the TUI may leave the terminal in raw mode

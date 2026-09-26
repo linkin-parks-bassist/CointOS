@@ -34,14 +34,14 @@ class Lost(Exception):
 _urls: dict[str, str] = {}  # model -> its llama-server, as last reported by Lemonade
 
 
-def _call(url: str, body: dict | None = None, timeout: float = 30):
+def _call(url: str, body: dict | None, timeout: float):
     request = urllib.request.Request(url, None if body is None else json.dumps(body).encode(),
                                      {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.load(response)
 
 
-def _server(model: str, path: str, body: dict | None = None, timeout: float = 60):
+def _server(model: str, path: str, body: dict | None, timeout: float):
     return _call(_urls[model] + path, body, timeout)
 
 
@@ -72,7 +72,7 @@ def _problems(config: dict, shape: dict, entry: dict | None) -> list[str]:
 def models(config: dict) -> dict[str, dict]:
     """Each configured model: {"lanes": n} when loaded in its configured shape, else {"problems": [...]}."""
     health = {entry["model_name"]: entry
-              for entry in _call(config["lemonade"] + "/api/v1/health", timeout=10)["all_models_loaded"]}
+              for entry in _call(config["lemonade"] + "/api/v1/health", None, config["timeouts"]["lemonade_health_seconds"])["all_models_loaded"]}
     found = {}
     for name, shape in config["models"].items():
         problems = _problems(config, shape, health.get(name))
@@ -110,7 +110,7 @@ def launch(config: dict, name: str) -> None:
     kill(config, name)
     _call(config["lemonade"] + "/v1/load", {
         "model_name": name, "ctx_size": shape["ctx_size"], "llamacpp_args": _wanted_args(config, shape),
-        "merge_args": False, "save_options": False, "pinned": True}, timeout=900)
+        "merge_args": False, "save_options": False, "pinned": True}, config["timeouts"]["model_launch_seconds"])
     problems = models(config)[name].get("problems")
     if problems:
         raise RuntimeError(f"{name} launched in the wrong shape: {'; '.join(problems)}")
@@ -118,7 +118,7 @@ def launch(config: dict, name: str) -> None:
 
 def kill(config: dict, name: str) -> None:
     try:
-        _call(config["lemonade"] + "/v1/unload", {"model_name": name}, timeout=300)
+        _call(config["lemonade"] + "/v1/unload", {"model_name": name}, config["timeouts"]["model_kill_seconds"])
     except urllib.error.HTTPError as error:
         if error.code != 404:  # 404: it was not loaded
             raise
@@ -134,9 +134,9 @@ def render(config: dict, model: str, conversation: dict) -> dict:
         body["tools"] = conversation["tools"]
     if conversation.get("template"):
         body["chat_template_kwargs"] = conversation["template"]
-    text = _server(model, "/apply-template", body)["prompt"]
+    text = _server(model, "/apply-template", body, config["timeouts"]["server_seconds"])["prompt"]
     tokens = _server(model, "/tokenize", {"content": text, "add_special": False, "parse_special": True},
-                     timeout=120)["tokens"]
+                     config["timeouts"]["render_seconds"])["tokens"]
     return {"tokens": tokens, "reader": {"thinking": text.endswith("<think>\n"),
                                          "tools": conversation.get("tools") or []}}
 
@@ -202,14 +202,14 @@ def _snapshot(name: str) -> str:
 
 def save(config: dict, model: str, lane: int, name: str) -> dict:
     """Save the lane's context as snapshot `name`: {"tokens": how many it holds, "bytes": its size}."""
-    saved = _server(model, f"/slots/{lane}?action=save", {"filename": _snapshot(name)}, timeout=300)
+    saved = _server(model, f"/slots/{lane}?action=save", {"filename": _snapshot(name)}, config["timeouts"]["snapshot_seconds"])
     return {"tokens": saved["n_saved"], "bytes": os.path.getsize(Path(config["snapshots"]) / _snapshot(name))}
 
 
 def restore(config: dict, model: str, lane: int, name: str) -> bool:
     try:
         return bool(_server(model, f"/slots/{lane}?action=restore", {"filename": _snapshot(name)},
-                            timeout=300).get("n_restored"))
+                            config["timeouts"]["snapshot_seconds"]).get("n_restored"))
     except (OSError, ValueError):
         return False
 
@@ -268,7 +268,7 @@ def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool)
 
     The split mirrors how the Qwen template renders an assistant turn, so that the next render
     reproduces these tokens exactly and the lane state can be continued."""
-    text = _server(model, "/detokenize", {"tokens": tokens})["content"] if tokens else ""
+    text = _server(model, "/detokenize", {"tokens": tokens}, config["timeouts"]["server_seconds"])["content"] if tokens else ""
     for end in END_OF_TURN:
         text = text.removesuffix(end)
     reasoning, rest = "", text

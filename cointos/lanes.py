@@ -414,7 +414,8 @@ def worker(position: int) -> None:
 def save_all() -> None:
     """On a graceful stop: once the steps in flight have ended, save each lane's context whose
     conversation goes on, so a restarted daemon resumes it warm instead of reading it again."""
-    for _ in range(600):
+    deadline = time.monotonic() + CONFIG["timeouts"]["stop_save_seconds"]
+    while time.monotonic() < deadline:
         with LOCK:
             if not BUSY:
                 break

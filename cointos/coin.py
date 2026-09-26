@@ -41,7 +41,7 @@ def credentials() -> tuple[str, set[int]]:
     return values["AGENT_TELEGRAM_BOT_TOKEN"], allowed
 
 
-def telegram(token: str, method: str, body: dict, timeout: float = 40) -> dict:
+def telegram(token: str, method: str, body: dict, timeout: float = SETTINGS["telegram_seconds"]) -> dict:
     request = urllib.request.Request(f"https://api.telegram.org/bot{token}/{method}", json.dumps(body).encode(),
                                      {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -54,14 +54,14 @@ def telegram(token: str, method: str, body: dict, timeout: float = 40) -> dict:
 def send(token: str, chat: int, text: str) -> None:
     text = text.strip() or "(nothing to say)"
     for start in range(0, len(text), TELEGRAM_LIMIT):
-        for attempt in range(3):
+        for attempt in range(SETTINGS["send_attempts"]):
             try:
                 telegram(token, "sendMessage", {"chat_id": chat, "text": text[start:start + TELEGRAM_LIMIT]}, 20)
                 break
             except (OSError, RuntimeError):
-                if attempt == 2:
+                if attempt == SETTINGS["send_attempts"] - 1:
                     raise
-                time.sleep(2)
+                time.sleep(SETTINGS["retry_pause_seconds"])
 
 
 # ---------------------------------------------------------------- memory
@@ -179,7 +179,7 @@ TERMINAL = {"reply", "finish_silently"}
 
 
 def capture(*argv) -> str:
-    result = subprocess.run([str(ROOT / "bin/cointos"), *argv], capture_output=True, text=True, timeout=300)
+    result = subprocess.run([str(ROOT / "bin/cointos"), *argv], capture_output=True, text=True, timeout=CONFIG["timeouts"]["command_seconds"])
     return (result.stdout + result.stderr).strip()
 
 
@@ -310,10 +310,10 @@ def main() -> None:
     threading.Thread(target=alert_forwarder, args=(token, allowed), daemon=True).start()
     while True:
         try:
-            updates = telegram(token, "getUpdates", {"timeout": 25, "offset": offset, "allowed_updates": ["message"]})
+            updates = telegram(token, "getUpdates", {"timeout": SETTINGS["long_poll_seconds"], "offset": offset, "allowed_updates": ["message"]})
         except Exception:
             traceback.print_exc()
-            time.sleep(5)
+            time.sleep(SETTINGS["error_pause_seconds"])
             continue
         for update in updates:
             offset = update["update_id"] + 1

@@ -162,7 +162,7 @@ def settle(agent_id: str, outcome: dict) -> None:
     if finished:
         merged = agents.remove_worktree(project, task)
         end_task(task, "done", detail + ("" if merged else "; branch not merged"),
-                 result=(outcome.get("text") or "")[-2000:])
+                 result=(outcome.get("text") or "")[-CONFIG["result_chars"]:])
         log("task finished", task=task["id"], detail=task["note"])
         finish_agent(agent_id, "finished")
     else:
@@ -247,7 +247,7 @@ def adopt(previous: dict) -> None:
         if agent_id not in L["agents"]:
             for pid in pids:
                 try:
-                    agents.stop_group(pid, grace=2)
+                    agents.stop_group(pid, grace=CONFIG["timeouts"]["leftover_stop_grace_seconds"])
                 except PermissionError:
                     pass
     for task in L["tasks"].values():
