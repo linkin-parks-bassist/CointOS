@@ -54,9 +54,11 @@ def common(a: list[int], b: list[int]) -> int:
 def shared_prefix(thought_id: str, model: str) -> int:
     """The longest start this thought's context shares with another context of the model that
     CointOS holds or runs; 0 if it is too short to be worth a snapshot of its own. Caller holds LOCK."""
-    tokens = tokens_of(thought_id)
-    others = [tokens_of(t) for t, thought in L["thoughts"].items() if t != thought_id and thought["model"] == model]
-    others += [held for p, held in HELD.items() if L["lanes"][p]["model"] == model]
+    tokens, owner = tokens_of(thought_id), L["thoughts"][thought_id]["owner"]
+    # Only other conversations: a conversation shares everything with its own earlier states.
+    others = [tokens_of(t) for t, thought in L["thoughts"].items()
+              if thought["owner"] != owner and thought["model"] == model]
+    others += [held for p, held in HELD.items() if L["lanes"][p]["model"] == model and L["lanes"][p]["resident"] != owner]
     longest = max((common(tokens, other) for other in others), default=0)
     return longest if longest >= CONFIG["scheduler"]["shared_prefix_tokens"] else 0
 

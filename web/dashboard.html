@@ -75,16 +75,29 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .row .state { font-size: 14px; color: var(--ink-soft); text-align: right; }
 .row .meta { grid-column: 2 / 4; font-size: 13px; color: var(--ink-faint); overflow-wrap: anywhere; }
 .muted { color: var(--ink-faint); }
-.resources { font-size: 14px; }
-.resource { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line-soft); }
-.resource:first-child { border-top: 0; }
-.resource .name { font-weight: 900; min-width: 150px; }
 .chip { font-size: 12px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg); }
 .chip.held { background: var(--c); border-color: var(--dark); }
-.check { display: flex; gap: 10px; padding: 3px 0; font-size: 14px; } .check .ok { color: var(--good); font-weight: 900; }
-.check .no { color: var(--bad); font-weight: 900; }
+.machine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 40px; }
+.lane-row { display: grid; grid-template-columns: 130px 56px 1fr; align-items: center; gap: 8px; padding: 6px 0;
+  border-top: 1px solid var(--line-soft); font-size: 14px; }
+.lane-row:first-of-type { border-top: 0; }
+.lane-row .name { font-weight: 900; }
+.lane-row .chip { justify-self: start; }
+.membar { display: flex; height: 14px; border: 1px solid var(--dark); margin: 6px 0 8px; }
+.membar .use { background: var(--manager); } .membar .keep { background: var(--line-soft); }
+.memlegend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; }
+.memlegend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 1px solid var(--dark); vertical-align: -1px; }
+.memlegend i.use { background: var(--manager); } .memlegend i.keep { background: var(--line-soft); }
+.memfacts { margin-top: 8px; font-size: 13px; color: var(--ink-faint); }
+.check { margin-top: 16px; padding: 8px 12px; font-size: 14px; border: 1px solid var(--line); }
+.check.ok { color: var(--good); font-weight: 900; background: color-mix(in oklab, var(--good) 8%, var(--paper)); }
+.check.no { color: var(--bad); background: var(--accent-wash); } .check.no + .check.no { margin-top: 6px; }
+.meta.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history { font-size: 13px; max-height: 360px; overflow: auto; }
-.history div { padding: 3px 0; border-top: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.history div { display: flex; gap: 12px; padding: 4px 0; border-top: 1px solid var(--line-soft); }
+.history .when { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
+.history .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.history .alert-line .what { color: var(--bad); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -95,8 +108,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
   <div id="agents"></div>
   <div class="grid">
     <section class="panel wide"><h2>Work</h2><div id="work"></div></section>
-    <section class="panel"><h2>Resources</h2><div class="resources" id="resources"></div></section>
-    <section class="panel"><h2>Self-check</h2><div id="checks"></div></section>
+    <section class="panel wide machine"><h2>Machine</h2><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
+      <div id="checks"></div></section>
     <section class="panel wide"><h2>Recently</h2><div class="history" id="history"></div></section>
   </div>
 </main>
@@ -155,32 +168,63 @@ function renderWork(L) {
     return some.length ? `<h3>${title}</h3>` + some.map(t => `<div class="row" style="--c:var(--${t.role})"><div class="bar"></div>` +
       `<div class="who">${esc(t.project)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
       `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
-      `<div class="meta">${esc(status === "done" && t.result ? t.result.slice(-300) : t.note || "")}</div></div>`).join("") : "";
+      `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div></div>`).join("") : "";
   }).join("") : `<p class="muted">No work yet.</p>`;
 }
 
-function renderResources(L) {
-  const waiting = Object.values(L.thoughts).filter(t => t.lane === null);
-  const models = Object.entries(L.models).map(([name, m]) => {
-    const lanes = L.lanes.filter(l => l.model === name).map(l => {
+const short_task = t => String(t || "").replace(/^[^:]+:/, "").replace(/^what\/is\/\w+\//, "").replace(/\.md$/, "");
+
+function renderMachine(L) {
+  $("lanes").innerHTML = `<h3>Lanes</h3>` + Object.entries(L.models).map(([name, m]) =>
+    L.lanes.filter(l => l.model === name).map(l => {
       const holder = L.thoughts[l.holder];
-      return holder ? `<span class="chip held" style="--c:${colour(holder.agent)}">lane ${l.index}: ${esc(holder.agent)}</span>`
-                    : `<span class="chip">lane ${l.index}: ${l.up ? "free" : "down"}</span>`; }).join("");
-    const queued = waiting.filter(t => t.model === name).length;
-    return `<div class="resource"><span class="name">${esc(short(name))}</span>` +
-      (m.up ? lanes : `<span class="chip">${m.launching ? "launching" : esc(m.problems.join("; "))}</span>`) +
-      (queued ? `<span class="muted">${queued} waiting</span>` : "") + `</div>`; }).join("");
-  const m = L.memory, g = L.guard, snaps = Object.values(L.snapshots);
-  const memory = m.headroom_gb === undefined ? "" : `<div class="resource"><span class="name">Memory</span>` +
-    `<span class="chip">headroom ${m.headroom_gb} GB</span><span class="chip">${m.available_gb} GB available</span>` +
-    `<span class="chip">pressure ${m.psi}</span><span class="chip">swap ${m.swap_gb} GB</span>` +
-    (g.blocked ? `<span class="chip held" style="--c:var(--accent-bright)">background waiting for memory</span>` : "") +
-    (g.killed ? `<span class="chip held" style="--c:var(--accent-bright)">work model killed</span>` : "") + `</div>` +
-    `<div class="resource"><span class="name">Saved contexts</span>` +
-    ["memory", "disk"].map(tier => { const here = snaps.filter(s => (s.tier === "memory") === (tier === "memory"));
-      return `<span class="chip">${here.length} in ${tier} · ${(here.reduce((n, s) => n + s.bytes, 0) / 1e9).toFixed(1)} GB</span>`; }).join("") +
-    `</div>`;
-  $("resources").innerHTML = models + memory;
+      const who = holder ? `<span class="chip held" style="--c:${colour(holder.agent)}">${esc(holder.agent)}</span>`
+        : `<span class="muted">${m.up ? "free" : m.launching ? "launching" : "down"}</span>`;
+      return `<div class="lane-row"><span class="name">${esc(short(name))}</span><span class="muted">lane ${l.index}</span>${who}</div>`;
+    }).join("")).join("");
+  const m = L.memory || {}, snaps = Object.values(L.snapshots);
+  if (m.headroom_gb === undefined) { $("memory").innerHTML = ""; return; }
+  const usable = Math.max(0, m.headroom_gb), kept = Math.max(0, m.available_gb - usable);
+  const inMemory = snaps.filter(s => s.tier === "memory"), onDisk = snaps.filter(s => s.tier !== "memory");
+  const gb = list => (list.reduce((n, s) => n + s.bytes, 0) / 1e9).toFixed(1);
+  $("memory").innerHTML = `<h3>Memory</h3>` +
+    `<div class="membar"><span class="use" style="flex:${usable}"></span><span class="keep" style="flex:${kept}"></span></div>` +
+    `<div class="memlegend"><span><i class="use"></i>${usable.toFixed(1)} GB usable by CointOS</span>` +
+    `<span><i class="keep"></i>${kept.toFixed(1)} GB kept for David</span></div>` +
+    `<div class="memfacts">${inMemory.length} saved contexts in memory (${gb(inMemory)} GB) · ${onDisk.length} on disk (${gb(onDisk)} GB)` +
+    ` · pressure ${m.psi} · swap ${m.swap_gb} GB` +
+    (L.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (L.guard.killed ? ` · <b>work model killed</b>` : "") + `</div>`;
+}
+
+function renderChecks(L) {
+  const failing = L.checks.filter(c => !c.ok);
+  $("checks").innerHTML = !L.checks.length ? "" : failing.length
+    ? failing.map(c => `<div class="check no"><b>${esc(c.name)}</b> ${esc(c.detail)}</div>`).join("")
+    : `<div class="check ok">All ${L.checks.length} self-checks green</div>`;
+}
+
+function sentence(h) {
+  const lane = h.model ? `${short(h.model)} lane ${h.lane}` : `lane ${h.lane}`;
+  switch (h.event) {
+    case "agent started": return `${h.agent} started on ${short_task(h.task)} (run ${h.run})`;
+    case "agent ended": return `${h.agent} ended: ${h.reason}`;
+    case "agent adopted": return `${h.agent} carried on through a daemon restart`;
+    case "task created": return `new task: ${short_task(h.task)}`;
+    case "task finished": return `${short_task(h.task)} finished: ${h.detail}`;
+    case "switch": return `${lane}: ${h.out ? short_task(h.out) : "empty"} → ${short_task(h.into)}` +
+      (h.restored ? ` (restored ${h.restored.toLocaleString()} tokens)` : " (cold)") + (h.saved ? ", saved the outgoing" : "");
+    case "shared prefix saved": return `shared start saved: ${h.tokens.toLocaleString()} tokens`;
+    case "snapshot forgotten": return `forgot a snapshot of ${short_task(h.owner)}: ${h.reason}`;
+    case "saved on stop": return `${lane}: saved ${short_task(h.owner)} as the daemon stopped`;
+    case "snapshots moved to disk for shutdown": return `moved ${h.count} saved contexts to disk for shutdown`;
+    case "model up": return `${short(h.model)} is up`;
+    case "viewer": return `viewer ${h.slot} now shows ${h.agent}`;
+    case "alert": return h.text;
+    default: {
+      const {at, event, ...rest} = h;
+      return `${event}${Object.keys(rest).length ? ": " + Object.entries(rest).map(([k, v]) => `${k} ${typeof v === "object" ? JSON.stringify(v) : v}`).join(", ") : ""}`;
+    }
+  }
 }
 
 function render(L) {
@@ -196,13 +240,11 @@ function render(L) {
   $("alert").innerHTML = failing.map(c => esc(c.name + ": " + c.detail)).join("<br>");
   renderAgents(L);
   renderWork(L);
-  renderResources(L);
-  $("checks").innerHTML = L.checks.map(c => `<div class="check"><span class="${c.ok ? "ok" : "no"}">${c.ok ? "ok" : "fail"}</span>` +
-    `<span>${esc(c.name)}${c.detail ? ": " + esc(c.detail) : ""}</span></div>`).join("");
-  $("history").innerHTML = L.history.slice(-60).reverse().map(h => {
-    const {at, event, ...rest} = h;
-    return `<div><span class="muted">${new Date(at * 1000).toLocaleTimeString()}</span> <b>${esc(event)}</b> ` +
-      esc(Object.entries(rest).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ")) + `</div>`; }).join("");
+  renderMachine(L);
+  renderChecks(L);
+  $("history").innerHTML = L.history.slice(-60).reverse().map(h =>
+    `<div class="${h.event === "alert" ? "alert-line" : ""}"><span class="when">${new Date(h.at * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>` +
+    `<span class="what">${esc(sentence(h))}</span></div>`).join("");
 }
 
 async function poll() {
