@@ -1,5 +1,0 @@
-{
-  "machine": "MDT AIImmerse",
-  "physical_unified_memory_gb": 128,
-  "memory_note": "Physical unified memory, the live firmware GPU carveout, Linux-visible total, dynamic GPU GTT, and currently available memory are separate facts; never call available memory the machine total."
-}

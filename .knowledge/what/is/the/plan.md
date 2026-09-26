@@ -1,25 +1,16 @@
 ---
-status: green
-revised_at: "2026-09-26T09:53:51+10:00"
+status: "green"
+revised_at: "2026-09-26T10:52:29+10:00"
 ---
 
-The plan is to reach the system defined in `what/is/cointos.md`: an autonomous, self-sustaining agent ecosystem that keeps the GPU busy with useful work without David's prompting.
+Build the architecture in `what/is/the/architecture/of/cointos.md` in milestones. Each milestone ends with a live demonstration on the real machine and a green `cointos check`.
 
-**Milestone 1: autonomy loop (current).** Build on the existing scheduler rather than hardening it further:
-- write the steward/manager/worker role classes; *(done, e888d61)*
-- put work queues in knowledge trees; *(done, in use)*
-- give Coin knowledge-tree tools; *(done, live check pending)*
-- add a spawner that starts an agent whenever capacity is free. *(built and enabled, e888d61; first live cycle unobserved)*
+1. **Config and models.** `config/cointos.json` and a start routine that loads both models in their configured shapes through Lemonade and confirms the effective launch. *Live:* both models loaded with the configured context and lanes; memory figures in the ledger.
+2. **Daemon, ledger and gateway.** `cointosd` with the ledger, the loopback API, the gateway and the scheduler (per-request lanes, priority classes, Coin's reserved lane, output cap), plus `cointos status` and `cointos check`. *Live:* three concurrent streaming requests on the work model share its two lanes, and a Coin-priority request is served next.
+3. **Agents.** OpenCode agents launched through the gateway in per-agent git worktrees (`how/to/launch/opencode/for/a/cointos/agent.md`), with stopped runs resumed. Add `cointos agents`, `jobs`, `stop` and `go`. *Live:* four agents with small real tasks share two lanes and finish; killing one mid-run resumes its task.
+4. **Autonomy.** The spawner, knowledge-tree queues, roles, and workers merging their branches when done. *Live:* one unattended hour in which queue items advance to done with commits.
+5. **Coin.** The Telegram service using the daemon API, the gateway (reserved lane) and kt MCP tools, with a bounded number of tool rounds per turn. Add `cointos halt` and `up`. *Live:* the Coin-under-load scenario from the spec.
+6. **Guard and dashboard.** Physical limits from the config, and the dashboard on the ledger. *Live:* the full acceptance in `what/is/the/spec.md`.
+7. **Sole Survivor** (after the MVP): an agent started in guard emergencies to diagnose and repair them.
 
-Acceptance is judged by observation: left alone, the GPU stays busy, drafted ideas and queued work visibly advance in their repositories under `~/Projects/`, and the system does not fall over. The concrete steps are in `what/is/next.md`.
-
-**Milestone 2: stability and recovery.** Once agents are running continuously, fix what actually breaks under real load. Prove Sole Survivor recovery on a real or safely induced incident, and keep Coin essentially always available. Scheduler follow-ups (sibling cancellation, pressure priority, multi-model selection, MTP throughput, proxy transport limits, lease archival) are done only when real load shows they matter.
-
-**Milestone 3: the idea pipeline and role diversification.** Deepen the dissolution pipeline (`what/is/architecture/of/cointos.md`): multi-step chunking, review and audit at the right abstraction levels, and diversified roles within each class.
-
-**Standing constraints.**
-- No named Qwen model or fixed slot count defines capacity; resident allocation, durable demand, policy, headroom and evidence-backed ceilings do.
-- Physical llama.cpp `--parallel` changes need unload/load and may lose KV cache.
-- Keep user runtime under `~/.CointOS`; the root survival plane is a separate boundary.
-- Only side-effect-free, subsecond predicates belong in knowledge-tree startup proofs.
-- Executor distillation criteria are in `how/should/executor/py/be/fractionally/distilled.md`; do not split files cosmetically.
+The core stays around 3,000 lines (`how/to/keep/cointos/simple.md`).

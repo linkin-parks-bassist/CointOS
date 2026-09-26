@@ -1,8 +1,0 @@
----
-status: green
-revised_at: "2026-09-26T08:13:49+10:00"
----
-
-In `ecosystem/resource_control.py`, each emergency guard tick first advances the current Sole Survivor. If that worker is terminal `failed`, the immutable incident record exists, and current resource thresholds are healthy, the guard durably schedules a successor rather than treating the failure as a steady state. The first successor is due immediately; later successors use exponential backoff capped at one hour. Scheduling records the failed job identity and due time so repeated ticks do not spawn duplicates. `request_survivor_retry(escalate=True)` archives the previous active retry record, prepares a new recovery job linked to the failed predecessor, and re-enters the emergency phase sequence. The prompt directs the successor to inspect the predecessor's failure, preserve evidence, write a truthful conclusion early, and diagnose and repair the incident. Ordinary dispatch remains gated until a recovery worker passes the existing healthy-resource, lease-reconciliation, work-gate smoke, and dispatch-start checks through `resource-control recover`.
-
-This is installed and active in the resource guard; 56 focused resource-control tests and the standard suite pass. It has not yet been live-qualified against a new failed-survivor incident. Successors currently use the same bounded emergency model; this is persistence and evidence-aware escalation, not yet a proven cross-model or hosted escalation ladder. Repeated physically unhealthy observations defer escalation; they do not authorize an unsafe gate reopen. The separate `recover --operator` path remains an explicit manual exception, not the automatic fallback.

@@ -1,2 +1,0 @@
-"""Local agent ecosystem coordinator."""
-

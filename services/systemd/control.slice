@@ -1,8 +1,0 @@
-[Unit]
-Description=Protected local chatbot control plane
-
-[Slice]
-CPUWeight=1000
-IOWeight=1000
-MemoryLow=2G
-ManagedOOMPreference=avoid

@@ -1,5 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$repo_dir"
-exec python3 -m unittest -v tests.test_control_turns tests.test_local_intent
