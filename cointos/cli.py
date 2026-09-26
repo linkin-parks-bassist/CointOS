@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -10,9 +12,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from cointos import agents, config as configuration, models
+from cointos import agents, config as configuration
 
 CONFIG = configuration.load()
+BACKEND = importlib.import_module(CONFIG["backend"])
 UNITS = ["cointosd.service", "cointos-coin.service"]
 
 
@@ -41,23 +44,26 @@ def ago(seconds: float) -> str:
 
 
 def show_status(state: dict) -> None:
+    """Agents first, then the work, then the resources that serve them."""
     now = time.time()
-    m = state["machine"]
-    print(f"CointOS  up {ago(now - state['started_at'])}  {'PAUSED' if state['paused'] else 'running'}"
-          f"  agents {len(state['agents'])}  waiting requests {sum(r['lane'] is None for r in state['requests'].values())}")
+    agents = list(state["agents"].values())
+    count = lambda status: sum(t["status"] == status for t in state["tasks"].values())
+    print(f"CointOS  up {ago(now - state['started_at'])}  {'PAUSED' if state['paused'] else 'running'}  "
+          f"{len(agents)} agents  ({sum(a['state'] == 'reading' for a in agents)} reading, "
+          f"{sum(a['state'] == 'thinking' for a in agents)} thinking, "
+          f"{sum(a['state'] == 'waiting' for a in agents)} waiting, {sum(a['state'] == 'acting' for a in agents)} acting)")
+    print(f"work     {count('running')} in progress  {count('waiting')} up next  {count('done')} done  {count('failed')} gave up")
+    m, guard = state["memory"], state["guard"]
     if m:
-        print(f"machine  available {m['mem_available_gb']} GB  psi {m['psi_full_avg10']}  swap {m['swap_used_gb']} GB"
-              f"  gpu {m['gpu_used_gb']} GB")
-    if state["guard"]["breaches"]:
-        print("GUARD    " + "; ".join(state["guard"]["breaches"]))
+        print(f"memory   headroom {m['headroom_gb']} GB  (available {m['available_gb']} GB)  pressure {m['psi']}  "
+              f"swap {m['swap_gb']} GB  snapshots {sum(s['tier'] == 'memory' for s in state['snapshots'].values())} in memory, "
+              f"{sum(s['tier'] != 'memory' for s in state['snapshots'].values())} on disk"
+              + ("  BACKGROUND WAITING FOR MEMORY" if guard["blocked"] else "") + ("  WORK MODEL KILLED" if guard["killed"] else ""))
     for name, model in state["models"].items():
         lanes = [lane for lane in state["lanes"] if lane["model"] == name]
-        shown = "  ".join(f"[{lane['index']}] {lane['caller'] or ('idle' if lane['up'] else 'down')}" for lane in lanes)
-        print(f"{name:20} {'up' if model['loaded'] else 'DOWN ' + '; '.join(model['problems'])}  {shown}")
-    counts = {}
-    for task in state["tasks"].values():
-        counts[task["status"]] = counts.get(task["status"], 0) + 1
-    print("tasks    " + ("  ".join(f"{k} {v}" for k, v in sorted(counts.items())) or "none"))
+        holders = "  ".join(f"[{lane['index']}] " + (state["thoughts"][lane["holder"]]["agent"] if lane["holder"] in state["thoughts"]
+                                                     else "free" if lane["up"] else "down") for lane in lanes)
+        print(f"{name:20} {'up' if model['up'] else 'launching' if model['launching'] else 'DOWN ' + '; '.join(model['problems'])}  {holders}")
     failing = [c for c in state["checks"] if not c["ok"]]
     print("check    " + ("green" if not failing else "RED: " + "; ".join(f"{c['name']}: {c['detail']}" for c in failing)))
 
@@ -67,13 +73,10 @@ def show_agents(state: dict) -> None:
     if not state["agents"]:
         print("no live agents")
     for agent in state["agents"].values():
-        lane = next((f"lane {l['model'].split('-')[0]}/{l['index']}" for l in state["lanes"] if l["caller"] == agent["id"]), "")
-        waiting = any(r["caller"] == agent["id"] and r["lane"] is None for r in state["requests"].values())
-        print(f"{agent['id']:18} {agent['state']:8} {agent['project']}:{agent['title']}  up {ago(now - agent['started_at'])}"
-              f"  requests {agent['requests']}  last {ago(now - agent['last_activity'])} ago"
-              f"  {lane or ('waiting for a lane' if waiting else 'working')}")
-        if agent.get("session"):
-            print(f"{'':18} session {agent['session']}")
+        print(f"{agent['id']:16} {agent['state']:9} {agent['project']}:{agent['title']}  up {ago(now - agent['started_at'])}"
+              f"  {agent['thoughts']} thoughts  last activity {ago(now - agent['last_activity'])} ago")
+        if agent.get("doing"):
+            print(f"{'':16} {agent['doing'][:140]}")
 
 
 def show_jobs(state: dict, limit: int = 30) -> None:
@@ -95,14 +98,13 @@ def halt(keep_coin: bool) -> None:
     systemctl("stop", *units)
     for name in CONFIG["models"]:
         try:
-            models.unload(CONFIG, name)
+            BACKEND.kill(CONFIG, name)
         except Exception as error:
-            print(f"could not unload {name}: {error}")
-    left = agents.find_processes()
-    for pids in left.values():
+            print(f"could not kill {name}: {error}")
+    for pids in agents.find_processes().values():
         for pid in pids:
             agents.stop_group(pid, grace=2)
-    print("halted: daemon" + ("" if keep_coin else " and Coin") + " stopped, agents stopped, models unloaded"
+    print("halted: daemon" + ("" if keep_coin else " and Coin") + " stopped, agents stopped, models killed"
           "\nbring it back with: cointos up")
 
 
@@ -130,12 +132,26 @@ def merge() -> None:
     print(f"merged {branch} into {main}")
 
 
+def watch(agent_id: str | None) -> None:
+    """Open OpenCode's live view of an agent's session (the first live agent if none is named)."""
+    live = ledger()["agents"]
+    if not live:
+        raise SystemExit("no live agents")
+    agent = live.get(agent_id) if agent_id else next(iter(live.values()))
+    if agent is None:
+        raise SystemExit(f"no live agent {agent_id!r}; live: {', '.join(live)}")
+    if not agent.get("url") or not agent.get("session"):
+        raise SystemExit(f"{agent['id']} is still starting; try again in a moment")
+    os.execv(agents.OPENCODE, [agents.OPENCODE, "attach", agent["url"], "--session", agent["session"]])
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="cointos", description="Control CointOS.")
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("status", "agents", "check", "go", "up", "merge"):
         sub.add_parser(name)
     sub.add_parser("jobs").add_argument("--all", action="store_true")
+    sub.add_parser("watch", help="watch an agent live in OpenCode").add_argument("agent", nargs="?")
     stop = sub.add_parser("stop", help="pause autonomous agents (or stop one agent)")
     stop.add_argument("agent", nargs="?")
     sub.add_parser("halt").add_argument("--keep-coin", action="store_true")
@@ -171,6 +187,8 @@ def main(argv=None) -> None:
     elif args.command == "up":
         systemctl("start", *UNITS)
         print("starting: cointosd loads the models, then agents start as work is available")
+    elif args.command == "watch":
+        watch(args.agent)
     elif args.command == "merge":
         merge()
     elif args.command == "queue":

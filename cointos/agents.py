@@ -67,10 +67,13 @@ def opencode_config(config: dict, key: str) -> dict:
         "model": f"{PROVIDER}/{work}",
         "provider": {PROVIDER: {
             "npm": "@ai-sdk/openai-compatible", "name": "CointOS gateway",
-            "options": {"baseURL": api_url(config) + "/v1", "apiKey": key},
+            # A request can wait for a lane and then prefill for minutes before its first byte;
+            # the daemon's silence check, not a client timeout, decides when an agent is stuck.
+            "options": {"baseURL": api_url(config) + "/v1", "apiKey": key,
+                        "timeout": False, "headerTimeout": False, "chunkTimeout": False},
             "models": {work: {"name": work, "tool_call": True,
                               "limit": {"context": shape["ctx_size"] // shape["lanes"],
-                                        "output": config["max_output_tokens"]}}},
+                                        "output": config["scheduler"]["max_thought_tokens"]}}},
         }},
         "mcp": mcp,
         "permission": {
@@ -131,7 +134,9 @@ def start_server(agent_id: str, worktree: str, env: dict) -> tuple[subprocess.Po
 def run(config: dict, agent: dict, task: dict, project: dict, key: str, on_event) -> dict:
     """Run one agent to the end of its OpenCode run. Blocking; call from the agent's thread.
 
-    `on_event(kind, value)` reports "server" (pid), "session" (id) and "activity" (event type).
+    `on_event(kind, value)` reports "server" ((process group id, server URL)), "session" (id)
+    and "activity" (a one-line description of what the agent just did, or None). The OpenCode server and client share one process group, which
+    the caller owns: it stops the group when it has recorded the end of the run.
     Returns {"finish": last step finish reason, "code": client exit code, "text": last text}.
     """
     directory = agent_dir(agent["id"])
@@ -144,7 +149,7 @@ def run(config: dict, agent: dict, task: dict, project: dict, key: str, on_event
     env = {**os.environ, "OPENCODE_CONFIG": str(config_path), "COINTOS_AGENT": agent["id"],
            "PATH": f"{ROOT / 'bin'}:{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
     server, url = start_server(agent["id"], task["worktree"], env)
-    on_event("server", server.pid)
+    on_event("server", (server.pid, url))
     command = [OPENCODE, "run", "--attach", url, "--dir", task["worktree"], "--format", "json", "--auto",
                "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/{config['work_model']}"]
     if task.get("session"):
@@ -169,8 +174,8 @@ def run(config: dict, agent: dict, task: dict, project: dict, key: str, on_event
                 continue
             if event.get("sessionID"):
                 on_event("session", event["sessionID"])
-            on_event("activity", event.get("type"))
             part = event.get("part") or {}
+            on_event("activity", describe(part))
             if part.get("type") == "text" and part.get("text"):
                 outcome["text"] = part["text"]
             if event.get("type") == "step_finish":
@@ -182,8 +187,18 @@ def run(config: dict, agent: dict, task: dict, project: dict, key: str, on_event
     except subprocess.TimeoutExpired:
         client.kill()
         outcome["code"] = client.wait()
-    stop_group(server.pid)
     return outcome
+
+
+def describe(part: dict) -> str | None:
+    """One line saying what an OpenCode event part shows the agent doing, if anything."""
+    if part.get("type") == "text" and part.get("text"):
+        return " ".join(part["text"].split())[:200]
+    if part.get("type") == "tool":
+        given = (part.get("state") or {}).get("input") or {}
+        detail = next((value for value in given.values() if isinstance(value, str) and value), json.dumps(given))
+        return f"{part.get('tool')}: {' '.join(str(detail).split())[:180]}"
+    return None
 
 
 def stop_group(pgid: int, grace: float = 5) -> None:

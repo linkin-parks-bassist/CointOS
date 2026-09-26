@@ -105,13 +105,14 @@ def live_summary() -> str:
         state = cli.call()
     except (OSError, urllib.error.URLError):
         return "The CointOS daemon is not reachable right now (it may be halted or restarting)."
-    agents = [f"{a['id']} ({a['project']}: {a['title']})" for a in state["agents"].values()]
+    agents = [f"{a['id']} {a['state']} on {a['project']}: {a['title']}" for a in state["agents"].values()]
     tasks = sorted(state["tasks"].values(), key=lambda t: t["updated_at"], reverse=True)[:8]
     failing = [f"{c['name']}: {c['detail']}" for c in state["checks"] if not c["ok"]]
-    models = [f"{name} {'up' if m['loaded'] else 'down'}" for name, m in state["models"].items()]
+    models = [f"{name} {'up' if m['up'] else 'down'}" for name, m in state["models"].items()]
+    memory = state["memory"]
     return "\n".join([
-        f"Autonomous agents: {'paused' if state['paused'] else 'running'}; live agents: {', '.join(agents) or 'none'}.",
-        f"Models: {', '.join(models)}. Machine: {json.dumps(state['machine'])}.",
+        f"Autonomous agents: {'paused' if state['paused'] else 'running'}; live agents: {'; '.join(agents) or 'none'}.",
+        f"Models: {', '.join(models)}. Memory headroom: {memory.get('headroom_gb')} GB.",
         "Recent tasks: " + "; ".join(f"{t['project']}:{t['title']} {t['status']}" for t in tasks),
         "Self-check: " + ("green" if not failing else "failing: " + "; ".join(failing)),
         "Configured projects: " + ", ".join(p["name"] for p in CONFIG["projects"]),
