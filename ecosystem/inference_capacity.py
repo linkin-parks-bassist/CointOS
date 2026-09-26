@@ -660,6 +660,32 @@ def release_parked_sequence(root: Path, lease_id: str, released_sequence: dict,
         return _public_lease(lease)
 
 
+def publish_scheduling_policy(root: Path) -> dict:
+    """Validate config/scheduling.json and publish it as the active snapshot.
+
+    The config file is the policy. Publishing is idempotent: an unchanged
+    policy keeps its existing snapshot, so running processes see no change.
+    """
+    root = Path(root)
+    source = root / "config/scheduling.json"
+    values = json.loads(source.read_text(encoding="utf-8"))
+    _validate_scheduling_values(values)
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    digest = hashlib.sha256(canonical).hexdigest()
+    target = root / "state/scheduling-policy.json"
+    try:
+        current = _load_json(target)
+    except (OSError, ValueError):
+        current = None
+    if type(current) is dict and current.get("digest") == digest:
+        return current
+    from datetime import datetime, timezone
+    snapshot = {"schema_version": 1, "values": values, "digest": digest,
+                "activated_at": datetime.now(timezone.utc).isoformat(), "source_path": str(source)}
+    _atomic_write(target, snapshot)
+    return snapshot
+
+
 def scheduling_snapshot(root: Path) -> dict:
     """Load and validate the published scheduling snapshot; return its values."""
     document = _load_json(Path(root) / "state" / "scheduling-policy.json")

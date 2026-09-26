@@ -1520,6 +1520,31 @@ def _waiting_jobs(running_id: str) -> list[dict]:
     return waiting
 
 
+def _grow_idle_profile() -> None:
+    """Let an idle work model grow to its lane floor before the next job takes its only lane.
+
+    Growing needs an unload/reload, which is only possible while the model is
+    idle; without this the next ready job always wins that moment. Only growth
+    is applied here; shrinking stays with the profile timer.
+    """
+    from ecosystem import backend_profile_scheduler
+    try:
+        decision = backend_profile_scheduler.plan_once(cli.ROOT)
+        plan = decision.get("plan") or {}
+        if (decision.get("state") == "change"
+                and plan.get("target_parallel_sequences", 0) > plan.get("current_parallel_sequences", 0)):
+            result = backend_profile_scheduler.reconcile_once(cli.ROOT)
+            cli.audit("executor.profile_grown_before_dispatch", model_id=decision.get("model_id"),
+                      target=plan.get("target_parallel_sequences"), result=result.get("state"))
+    except Exception as error:  # growth is an optimisation; dispatch must continue
+        cli.audit("executor.profile_growth_skipped", error=f"{type(error).__name__}: {error}")
+
+
+def _background(job: dict) -> bool:
+    return (str(job.get("source", "")).startswith("spawner:")
+            and job.get("user_directed_origin") not in cli.USER_DIRECTED_ORIGINS)
+
+
 def _preemption_reason(job: dict, fairness_started: float | None,
                        scheduling: dict) -> str | None:
     try:
@@ -1545,7 +1570,10 @@ def _preemption_reason(job: dict, fairness_started: float | None,
     if strongest_priority > running_priority:
         return (f"higher-priority job {strongest['id']} is waiting "
                 f"({strongest_priority} > {running_priority})")
-    if strongest_priority < running_priority:
+    # Autonomous background agents take turns regardless of role order, so one
+    # long agent cannot hold a lane while others wait. Everything else keeps
+    # strict priority.
+    if strongest_priority < running_priority and not (_background(job) and _background(strongest)):
         return None
     quantum = float(scheduling_policy()["workers"]["time_slice_seconds"])
     if fairness_started is not None and time.monotonic() - fairness_started >= quantum:
@@ -1857,6 +1885,7 @@ def execute_next(run=subprocess.run) -> bool:
                     and job_admitted_in_current_mode(job)):
                 ready.append((path, job))
         if ready:
+            _grow_idle_profile()
             try:
                 scheduling = scheduler.scheduling_document(cli.ROOT)
                 inventory = snapshot()

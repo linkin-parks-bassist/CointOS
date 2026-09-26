@@ -31,7 +31,7 @@
     "initial_concurrency": 1,
     "schedule_boundary": "job",
     "batch_same_model_jobs": true,
-    "time_slice_seconds": 300,
+    "time_slice_seconds": 600,
     "preemption_grace_seconds": 15,
     "minimum_residency_seconds": {
       "under_6_gb": 300,

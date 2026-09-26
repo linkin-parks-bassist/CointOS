@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import sys
 import pty
 from pathlib import Path
 import shutil
@@ -215,6 +216,11 @@ def install(source, prefix, dry_run=False, preserve_installed_knowledge=False):
                      'completed_at': datetime.now(timezone.utc).isoformat()}
             (stage / GENERATION).write_text(json.dumps(stamp, indent=2) + '\n')
             (stage / GENERATION).rename(prefix / GENERATION)
+            (prefix / 'state').mkdir(exist_ok=True)
+            subprocess.run([sys.executable, '-c',
+                            'import pathlib; from ecosystem.inference_capacity import publish_scheduling_policy; '
+                            'publish_scheduling_policy(pathlib.Path("."))'],
+                           cwd=prefix, check=True, env=dict(os.environ, COINTOS_RUNTIME_ROOT=str(prefix)))
     print(f'Installed CointOS into {prefix}; services unchanged.')
     for name in preserved:
         print(f'Preserved {name}; updated default is {name}.dist')
