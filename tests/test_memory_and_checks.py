@@ -78,6 +78,11 @@ class Checks(unittest.TestCase):
         state = ledger([lane(holder="a")], [thought("a", "background", lane=0), thought("b", "background", waiting_since=0)])
         self.assertIn("no agent starves", self.failing(state, now=500))
 
+    def test_waiting_long_behind_reads_is_not_starving_the_moment_a_slice_ends(self):
+        state = ledger([lane(holder="a")], [thought("a", "background", lane=0, since=460),
+                                            thought("b", "background", waiting_since=0)])
+        self.assertNotIn("no agent starves", self.failing(state, now=500))
+
     def test_waiting_behind_a_cold_read_is_not_starving(self):
         state = ledger([lane(holder="a")], [thought("a", "background", lane=0, reading=True),
                                             thought("b", "background", waiting_since=0)])

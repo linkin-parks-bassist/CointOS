@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T21:48:47+10:00"
+revised_at: "2026-09-26T22:14:04+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -23,7 +23,7 @@ revised_at: "2026-09-26T21:48:47+10:00"
 - **Turns.** An agent's turn on a lane runs from when it gets the lane until it gives it up, across consecutive thoughts.
 - **Policy**, applied at every step boundary, whenever an agent starts thinking, and every tick (a slice runs out between events):
   1. A thinking agent of a higher class takes a lane from a lower class at once. It takes a lane whose holder is generating before one whose holder is reading, so a cold read is displaced only when there is no other lane.
-  2. Among equals, a reading holder keeps its lane until its context is read. A generating holder whose turn has lasted `slice_seconds` gives the lane to the equal that has waited longest.
+  2. Among equals, a reading holder keeps its lane until its context is read. A generating holder whose turn has generated for `slice_seconds` gives the lane to the equal that has waited longest. The slice counts generating time only: it starts when the read is done, so a cold agent is never pre-empted the moment it finishes reading.
   3. A tool call yields the lane, like a system call: when a thought ends, the lane stays held for its agent for `yield_grace_seconds`, and a next thought arriving within that grace continues the same turn, so a burst of quick tool calls is not switched out. Only a higher class may take a held lane.
   4. A thought is placed on the cheapest lane open to it: the one it holds or that is held for it, then a warm one, then a free one, then an unreserved one.
 - **Contexts stay resident when nothing needs the lane.** When a thought ends, the agent's context stays on its lane. It is saved only when another agent needs that lane, so an agent that keeps a lane between thoughts pays nothing.
@@ -99,7 +99,7 @@ Every tick the daemon checks these invariants over the ledger; a violation shows
 
 1. No lane is free (and not held for an agent's grace) for more than `idle_lane_seconds` while an agent is waiting to think on that model.
 2. A waiting agent that outranks a lane holder gets a lane within `preempt_seconds`.
-3. No waiting agent is passed over for more than `starve_seconds` while an equal past its slice, and not reading, holds a lane it could use.
+3. No waiting agent is passed over for more than `starve_seconds` by an equal that holds a lane past its slice (and is not reading), counted from when that slice ran out.
 4. No agent is silent for longer than `agent_silent_seconds`.
 5. No agent repeats the same thought more than `max_identical_thoughts` times.
 6. Every running agent has a live process, and every agent process belongs to a ledger agent or an exiting one.

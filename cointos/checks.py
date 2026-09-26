@@ -36,11 +36,13 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         for t in waiting if now - t["waiting_since"] > limits["preempt_seconds"]
         and held_by(lambda h, t=t: rank.get(h["class"], 99) > rank.get(t["class"], 99), t)])
 
-    slice_seconds = config["scheduler"]["slice_seconds"]
+    def overdue(h, t):  # how long h has held on past its slice while t was waiting
+        return min(now - t["waiting_since"], now - h["since"] - config["scheduler"]["slice_seconds"])
+
     check("no agent starves", [
-        f"{t['agent']} waited {now - t['waiting_since']:.0f}s behind an equal past its slice"
-        for t in waiting if now - t["waiting_since"] > limits["starve_seconds"]
-        and held_by(lambda h, t=t: h["class"] == t["class"] and not h["reading"] and now - h["since"] > slice_seconds, t)])
+        f"{t['agent']} passed over for {max(overdue(h, t) for h in thoughts if h['lane'] is not None):.0f}s by an equal past its slice"
+        for t in waiting if held_by(lambda h, t=t: h["class"] == t["class"] and not h["reading"]
+                                    and overdue(h, t) > limits["starve_seconds"], t)])
 
     thinking = {t["agent"] for t in thoughts}
     check("no silent agent", [

@@ -150,7 +150,11 @@ def schedule() -> None:
         thought["warm"] = [p for p, held in HELD.items()
                            if L["lanes"][p]["model"] == thought["model"] and begins(held, tokens)]
         # Reading: no lane holds (nearly) all of its context yet, so the model is still reading it.
-        thought["reading"] = not any(len(HELD[p]) >= len(tokens) - 1 for p in thought["warm"])
+        reading = not any(len(HELD[p]) >= len(tokens) - 1 for p in thought["warm"])
+        if thought["reading"] and not reading and thought["lane"] is not None:
+            # The read is done: the turn's slice counts generating time only, from now.
+            L["lanes"][thought["lane"]]["turn_since"] = thought["since"] = now()
+        thought["reading"] = reading
     wanted = scheduler.assign(CONFIG, L["lanes"], list(L["thoughts"].values()), now(), blocked())
     for position, thought_id in wanted.items():
         lane = L["lanes"][position]
