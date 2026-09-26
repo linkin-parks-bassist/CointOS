@@ -83,12 +83,12 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .lane-row:first-of-type { border-top: 0; }
 .lane-row .name { font-weight: 900; }
 .lane-row .chip { justify-self: start; }
-.membar { display: flex; height: 14px; border: 1px solid var(--dark); margin: 6px 0 8px; }
+.membar { display: flex; height: 14px; border: 1px solid var(--dark); margin-top: 12px; }
 .membar .use { background: var(--manager); } .membar .keep { background: var(--line-soft); }
 .memlegend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; }
 .memlegend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 1px solid var(--dark); vertical-align: -1px; }
 .memlegend i.use { background: var(--manager); } .memlegend i.keep { background: var(--line-soft); }
-.memfacts { margin-top: 8px; font-size: 13px; color: var(--ink-faint); }
+.memfacts { margin-top: 6px; font-size: 13px; color: var(--ink-faint); }
 .check { margin-top: 16px; padding: 8px 12px; font-size: 14px; border: 1px solid var(--line); }
 .check.ok { color: var(--good); font-weight: 900; background: color-mix(in oklab, var(--good) 8%, var(--paper)); }
 .check.no { color: var(--bad); background: var(--accent-wash); } .check.no + .check.no { margin-top: 6px; }
@@ -188,12 +188,12 @@ function renderMachine(L) {
   const inMemory = snaps.filter(s => s.tier === "memory"), onDisk = snaps.filter(s => s.tier !== "memory");
   const gb = list => (list.reduce((n, s) => n + s.bytes, 0) / 1e9).toFixed(1);
   $("memory").innerHTML = `<h3>Memory</h3>` +
-    `<div class="membar"><span class="use" style="flex:${usable}"></span><span class="keep" style="flex:${kept}"></span></div>` +
     `<div class="memlegend"><span><i class="use"></i>${usable.toFixed(1)} GB usable by CointOS</span>` +
     `<span><i class="keep"></i>${kept.toFixed(1)} GB kept for David</span></div>` +
     `<div class="memfacts">${inMemory.length} saved contexts in memory (${gb(inMemory)} GB) · ${onDisk.length} on disk (${gb(onDisk)} GB)` +
     ` · pressure ${m.psi} · swap ${m.swap_gb} GB` +
-    (L.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (L.guard.killed ? ` · <b>work model killed</b>` : "") + `</div>`;
+    (L.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (L.guard.killed ? ` · <b>work model killed</b>` : "") + `</div>` +
+    `<div class="membar"><span class="use" style="flex:${usable}"></span><span class="keep" style="flex:${kept}"></span></div>`;
 }
 
 function renderChecks(L) {
