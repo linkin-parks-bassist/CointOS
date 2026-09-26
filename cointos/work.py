@@ -27,6 +27,18 @@ def load_keys() -> None:
     KEY_OWNERS[keys["coin"]] = ("coin", "coin")
 
 
+def keep_key(agent_id: str, key: str | None) -> None:
+    """Record (or, with None, drop) an agent's gateway key, so an agent that outlives a daemon
+    restart is still known by it."""
+    keys = read_json(KEYS, {})
+    agents_keys = keys.setdefault("agents", {})
+    if key is None:
+        agents_keys.pop(agent_id, None)
+    else:
+        agents_keys[agent_id] = key
+    write_json(KEYS, keys, mode=0o600)
+
+
 def project_named(name: str) -> dict:
     for project in CONFIG["projects"]:
         if project["name"].lower() == name.lower():
@@ -47,6 +59,7 @@ def start_agent(task_id: str) -> None:
     key = secrets.token_urlsafe(24)
     KEY_OWNERS[key] = (agent_id, "background")
     AGENT_KEYS[agent_id] = key
+    keep_key(agent_id, key)
     task.update(status="running", runs=task["runs"] + 1, agent=agent_id, note=None, updated_at=now())
     L["agents"][agent_id] = {
         "id": agent_id, "role": task["role"], "project": task["project"], "task": task_id, "title": task["title"],
@@ -57,15 +70,13 @@ def start_agent(task_id: str) -> None:
     threading.Thread(target=agent_thread, args=(agent_id, dict(task), key), daemon=True).start()
 
 
-def agent_thread(agent_id: str, task: dict, key: str) -> None:
-    """Own one agent's processes from launch to exit, and report how its run ended."""
-    group = []
-
+def agent_thread(agent_id: str, task: dict | None, key: str | None) -> None:
+    """Own one agent from launch (or, with no task, from re-adoption after a daemon restart) to
+    the end of its run, and report how it ended. The run itself is a systemd unit outside the
+    daemon; this thread follows it."""
     def on_event(kind, value):
         with LOCK:
             agent = L["agents"].get(agent_id)
-            if kind == "server":
-                group.append(value[0])
             if agent is None:
                 raise Ended
             if kind == "server":
@@ -77,7 +88,9 @@ def agent_thread(agent_id: str, task: dict, key: str) -> None:
                 agent["doing"] = value
             agent["last_activity"] = now()
     try:
-        outcome = agents.run(CONFIG, {"id": agent_id}, task, project_named(task["project"]), key, on_event)
+        if task is not None:
+            agents.launch(CONFIG, agent_id, task, project_named(task["project"]), key)
+        outcome = agents.watch(agent_id, on_event)
     except Ended:
         outcome = None
     except Exception as error:
@@ -87,8 +100,7 @@ def agent_thread(agent_id: str, task: dict, key: str) -> None:
             if outcome is not None and agent_id in L["agents"]:
                 settle(agent_id, outcome)
     finally:
-        if group:
-            agents.stop_group(group[0])
+        agents.stop(agent_id)
 
 
 def stop_agent(agent_id: str, reason: str, requeue: bool, charge: bool = True) -> None:
@@ -106,8 +118,7 @@ def stop_agent(agent_id: str, reason: str, requeue: bool, charge: bool = True) -
         if task["status"] == "failed":
             alert(f"Gave up on {task['title']} in {task['project']} after {task['runs']} runs: {reason}")
     finish_agent(agent_id, reason)
-    if agent["pid"]:
-        threading.Thread(target=agents.stop_group, args=(agent["pid"],), daemon=True).start()
+    threading.Thread(target=agents.stop, args=(agent_id,), daemon=True).start()
 
 
 def finish_agent(agent_id: str, reason: str) -> None:
@@ -115,6 +126,7 @@ def finish_agent(agent_id: str, reason: str) -> None:
     agent = L["agents"].pop(agent_id)
     L["exiting"][agent_id] = now()
     KEY_OWNERS.pop(AGENT_KEYS.pop(agent_id, ""), None)
+    keep_key(agent_id, None)
     lanes.cancel_agent(agent_id)
     log("agent ended", agent=agent_id, task=agent["task"], reason=reason, thoughts=agent["thoughts"],
         seconds=round(now() - agent["started_at"]))
@@ -213,14 +225,27 @@ def spawn() -> None:
         headroom -= CONFIG["memory"]["agent_memory_gb"]
 
 
-def recover_leftovers() -> None:
-    """Stop agent processes left by an earlier daemon and requeue their tasks."""
-    for pids in agents.find_processes().values():
-        for pid in pids:
-            try:
-                agents.stop_group(pid, grace=2)
-            except PermissionError:
-                pass
+def adopt(previous: dict) -> None:
+    """On daemon start: take back the agents of the previous daemon. Their runs are systemd units
+    that outlived it; each gets its thread again, which follows the run from its files (and, for
+    a run that ended meanwhile, settles it at once). Agent processes of no known agent are
+    stopped, and running tasks without an agent wait again. Caller holds LOCK."""
+    keys = read_json(KEYS, {}).get("agents", {})
+    for agent_id, agent in (previous.get("agents") or {}).items():
+        if agent_id not in keys or agent["task"] not in L["tasks"]:
+            continue
+        L["agents"][agent_id] = {**agent, "state": "running" if agent["state"] != "starting" else "starting"}
+        KEY_OWNERS[keys[agent_id]] = (agent_id, agent["class"])
+        AGENT_KEYS[agent_id] = keys[agent_id]
+        log("agent adopted", agent=agent_id, task=agent["task"])
+        threading.Thread(target=agent_thread, args=(agent_id, None, None), daemon=True).start()
+    for agent_id, pids in agents.find_processes().items():
+        if agent_id not in L["agents"]:
+            for pid in pids:
+                try:
+                    agents.stop_group(pid, grace=2)
+                except PermissionError:
+                    pass
     for task in L["tasks"].values():
-        if task["status"] == "running":
-            task.update(status="waiting", agent=None, note="daemon restarted", updated_at=now())
+        if task["status"] == "running" and task["agent"] not in L["agents"]:
+            task.update(status="waiting", agent=None, note="its agent was gone after a daemon restart", updated_at=now())

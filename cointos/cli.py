@@ -96,6 +96,7 @@ def systemctl(*args) -> int:
 def halt(keep_coin: bool) -> None:
     units = UNITS[:1] if keep_coin else UNITS
     systemctl("stop", *units)
+    systemctl("stop", "cointos-agent-*")  # agents' runs are units of their own
     for name in CONFIG["models"]:
         try:
             BACKEND.kill(CONFIG, name)

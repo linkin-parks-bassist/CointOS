@@ -147,9 +147,10 @@ def tick(timers: dict) -> None:
 
 
 def shutdown() -> None:
+    """Stop the daemon, not the agents: their runs are units of their own, which the next
+    daemon adopts. Thoughts in flight are cut; OpenCode retries them, and they resume from their
+    context's checkpoint or from the lane's state saved here."""
     with LOCK:
-        for agent_id in list(L["agents"]):
-            work.stop_agent(agent_id, "daemon stopping", requeue=True, charge=False)
         log("daemon stopped")
     STOPPING.set()  # lanes finish the step in flight and take no more
     with LOCK:
@@ -160,10 +161,11 @@ def shutdown() -> None:
 
 def main() -> None:
     faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1` shows every thread's stack
-    L.update(fresh(read_json(LEDGER, {}) or {}))
+    previous = read_json(LEDGER, {}) or {}
+    L.update(fresh(previous))
     work.load_keys()
-    work.recover_leftovers()
     with LOCK:
+        work.adopt(previous)
         log("daemon started")
     save()
     gateway.serve()
