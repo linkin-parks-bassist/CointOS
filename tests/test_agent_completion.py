@@ -61,6 +61,32 @@ class Completion(unittest.TestCase):
         self.assertEqual(state.L["tasks"]["test"]["status"], "failed")
         self.assertEqual(len(state.L["alerts"]), 1)
 
+    def item_run(self, on_main, on_branch):
+        """An item run that ended by itself, with its leaf on main and on its branch."""
+        main, branch = self.directory / "main", self.directory / "branch"
+        for root, status in ((main, on_main), (branch, on_branch)):
+            leaf = root / ".knowledge/what/is/queued/item.md"
+            leaf.parent.mkdir(parents=True)
+            leaf.write_text(f"Status: {status}\n\nThe brief.\n")
+        self.enterContext(patch.object(work, "project_named", return_value={"path": str(main)}))
+        state.L["tasks"]["test"].update(kind="item", item="what/is/queued/item.md", worktree=str(branch))
+        (self.directory / "exit.json").write_text('{"code": 0}')
+        work.agent_thread("worker-test", None, None)
+        return state.L["tasks"]["test"]
+
+    def test_an_item_is_done_only_when_main_says_so(self):
+        task = self.item_run("done", "done")
+        self.assertEqual(task["status"], "done")
+
+    def test_a_done_status_left_on_the_branch_requeues_the_task(self):
+        task = self.item_run("queued", "done")
+        self.assertEqual(task["status"], "waiting")
+        self.assertIn("queued on main, done on its branch", task["note"])
+
+    def test_a_branch_that_could_not_land_may_report_blocked(self):
+        task = self.item_run("in progress", "blocked")
+        self.assertEqual(task["status"], "done")
+
 
 if __name__ == "__main__":
     unittest.main()

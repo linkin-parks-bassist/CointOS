@@ -146,10 +146,14 @@ def settle(agent_id: str, outcome: dict) -> None:
     task = L["tasks"][agent["task"]]
     project = project_named(task["project"])
     if task["kind"] in ("item", "breakdown"):
-        found = queues.read_item(Path(task["worktree"]), task["item"]) or queues.read_item(Path(project["path"]), task["item"])
-        status = found["status"] if found else None
-        finished = status in (("done", "blocked") if task["kind"] == "item" else ("in progress", "done", "blocked"))
-        detail = f"item status {status}"
+        # The item on the main branch is the truth: it is what the queues, David and later agents
+        # see. A status set only on the task branch is undelivered, except `blocked`, which can be
+        # the very reason the branch could not land.
+        landed = (queues.read_item(Path(project["path"]), task["item"]) or {}).get("status")
+        branch = (queues.read_item(Path(task["worktree"]), task["item"]) or {}).get("status")
+        accepted = ("done", "blocked") if task["kind"] == "item" else ("in progress", "done", "blocked")
+        finished = landed in accepted or branch == "blocked"
+        detail = f"item status {landed} on main" + ("" if branch in (None, landed) else f", {branch} on its branch")
     else:
         finished = outcome.get("finish") == "stop"
         detail = f"run finished with {outcome.get('finish')}"

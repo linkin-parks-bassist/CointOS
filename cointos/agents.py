@@ -94,10 +94,11 @@ def prompt(task: dict, project: dict) -> str:
     parts = [(roles / "_base.md").read_text(), (roles / ROLE_FILES[task["role"]]).read_text()]
     where = (f"Project: {project['name']}, repository {project['path']}, main branch "
              f"`{project['main_branch']}`.\nYour worktree: {task['worktree']}, on branch `{task['branch']}`.")
-    finish = ("When your work is committed, bring your branch up to date with "
+    finish = ("When your work and your item's new status are committed, bring your branch up to date with "
               f"`git merge {project['main_branch']}` (resolve any conflicts and re-check), then run "
-              "`cointos merge` in your worktree to land it on the main branch. If `cointos merge` "
-              "refuses, set the item to `Status: blocked` with the reason.")
+              "`cointos merge` in your worktree to land it on the main branch. Only what lands counts: "
+              "commit nothing after that. If `cointos merge` refuses, set the item to "
+              "`Status: blocked` with the reason.")
     if task["kind"] == "item":
         assignment = (f"{where}\n\nYour item: `.knowledge/{task['item']}` (read it with kt). As it was "
                       f"queued:\n\n{task['brief']}\n\n{finish}")
@@ -147,7 +148,8 @@ def launch(config: dict, agent_id: str, task: dict, project: dict, key: str) -> 
         json.dump(opencode_config(config, key), stream, indent=1)
     resumed = bool(task.get("session"))
     text = ("Your previous run on this assignment stopped before it finished. Check where things "
-            "stand and continue it to the end. Do not repeat finished work.") if resumed else prompt(task, project)
+            "stand and continue it to the end. Do not repeat finished work. It is finished only when "
+            f"it has landed on `{project['main_branch']}` with `cointos merge`.") if resumed else prompt(task, project)
     command = [OPENCODE, "run", "--dir", task["worktree"], "--format", "json", "--auto",
                "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/{config['work_model']}"]
     if resumed:
