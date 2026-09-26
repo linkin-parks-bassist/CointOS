@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-26T09:24:46+10:00"
+revised_at: "2026-09-26T09:53:55+10:00"
 ---
 
 Roles are organised in three classes (David). The starting set is deliberately minimal and "vaguely the right shape"; David will refine the role files, and roles diversify within each class as practice shows the need.
@@ -14,7 +14,7 @@ Roles are organised in three classes (David). The starting set is deliberately m
 
 `roles/_base.md` is shared by every spawned agent. It covers orientation through knowledge trees, doing one step well, evidence over claims, committing in the workspace, and the queue conventions. `ecosystem/roles.py::build_prompt` composes an agent's prompt as base, then role file, then the assignment. The executor runs OpenCode in the job's contracted workspace, so project work happens in that project's repository.
 
-**Queues live in project knowledge trees** (layout still experimental). For each project under `~/Projects/<repo>/.knowledge/`:
+**Queues live in project knowledge trees** (layout in use). For each project under `~/Projects/<repo>/.knowledge/`:
 
 - `what/is/urgent/<item>.md` and `what/is/queued/<item>.md`: work items for workers;
 - `what/is/drafted/<item>.md`: ideas David drafted, for managers to break down.

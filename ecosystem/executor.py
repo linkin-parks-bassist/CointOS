@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import os
 import signal
 import subprocess
@@ -1538,6 +1539,53 @@ def _grow_idle_profile() -> None:
                       target=plan.get("target_parallel_sequences"), result=result.get("state"))
     except Exception as error:  # growth is an optimisation; dispatch must continue
         cli.audit("executor.profile_growth_skipped", error=f"{type(error).__name__}: {error}")
+    try:
+        _unload_misshaped_idle_models()
+    except Exception as error:
+        cli.audit("executor.misshaped_unload_skipped", error=f"{type(error).__name__}: {error}")
+
+
+def _unload_misshaped_idle_models() -> None:
+    """Unload an idle work model loaded with fewer lanes than its standard shape.
+
+    A model realized for one request can come up as one wide lane (for example
+    262k x 1) instead of its qualified shape (131k x 2). That shape has no
+    qualification, so the profile scheduler cannot grow it, and it would hold
+    one lane forever. Unloading it while idle lets the next realization load
+    the standard shape from `dynamic_models.parallel_requests_by_model`.
+    """
+    from ecosystem import resource_control
+    policy = json.loads((cli.ROOT / "config/resource-policy.json").read_text(encoding="utf-8"))
+    dynamic = policy.get("dynamic_models", {})
+    standard = dynamic.get("parallel_requests_by_model", {})
+    floor = dynamic.get("profile_minimum_parallel_sequences", 1)
+    busy_models = set()
+    for path in (cli.ROOT / "state/jobs").glob("task-*.json"):
+        try:
+            job = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if job.get("state") in {"claimed", "runner_starting", "running", "awaiting_verification"}:
+            busy_models.add(job.get("model"))
+    for path in (cli.ROOT / "state/inference-runs").glob("native-*.json"):
+        try:
+            run = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if run.get("state") in {"acquiring", "running"}:
+            busy_models.add(run.get("model"))
+    health = resource_control.lemonade_health()
+    for item in health.get("all_models_loaded") or []:
+        name = item.get("model_name")
+        options = item.get("recipe_options") or {}
+        match = re.search(r"--parallel\s+(\d+)", str(options.get("llamacpp_args", "")))
+        lanes = int(match.group(1)) if match else 1
+        wanted = standard.get(name)
+        if (item.get("pinned") or item.get("is_busy") is not False or name in busy_models
+                or type(wanted) is not int or lanes >= min(wanted, floor)):
+            continue
+        resource_control._lemonade_request("/v1/unload", {"model_name": name}, timeout=60)
+        cli.audit("executor.misshaped_model_unloaded", model_id=name, lanes=lanes, standard_lanes=wanted)
 
 
 def _background(job: dict) -> bool:

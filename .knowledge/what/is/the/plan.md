@@ -1,15 +1,15 @@
 ---
 status: green
-revised_at: "2026-09-26T09:11:42+10:00"
+revised_at: "2026-09-26T09:53:51+10:00"
 ---
 
 The plan is to reach the system defined in `what/is/cointos.md`: an autonomous, self-sustaining agent ecosystem that keeps the GPU busy with useful work without David's prompting.
 
 **Milestone 1: autonomy loop (current).** Build on the existing scheduler rather than hardening it further:
-- write the steward/manager/worker role classes;
-- put work queues in knowledge trees;
-- give Coin knowledge-tree tools;
-- add a spawner that starts an agent whenever capacity is free.
+- write the steward/manager/worker role classes; *(done, e888d61)*
+- put work queues in knowledge trees; *(done, in use)*
+- give Coin knowledge-tree tools; *(done, live check pending)*
+- add a spawner that starts an agent whenever capacity is free. *(built and enabled, e888d61; first live cycle unobserved)*
 
 Acceptance is judged by observation: left alone, the GPU stays busy, drafted ideas and queued work visibly advance in their repositories under `~/Projects/`, and the system does not fall over. The concrete steps are in `what/is/next.md`.
 

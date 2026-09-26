@@ -42,6 +42,7 @@
     "rollover_fraction": 0.75,
     "profile_minimum_dwell_seconds": 300,
     "profile_minimum_parallel_sequences": 2,
+    "parallel_requests_by_model": {"Qwen3.8-27B-GGUF": 2},
     "profile_failure_cooldown_seconds": 3600,
     "parallel_requests": 1,
     "llamacpp_batch_size": 512,

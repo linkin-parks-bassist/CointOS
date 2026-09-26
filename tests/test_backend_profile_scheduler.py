@@ -8,7 +8,8 @@ from ecosystem.backend_profile_scheduler import assess_profiles
 
 
 class ProfileCandidateScanTests(unittest.TestCase):
-    def assess(self, capacity, *, demand_a=0, demand_b=2):
+    def assess(self, capacity, *, demand_a=0, demand_b=2, qualified=2,
+               minimum_lanes=None):
         inventory = {
             "control_model": "control",
             "models": [{"id": "a", "loaded": True},
@@ -21,6 +22,8 @@ class ProfileCandidateScanTests(unittest.TestCase):
             "profile_minimum_dwell_seconds": 300,
             "profile_failure_cooldown_seconds": 3600,
         }}
+        if minimum_lanes is not None:
+            policy["dynamic_models"]["profile_minimum_parallel_sequences"] = minimum_lanes
         profiles = {"a": {"model_id": "a", "parallel_sequences": 2,
                           "context_tokens_per_sequence": 100},
                     "b": {"model_id": "b", "parallel_sequences": 1,

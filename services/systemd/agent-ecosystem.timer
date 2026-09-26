@@ -1,11 +1,11 @@
 [Unit]
-Description=Periodic fallback scan of the local agent inbox
+Description=Frequent scan of the agent inbox and executor dispatch
 
 [Timer]
-OnBootSec=2m
-OnUnitActiveSec=5m
+OnBootSec=30s
+OnUnitActiveSec=3s
+AccuracySec=500ms
 Unit=agent-ecosystem.service
 
 [Install]
 WantedBy=timers.target
-
