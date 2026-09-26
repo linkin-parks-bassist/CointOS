@@ -151,6 +151,8 @@ def schedule() -> None:
                            if L["lanes"][p]["model"] == thought["model"] and begins(held, tokens)]
         # Reading: no lane holds (nearly) all of its context yet, so the model is still reading it.
         reading = not any(len(HELD[p]) >= len(tokens) - 1 for p in thought["warm"])
+        # How much of its context the lane it holds has read (for progress).
+        thought["held"] = len(HELD.get(thought["lane"]) or []) if thought["lane"] is not None else 0
         if thought["reading"] and not reading and thought["lane"] is not None:
             # The read is done: the turn's slice counts generating time only, from now.
             L["lanes"][thought["lane"]]["turn_since"] = thought["since"] = now()
