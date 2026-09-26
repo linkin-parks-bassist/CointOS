@@ -1,7 +1,9 @@
 ---
 status: "green"
-revised_at: "2026-09-26T15:56:15+10:00"
+revised_at: "2026-09-27T00:27:35+10:00"
 ---
+
+Checked service properties on 2026-09-27 match the description below; token-resume timings and performance are retained earlier observations, not tests repeated during the tree refresh.
 
 Lemonade is the local model server, a system service (`lemond.service`, running as user `lemonade`, logs in `journalctl -u lemond`) independent of CointOS. Its API is at `http://127.0.0.1:13305`.
 
@@ -9,9 +11,9 @@ Lemonade is the local model server, a system service (`lemond.service`, running 
 - `POST /v1/load` takes `{"model_name", "ctx_size", "llamacpp_args", "merge_args", "pinned", "save_options"}`. Extra llama-server flags pass through `llamacpp_args`.
 - `POST /v1/unload` takes `{"model_name"}`, and answers 404 when that model is not loaded.
 
-**Lemonade is shared.** Any client can unload or reload a model, and a reload may use another port, so a client must re-read health rather than cache a `backend_url`.
+**Lemonade is shared.** Any client can unload or reload a model, and a reload may use another port, so clients must refresh backend URLs from health. CointOS refreshes its backend URL map during model checks; it does not resolve a URL afresh for every token call.
 
-**Files and sandbox.** Model files under `/var/lib/lemonade` are readable only by `lemonade`, so every llama-server must be started through Lemonade. The service has a private `/tmp` and a read-only system, but can write to `/dev/shm`; a snapshot directory there must be writable by `lemonade` (for example mode 0777).
+**Files and sandbox.** Model files under `/var/lib/lemonade` are readable only by `lemonade`, so every llama-server must be started through Lemonade. The service has a private `/tmp` and `ProtectSystem=full`, but can write to `/dev/shm`; a snapshot directory there must be writable by `lemonade` (for example mode 0777).
 
 **llama-server**, one per loaded model at its `backend_url`, offers what a pre-emptive scheduler needs (all checked on the Qwen3.5-4B and on Qwen3.8-27B with MTP speculation):
 - `POST /apply-template` with `messages` and `tools` returns the rendered prompt; `POST /tokenize` with `parse_special: true` turns it into tokens; `POST /detokenize` turns tokens back into text.

@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T15:57:25+10:00"
+revised_at: "2026-09-27T00:27:35+10:00"
 ---
 
 **Qwen3.8-27B-GGUF: the work model.**
@@ -8,7 +8,7 @@ revised_at: "2026-09-26T15:57:25+10:00"
 - Weights about 17.5 GB.
 - Shape: `ctx_size` 262,144 with `--parallel 2` (2 lanes of 131,072 tokens).
 - Launch arguments: `--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp` (MTP speculative decoding), plus `--slot-save-path` from the backend for context snapshots. No `--reasoning-budget`. About 38.5 GB of memory loaded; the 4B about 6.6 GB.
-- Observed speed: about 20–25 visible tokens/s for one request with MTP, and about 13 tokens/s aggregate across two concurrent requests. Prefill runs at about 170 tokens/s, so an uncached 20k-token agent prompt costs about 2 minutes of lane time, and generation on the other lane drops to about 1–3 tokens/s meanwhile.
+- Earlier observed speed (not a current benchmark): about 20–25 visible tokens/s for one request with MTP, and about 13 tokens/s aggregate across two concurrent requests. Prefill runs at about 170 tokens/s, so an uncached 20k-token agent prompt costs about 2 minutes of lane time, and generation on the other lane drops to about 1–3 tokens/s meanwhile.
 - A hybrid (recurrent plus attention) model: prompt reuse needs a saved state, not merely a shared prefix (`how/does/lemonade/serve/models.md`).
 - Supports tool calling.
 
@@ -19,4 +19,4 @@ revised_at: "2026-09-26T15:57:25+10:00"
 
 **Lanes are set at load.** `--parallel` is a llama-server start option and the KV buffer is allocated at load, so the lane count is part of how a model is loaded.
 
-**Check what actually loaded.** Lemonade keeps saved recipe options per model. After a load, the effective `launch_command` in Lemonade's health output shows the arguments actually in use. Loading with `merge_args: true` and `save_options: true` keeps the saved recipe equal to the requested one.
+**Check what actually loaded.** Lemonade keeps saved recipe options per model. After a load, the effective `launch_command` in Lemonade's health output shows the arguments actually in use. CointOS deliberately loads with `merge_args: false` and `save_options: false`: it supplies the complete configured arguments without changing the saved recipe. Both models are pinned. `backend_llama.models()` checks effective context and requested flags before declaring a model up; health on 2026-09-27 matched both configured shapes.

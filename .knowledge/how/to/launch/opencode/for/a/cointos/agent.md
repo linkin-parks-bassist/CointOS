@@ -1,30 +1,26 @@
 ---
 status: "green"
-revised_at: "2026-09-26T14:02:30+10:00"
+revised_at: "2026-09-27T00:28:35+10:00"
 ---
 
-Agents are OpenCode sessions (`~/.local/bin/opencode`, version 1.18.x) whose model provider is the CointOS gateway.
+Agents are OpenCode sessions whose provider is the CointOS gateway. The installed binary is `~/.local/bin/opencode`, checked as version 1.18.32 on 2026-09-27. The implementation is `cointos/agents.py`.
 
-**Config.** Give each agent an OpenCode config (through the `OPENCODE_CONFIG` environment variable) with:
-- one provider using `"npm": "@ai-sdk/openai-compatible"`, whose `baseURL` is the gateway and whose API key is the agent's gateway key;
-- provider options `"timeout": false, "headerTimeout": false, "chunkTimeout": false`. OpenCode's defaults (300,000 ms each) abort a request that is still waiting for a lane or prefilling, raising `ProviderHeaderTimeoutError`, and the retry starts the wait over. The daemon's silence check decides when an agent is stuck;
-- the work model declared with `limit.context` equal to its lane size (131,072) and `limit.output` equal to the configured output cap;
-- `permission`: `"*": "allow"` inside the agent's worktree and David's home, with web fetch and search, `sudo`, `su`, `systemctl`, package managers and `git push` denied.
+**Config.** Each run receives an `OPENCODE_CONFIG` file under `state/agents/<id>/`, created mode 0600 for its gateway key:
+- Provider `cointos` uses `@ai-sdk/openai-compatible`, the gateway's `/v1` endpoint and the agent key.
+- `timeout`, `headerTimeout` and `chunkTimeout` are false. Earlier default 300,000 ms timeouts aborted waiting/prefilling requests; daemon lifecycle rules handle stalled agents.
+- Context limit is configured total context divided by lane count (currently 131,072); output is `max_thought_tokens` (currently 16,384).
+- Permissions broadly allow work while denying web fetch/search, doom loops, privilege/package-management commands, `git push`, and `cointos halt|up|stop`. External-directory access permits the home tree except `~/Avnet`; reads deny `*.env` and Avnet, and edits deny Avnet. These are OpenCode permissions, not OS isolation.
+- Other global MCP servers are disabled in the per-agent config; knowledgetrees is retained. Sharing and autoupdate are disabled.
 
-David's global config at `~/.config/opencode/opencode.json` registers the knowledge-tree MCP server (`python3 ~/.knowledge/.tools/kt-mcp`) and the knowledge-tree plugin. Agents keep both.
+The global config registers `python3 ~/.knowledge/.tools/kt-mcp`; the locally installed plugin is `~/.config/opencode/plugins/knowledgetrees.js` (the config's plugin array can be empty). Do not use `--pure`, which disables plugins.
 
-**Launch sequence:**
-1. `opencode serve --hostname 127.0.0.1 --port 0 --mdns=false`, with the worktree as working directory. Read the listening URL from its output (`opencode server listening on http://127.0.0.1:PORT`). Do not pass `--pure`: it disables plugins, including the knowledge-tree plugin that injects the agent's startup knowledge.
-2. `opencode run --attach URL --dir WORKTREE --title TITLE --model PROVIDER/MODEL`, with the prompt written to the client's **stdin**. `opencode run` wraps any positional message containing spaces in literal quotes; stdin is taken verbatim.
-3. To resume an existing session, add `--session SESSION_ID`.
-4. `opencode run` emits JSON events on stdout, one per line. `step_finish` marks a completed step, and the session id appears in the events. The server's HTTP API also exposes session messages.
+**Launch and lifetime.** The daemon creates a transient user unit `cointos-agent-<id>` running `python3 -m cointos.agents DIR`, with `KillMode=control-group`. That unit prepares the task worktree and runs:
+1. `opencode serve --hostname 127.0.0.1 --port 0 --mdns=false` in the worktree.
+2. `opencode run --attach URL --dir WORKTREE --format json --auto --title TITLE --model cointos/MODEL`, with the prompt on stdin. Positional prompts containing spaces were previously observed to acquire literal quotes.
+3. A resumed task adds `--session SESSION_ID` and a continuation prompt. A daemon restart instead adopts the still-running unit; it does not launch a new task run.
 
-**Retries.** On a 5xx from the provider, OpenCode resends the identical request with backoff (seen at about 2, 5 and 10 s). A repeated request is therefore not by itself a looping model.
+The daemon follows `server.json`, `events.jsonl` and `exit.json`. Events include session IDs and step completions. On prior observed provider 5xx failures OpenCode retried identical requests with backoff, so identical requests alone do not prove a model loop.
 
-**Logs.** OpenCode logs, including provider errors, go to `~/.local/share/opencode/log/opencode.log`, not to the server's stdout.
+**Logs and watching.** Run files include server output, client errors and JSON events under `state/agents/<id>/`; OpenCode's own provider log is `~/.local/share/opencode/log/opencode.log`. `cointos watch [AGENT]` reads the live agent URL/session from the daemon ledger and invokes `opencode attach`. `cointos view --all` enables pop-up viewers, up to the configured limit; `--off` stops opening new ones. Existing idle viewer windows are reused for new agents.
 
-**Watching an agent live:** `opencode attach URL --session SESSION_ID` opens a TUI view of a running session. `cointos watch [AGENT]` does this for a live CointOS agent, reading the URL from `state/agents/<id>/server.log`. CointOS opens no viewer windows by itself; agents run headless.
-
-**Shell tools in agent sessions:** `rg` (ripgrep) is at `~/.local/bin/rg`, which is on the OpenCode server's `PATH`.
-
-The CointOS implementation of this launch is `cointos/agents.py`.
+The run's PATH prepends this checkout's `bin/` and `~/.local/bin`; ripgrep is available there.

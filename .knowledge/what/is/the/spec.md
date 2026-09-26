@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T14:33:22+10:00"
+revised_at: "2026-09-27T00:27:34+10:00"
 ---
 
 Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design is `what/is/the/architecture/of/cointos.md`; the working rules are `how/to/keep/cointos/simple.md`.
@@ -24,6 +24,10 @@ Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design
 - **Halt/up:** `cointos halt` mid-soak leaves no CointOS process running and no model loaded. After `cointos up`, the interrupted tasks resume.
 - **Kill test:** killing an agent process mid-run is detected and its task resumed within 30 s, with `cointos check` green again afterwards.
 
+## Implementation status
+
+The requirements above remain the acceptance contract. Snapshot-based pre-emption and disk snapshot tiers are already implemented. The 900-second tool-silence threshold does not meet requirement 6's one-minute bound; the gap remains open. Current evidence and other gaps belong to `what/is/the/state.md`; completed ledger tasks are not a substitute for the acceptance scenarios.
+
 ## Later
 
-KV-cache snapshots; changing lane shapes at runtime; several work models at once; Sole Survivor as an agent; deeper review hierarchies.
+Changing lane shapes at runtime; several work models at once; Sole Survivor as an agent; deeper review hierarchies.

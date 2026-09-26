@@ -61,4 +61,4 @@ def save() -> None:
     with LOCK:
         L["updated_at"] = now()
         snapshot = json.loads(json.dumps(L))
-    configuration.write_json(configuration.LEDGER, snapshot)
+        configuration.write_json(configuration.LEDGER, snapshot)

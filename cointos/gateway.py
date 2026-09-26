@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from cointos import lanes, memory, queues, work
 from cointos.config import ROOT
-from cointos.state import BACKEND, CONFIG, LOCK, L, log
+from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, log, save
 
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
 KEEPALIVE_SECONDS = 10
@@ -214,6 +214,14 @@ class ApiError(ValueError):
 def api(action: str, body: dict):
     """Control actions for the CLI, Coin and the dashboard."""
     with LOCK:
+        if action == "halt":
+            STOPPING.set()
+            for agent_id in list(L["agents"]):
+                work.stop_agent(agent_id, "system halted", requeue=True, charge=False)
+            log("halt requested")
+            save()
+            LOCK.notify_all()
+            return {"ok": True}
         if action == "stop":
             L["paused"] = True
             for agent_id in list(L["agents"]):

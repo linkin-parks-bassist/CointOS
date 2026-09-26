@@ -1,8 +1,8 @@
 """Work: tasks from the knowledge-tree queues, the spawner, and each agent's life.
 
-An agent's thread owns its OpenCode processes and alone reports how its run ended. Every
-end follows one order: the agent leaves the ledger with its task settled, then its process
-group is stopped (`what/is/the/architecture/of/cointos.md`, *Agents*).
+A daemon thread follows each independent agent unit and settles its task. Daemon-directed
+stops settle the task before stopping the unit; externally ended runs are settled when
+observed (`what/is/the/architecture/of/cointos.md`, *Agents*).
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cointos import agents, lanes, queues
 from cointos.config import KEYS, STATE, read_json, write_json
-from cointos.state import BACKEND, CONFIG, LOCK, L, alert, log, now
+from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, log, now
 
 KEY_OWNERS: dict[str, tuple[str, str]] = {}  # gateway key -> (agent id, class)
 AGENT_KEYS: dict[str, str] = {}  # agent id -> its gateway key
@@ -213,7 +213,7 @@ def next_task() -> str | None:
 
 def spawn() -> None:
     """Start agents while there is room, work and memory. Caller holds LOCK."""
-    if (L["paused"] or lanes.blocked() or not L["models"][CONFIG["work_model"]]["up"]
+    if (STOPPING.is_set() or L["paused"] or lanes.blocked() or not L["models"][CONFIG["work_model"]]["up"]
             or now() - L["user_last_thought"] < CONFIG["spawner"]["user_quiet_seconds"]):
         return
     headroom = L["memory"].get("headroom_gb", 0.0)

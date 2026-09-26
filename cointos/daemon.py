@@ -181,8 +181,9 @@ def main() -> None:
     lanes.start()
 
     def on_signal(signum, frame):
-        shutdown()
-        raise SystemExit(0)
+        STOPPING.set()
+        with LOCK:
+            LOCK.notify_all()
 
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
@@ -194,6 +195,7 @@ def main() -> None:
         except Exception:
             traceback.print_exc()
         time.sleep(max(0.0, CONFIG["tick_seconds"] - (time.monotonic() - started)))
+    shutdown()
 
 
 if __name__ == "__main__":

@@ -1,7 +1,9 @@
 ---
 status: "green"
-revised_at: "2026-09-26T15:51:36+10:00"
+revised_at: "2026-09-27T00:27:35+10:00"
 ---
+
+The core for milestones 1–6 is implemented, but their live acceptance is not all established. Both models match config; completed thoughts and restart adoption appear in the ledger. The four-agent completion/kill demonstration, Coin timing, uninterrupted hour and full soak still need evidence. Sole Survivor is not implemented. `what/is/the/state.md` owns the current evidence and gaps, and `what/is/next.md` orders the remaining work.
 
 Build the architecture in `what/is/the/architecture/of/cointos.md` in milestones. Each milestone ends with a live demonstration on the real machine and a green `cointos check`.
 

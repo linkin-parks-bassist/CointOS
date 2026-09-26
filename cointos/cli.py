@@ -94,6 +94,10 @@ def systemctl(*args) -> int:
 
 
 def halt(keep_coin: bool) -> None:
+    try:
+        call("halt")  # the ledger owner settles interrupted work before any unit is killed
+    except urllib.error.URLError:
+        print("daemon unreachable: stopping remaining services and models")
     units = UNITS[:1] if keep_coin else UNITS
     systemctl("stop", *units)
     systemctl("stop", "cointos-agent-*")  # agents' runs are units of their own
