@@ -13,8 +13,6 @@
   --accent: #9f3b52; --accent-bright: #e9687e; --accent-wash: #f9eae6; --line: #9a858a;
   --line-soft: #e5d9d7; --shadow: #e9d9d6; --dark: #29272c; --dark-2: #343137; --dark-line: #4a4549;
   --dark-text: #fff5ef; --dark-soft: #cfc3bf; --pink-shadow: #e8b7b8;
-  --worker: #ecc16b; --manager: #79cda5; --steward: #c99a7a; --survivor: #e9687e; --coin: #ffb1b5;
-  --user: #9ab8e8; --good: #3f8f6a; --bad: #9f3b52;
   font-family: ui-sans-serif, system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
@@ -29,18 +27,20 @@ main { max-width: 1260px; margin: auto; padding: 26px 16px 60px; }
 .summary { margin: 16px 0 0; font-size: clamp(17px, 2vw, 22px); line-height: 1.35; color: var(--ink-soft); }
 .summary b { color: var(--ink); font-weight: 900; }
 .dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 10px;
-  background: var(--manager); border: 2px solid var(--dark); vertical-align: 1px; }
+  background: var(--ink); border: 2px solid var(--dark); vertical-align: 1px; }
 .dot.bad { background: var(--accent-bright); }
 .alert { margin-top: 18px; padding: 13px 18px; border-left: 5px solid var(--accent-bright); background: var(--accent-wash); }
 .alert:empty { display: none; }
-.agents { margin-top: 26px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
-.agent { position: relative; background: var(--dark); color: var(--dark-text); border: 2px solid var(--dark); box-shadow: 7px 7px 0 var(--pink-shadow);
-  padding: 18px 20px 11px; display: grid; grid-template-columns: 46px 1fr; gap: 4px 16px; min-width: 0; }
-.agent .orb { grid-row: 1 / 3; width: 46px; height: 46px; border-radius: 50%; border: 2px dashed var(--c); }
-.agent .orb.thinking { border: 0; background: radial-gradient(circle at 35% 30%, #fff9 0%, var(--c) 40%, color-mix(in oklab, var(--c) 60%, #000) 100%);
-  box-shadow: 0 0 26px -4px var(--c); animation: breathe 3.2s ease-in-out infinite; }
-.agent .orb.tools { border-style: solid; background: color-mix(in oklab, var(--c) 30%, transparent); }
-@keyframes breathe { 50% { transform: scale(1.08); } }
+.agents { margin-top: 26px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); }
+.agent { --c: var(--accent-bright); position: relative; background: var(--dark); color: var(--dark-text); border: 2px solid var(--dark); box-shadow: 7px 7px 0 var(--pink-shadow);
+  padding: 18px 20px 11px; display: grid; grid-template-columns: 18px 1fr; gap: 4px 14px; min-width: 0; }
+/* The agent's state, as a flat square: solid (and slowly pulsing) while the model works for it,
+   an outline while it waits for a lane, cream while its tools run, dashed while it starts. */
+.agent .mark { grid-row: 1 / 3; width: 18px; height: 18px; margin-top: 3px; border: 2px solid var(--c); }
+.agent .mark.thinking { background: var(--c); animation: pulse 2.4s ease-in-out infinite; }
+.agent .mark.tools { background: var(--dark-text); border-color: var(--dark-text); }
+.agent .mark.starting { border-style: dashed; }
+@keyframes pulse { 50% { opacity: .45; } }
 .agent .rate { position: absolute; top: 16px; right: 20px; font: 900 20px/1 ui-sans-serif, system-ui, sans-serif;
   letter-spacing: -.03em; color: var(--dark-text); font-variant-numeric: tabular-nums; }
 .agent .rate small { font-size: 11px; font-weight: 500; color: var(--dark-soft); letter-spacing: 0; }
@@ -70,13 +70,15 @@ main { max-width: 1260px; margin: auto; padding: 26px 16px 60px; }
 h2 { font-size: clamp(24px, 2.6vw, 30px); line-height: 1; letter-spacing: -.055em; margin: 0 0 12px; font-weight: 900; }
 h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-faint); margin: 18px 0 4px; }
 .row { display: grid; grid-template-columns: 5px 1fr auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
-.row .bar { grid-row: 1 / 3; background: var(--c); border: 1px solid var(--dark); }
+.row .bar { grid-row: 1 / 3; background: var(--line-soft); border: 1px solid var(--dark); }
+.row.running .bar { background: var(--accent-bright); } .row.done .bar { background: var(--ink-faint); }
+.row.failed .bar { background: var(--accent); }
 .row .who { font-weight: 900; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .row .state { font-size: 14px; color: var(--ink-soft); text-align: right; }
 .row .meta { grid-column: 2 / 4; font-size: 13px; color: var(--ink-faint); overflow-wrap: anywhere; }
 .muted { color: var(--ink-faint); }
 .chip { font-size: 12px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg); }
-.chip.held { background: var(--c); border-color: var(--dark); }
+.chip.held { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); font-weight: 700; }
 .machine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 40px; }
 .lane-row { display: grid; grid-template-columns: 130px 56px 1fr; align-items: center; gap: 8px; padding: 6px 0;
   border-top: 1px solid var(--line-soft); font-size: 14px; }
@@ -95,14 +97,14 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .legend b { font-variant-numeric: tabular-nums; } .legend em { font-style: normal; color: var(--ink-faint); text-align: right; }
 .memfacts { margin-top: 6px; font-size: 13px; color: var(--ink-faint); }
 .check { margin-top: 16px; padding: 8px 12px; font-size: 14px; border: 1px solid var(--line); }
-.check.ok { color: var(--good); font-weight: 900; background: color-mix(in oklab, var(--good) 8%, var(--paper)); }
-.check.no { color: var(--bad); background: var(--accent-wash); } .check.no + .check.no { margin-top: 6px; }
+.check.ok { color: var(--ink); font-weight: 900; background: var(--paper); }
+.check.no { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); } .check.no + .check.no { margin-top: 6px; }
 .meta.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history { font-size: 13px; max-height: 360px; overflow: auto; }
 .history div { display: flex; gap: 12px; padding: 4px 0; border-top: 1px solid var(--line-soft); }
 .history .when { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
 .history .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.history .alert-line .what { color: var(--bad); font-weight: 700; }
+.history .alert-line .what { color: var(--accent); font-weight: 700; }
 </style>
 </head>
 <body>
@@ -123,8 +125,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const ago = t => { const s = Math.max(0, Date.now() / 1000 - t) | 0;
   return s < 120 ? s + "s" : s < 7200 ? (s / 60 | 0) + "m" : (s / 3600 | 0) + "h"; };
-const ROLES = ["worker", "manager", "steward", "survivor", "coin", "user"];
-const colour = who => { const role = (who || "").split(/[-:]/)[0]; return `var(--${ROLES.includes(role) ? role : "user"})`; };
+
 const short = model => model.replace(/-GGUF$/, "");
 
 // What an agent is doing right now, from its thoughts.
@@ -153,7 +154,7 @@ function renderAgents(L) {
     const live = a.live || {};
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
       (kind === "tools" && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
-    return `<article class="agent" style="--c:${colour(a.id)}"><div class="orb ${kind}"></div>` +
+    return `<article class="agent"><div class="mark ${kind}"></div>` +
       (a.rate && a.state === "thinking" ? `<div class="rate">${a.rate.toFixed(1)}<small> tok/s</small></div>` : "") +
       `<div class="role">${esc(a.role)} · ${esc(a.project)}</div>` +
       `<div class="work">${esc(a.title.replace(/-/g, " "))}</div>` +
@@ -170,7 +171,7 @@ function renderWork(L) {
   const tasks = Object.values(L.tasks).sort((a, b) => b.updated_at - a.updated_at);
   $("work").innerHTML = tasks.length ? groups.map(([status, title]) => {
     const some = tasks.filter(t => t.status === status).slice(0, status === "done" ? 10 : 50);
-    return some.length ? `<h3>${title}</h3>` + some.map(t => `<div class="row" style="--c:var(--${t.role})"><div class="bar"></div>` +
+    return some.length ? `<h3>${title}</h3>` + some.map(t => `<div class="row ${status}"><div class="bar"></div>` +
       `<div class="who">${esc(t.project)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
       `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
       `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div></div>`).join("") : "";
@@ -183,7 +184,7 @@ function renderMachine(L) {
   $("lanes").innerHTML = `<h3>Lanes</h3>` + Object.entries(L.models).map(([name, m]) =>
     L.lanes.filter(l => l.model === name).map(l => {
       const holder = L.thoughts[l.holder];
-      const who = holder ? `<span class="chip held" style="--c:${colour(holder.agent)}">${esc(holder.agent)}</span>`
+      const who = holder ? `<span class="chip held">${esc(holder.agent)}</span>`
         : `<span class="muted">${m.up ? "free" : m.launching ? "launching" : "down"}</span>`;
       return `<div class="lane-row"><span class="name">${esc(short(name))}</span><span class="muted">lane ${l.index}</span>${who}</div>`;
     }).join("")).join("");
@@ -197,8 +198,10 @@ function renderMachine(L) {
   const free = gib(m.available_gb), physical = gib(m.physical_gb);
   const system = Math.max(0, physical - weights - kv - saved - free);
   // Clockwise from midnight: the operating system, CointOS's parts, then what is free.
-  const parts = [["Operating System", system, "#eda100"], ["Model weights", weights, "#2a78d6"],
-                 ["KV-cache", kv, "#eb6834"], ["Saved contexts", saved, "#1baf7a"], ["Free", free, "#d9cfcc"]];
+  // The operating system in ink, CointOS's parts in steps of the site's rose (validated as an
+  // ordinal ramp), free memory as pale paper.
+  const parts = [["Operating System", system, "#28262b"], ["Model weights", weights, "#9f3b52"],
+                 ["KV-cache", kv, "#e9687e"], ["Saved contexts", saved, "#ec98a5"], ["Free", free, "#ece3e0"]];
   const total = parts.reduce((n, p) => n + p[1], 0), r = 58, C = 2 * Math.PI * r, gap = 2;
   let at = 0;
   const arcs = parts.map(([name, gb, colour], i) => {
@@ -239,7 +242,7 @@ function renderChecks(L) {
   const failing = L.checks.filter(c => !c.ok);
   $("checks").innerHTML = !L.checks.length ? "" : failing.length
     ? failing.map(c => `<div class="check no"><b>${esc(c.name)}</b> ${esc(c.detail)}</div>`).join("")
-    : `<div class="check ok">All ${L.checks.length} self-checks green</div>`;
+    : `<div class="check ok">✓ All ${L.checks.length} self-checks pass</div>`;
 }
 
 function sentence(h) {
