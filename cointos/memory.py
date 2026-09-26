@@ -20,7 +20,7 @@ def measure() -> dict:
         for line in stream:
             if line.startswith("full"):
                 psi = float(line.split()[1].split("=")[1])
-    return {"available_gb": round(values["MemAvailable"] / GB, 1),
+    return {"total_gb": round(values["MemTotal"] / GB, 1), "available_gb": round(values["MemAvailable"] / GB, 1),
             "swap_gb": round((values["SwapTotal"] - values["SwapFree"]) / GB, 2), "psi": psi}
 
 

@@ -83,11 +83,16 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .lane-row:first-of-type { border-top: 0; }
 .lane-row .name { font-weight: 900; }
 .lane-row .chip { justify-self: start; }
-.membar { display: flex; height: 14px; border: 1px solid var(--dark); margin-top: 12px; }
-.membar .use { background: var(--manager); } .membar .keep { background: var(--line-soft); }
-.memlegend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 14px; }
-.memlegend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 1px solid var(--dark); vertical-align: -1px; }
-.memlegend i.use { background: var(--manager); } .memlegend i.keep { background: var(--line-soft); }
+.mem { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-top: 4px; }
+.donut { width: 160px; height: 160px; flex: none; }
+.donut .seg { transition: opacity .15s; cursor: default; }
+.donut text { text-anchor: middle; fill: var(--ink); font-family: inherit; }
+.donut .big { font-size: 20px; font-weight: 900; letter-spacing: -.03em; } .donut .small { font-size: 11px; fill: var(--ink-faint); }
+.legend { display: grid; gap: 4px; font-size: 14px; min-width: 240px; flex: 1; }
+.legend .item { display: grid; grid-template-columns: 12px 1fr auto 40px; align-items: center; gap: 8px; padding: 2px 4px; }
+.legend .item.on { background: var(--accent-wash); }
+.legend i { width: 12px; height: 12px; border-radius: 2px; }
+.legend b { font-variant-numeric: tabular-nums; } .legend em { font-style: normal; color: var(--ink-faint); text-align: right; }
 .memfacts { margin-top: 6px; font-size: 13px; color: var(--ink-faint); }
 .check { margin-top: 16px; padding: 8px 12px; font-size: 14px; border: 1px solid var(--line); }
 .check.ok { color: var(--good); font-weight: 900; background: color-mix(in oklab, var(--good) 8%, var(--paper)); }
@@ -182,18 +187,52 @@ function renderMachine(L) {
         : `<span class="muted">${m.up ? "free" : m.launching ? "launching" : "down"}</span>`;
       return `<div class="lane-row"><span class="name">${esc(short(name))}</span><span class="muted">lane ${l.index}</span>${who}</div>`;
     }).join("")).join("");
-  const m = L.memory || {}, snaps = Object.values(L.snapshots);
-  if (m.headroom_gb === undefined) { $("memory").innerHTML = ""; return; }
-  const usable = Math.max(0, m.headroom_gb), kept = Math.max(0, m.available_gb - usable);
-  const inMemory = snaps.filter(s => s.tier === "memory"), onDisk = snaps.filter(s => s.tier !== "memory");
-  const gb = list => (list.reduce((n, s) => n + s.bytes, 0) / 1e9).toFixed(1);
-  $("memory").innerHTML = `<h3>Memory</h3>` +
-    `<div class="memlegend"><span><i class="use"></i>${usable.toFixed(1)} GB usable by CointOS</span>` +
-    `<span><i class="keep"></i>${kept.toFixed(1)} GB kept for David</span></div>` +
-    `<div class="memfacts">${inMemory.length} saved contexts in memory (${gb(inMemory)} GB) · ${onDisk.length} on disk (${gb(onDisk)} GB)` +
-    ` · pressure ${m.psi} · swap ${m.swap_gb} GB` +
-    (L.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (L.guard.killed ? ` · <b>work model killed</b>` : "") + `</div>` +
-    `<div class="membar"><span class="use" style="flex:${usable}"></span><span class="keep" style="flex:${kept}"></span></div>`;
+  const m = L.memory || {};
+  if (m.total_gb === undefined) { $("memory").innerHTML = ""; return; }
+  const loaded = Object.entries(L.models).filter(([, model]) => model.up).map(([name]) => L.model_memory[name]);
+  const weights = loaded.reduce((n, x) => n + x.weights_gb, 0);
+  const kv = loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0);
+  const saved = Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0) / 1e9;
+  const free = Math.max(0, m.headroom_gb), kept = Math.max(0, m.available_gb - free);
+  const other = Math.max(0, m.total_gb - m.available_gb - weights - kv - saved);
+  // Used memory in the categorical order; free memory in quiet neutrals.
+  const parts = [["Model weights", weights, "#2a78d6"], ["KV cache (live contexts)", kv, "#eb6834"],
+                 ["Saved contexts", saved, "#1baf7a"], ["Desktop & other", other, "#eda100"],
+                 ["Free for CointOS", free, "#dcd4d1"], ["Kept free for you", kept, "#b9adaa"]];
+  const total = parts.reduce((n, p) => n + p[1], 0), r = 58, C = 2 * Math.PI * r, gap = 2;
+  let at = 0;
+  const arcs = parts.map(([name, gb, colour], i) => {
+    const length = total ? gb / total * C : 0, arc = Math.max(0, length - gap);
+    const svg = `<circle class="seg" data-i="${i}" r="${r}" cx="80" cy="80" fill="none" stroke="${colour}" stroke-width="24"` +
+      ` stroke-dasharray="${arc} ${C - arc}" stroke-dashoffset="${-at}" transform="rotate(-90 80 80)"></circle>`;
+    at += length;
+    return svg;
+  }).join("");
+  MEMORY_PARTS = parts;
+  $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
+    `<svg viewBox="0 0 160 160" class="donut" onmouseleave="focusPart(-1)">${arcs}` +
+    `<text x="80" y="76" class="big" id="donut-value">${m.total_gb.toFixed(0)} GB</text>` +
+    `<text x="80" y="96" class="small" id="donut-label">memory</text></svg>` +
+    `<div class="legend">` + parts.map(([name, gb, colour], i) =>
+      `<div class="item" data-i="${i}" onmouseenter="focusPart(${i})" onmouseleave="focusPart(-1)"><i style="background:${colour}"></i>` +
+      `<span>${name}</span><b>${gb.toFixed(1)} GB</b><em>${total ? Math.round(gb / total * 100) : 0}%</em></div>`).join("") +
+    `</div></div>` +
+    `<div class="memfacts">pressure ${m.psi} · swap ${m.swap_gb} GB` +
+    (L.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (L.guard.killed ? ` · <b>work model killed</b>` : "") + `</div>`;
+  document.querySelectorAll(".donut .seg").forEach(seg => seg.onmouseenter = () => focusPart(+seg.dataset.i));
+  if (FOCUSED >= 0) focusPart(FOCUSED);  // the page redraws every 2 s; keep what the reader is looking at
+}
+
+let MEMORY_PARTS = [], FOCUSED = -1;
+function focusPart(i) {
+  FOCUSED = i;
+  const svg = document.querySelector(".donut");
+  if (!svg) return;
+  svg.querySelectorAll(".seg").forEach(seg => seg.style.opacity = i < 0 || +seg.dataset.i === i ? 1 : .35);
+  document.querySelectorAll(".legend .item").forEach(item => item.classList.toggle("on", +item.dataset.i === i));
+  const total = MEMORY_PARTS.reduce((n, p) => n + p[1], 0);
+  $("donut-value").textContent = i < 0 ? `${total.toFixed(0)} GB` : `${MEMORY_PARTS[i][1].toFixed(1)} GB`;
+  $("donut-label").textContent = i < 0 ? "memory" : MEMORY_PARTS[i][0].replace(/ \(.*\)/, "").toLowerCase();
 }
 
 function renderChecks(L) {
