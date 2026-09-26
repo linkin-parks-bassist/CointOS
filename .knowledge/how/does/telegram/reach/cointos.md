@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-27T00:28:34+10:00"
+revised_at: "2026-09-27T00:58:14+10:00"
 ---
 
 Coin is a separate Telegram service implemented in `cointos/coin.py`. Credentials live in the configured `~/.config/agent-ecosystem/telegram.env`, never in the repository or command-line arguments:
@@ -11,7 +11,7 @@ The service long-polls `getUpdates`, accepts allow-listed text messages and uses
 
 **Routing.**
 - Plain `status` or `/status` uses the CLI directly without a model turn.
-- Other messages first get a front-desk-model reply through the gateway at Coin priority (one front-model lane is reserved for Coin and Sole Survivor).
+- Other messages first get a front-desk-model reply through the gateway at Coin priority (one front-model lane is reserved for Coin).
 - Every non-status message then enters a serial deeper-turn queue on the work model, even if the small model says no deeper turn is needed. The deeper turn can finish silently or send a useful follow-up.
 - Deep tools expose status, agents, jobs, checks, queues, pause/resume, stop-agent, start, halt and knowledge-tree tools. Coin's halt uses `--keep-coin`; an ordinary CLI halt stops Coin too.
 - The configured tool-round budget is currently 8, followed by up to 3 finishing iterations with terminal tools. Repeated identical calls reuse their earlier result within a turn.

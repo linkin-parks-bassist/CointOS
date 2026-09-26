@@ -110,10 +110,10 @@ def look_after_agents() -> None:
                               else "waiting" if mine else "running")
             if mine:
                 agent["last_activity"] = now()
-        if agent["state"] == "running" and now() - agent["last_activity"] > limits["agent_silent_seconds"]:
-            work.stop_agent(agent_id, "silent too long", requeue=True)
-        elif agent["repeats"] > limits["max_identical_thoughts"]:
+        if agent["repeats"] > limits["max_identical_thoughts"]:
             work.stop_agent(agent_id, "repeating one thought", requeue=True)
+    for agent_id in checks.silent_agents(CONFIG, L, now()):
+        work.stop_agent(agent_id, "silent too long", requeue=True)
 
 
 def tick(timers: dict) -> None:

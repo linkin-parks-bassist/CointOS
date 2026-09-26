@@ -1,9 +1,9 @@
 ---
 status: "green"
-revised_at: "2026-09-27T00:27:35+10:00"
+revised_at: "2026-09-27T00:58:13+10:00"
 ---
 
-The core for milestones 1–6 is implemented, but their live acceptance is not all established. Both models match config; completed thoughts and restart adoption appear in the ledger. The four-agent completion/kill demonstration, Coin timing, uninterrupted hour and full soak still need evidence. Sole Survivor is not implemented. `what/is/the/state.md` owns the current evidence and gaps, and `what/is/next.md` orders the remaining work.
+The core for milestones 1–6 is implemented, but their live acceptance is not all established. Both models match config; completed thoughts and restart adoption appear in the ledger. The four-agent completion/kill demonstration, Coin timing, uninterrupted hour and full soak still need evidence. Sole Survivor is off the current roadmap; catastrophic recovery is handled by David with a stronger remote agent. `what/is/the/state.md` owns the current evidence and gaps, and `what/is/next.md` orders the remaining work.
 
 Build the architecture in `what/is/the/architecture/of/cointos.md` in milestones. Each milestone ends with a live demonstration on the real machine and a green `cointos check`.
 
@@ -13,6 +13,5 @@ Build the architecture in `what/is/the/architecture/of/cointos.md` in milestones
 4. **Autonomy.** The spawner, knowledge-tree queues, roles, and workers merging their branches when done. *Live:* one unattended hour in which queue items advance to done with commits.
 5. **Coin.** The Telegram service using the daemon API, the gateway (reserved lane) and kt MCP tools, with a bounded number of tool rounds per turn. Add `cointos halt` and `up`. *Live:* the Coin-under-load scenario from the spec.
 6. **Memory and dashboard.** Headroom from both limits, snapshot tiers, distress, and the agents-first dashboard. *Live:* the full acceptance in `what/is/the/spec.md`.
-7. **Sole Survivor** (after the MVP): an agent started in memory emergencies to diagnose and repair them.
 
 The core stays around 3,000 lines (`how/to/keep/cointos/simple.md`).

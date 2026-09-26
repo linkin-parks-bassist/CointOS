@@ -5,6 +5,18 @@ from cointos import memory
 from cointos.scheduler import held_for, lane_allows
 
 
+def silent_agents(config: dict, ledger: dict, now: float) -> list[str]:
+    """Agents with neither an outstanding thought nor a recent OpenCode event.
+
+    Starting, tools and between-request stalls share this bound. A thought reading,
+    generating or waiting for a lane is accounted for by the scheduler instead.
+    """
+    thinking = {t["agent"] for t in ledger["thoughts"].values()}
+    return [agent_id for agent_id, agent in ledger["agents"].items()
+            if agent_id not in thinking
+            and now - agent["last_activity"] > config["checks"]["agent_silent_seconds"]]
+
+
 def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[int]],
              blocked: frozenset = frozenset()) -> list[dict]:
     """`processes` maps agent id to the live pids found carrying that id."""
@@ -44,11 +56,9 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         for t in waiting if held_by(lambda h, t=t: h["class"] == t["class"] and not h["reading"]
                                     and overdue(h, t) > limits["starve_seconds"], t)])
 
-    thinking = {t["agent"] for t in thoughts}
     check("no silent agent", [
-        f"{agent_id} running tools silently for {now - agent['last_activity']:.0f}s"
-        for agent_id, agent in ledger["agents"].items()
-        if agent_id not in thinking and now - agent["last_activity"] > limits["agent_silent_seconds"]])
+        f"{agent_id} without a thought or event for {now - ledger['agents'][agent_id]['last_activity']:.0f}s"
+        for agent_id in silent_agents(config, ledger, now)])
 
     check("no looping agent", [
         f"{agent_id} repeated one thought {agent['repeats']} times"

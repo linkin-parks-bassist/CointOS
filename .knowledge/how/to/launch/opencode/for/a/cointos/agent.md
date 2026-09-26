@@ -1,13 +1,13 @@
 ---
 status: "green"
-revised_at: "2026-09-27T00:28:35+10:00"
+revised_at: "2026-09-27T00:59:57+10:00"
 ---
 
 Agents are OpenCode sessions whose provider is the CointOS gateway. The installed binary is `~/.local/bin/opencode`, checked as version 1.18.32 on 2026-09-27. The implementation is `cointos/agents.py`.
 
 **Config.** Each run receives an `OPENCODE_CONFIG` file under `state/agents/<id>/`, created mode 0600 for its gateway key:
 - Provider `cointos` uses `@ai-sdk/openai-compatible`, the gateway's `/v1` endpoint and the agent key.
-- `timeout`, `headerTimeout` and `chunkTimeout` are false. Earlier default 300,000 ms timeouts aborted waiting/prefilling requests; daemon lifecycle rules handle stalled agents.
+- `timeout`, `headerTimeout` and `chunkTimeout` are false. Earlier default 300,000 ms timeouts aborted waiting/prefilling requests; daemon lifecycle rules handle stalled agents. The 30-second event-silence bound applies when no thought is outstanding, including startup; active model reads/generation and lane waits are exempt. Long tools without an OpenCode event can reach this bound.
 - Context limit is configured total context divided by lane count (currently 131,072); output is `max_thought_tokens` (currently 16,384).
 - Permissions broadly allow work while denying web fetch/search, doom loops, privilege/package-management commands, `git push`, and `cointos halt|up|stop`. External-directory access permits the home tree except `~/Avnet`; reads deny `*.env` and Avnet, and edits deny Avnet. These are OpenCode permissions, not OS isolation.
 - Other global MCP servers are disabled in the per-agent config; knowledgetrees is retained. Sharing and autoupdate are disabled.

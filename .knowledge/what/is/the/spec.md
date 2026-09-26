@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-27T00:27:34+10:00"
+revised_at: "2026-09-27T01:01:58+10:00"
 ---
 
 Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design is `what/is/the/architecture/of/cointos.md`; the working rules are `how/to/keep/cointos/simple.md`.
@@ -26,8 +26,12 @@ Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design
 
 ## Implementation status
 
-The requirements above remain the acceptance contract. Snapshot-based pre-emption and disk snapshot tiers are already implemented. The 900-second tool-silence threshold does not meet requirement 6's one-minute bound; the gap remains open. Current evidence and other gaps belong to `what/is/the/state.md`; completed ledger tasks are not a substitute for the acceptance scenarios.
+The requirements above remain the acceptance contract. Snapshot-based pre-emption and disk snapshot tiers are already implemented. The event-silence threshold is now 30 seconds, shared by the recovery loop and self-check and including stalled startup; a suspended-startup live test recovered in 29.97 seconds with sampled self-checks green. This verifies that failure scenario, not every failure or the full acceptance suite. Current evidence and other gaps belong to `what/is/the/state.md`; completed ledger tasks are not a substitute for the acceptance scenarios.
+
+## Recovery boundary
+
+Automatic recovery is bounded and mechanical: preserve tasks, stop distressed work, unload/reload models and restart services as configured. Catastrophic diagnosis and repair are for David and a stronger remote agent. An autonomous Sole Survivor agent is off the current roadmap, subject to David revisiting the decision.
 
 ## Later
 
-Changing lane shapes at runtime; several work models at once; Sole Survivor as an agent; deeper review hierarchies.
+Changing lane shapes at runtime; several work models at once; deeper review hierarchies.

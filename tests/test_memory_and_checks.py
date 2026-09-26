@@ -1,13 +1,14 @@
 import unittest
 
-from cointos import checks, memory
+from cointos import checks, config, memory
 
 CONFIG = {
-    "classes": ["survivor", "coin", "user", "background"],
+    "classes": ["coin", "user", "background"],
     "reserved_lanes": [],
     "memory": {"reserve_gb": 24, "max_psi": 1.0},
     "scheduler": {"slice_seconds": 30},
-    "checks": {"idle_lane_seconds": 5, "preempt_seconds": 15, "starve_seconds": 120, "agent_silent_seconds": 900,
+    "checks": {"idle_lane_seconds": 5, "preempt_seconds": 15, "starve_seconds": 120,
+               "agent_silent_seconds": config.load()["checks"]["agent_silent_seconds"],
                "max_identical_thoughts": 3},
 }
 
@@ -97,6 +98,23 @@ class Checks(unittest.TestCase):
         self.assertIn("no silent agent", self.failing(ledger([], [], {"x": agent}), now=1000, processes={"x": [1]}))
         state = ledger([lane(holder="t")], [thought("t", "background", lane=0, agent="x")], {"x": agent})
         self.assertNotIn("no silent agent", self.failing(state, now=1000, processes={"x": [1]}))
+
+    def test_silence_boundary_applies_to_starting_and_running_agents(self):
+        limit = CONFIG["checks"]["agent_silent_seconds"]
+        for phase in ("starting", "running"):
+            with self.subTest(phase=phase):
+                state = ledger([], [], {"x": {"state": phase, "last_activity": 10, "repeats": 0}})
+                self.assertEqual(checks.silent_agents(CONFIG, state, 10 + limit), [])
+                self.assertEqual(checks.silent_agents(CONFIG, state, 10 + limit + .01), ["x"])
+                state["agents"]["x"]["last_activity"] = 10 + limit
+                self.assertEqual(checks.silent_agents(CONFIG, state, 10 + limit + .01), [])
+
+    def test_a_waiting_or_reading_thought_is_not_tool_silence(self):
+        for lane_id, reading in ((None, True), (0, True), (0, False)):
+            with self.subTest(lane=lane_id, reading=reading):
+                state = ledger([], [thought("t", "background", lane=lane_id, agent="x", reading=reading)],
+                               {"x": {"state": "starting", "last_activity": 0, "repeats": 0}})
+                self.assertEqual(checks.silent_agents(CONFIG, state, 1000), [])
 
     def test_agents_and_processes(self):
         agent = {"state": "running", "last_activity": 99, "repeats": 1}

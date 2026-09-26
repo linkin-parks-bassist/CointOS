@@ -3,8 +3,8 @@ import unittest
 from cointos import scheduler
 
 CONFIG = {
-    "classes": ["survivor", "coin", "user", "background"],
-    "reserved_lanes": [{"model": "front", "lane": 1, "classes": ["survivor", "coin"]}],
+    "classes": ["coin", "user", "background"],
+    "reserved_lanes": [{"model": "front", "lane": 1, "classes": ["coin"]}],
     "scheduler": {"slice_seconds": 30},
 }
 

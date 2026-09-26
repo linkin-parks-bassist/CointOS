@@ -26,7 +26,6 @@
     }
   },
   "classes": [
-    "survivor",
     "coin",
     "user",
     "background"
@@ -36,7 +35,6 @@
       "model": "Qwen3.5-4B-GGUF",
       "lane": 1,
       "classes": [
-        "survivor",
         "coin"
       ]
     }
@@ -60,7 +58,7 @@
     "idle_lane_seconds": 5,
     "preempt_seconds": 15,
     "starve_seconds": 120,
-    "agent_silent_seconds": 900,
+    "agent_silent_seconds": 30,
     "max_identical_thoughts": 3,
     "exit_grace_seconds": 30
   },

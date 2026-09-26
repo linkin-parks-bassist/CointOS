@@ -1,6 +1,6 @@
 ---
-status: green
-revised_at: "2026-09-26T10:48:19+10:00"
+status: "green"
+revised_at: "2026-09-27T00:58:13+10:00"
 ---
 
 CointOS is David's personal, local-first, autonomous agent ecosystem, developed in `/home/david/Projects/CointOS`. It is not a tool David "uses" turn by turn. It runs by itself, continuously, and keeps the GPU busy with useful work.
@@ -8,7 +8,7 @@ CointOS is David's personal, local-first, autonomous agent ecosystem, developed 
 **What it does, in perpetuity:**
 
 - **Agents spawn, look around, act, and recede.** An agent is spawned and given a role. It orients itself (expedited by its role and by knowledge trees), decides by its own judgement what needs doing, does a piece of it, and goes back into the void. This repeats indefinitely.
-- **Three role classes.** A steward class keeps the system alive: Sole Survivor, Coin and maintenance stewards. A managerial class builds and maintains priority queues of work: decomposition, ordering, review and audit. A worker class carries those queues out. See `what/are/the/cointos/roles.md`.
+- **Three role classes.** A steward class keeps the system alive: Coin and maintenance stewards. A managerial class builds and maintains priority queues of work: decomposition, ordering, review and audit. A worker class carries those queues out. See `what/are/the/cointos/roles.md`.
 - **Work sources.** Agents carry out work David has submitted as to-be-done, and they maintain and improve the system itself. They are not limited to either.
 - **Where work lands.** Project work happens in ordinary git repositories under `~/Projects/`.
 - **Idea pipeline.** David drafts ideas. Without further prompting, agents break them into small, elaborated, manageable chunks, then implement, test, review and audit them.
@@ -22,6 +22,6 @@ CointOS is David's personal, local-first, autonomous agent ecosystem, developed 
 
 **Utilisation.** Subject to the above, the GPU should be doing something most of the time, without David having to do much.
 
-**Stability.** The system must be very stable. Safeguards, principally the Sole Survivor, must quickly take the system down and bring it back up when anything goes wrong. Stability comes from simplicity first and safeguards second (`how/to/keep/cointos/simple.md`).
+**Stability.** The system must be very stable. Mechanical safeguards stop distressed work, preserve tasks and recover known service failures. Catastrophic diagnosis and repair are for David to bring in a stronger agent remotely; an autonomous Sole Survivor agent is not on the current roadmap. Stability comes from simplicity first and safeguards second (`how/to/keep/cointos/simple.md`).
 
 **Acceptance.** David expects to recognise working behaviour when he sees it: left alone, the GPU stays busy, drafted ideas and queued work visibly advance, Coin always answers, and nothing falls over. The measurable version is in `what/is/the/spec.md`.
