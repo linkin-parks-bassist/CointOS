@@ -1,5 +1,5 @@
 ---
-status: "green"
+status: green
 revised_at: "2026-09-27T01:01:58+10:00"
 ---
 

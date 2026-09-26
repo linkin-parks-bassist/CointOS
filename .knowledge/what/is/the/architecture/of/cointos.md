@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-27T00:59:56+10:00"
+revised_at: "2026-09-27T01:13:40+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -106,7 +106,7 @@ Every tick the daemon checks these invariants over the ledger; a violation shows
 3. No waiting agent is passed over for more than `starve_seconds` by an equal that holds a lane past its slice (and is not reading), counted from when that slice ran out.
 4. No agent is silent for longer than `agent_silent_seconds`.
 5. No agent repeats the same thought more than `max_identical_thoughts` times.
-6. Every running agent has a live process, and every agent process belongs to a ledger agent or an exiting one.
+6. Every agent process belongs to a ledger agent or an exiting one (`no stray agent processes`). The run supervisor owns unit exit detection, event draining and task settlement: process absence before settlement is expected, including successful completion. Unfinished runs still requeue or alert on exhausted attempts; silence recovery remains separate.
 7. Headroom is not negative and there is no distress.
 
 ## Watching

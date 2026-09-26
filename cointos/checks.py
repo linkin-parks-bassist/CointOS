@@ -64,13 +64,12 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         f"{agent_id} repeated one thought {agent['repeats']} times"
         for agent_id, agent in ledger["agents"].items() if agent["repeats"] > limits["max_identical_thoughts"]])
 
-    # An agent leaves the ledger before its processes are stopped, so processes of an agent in
-    # `exiting` are expected until that entry's grace runs out.
-    problems = [f"{agent_id} has no live process" for agent_id, agent in ledger["agents"].items()
-                if agent["state"] != "starting" and agent_id not in processes]
-    problems += [f"stray agent process {agent_id} (pids {pids})" for agent_id, pids in processes.items()
-                 if agent_id not in ledger["agents"] and agent_id not in ledger["exiting"]]
-    check("agents match processes", problems)
+    # The run supervisor owns exit detection and task settlement. A process can exit normally
+    # before that observer settles its ledger entry; absence is not an invariant violation.
+    # Directed stops leave the ledger first, with a bounded grace for process cleanup.
+    problems = [f"stray agent process {agent_id} (pids {pids})" for agent_id, pids in processes.items()
+                if agent_id not in ledger["agents"] and agent_id not in ledger["exiting"]]
+    check("no stray agent processes", problems)
 
     measured = ledger.get("memory") or {}
     problems = memory.distressed(config, measured) if measured else []

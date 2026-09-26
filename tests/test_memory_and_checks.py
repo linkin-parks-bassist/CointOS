@@ -118,10 +118,11 @@ class Checks(unittest.TestCase):
 
     def test_agents_and_processes(self):
         agent = {"state": "running", "last_activity": 99, "repeats": 1}
-        self.assertEqual(self.failing(ledger([], [], {"a": agent})), {"agents match processes"})
+        # Normal exit precedes asynchronous supervisor settlement. It is not a failure.
+        self.assertEqual(self.failing(ledger([], [], {"a": agent})), set())
         self.assertEqual(self.failing(ledger([], [], {"a": {**agent, "state": "starting"}})), set())
         self.assertEqual(self.failing(ledger([], [], exiting={"b": 95}), processes={"b": [1]}), set())
-        self.assertEqual(self.failing(ledger([], []), processes={"b": [1]}), {"agents match processes"})
+        self.assertEqual(self.failing(ledger([], []), processes={"b": [1]}), {"no stray agent processes"})
 
     def test_memory(self):
         self.assertEqual(self.failing(ledger([], [], headroom=-1)), {"memory within bounds"})
