@@ -22,6 +22,7 @@ from cointos.state import BACKEND, CONFIG, LOCK, L, log
 
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
 KEEPALIVE_SECONDS = 10
+LIVE_CHARS = 600  # how much of an agent's current words the dashboard shows
 
 
 def identity(key: str) -> tuple[str, str, str]:
@@ -126,8 +127,10 @@ class Handler(BaseHTTPRequestHandler):
                     end = item["end"]
                     continue
                 generated += item
+                current = BACKEND.read(CONFIG, model, rendered["reader"], generated, False)
+                show(agent, current)
                 if stream:
-                    self.send_new(reply_id, model, BACKEND.read(CONFIG, model, rendered["reader"], generated, False), sent)
+                    self.send_new(reply_id, model, current, sent)
         except OSError:
             lanes.cancel(thought)  # the asker is gone
             return
@@ -135,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             error = {"error": {"message": "the thought failed on the model server; try again"}}
             return self.wfile.write(b"data: " + json.dumps(error).encode() + b"\n\n") if stream else self.reply(502, error)
         final = BACKEND.read(CONFIG, model, rendered["reader"], generated, True)
+        show(agent, final)
         finish = "tool_calls" if final["tool_calls"] else "length" if end == "limit" else "stop"
         usage = {"prompt_tokens": len(rendered["tokens"]), "completion_tokens": len(generated),
                  "total_tokens": len(rendered["tokens"]) + len(generated)}
@@ -167,6 +171,14 @@ class Handler(BaseHTTPRequestHandler):
         if delta:
             self.wfile.write(chunk(reply_id, model, delta))
             self.wfile.flush()
+
+
+def show(agent: str, thought: dict) -> None:
+    """Keep the end of what an agent is saying, for the dashboard's live view of it."""
+    with LOCK:
+        if agent in L["agents"]:
+            L["agents"][agent]["live"] = {"reasoning": thought["reasoning"][-LIVE_CHARS:],
+                                          "content": thought["content"][-LIVE_CHARS:]}
 
 
 class ApiError(ValueError):
