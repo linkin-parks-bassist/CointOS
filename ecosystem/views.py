@@ -333,6 +333,40 @@ def queue_items() -> list[dict]:
     return items
 
 
+def coin() -> dict:
+    """Coin's live inference (what it is running or waiting for) and recent exchanges."""
+    active = []
+    for path in (cli.ROOT / "state/inference-runs").glob("native-*.json"):
+        try:
+            run = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if run.get("state") in ("waiting", "acquiring", "running"):
+            active.append({"id": run.get("id"), "model": run.get("model"), "state": run.get("state"),
+                           "placement": "live" if run.get("state") == "running" else "waiting",
+                           "since": datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)})
+    turns = []
+    for path in (cli.ROOT / "state/control-turns").glob("*.json"):
+        try:
+            turn = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        front, deep = turn.get("front_state"), turn.get("deep_state")
+        if deep in ("queued", "running", "retry") or front in (None, "pending", "attempting", "generating", "ready", "sending"):
+            status = "thinking"
+        elif front == "failed" and deep in (None, "failed"):
+            status = "failed"
+        elif turn.get("followup_state") == "delivered" or front == "delivered":
+            status = "replied"
+        else:
+            status = deep or front or "unknown"
+        turns.append({"id": turn.get("id"), "received_at": _when(turn.get("received_at")),
+                      "message": (turn.get("message") or "")[:80], "status": status,
+                      "reply": (turn.get("followup") or turn.get("initial_response") or "")[:140]})
+    turns.sort(key=lambda item: item["received_at"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return {"active": active, "turns": turns[:6]}
+
+
 def _plain(value: object) -> object:
     if isinstance(value, datetime):
         return value.isoformat()
@@ -348,4 +382,4 @@ def snapshot() -> dict:
     now = datetime.now(timezone.utc)
     return _plain({"now": now, "health": health(), "agents": agents(now),
                    "jobs": recent_jobs(40, now), "queues": queue_items(),
-                   "spawner": spawner_state(), "services": services()})
+                   "spawner": spawner_state(), "services": services(), "coin": coin()})
