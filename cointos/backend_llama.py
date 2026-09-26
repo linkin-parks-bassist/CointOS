@@ -141,13 +141,14 @@ def prefill(config: dict, model: str, lane: int, tokens: list[int]) -> None:
 
 def think(config: dict, model: str, lane: int, tokens: list[int], max_new: int, sampling: dict, on_tokens) -> dict:
     """Extend a context on a lane by up to `max_new` tokens, calling `on_tokens(new)` as they
-    come. Returns {"tokens": the new tokens, "done": the thought ended}. Afterwards the lane
-    holds every token sent and received except the last one received."""
+    come. Returns {"tokens": the new tokens, "done": the thought ended, "rate": the model's own
+    generation speed for this call in tokens per second, or None if too short to tell}.
+    Afterwards the lane holds every token sent and received except the last one received."""
     target = urllib.parse.urlparse(_urls[model])
     connection = http.client.HTTPConnection(target.hostname, target.port, timeout=None)
     body = {**sampling, "prompt": tokens, "n_predict": max_new, "stream": True, "id_slot": lane,
             "cache_prompt": True, "return_tokens": True}
-    result = {"tokens": [], "done": False}
+    result = {"tokens": [], "done": False, "rate": None}
     try:
         connection.request("POST", "/completion", json.dumps(body), {"Content-Type": "application/json"})
         response = connection.getresponse()
@@ -163,6 +164,9 @@ def think(config: dict, model: str, lane: int, tokens: list[int], max_new: int, 
                 on_tokens(new)
             if event.get("stop"):
                 result["done"] = event.get("stop_type") != "limit"
+                timings = event.get("timings") or {}
+                if timings.get("predicted_n", 0) >= 16 and timings.get("predicted_ms"):
+                    result["rate"] = timings["predicted_n"] * 1000 / timings["predicted_ms"]
                 break
     finally:
         connection.close()
@@ -234,8 +238,10 @@ def _value(raw: str, schema: dict):
 
 
 def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool) -> dict:
-    """What a thought says so far: {"reasoning", "content", "tool_calls"}. Before the thought is
-    final, text that may still turn into a marker is held back, and tool calls are not given.
+    """What a thought says so far: {"reasoning", "content", "tool_calls", "phase"}, phase being
+    "reasoning" while the model is still thinking, then "writing" (its message or tool calls).
+    Before the thought is final, text that may still turn into a marker is held back, and tool
+    calls are not given.
 
     The split mirrors how the Qwen template renders an assistant turn, so that the next render
     reproduces these tokens exactly and the lane state can be continued."""
@@ -252,7 +258,9 @@ def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool)
     content, calling, calls = rest.partition("<tool_call>")
     if not final and not calling:
         content = _withhold(content)
-    thought = {"reasoning": reasoning.strip(), "content": content.rstrip("\n") if calling else content, "tool_calls": []}
+    phase = "reasoning" if reader["thinking"] and "</think>" not in text else "writing"
+    thought = {"reasoning": reasoning.strip(), "content": content.rstrip("\n") if calling else content, "tool_calls": [],
+               "phase": phase}
     if final and calling:
         schemas = {tool["function"]["name"]: tool["function"].get("parameters", {}).get("properties", {})
                    for tool in reader["tools"]}

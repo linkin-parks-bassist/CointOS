@@ -178,7 +178,7 @@ def show(agent: str, thought: dict) -> None:
     with LOCK:
         if agent in L["agents"]:
             L["agents"][agent]["live"] = {"reasoning": thought["reasoning"][-LIVE_CHARS:],
-                                          "content": thought["content"][-LIVE_CHARS:]}
+                                          "content": thought["content"][-LIVE_CHARS:], "phase": thought["phase"]}
 
 
 class ApiError(ValueError):
