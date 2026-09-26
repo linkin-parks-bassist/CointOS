@@ -138,7 +138,7 @@ def test_path_links_expose_installed_commands_without_clobbering():
         installer.link_commands(prefix, bin_dir)
         for name, script in installer.PATH_COMMANDS.items():
             assert (bin_dir / name).readlink() == prefix / 'scripts' / script
-        result = subprocess.run(['ecosystem', 'status'], cwd=base,
+        result = subprocess.run(['ecosystem', 'counts'], cwd=base,
                                 env=dict(os.environ, PATH=str(bin_dir) + ':' + os.environ['PATH']),
                                 capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
@@ -146,7 +146,7 @@ def test_path_links_expose_installed_commands_without_clobbering():
         jobs_dir = prefix / 'state/jobs'
         (jobs_dir / 'audit.json').write_text('{"state":"ready"}')
         (jobs_dir / 'task.json').write_text('{"kind":"agent-task","state":"queued"}')
-        result = subprocess.run(['ecosystem', 'status'], cwd=base,
+        result = subprocess.run(['ecosystem', 'counts'], cwd=base,
                                 env=dict(os.environ, PATH=str(bin_dir) + ':' + os.environ['PATH']),
                                 capture_output=True, text=True)
         assert result.returncode == 0, result.stderr

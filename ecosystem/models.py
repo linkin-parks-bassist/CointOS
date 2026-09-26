@@ -611,14 +611,21 @@ def snapshot(root: Path | None = None, clock=None) -> dict:
     maximum_kv_bytes = min(host_kv_headroom, gtt_kv_headroom) \
         if None not in (host_kv_headroom, gtt_kv_headroom) else None
     contexts = [item["context"] for item in models if _positive_integer(item.get("context"))]
-    envelope_safe = (
+    # Verified means the capacity facts were observed; safe means there is headroom
+    # to load or grow. A full machine is verified-but-unsafe: resident fixed
+    # allocations stay usable, only new loads are refused.
+    envelope_verified = (
         host_fresh and registry_fresh
-        and _positive_integer(maximum_model_bytes)
-        and _positive_integer(maximum_kv_bytes)
+        and isinstance(maximum_model_bytes, int) and isinstance(maximum_kv_bytes, int)
         and bool(contexts)
     )
+    envelope_safe = (
+        envelope_verified
+        and _positive_integer(maximum_model_bytes)
+        and _positive_integer(maximum_kv_bytes)
+    )
     resource_envelope = {
-        "verified": bool(envelope_safe),
+        "verified": bool(envelope_verified),
         "fresh": bool(host_fresh and registry_fresh),
         "stale": not bool(host_fresh and registry_fresh),
         "safe": bool(envelope_safe),
@@ -760,8 +767,6 @@ def _inventory_reasons(inventory: dict) -> list[str]:
             reasons.append("resource_envelope:unverified")
         if envelope.get("fresh") is not True or envelope.get("stale") is True:
             reasons.append("resource_envelope:stale")
-        if envelope.get("safe") is not True:
-            reasons.append("resource_envelope:unsafe")
         if not isinstance(envelope.get("provenance"), str) or not envelope["provenance"]:
             reasons.append("resource_envelope:provenance")
     return reasons
@@ -846,13 +851,14 @@ def _model_route(model: dict, inventory: dict, policy: dict, request: dict) -> d
     )
     if context_mode == "shared" and not shared_verified:
         reasons.append("context:shared_unverified")
-    if not _positive_integer(maximum_model_bytes) or (
-            not resident_verified and _positive_integer(model_bytes)
-            and model_bytes > maximum_model_bytes):
-        reasons.append("model_bytes")
+    if not resident_verified and (
+            envelope.get("safe") is not True or not _positive_integer(maximum_model_bytes)
+            or (_positive_integer(model_bytes) and model_bytes > maximum_model_bytes)):
+        reasons.append("resource_envelope:unsafe" if envelope.get("safe") is not True
+                       else "model_bytes")
     if not _positive_integer(maximum_backend_context):
         reasons.append("resource_envelope:maximum_context_tokens")
-    for field in ("available_host_bytes", "gtt_limit_bytes", "maximum_kv_bytes"):
+    for field in ("available_host_bytes", "gtt_limit_bytes") + (() if resident_verified else ("maximum_kv_bytes",)):
         if not _positive_integer(envelope.get(field)):
             reasons.append(f"resource_envelope:{field}")
     gtt_used_evidence = envelope.get("gtt_used_bytes")
