@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T15:48:50+10:00"
+revised_at: "2026-09-26T21:48:47+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -28,7 +28,7 @@ revised_at: "2026-09-26T15:48:50+10:00"
   4. A thought is placed on the cheapest lane open to it: the one it holds or that is held for it, then a warm one, then a free one, then an unreserved one.
 - **Contexts stay resident when nothing needs the lane.** When a thought ends, the agent's context stays on its lane. It is saved only when another agent needs that lane, so an agent that keeps a lane between thoughts pays nothing.
 - **Shared starts.** Agents of one role share a long common start (tools, system prompt, role). When a context being read shares at least `shared_prefix_tokens` with another context CointOS holds, the read stops exactly there once and saves that start as a shared snapshot. Every later context that begins with it restores it instead of reading it, through the ordinary longest-snapshot match.
-- **One snapshot per conversation.** Saving a context forgets its conversation's older snapshots, which are starts of it.
+- **One snapshot per conversation.** Saving a context forgets its conversation's older snapshots, which are starts of it. A task's conversation is one line of history, so when its next thought starts, the task's snapshots that do not begin the new context (left by a run that stopped mid-thought) are forgotten too. Coin's and David's snapshots, which may belong to several conversations at once, leave by least recent use.
 - **Reservation:** one lane of the front-desk model serves only Coin and Sole Survivor, so Coin's first reply never waits.
 - **Bound:** a thought generates at most `max_thought_tokens`.
 

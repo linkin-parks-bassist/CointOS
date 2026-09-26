@@ -79,8 +79,21 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
                             "max": max_new, "generated": [], "queue": queue.Queue(), "cancelled": False}
         if klass == "user":
             L["user_last_thought"] = now()
+        if owner in L["tasks"]:
+            forget_diverged(owner, model, rendered["tokens"])
         schedule()
     return thought_id
+
+
+def forget_diverged(owner: str, model: str, tokens: list[int]) -> None:
+    """A task's conversation is one line of history: its snapshots that do not begin the context
+    it goes on with (left by a run that stopped mid-thought) can never be used again. Caller holds LOCK."""
+    for name in [n for n, s in L["snapshots"].items()
+                 if s["owner"] == owner and s["model"] == model
+                 and (s["tokens"] >= len(tokens) or digest(tokens[:s["tokens"]]) != s["digest"])]:
+        L["snapshots"].pop(name)
+        BACKEND.forget(CONFIG, name)
+        log("snapshot forgotten", owner=owner, reason="diverged from its conversation")
 
 
 def cancel(thought_id: str) -> None:
