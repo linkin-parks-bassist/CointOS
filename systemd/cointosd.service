@@ -1,0 +1,16 @@
+[Unit]
+Description=CointOS daemon: GPU lanes, gateway, agents, guard and self-check
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m cointos.daemon
+KillMode=mixed
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

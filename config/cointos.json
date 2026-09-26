@@ -1,0 +1,75 @@
+{
+  "lemonade": "http://127.0.0.1:13305",
+  "port": 4200,
+  "tick_seconds": 1,
+  "work_model": "Qwen3.8-27B-GGUF",
+  "front_model": "Qwen3.5-4B-GGUF",
+  "models": {
+    "Qwen3.8-27B-GGUF": {
+      "ctx_size": 262144,
+      "lanes": 2,
+      "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp",
+      "pinned": true
+    },
+    "Qwen3.5-4B-GGUF": {
+      "ctx_size": 65536,
+      "lanes": 2,
+      "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1",
+      "pinned": true
+    }
+  },
+  "priorities": [
+    "survivor",
+    "coin",
+    "user",
+    "background"
+  ],
+  "reserved_lanes": [
+    {
+      "model": "Qwen3.5-4B-GGUF",
+      "lane": 1,
+      "classes": [
+        "survivor",
+        "coin"
+      ]
+    }
+  ],
+  "max_output_tokens": 8192,
+  "warm_lane_grace_seconds": 30,
+  "user_quiet_seconds": 120,
+  "limits": {
+    "min_mem_available_gb": 24,
+    "max_psi_full_avg10": 1.0,
+    "max_swap_used_gb": 2,
+    "unload_after_seconds": 60,
+    "calm_seconds_before_reload": 300
+  },
+  "checks": {
+    "lane_idle_seconds": 5,
+    "coin_wait_seconds": 10,
+    "agent_silent_seconds": 900,
+    "max_identical_requests": 3
+  },
+  "spawner": {
+    "max_agents": 4,
+    "interval_seconds": 5,
+    "max_runs_per_task": 5,
+    "survey_every_seconds": 21600,
+    "maintenance_every_seconds": 21600,
+    "maintenance_project": "CointOS"
+  },
+  "projects": [
+    {
+      "name": "sandbox",
+      "path": "~/Projects/cointos-sandbox",
+      "main_branch": "main"
+    }
+  ],
+  "history_length": 200,
+  "coin": {
+    "telegram_env": "~/.config/agent-ecosystem/telegram.env",
+    "history_messages": 20,
+    "max_tool_rounds": 8,
+    "alert_poll_seconds": 5
+  }
+}

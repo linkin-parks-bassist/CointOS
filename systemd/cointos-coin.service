@@ -1,0 +1,14 @@
+[Unit]
+Description=CointOS Coin: David's Telegram remote control
+After=network-online.target cointosd.service
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -m cointos.coin
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
