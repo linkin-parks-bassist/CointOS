@@ -1,6 +1,6 @@
 ---
 status: "green"
-revised_at: "2026-09-26T23:18:35+10:00"
+revised_at: "2026-09-26T23:26:50+10:00"
 ---
 
 **CointOS is an operating system for agents.** The primitive is the agent. Model lanes are resources: a pre-emptive scheduler time-shares them among agents, the way an operating system time-shares CPUs among processes. Details not fixed here are for the builder to decide, within `how/to/keep/cointos/simple.md`.
@@ -86,6 +86,8 @@ The machine is David's workstation first. Memory is one pool (unified GPU memory
 - **An allocation happens only if it fits in the headroom; otherwise it waits.** Launching a model needs its `memory_gb`, starting an agent needs `agent_memory_gb`, and saving a context needs its size, estimated from the last snapshots of that model.
 - **The model server's allowance counts too.** Lemonade runs in `inference.slice` with its own memory budget (`memory.high`), and snapshot files in `/dev/shm` are charged to it. When it overflows into swap, systemd-oomd kills Lemonade. So headroom is the tighter of the machine's (available memory minus `reserve_gb`) and the server's (its budget minus its anonymous and shared memory; page cache it drops cheaply). The backend reports the server's.
 - **Snapshots give way first, a tier at a time.** They are the only elastic memory. Whenever headroom is negative, or an allocation needs room, the least recently run snapshots in memory move to disk (`disk_snapshots`, at most `disk_snapshots_gb`, whose own least recently run snapshots are forgotten to make room), or are forgotten when the disk tier is full. A snapshot on disk comes back to memory for a restore if it fits; otherwise its context is read again. Moves run outside the daemon's lock.
+- **Snapshots outlast everything but a reboot.** Snapshots in `/dev/shm` survive a daemon restart, a killed model and a killed Lemonade; only a reboot or power loss wipes them. So when the machine shuts down (systemd reports `stopping`), the daemon moves them to the disk tier, and agents resume warm after the reboot. No snapshot is ever copied periodically: a snapshot is a whole state (about 3 GB for a 35k-token context), so periodic copies would cost terabytes of writes a day.
+- **A snapshot is a cache, never a record.** OpenCode's session is the record of a conversation, tool calls and results included. A snapshot is used only when its tokens begin the conversation as it now is, so an old snapshot is never wrong, only shorter: the model reads, and does not repeat, whatever happened since.
 - **When headroom stays negative with nothing left to move,** background agents get no lanes and no new agents start, until headroom returns.
 - **Distress** is memory pressure (PSI `full avg10` above `max_psi`) sustained for `distress_seconds`. Swap in use is not a sign of it, since it lingers long after pressure is gone. Then background agents are stopped with their tasks requeued, the work model is killed, and Coin is alerted. The model is launched again once its `memory_gb` fits.
 

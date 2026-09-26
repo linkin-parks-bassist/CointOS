@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import faulthandler
 import signal
+import subprocess
 import threading
 import time
 import traceback
@@ -156,7 +157,15 @@ def shutdown() -> None:
     with LOCK:
         LOCK.notify_all()
     lanes.save_all()
+    if system_stopping():
+        lanes.persist()
     save()
+
+
+def system_stopping() -> bool:
+    """Whether the whole machine is shutting down (not just this daemon being restarted)."""
+    state = subprocess.run(["systemctl", "is-system-running"], capture_output=True, text=True).stdout.strip()
+    return state == "stopping"
 
 
 def main() -> None:

@@ -411,6 +411,21 @@ def save_all() -> None:
                 log("saved on stop", model=lane["model"], lane=lane["index"], owner=owner, tokens=len(held))
 
 
+def persist() -> None:
+    """Before the machine shuts down, move the snapshots held in memory (/dev/shm, which a reboot
+    wipes) to the disk tier, so agents resume warm after it. Nothing else loses them: a daemon
+    restart, a model killed or Lemonade killed all leave /dev/shm as it is."""
+    with LOCK:
+        leaving = [name for name, s in L["snapshots"].items()
+                   if s["tier"] == "memory" and disk_room(s["bytes"] / memory.GB, keep=name)]
+        for name in leaving:
+            L["snapshots"][name]["tier"] = "moving"
+    for name in leaving:
+        spill(name)
+    with LOCK:
+        log("snapshots moved to disk for shutdown", count=len(leaving))
+
+
 def lanes_down(model: str) -> None:
     """A model went away: its lanes are down, their states are gone, and their holders wait
     again. Caller holds LOCK."""
