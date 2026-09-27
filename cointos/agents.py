@@ -17,7 +17,8 @@ TIMEOUTS = load_config()["timeouts"]
 OPENCODE = str(Path.home() / ".local/bin/opencode")
 GLOBAL_OPENCODE = Path.home() / ".config/opencode/opencode.json"
 PROVIDER = "cointos"
-ROLE_FILES = {"worker": "worker.md", "manager": "manager.md", "steward": "steward.md", "gardener": "gardener.md"}
+ROLE_FILES = {"worker": "worker.md", "manager": "manager.md", "steward": "steward.md", "gardener": "gardener.md",
+              "integrator": "integrator.md"}
 
 
 def agent_dir(agent_id: str) -> Path:
@@ -48,6 +49,18 @@ def remove_worktree(place: dict, task: dict) -> bool:
         git("-C", place["path"], "worktree", "remove", "--force", task["worktree"], check=False)
         git("-C", place["path"], "branch", "-d", task["branch"], check=False)
     return merged
+
+
+def committed(task: dict) -> bool:
+    """Whether the task's worktree has everything committed."""
+    return not git("-C", task["worktree"], "status", "--porcelain", check=False).stdout.strip()
+
+
+def discard_worktree(place: dict, task: dict) -> None:
+    """Remove the worktree and branch of a task whose work has landed (squashed, so the branch
+    itself is not part of main) or was never to land."""
+    git("-C", place["path"], "worktree", "remove", "--force", task["worktree"], check=False)
+    git("-C", place["path"], "branch", "-D", task["branch"], check=False)
 
 
 def opencode_config(config: dict, key: str) -> dict:
@@ -98,18 +111,24 @@ def prompt(task: dict, place: dict) -> str:
         where = (f"Tree: {place['name']}, the knowledge root `{place['tree']}` of repository {place['path']}, "
                  f"main branch `{place['main_branch']}`.\nYour worktree: {task['worktree']}, on branch "
                  f"`{task['branch']}`; your copy of the tree is `{Path(task['worktree']) / place['tree']}`.")
-        refused = "If `cointos merge` refuses, say why in your final answer."
+    elif task["kind"] == "integrate":
+        where = (f"Project: {place['name']}, repository {place['path']}, main branch `{place['main_branch']}`.\n"
+                 f"Your worktree: {task['worktree']}, fresh from main.")
     else:
         where = (f"Project: {place['name']}, repository {place['path']}, main branch "
                  f"`{place['main_branch']}`.\nYour worktree: {task['worktree']}, on branch `{task['branch']}`.")
-        refused = "If `cointos merge` refuses, set the item to `Status: blocked` with the reason."
     finish = ("When your work is committed, land it with `cointos merge` in your worktree: it brings your "
               f"branch up to date with `{place['main_branch']}` and lands it. Never run `git merge`, `git rebase` "
               "or `git stash` yourself. If it reports conflicts, resolve them as it says and run it again. "
-              f"Only what lands counts: commit nothing after that. {refused}")
+              "Only what lands counts: commit nothing after that. If it refuses, say why in your final answer.")
     if task["kind"] == "item":
         assignment = (f"{where}\n\nYour item: `.knowledge/{task['item']}` (read it with kt). As it was "
-                      f"queued:\n\n{task['brief']}\n\n{finish}")
+                      f"queued:\n\n{task['brief']}\n\nWhen your work and your item's new status are committed "
+                      "on your branch, stop. Do not land it: the integrator reviews your branch and lands it, or "
+                      "sends it back to you with notes.")
+    elif task["kind"] == "integrate":
+        assignment = (f"{where}\n\nIntegrate the finished item `.knowledge/{task['item']}` from its worker's "
+                      "branch. Start with `cointos review` in your worktree.")
     elif task["kind"] == "breakdown":
         assignment = (f"{where}\n\nBreak down the drafted idea `.knowledge/{task['item']}`:\n\n"
                       f"{task['brief']}\n\n{finish}")
@@ -159,9 +178,14 @@ def launch(config: dict, agent_id: str, task: dict, place: dict, key: str) -> No
     with os.fdopen(descriptor, "w") as stream:
         json.dump(opencode_config(config, key), stream, indent=1)
     resumed = bool(task.get("session"))
-    text = ("Your previous run on this assignment stopped before it finished. Check where things "
-            "stand and continue it to the end. Do not repeat finished work. It is finished only when "
-            f"it has landed on `{place['main_branch']}` with `cointos merge`.") if resumed else prompt(task, place)
+    if task.get("review"):
+        text = (f"The integrator sent your work back:\n\n{task['review']}\n\nAddress this on your branch, commit, "
+                "and stop; the integrator will review it again.")
+    elif resumed:
+        text = ("Your previous run on this assignment stopped before it finished. Check where things "
+                "stand and continue it to the end. Do not repeat finished work.")
+    else:
+        text = prompt(task, place)
     command = [OPENCODE, "run", "--dir", task["worktree"], "--format", "json", "--auto",
                "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/{config['work_model']}"]
     if resumed:

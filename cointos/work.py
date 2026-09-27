@@ -124,6 +124,8 @@ def stop_agent(agent_id: str, reason: str, requeue: bool, charge: bool = True) -
         end_task(task, "waiting" if requeue and not exhausted else "failed", reason)
         if task["status"] == "failed":
             alert(f"Gave up on {task['title']} in {task['place']} after {task['runs']} runs: {reason}")
+            if task["kind"] == "integrate":  # an item that cannot be integrated has failed too
+                end_task(L["tasks"][f"{task['place']}:{task['item']}"], "failed", "could not be integrated")
     finish_agent(agent_id, reason)
     threading.Thread(target=agents.stop, args=(agent_id,), daemon=True).start()
 
@@ -152,15 +154,33 @@ def settle(agent_id: str, outcome: dict) -> None:
     agent = L["agents"][agent_id]
     task = L["tasks"][agent["task"]]
     where = place(task)
-    if task["kind"] in ("item", "breakdown"):
-        # The item on the main branch is the truth: it is what the queues, David and later agents
-        # see. A status set only on the task branch is undelivered, except `blocked`, which can be
-        # the very reason the branch could not land.
+    keep_worktree = False
+    if task["kind"] == "item":
+        # A worker's part ends with its work and its item's new status committed on its branch;
+        # the integrator reviews it and lands it, or sends it back.
+        branch = (queues.read_item(Path(task["worktree"]), task["item"]) or {}).get("status")
+        committed = agents.committed(task)
+        finished = branch in ("done", "blocked") and committed
+        detail = f"item status {branch} on its branch" + ("" if committed else ", with uncommitted changes")
+        keep_worktree = True
+    elif task["kind"] == "integrate":
+        # Finished once its item has left review: landed (its leaf gone, or blocked, on main) or
+        # sent back to its worker.
+        worker = L["tasks"][f"{where['name']}:{task['item']}"]
+        on_main = (queues.read_item(Path(where["path"]), task["item"]) or {}).get("status")
+        if task["item"] in queues.landed(where) or on_main == "blocked":
+            agents.discard_worktree(where, worker)
+            end_task(worker, "done", "landed" if on_main is None else "landed as blocked", review=None)
+            log("task finished", task=worker["id"], detail=worker["note"])
+        finished = worker["status"] != "review"
+        detail = f"{task['item']} {worker['status']}"
+    elif task["kind"] == "breakdown":
+        # The idea on the main branch is the truth; `blocked` also counts from the branch, as it
+        # can be the very reason the branch could not land.
         landed = (queues.read_item(Path(where["path"]), task["item"]) or {}).get("status")
         branch = (queues.read_item(Path(task["worktree"]), task["item"]) or {}).get("status")
-        accepted = ("done", "blocked") if task["kind"] == "item" else ("in progress", "done", "blocked")
-        finished = landed in accepted or branch == "blocked"
-        detail = f"item status {landed} on main" + ("" if branch in (None, landed) else f", {branch} on its branch")
+        finished = landed in ("in progress", "done", "blocked") or branch == "blocked"
+        detail = f"idea status {landed} on main" + ("" if branch in (None, landed) else f", {branch} on its branch")
     elif task["kind"] == "garden":
         # Like an item, the tree on the main branch is the truth: gardening is finished when
         # every leaf there is green again.
@@ -174,27 +194,45 @@ def settle(agent_id: str, outcome: dict) -> None:
     if outcome.get("error"):
         detail += f"; {outcome['error']}"
     if finished:
-        merged = agents.remove_worktree(where, task)
-        end_task(task, "done", detail + ("" if merged else "; branch not merged"),
-                 result=(outcome.get("text") or "")[-CONFIG["result_chars"]:])
+        result = (outcome.get("text") or "")[-CONFIG["result_chars"]:]
+        if keep_worktree:
+            end_task(task, "review", detail, result=result)
+        else:
+            if task["kind"] == "integrate":
+                agents.discard_worktree(where, task)
+                merged = True
+            else:
+                merged = agents.remove_worktree(where, task)
+            end_task(task, "done", detail + ("" if merged else "; branch not merged"), result=result)
         log("task finished", task=task["id"], detail=task["note"])
         finish_agent(agent_id, "finished")
     else:
         stop_agent(agent_id, f"run ended unfinished ({detail})", requeue=True)
 
 
+def send_back(integration: dict, notes: str) -> None:
+    """The integrator returns a worker's item with what must change. Caller holds LOCK."""
+    worker = L["tasks"][f"{integration['place']}:{integration['item']}"]
+    if worker["status"] != "review":
+        raise ValueError(f"{worker['id']} is not in review")
+    end_task(worker, "waiting", "sent back by the integrator", review=notes)
+    log("sent back", task=worker["id"], notes=notes)
+
+
 # ---------------------------------------------------------------- tasks and the spawner
 
-RANKS = {"urgent": [1], "queued": [3], "drafted": [4], "survey": [5], "maintenance": [6]}  # gardening: trees.rank
+# Lower runs first. Finished work is landed before new work starts, so branches stay close to
+# main. Gardening ranks by how bad its tree is (`trees.rank`).
+RANKS = {"urgent": [1], "integrate": [2], "queued": [4], "drafted": [5], "survey": [6], "maintenance": [7]}
 
 
 def new_task(where: dict, kind: str, role: str, item: str | None, brief: str, leaf_hash: str | None, rank: list,
              name: str | None = None) -> str:
     name = name or (Path(item).stem if item else f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}")
-    task_id = f"{where['name']}:{item or name}"
+    task_id = f"{where['name']}:{item if kind in ('item', 'breakdown') else name}"
     L["tasks"][task_id] = {
         "id": task_id, "place": where["name"], "kind": kind, "role": role, "item": item, "rank": rank,
-        "title": name if item else kind, "brief": brief, "leaf_hash": leaf_hash, "status": "waiting", "runs": 0,
+        "title": Path(item).stem if item else kind, "brief": brief, "leaf_hash": leaf_hash, "status": "waiting", "runs": 0,
         "session": None, "agent": None, "worktree": str(STATE / "worktrees" / where["name"] / name),
         "branch": f"cointos/{name}", "created_at": now(), "updated_at": now(), "note": None,
     }
@@ -223,7 +261,7 @@ def next_task() -> str | None:
     on main (`queues.readiness`). Caller holds LOCK."""
     tasks = L["tasks"]
     scanned = {project["name"]: queues.scan(project) for project in CONFIG["projects"]}
-    ready = {project: queues.readiness(items) for project, items in scanned.items()}
+    ready = {p["name"]: queues.readiness(scanned[p["name"]], queues.landed(p)) for p in CONFIG["projects"]}
     problems = {f"{project}:{item}": state for project, states in ready.items() for item, state in states.items()
                 if state not in ("ready", "waiting")}
     for task_id, problem in problems.items():
@@ -232,7 +270,7 @@ def next_task() -> str | None:
     L["dependency_problems"] = problems
 
     def runnable(task):
-        return not task.get("item") or ready.get(task["place"], {}).get(task["item"], "ready") == "ready"
+        return task["kind"] != "item" or ready.get(task["place"], {}).get(task["item"], "ready") == "ready"
 
     waiting = [t for t in tasks.values() if t["status"] == "waiting" and runnable(t)]
     if waiting:
@@ -243,7 +281,7 @@ def next_task() -> str | None:
             if ready[project["name"]][found["item"]] != "ready":
                 continue
             known = tasks.get(f"{project['name']}:{found['item']}")
-            if known and (known["status"] in ("running", "waiting") or known["leaf_hash"] == found["hash"]):
+            if known and (known["status"] in ("running", "waiting", "review") or known["leaf_hash"] == found["hash"]):
                 continue
             if found["kind"] in ("urgent", "queued") and found["status"] == "queued":
                 candidates.append((RANKS[found["kind"]], lambda p=project, f=found: new_task(
@@ -251,6 +289,13 @@ def next_task() -> str | None:
             elif found["kind"] == "drafted" and found["status"] == "drafted":
                 candidates.append((RANKS["drafted"], lambda p=project, f=found: new_task(
                     p, "breakdown", "manager", f["item"], f["brief"], f["hash"], RANKS["drafted"])))
+    for project in CONFIG["projects"]:  # one integration at a time per project, oldest first
+        integrating = tasks.get(f"{project['name']}:integrate")
+        finished = [t for t in tasks.values() if t["place"] == project["name"] and t["status"] == "review"]
+        if finished and not (integrating and integrating["status"] in ("running", "waiting")):
+            first = min(finished, key=lambda t: t["updated_at"])
+            candidates.append((RANKS["integrate"], lambda p=project, t=first: new_task(
+                p, "integrate", "integrator", t["item"], t["brief"], None, RANKS["integrate"], "integrate")))
     for tree in CONFIG["trees"]:
         health = tree_health(tree)
         known = tasks.get(f"{tree['name']}:garden")

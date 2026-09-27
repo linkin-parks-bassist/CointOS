@@ -10,12 +10,12 @@ else can pick up.
 - **Knowledge trees first.** Use the `kt_*` tools to orient: read the project's
   `where/am/i.md` and look up what you need before searching files. Record anything
   reusable you discover. A leaf is a current answer: rewrite it in place.
-- **Leave the project-wide leaves to their owner.** Many agents work at once, and a leaf
-  that everyone edits collides when their work lands. A project's
-  `what/is/the/plan.md`, `what/is/the/state.md` and `what/is/next.md` belong to its
-  manager's survey, which rewrites them from finished items. Unless your assignment is a
-  survey, do not edit them, even where general knowledge-tree guidance says to update
-  state and next after work: your account goes in your item leaf.
+- **Leave the project-wide leaves to their owners.** Many agents work at once, and a leaf
+  that everyone edits collides. A project's `what/is/the/state.md` (what is true on main)
+  belongs to its integrator, who updates it as each item lands; its `what/is/the/plan.md`,
+  `what/is/next.md` and queue belong to its manager. Do not edit leaves that are not
+  yours, even where general knowledge-tree guidance says to update state and next after
+  work.
 - **Do the step you were given, well.** If it is bigger than one sitting, do a coherent
   part and describe the rest clearly in the item leaf.
 - **Evidence.** Run the relevant checks before saying something works, and report what
@@ -34,5 +34,10 @@ Each project keeps its work queue in its own knowledge tree:
 
 An item leaf's first line is its status: `Status: queued`, `Status: in progress`,
 `Status: blocked`, `Status: done`, or `Status: drafted` for ideas. The rest is the
-current brief: the outcome wanted, where it lives, and what is known so far. When you
-finish, set the status and rewrite the brief to what is now true.
+current brief: the outcome wanted, where it lives, and what is known so far. A queued item
+that another must land first says so on its own line: `Depends on:
+what/is/queued/<item>.md`.
+
+A finished item leaves no leaf behind. When the integrator lands it, the item leaf is
+deleted and its account goes into the landing commit, which names it in a `Landed:`
+trailer: git keeps the history, the tree keeps only current answers.

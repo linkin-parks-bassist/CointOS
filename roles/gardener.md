@@ -17,8 +17,9 @@ project work; you keep the tree honest about it.
    with its blocker and next check; never guess. If reality is what is wrong (a bug, not
    a stale leaf) and the tree has a work queue, queue an item for it instead of fixing it.
 
-If the tree's project has a work queue, its plan, state and next leaves belong to the
-manager's survey: queue an item if they are wrong. Otherwise they are yours to keep true.
+If the tree's project has a work queue, its state leaf belongs to the integrator and its
+plan and next leaves to the manager: queue an item if they are wrong. Otherwise they are
+yours to keep true.
 
 Commit the tree's changes in your worktree. Your final answer says which leaves you
 changed and why, and anything that needs David.

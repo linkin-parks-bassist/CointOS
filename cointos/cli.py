@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from cointos import agents, config as configuration
+from cointos import agents, config as configuration, queues
 
 CONFIG = configuration.load()
 BACKEND = importlib.import_module(CONFIG["backend"])
@@ -113,23 +113,12 @@ def halt(keep_coin: bool) -> None:
           "\nbring it back with: cointos up")
 
 
-def merge() -> None:
-    """Land the current worktree's branch on its task's main branch: bring the branch up to date
-    with main, then fast-forward main to it. Agents land only this way, never with git merge. A
-    conflict is left in the worktree with plain instructions; nothing lands until it is resolved."""
-    def git(*args, cwd=None):
-        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+def git(*args, cwd=None) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
 
-    def conflicted():
-        return git("diff", "--name-only", "--diff-filter=U").stdout.split()
 
-    def resolve(files):
-        raise SystemExit(
-            "Main changed the same lines as your branch in:\n  " + "\n  ".join(files) + "\n"
-            "Nothing has landed. Open each file, keep what both sides meant (main's changes are other "
-            "agents' finished work; do not drop them) and remove the <<<<<<< ======= >>>>>>> markers. "
-            "Then `git add` those files, `git commit --no-edit`, and run `cointos merge` again.")
-    branch = git("branch", "--show-current").stdout.strip()
+def task_here() -> tuple[dict, str, Path]:
+    """The task whose worktree this is, its place's main branch, and the main checkout."""
     here = Path(git("rev-parse", "--show-toplevel").stdout.strip() or ".").resolve()
     checkout = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()).parent
     task = next((t for t in ledger()["tasks"].values() if Path(t["worktree"]).resolve() == here), None)
@@ -137,15 +126,38 @@ def merge() -> None:
         raise SystemExit(f"{here} is not a CointOS task's worktree")
     main = next(p for p in CONFIG["trees" if task["kind"] == "garden" else "projects"]
                 if p["name"] == task["place"])["main_branch"]
+    return task, main, checkout
+
+
+def conflicted() -> list[str]:
+    return git("diff", "--name-only", "--diff-filter=U").stdout.split()
+
+
+def resolve(files: list[str], then: str) -> None:
+    raise SystemExit(
+        "These files have changes from both sides:\n  " + "\n  ".join(files) + "\n"
+        "Nothing has landed. Open each file, keep what both sides meant (main's changes are other "
+        "agents' finished work; do not drop them) and remove the <<<<<<< ======= >>>>>>> markers. "
+        f"Then `git add` those files and {then}.")
+
+
+def merge() -> None:
+    """Land the current worktree's branch on its task's main branch: bring the branch up to date
+    with main, then fast-forward main to it. Managers, gardeners and the integrator land this
+    way, never with git merge. A conflict is left in the worktree with plain instructions;
+    nothing lands until it is resolved."""
+    task, main, checkout = task_here()
+    branch = git("branch", "--show-current").stdout.strip()
+    again = "`git commit --no-edit`, and run `cointos merge` again"
     if not branch or branch == main:
         raise SystemExit("run this in your task worktree, on your task branch")
     if conflicted():
-        resolve(conflicted())
+        resolve(conflicted(), again)
     if git("status", "--porcelain").stdout.strip():
         raise SystemExit("your worktree has uncommitted changes; commit them first, then run `cointos merge` again")
     if git("merge", "--no-edit", main).returncode != 0:
         if conflicted():
-            resolve(conflicted())
+            resolve(conflicted(), again)
         git("merge", "--abort")
         raise SystemExit(f"bringing your branch up to date with {main} failed; nothing has landed")
     if git("branch", "--show-current", cwd=checkout).stdout.strip() != main:
@@ -157,6 +169,60 @@ def merge() -> None:
                          "`cointos merge` again. Otherwise the main checkout has someone's uncommitted edits "
                          "in the same files; try again later.\n" + result.stderr.strip())
     print(f"landed {branch} on {main}")
+
+
+def integration() -> tuple[dict, dict, str, Path]:
+    """In an integrator's worktree: its task, the worker's task it integrates, main, the checkout."""
+    task, main, checkout = task_here()
+    if task["kind"] != "integrate":
+        raise SystemExit("only the integrator reviews and lands a worker's item")
+    worker = ledger()["tasks"][f"{task['place']}:{task['item']}"]
+    return task, worker, main, checkout
+
+
+def review() -> None:
+    """Bring the worker's branch into the integrator's worktree as one uncommitted change, drop
+    its item leaf if the item is done (a finished item leaves no leaf; git keeps its history), and
+    show what to check."""
+    task, worker, main, checkout = integration()
+    leaf = f".knowledge/{task['item']}"
+    account = git("show", f"{worker['branch']}:{leaf}").stdout
+    if not (git("diff", "--cached", "--quiet").returncode or conflicted()):
+        git("merge", "--squash", worker["branch"])
+        if (queues.status(account) or "") == "done":
+            git("rm", "-q", "-f", "--", leaf)
+    print(f"The worker's account of {task['item']}:\n\n{queues.answer(account).strip()}\n")
+    print("The change, staged in your worktree (`git diff --cached` shows it all):")
+    print(git("diff", "--cached", "--stat").stdout)
+    if conflicted():
+        resolve(conflicted(), "carry on with the review; `cointos land` commits it")
+    print("Next: check the change against the item and run the tests. Fix small things yourself. Bring "
+          "`.knowledge/what/is/the/state.md` (and any leaf the change makes untrue) up to date. Then "
+          "`cointos land \"<one-line summary>\"`, or `cointos return \"<what must change>\"`.")
+
+
+def land(summary: str) -> None:
+    """Commit the reviewed change as one commit, with the worker's account and a `Landed:` trailer
+    naming the item if its leaf is gone, and land it on main."""
+    task, worker, main, checkout = integration()
+    if conflicted():
+        resolve(conflicted(), "run `cointos land` again")
+    leaf = f".knowledge/{task['item']}"
+    git("add", "-A")
+    if git("diff", "--cached", "--quiet").returncode == 0:
+        raise SystemExit("nothing to land: run `cointos review` first")
+    account = queues.answer(git("show", f"{worker['branch']}:{leaf}").stdout).strip()
+    trailer = "" if (Path(task["worktree"]) / leaf).exists() else f"\n\nLanded: {task['item']}"
+    result = git("commit", "-q", "-m", f"{summary.strip()}\n\n{account}{trailer}")
+    if result.returncode != 0:
+        raise SystemExit(result.stderr.strip() or result.stdout.strip())
+    merge()
+
+
+def send_back(notes: str) -> None:
+    task, worker, main, checkout = integration()
+    call("return", {"task": task["id"], "notes": notes})
+    print(f"sent {task['item']} back to its worker. Your part is over: stop now.")
 
 
 def watch(agent_id: str | None) -> None:
@@ -214,8 +280,10 @@ def view(slot: int) -> None:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="cointos", description="Control CointOS.")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "agents", "check", "go", "up", "merge"):
+    for name in ("status", "agents", "check", "go", "up", "merge", "review"):
         sub.add_parser(name)
+    sub.add_parser("land", help="integrator: land the reviewed item").add_argument("summary")
+    sub.add_parser("return", help="integrator: send the item back to its worker").add_argument("notes")
     sub.add_parser("jobs").add_argument("--all", action="store_true")
     sub.add_parser("watch", help="watch an agent live in OpenCode").add_argument("agent", nargs="?")
     viewing = sub.add_parser("view", help="show agents live in pop-up windows: --all to open them, --off to stop")
@@ -269,6 +337,12 @@ def main(argv=None) -> None:
             raise SystemExit("usage: cointos view --all | --off")
     elif args.command == "merge":
         merge()
+    elif args.command == "review":
+        review()
+    elif args.command == "land":
+        land(args.summary)
+    elif args.command == "return":
+        send_back(args.notes)
     elif args.command == "queue":
         print(call("queue", {"project": args.project, "name": args.name, "brief": args.brief, "kind": args.kind})["item"])
 

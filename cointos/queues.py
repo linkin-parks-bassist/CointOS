@@ -36,16 +36,29 @@ def depends(text: str) -> list[str]:
     return []
 
 
-def readiness(items: list[dict]) -> dict[str, str]:
+def landed(project: dict) -> set[str]:
+    """The items landed on the project's main branch. A landed item's leaf is gone (a leaf is an
+    answer, never a log); its landing commit names it in a `Landed:` trailer, so git keeps the
+    history."""
+    result = subprocess.run(["git", "-C", project["path"], "log", project["main_branch"],
+                             "--format=%(trailers:key=Landed,valueonly)"], capture_output=True, text=True)
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
     """Each item's readiness from its `Depends on:` line: "ready" once every item it depends on
-    says done (the items are read from the project's main branch, where done is true); "waiting"
-    while any is still to come; otherwise the problem that keeps it from ever becoming ready (an
-    unknown or blocked dependency, or a cycle). Pure."""
+    has landed (`done`, item paths); "waiting" while any is still in the queue; otherwise the
+    problem that keeps it from ever becoming ready (an unknown or blocked dependency, or a
+    cycle). Pure."""
     paths = {item["item"]: item for item in items}
     stems = {Path(item["item"]).stem: item["item"] for item in items}
+    done_stems = {Path(name).stem: name for name in done}
 
     def resolve(name):
         return name if name in paths else stems.get(Path(name).stem)
+
+    def finished(name):
+        return name in done or Path(name).stem in done_stems
 
     def reaches(start, target, seen):
         for name in paths[start].get("depends", []):
@@ -56,7 +69,7 @@ def readiness(items: list[dict]) -> dict[str, str]:
 
     result = {}
     for item in items:
-        needed = item.get("depends", [])
+        needed = [name for name in item.get("depends", []) if not finished(name)]
         unknown = [name for name in needed if resolve(name) is None]
         if unknown:
             result[item["item"]] = f"depends on unknown {', '.join(unknown)}"
@@ -66,7 +79,7 @@ def readiness(items: list[dict]) -> dict[str, str]:
             result[item["item"]] = "depends on a blocked item: " + ", ".join(
                 resolve(name) for name in needed if paths[resolve(name)]["status"] == "blocked")
         else:
-            result[item["item"]] = "ready" if all(paths[resolve(name)]["status"] == "done" for name in needed) else "waiting"
+            result[item["item"]] = "waiting" if needed else "ready"
     return result
 
 

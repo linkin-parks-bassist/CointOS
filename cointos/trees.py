@@ -36,10 +36,10 @@ def health(tree: dict, timeout: float) -> dict:
 
 def rank(health: dict) -> list:
     """Where gardening the tree stands among tasks (lower runs first, see `work.RANKS`): brown
-    leaves before urgent work, yellow ones before queued work, a routine pass after surveys;
+    leaves before urgent work, yellow ones before queued work, a routine pass with the surveys;
     the worse the tree, the sooner."""
     if health["brown"]:
         return [0, -health["brown"], -health["yellow"]]
     if health["yellow"]:
-        return [2, -health["yellow"]]
-    return [5]
+        return [3, -health["yellow"]]
+    return [6]

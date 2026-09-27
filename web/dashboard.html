@@ -203,7 +203,8 @@ function renderAgents(S) {
 }
 
 function renderWork(L) {
-  const groups = [["running", "In progress"], ["waiting", "Up next"], ["failed", "Gave up"]];
+  const groups = [["running", "In progress"], ["review", "Waiting for the integrator"], ["waiting", "Up next"],
+                  ["failed", "Gave up"]];
   const tasks = Object.values(L.tasks).sort((a, b) => b.updated_at - a.updated_at);
   const rows = (status, some) => some.map(t => `<div class="row ${status}"><div class="bar"></div>` +
     `<div class="who">${esc(t.place)}: ${esc(t.title.replace(/-/g, " "))}</div>` +

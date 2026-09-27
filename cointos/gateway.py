@@ -224,6 +224,9 @@ def api(action: str, body: dict):
                 work.stop_agent(agent_id, "stopped by David", requeue=True, charge=False)
             log("paused")
             return {"ok": True, "paused": True}
+        if action == "return":
+            work.send_back(L["tasks"][body["task"]], body["notes"])
+            return {"ok": True}
         if action == "go":
             L["paused"] = False
             log("resumed")

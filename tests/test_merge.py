@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import cli
+from cointos import cli, queues
 
 
 def git(cwd, *args):
@@ -62,6 +62,50 @@ class Landing(unittest.TestCase):
         git(self.tree, "add", "state.md"), git(self.tree, "commit", "-q", "--no-edit")
         self.land()
         self.assertEqual((self.main / "state.md").read_text(), "theirs and mine\n")
+
+
+class Integration(unittest.TestCase):
+    """The integrator brings a worker's branch in as one change, drops the finished item's leaf,
+    and lands one commit whose trailer names the item; git keeps the account."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        self.main, self.worker, self.integrator = root / "project", root / "worker", root / "integrator"
+        self.main.mkdir()
+        git(self.main, "init", "-q", "-b", "main")
+        git(self.main, "config", "user.email", "t@t"), git(self.main, "config", "user.name", "t")
+        self.item = "what/is/queued/parser.md"
+        self.leaf = Path(".knowledge") / self.item
+        (self.main / self.leaf).parent.mkdir(parents=True)
+        (self.main / self.leaf).write_text("Status: queued\n\nWrite a parser.\n")
+        git(self.main, "add", "."), git(self.main, "commit", "-qm", "queue")
+        git(self.main, "worktree", "add", "-q", "-b", "cointos/parser", str(self.worker))
+        (self.worker / "parser.c").write_text("int parse;\n")
+        (self.worker / self.leaf).write_text("Status: done\n\nparser.c parses; its tests pass.\n")
+        git(self.worker, "add", "."), git(self.worker, "commit", "-qm", "wip")
+        git(self.main, "worktree", "add", "-q", "-b", "cointos/integrate", str(self.integrator))
+        ledger = {"tasks": {
+            "p:what/is/queued/parser.md": {"worktree": str(self.worker), "branch": "cointos/parser", "kind": "item",
+                                           "place": "p", "item": self.item},
+            "p:integrate": {"id": "p:integrate", "worktree": str(self.integrator), "kind": "integrate",
+                            "place": "p", "item": self.item}}}
+        self.enterContext(patch.object(cli, "ledger", return_value=ledger))
+        self.enterContext(patch.dict(cli.CONFIG, {"projects": [{"name": "p", "main_branch": "main"}]}))
+        previous = os.getcwd()
+        os.chdir(self.integrator)
+        self.addCleanup(os.chdir, previous)
+
+    def test_review_then_land_makes_one_commit_and_prunes_the_item(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.review()
+            cli.land("Add the parser")
+        self.assertEqual(sorted(git(self.main, "ls-files").split()), ["parser.c"])
+        message = git(self.main, "log", "-1", "--format=%B")
+        self.assertIn("parser.c parses", message)
+        self.assertEqual(queues.landed({"path": str(self.main), "main_branch": "main"}), {self.item})
+        self.assertEqual(len(git(self.main, "log", "--format=%h").split()), 2, "one commit for the item")
 
 
 if __name__ == "__main__":
