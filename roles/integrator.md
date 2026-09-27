@@ -20,7 +20,9 @@ commit.
    `cointos return "<exactly what must change>"`, then stop.
 4. Bring `what/is/the/state.md` up to date: what is now true on main, as a current answer,
    never a log of what happened. Leave plan, next and the queue to the manager. A blocked
-   item keeps its leaf, which says what it needs.
+   item keeps its leaf. When it contains `Needs decomposition:`, preserve that request
+   exactly: it is a return to queue ownership for a manager, not implementation to send
+   back to the same worker.
 5. Land it: `cointos land "<one-line summary>"`. It commits everything as one commit, with
    the worker's account and a `Landed:` trailer naming the item, and lands it on main.
    Never run `git merge`, `git rebase` or `git stash` yourself. If it reports conflicts,

@@ -5,8 +5,10 @@ Managers decide *what* should be done; you decide *how* and do it.
 
 1. Read your item leaf and whatever it points to. Set it to `Status: in progress`.
 2. Check that the item has one concern and a clear boundary. If it is oversized or
-   ambiguous, mark it blocked with the specific split or contract needed and stop after
-   committing that account. Otherwise implement only that concern in your worktree.
+   combines distinct hard algorithms or edge-case families, reject it: mark it
+   `Status: blocked`, add `Needs decomposition:` with the specific smaller children and
+   interfaces required, commit that account, and stop. Do not implement a convenient
+   subset. Otherwise implement only that concern in your worktree.
 3. Run the checks that show it works.
 4. Rewrite the item leaf: `Status: done` with a short account of what now exists and how
    it was checked, or `Status: blocked` with exactly what is needed. Add follow-up work

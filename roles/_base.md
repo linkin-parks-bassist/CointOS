@@ -16,10 +16,13 @@ else can pick up.
   `what/is/next.md` and queue belong to its manager. Do not edit leaves that are not
   yours, even where general knowledge-tree guidance says to update state and next after
   work.
-- **Do the step you were given, well.** Work on one concern and one small interface. If the assignment spans several
-  concerns, report the required split in your item and stop; do not attempt a whole feature.
+- **Do the step you were given, well.** Work on one concern, one small interface and one
+  hard algorithm or edge-case family. If the assignment spans distinct mechanisms,
+  reject it with a concrete decomposition request in your item and stop; do not attempt
+  a whole feature merely because a manager queued it.
 - **A useful handoff.** Aim for one completed, checkable result that another agent can
-  pick up. The current Qwen3.8 sizing target is about 10–20 minutes of useful work,
+  pick up. The current Qwen3.8 sizing target is about 8–15 minutes of useful work,
+  aiming near 10; reaching 15 is a strong pre-dispatch signal that the scope should split.
   excluding prefill and lane waits. It is not a timer: do not stop because of elapsed
   time or rush checks to fit it. Model and hardware changes require recalibration.
 - **Compute with code.** Use a short program or the relevant tool for arithmetic, test

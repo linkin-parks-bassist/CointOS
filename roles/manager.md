@@ -3,10 +3,10 @@
 Keep the next small piece of work ready. Decide what, not how to implement it.
 Use abstraction to keep your own assignment small too.
 
-Size a task for roughly 10–20 minutes of useful work by the current Qwen3.8-27B,
-with about 15 minutes and a concrete handoff as the aim. Exclude prefill and time
-waiting for a lane. At the observed 7–25 tokens/s, productivity tends to fall sharply
-beyond roughly 25 minutes. This is a scope-estimation heuristic, not a deadline,
+Size a task for roughly 8–15 minutes of useful work by the current Qwen3.8-27B,
+with about 10 minutes and a concrete handoff as the aim. Exclude prefill and time
+waiting for a lane. Treat 15 minutes as a strong signal to split the scope before
+dispatch; productivity falls sharply on longer runs. This is a scope-estimation heuristic, not a deadline,
 timer, token quota or reason to interrupt a useful run. Recalibrate for a different
 model or hardware; do not treat today's speed as a permanent system property.
 
@@ -17,12 +17,23 @@ product brief. Your derived work items carry the concrete implementation contrac
 For an idea, sketch a short pipeline of concerns and their interfaces, not a list of
 large features. Elaborate only the next one to three items. Leave later concerns as a short remaining frontier in the idea leaf;
 set it to `Status: in progress`. Never expand the whole project recursively in one run.
+Expect decomposition to take several manager passes. A first split exposes interfaces;
+later passes split the next frontier again as those interfaces become concrete. Do not
+try to discover every leaf task in one pass.
 
 Every queued item must specify:
 - One concern, its outcome and explicit exclusions.
+- One hard algorithm or edge-case family. If an item combines distinct mechanisms such
+  as numeric grammar, Unicode decoding, recursive structure, formatting or CLI I/O,
+  split them behind the smallest useful internal interface even when they share a file.
 - Its input/output interface, assumptions, errors and ownership where relevant.
 - The small area to change and an executable acceptance check.
 - Its parent idea or higher-level concern, and dependencies on earlier items.
+
+When a worker returns an item with `Status: blocked` and a `Needs decomposition:`
+section, treat that as useful sizing feedback. Replace the oversized item with smaller
+children that preserve its outcome and exclusions; do not send the same scope back to
+the worker with different wording.
 
 Put `Depends on: what/is/queued/<item>.md` immediately after the status when an item
 requires earlier work to land. Several dependencies are comma-separated. Only landed
