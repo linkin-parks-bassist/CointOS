@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-09-27T12:23:48+10:00"
+revised_at: "2026-09-27T12:26:05+10:00"
 ---
 
 The workstation is `DDRiver`, an AMD Ryzen AI MAX+ 395 with Radeon 8060S (Strix Halo), 128 GiB unified physical memory and a GNOME desktop. Live inspection on 2026-09-27 reports Ubuntu 24.04.5 LTS and kernel 7.0.0-31-generic. David's desktop and personal work outrank autonomous agents.
 
-**Memory is one pool.** GPU and ordinary host allocations share RAM. `memory.physical_bytes()` totals online memory blocks (137.4 decimal GB, approximately 128 GiB); `MemTotal` excludes boot reservations. The ledger and CLI use decimal GB. The dashboard converts and labels memory values in GiB. It shows MemAvailable versus physical memory unavailable to that measure (in use/reserved), not separate measured OS/model/KV allocations. The detailed panel separately retains model weights (configured estimate), KV/runtime (configured load estimate less weights), saved-context file size, and an explicitly unmeasured OS/applications row. Detail figures are not additive; file length is not resident memory, and load estimates may exceed current-shape consumption.
+**Memory is one pool.** GPU and ordinary host allocations share RAM. `memory.physical_bytes()` totals online memory blocks (137.4 decimal GB, approximately 128 GiB); `MemTotal` excludes boot reservations. The ledger and CLI use decimal GB. The dashboard's original five-part donut is retained at David's request. It converts to GiB but labels values GB; its OS remainder and model/KV estimates are not independent resident-memory measurements. MemAvailable is labelled Free and snapshot file sizes are used as the saved-context segment. These known attribution limits remain; the attempted redesign was reverted.
 
 **Measurements.**
 - `MemAvailable` in `/proc/meminfo` and PSI `full avg10` in `/proc/pressure/memory` drive workstation headroom and distress.
