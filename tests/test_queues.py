@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import queues, state, work
+from cointos import queues, state, work, gateway
 
 
 def item(name, status="queued", depends=(), decompose=False):
@@ -21,8 +21,7 @@ class Depends(unittest.TestCase):
 
 
 class Readiness(unittest.TestCase):
-    """An item is ready once everything it depends on has landed: a landed item's leaf is gone
-    and git names it in the landing commit's `Landed:` trailer."""
+    """An item is ready once the daemon confirms its prerequisites are accepted."""
 
     def test_an_item_waits_until_what_it_depends_on_has_landed(self):
         items = [item("core"), item("rest", depends=["what/is/the/queued/core.md"])]
@@ -54,41 +53,6 @@ class Readiness(unittest.TestCase):
         self.assertEqual(ready["what/is/the/queued/b.md"], "waiting")
 
 
-class Index(unittest.TestCase):
-    """An index lists its endpoints in priority order; urgent work goes first."""
-
-    TEXT = ("---\nstatus: green\n---\n\nWork queued, highest priority first.\n\n"
-            "- `what/is/the/queued/a.md`\n- `what/is/the/queued/b.md`: why b\n")
-
-    def test_entries_in_order(self):
-        self.assertEqual(queues.entries(self.TEXT, "queued"), ["what/is/the/queued/a.md", "what/is/the/queued/b.md"])
-        self.assertEqual(queues.entries(self.TEXT, "drafted"), [])
-
-    def test_urgent_first_and_ordinary_last(self):
-        first = queues.with_entry(self.TEXT, "what/is/the/queued/u.md", first=True)
-        last = queues.with_entry(self.TEXT, "what/is/the/queued/z.md", first=False)
-        self.assertEqual(queues.entries(first, "queued")[0], "what/is/the/queued/u.md")
-        self.assertEqual(queues.entries(last, "queued")[-1], "what/is/the/queued/z.md")
-        self.assertTrue(first.startswith("---\nstatus: green\n---\n\nWork queued"))
-
-    def test_an_index_says_when_it_is_empty(self):
-        text = queues.with_entry("Work, first first.\n\nNothing is queued.\n", "what/is/the/queued/a.md", first=False)
-        self.assertEqual(queues.entries(text, "queued"), ["what/is/the/queued/a.md"])
-        self.assertNotIn("Nothing is", text)
-        emptied = queues.without_entry(text, "what/is/the/queued/a.md")
-        self.assertTrue(emptied.endswith("Nothing is queued.\n"))
-
-    def test_landing_removes_only_its_entry(self):
-        text = queues.without_entry(self.TEXT, "what/is/the/queued/a.md")
-        self.assertEqual(queues.entries(text, "queued"), ["what/is/the/queued/b.md"])
-        self.assertIn("highest priority first", text)
-
-    def test_needs_decomposition(self):
-        self.assertTrue(queues.needs_decomposition("Status: blocked\n\nNeeds decomposition: split x and y"))
-        self.assertFalse(queues.needs_decomposition("Status: blocked\n\nWaiting on David."))
-        self.assertFalse(queues.needs_decomposition("Status: queued\n\nNeeds decomposition: later"))
-
-
 class Admission(unittest.TestCase):
     """Index order is priority, and a worker's decomposition request dispatches a manager."""
 
@@ -98,17 +62,16 @@ class Admission(unittest.TestCase):
         state.L.clear()
         state.L.update(state.fresh({}))
         self.path = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        (self.path / ".knowledge/what/is/the/queued").mkdir(parents=True)
         project = {"name": "p", "path": str(self.path), "main_branch": "main"}
         self.enterContext(patch.dict(work.CONFIG, projects=[project], trees=[]))
-        self.enterContext(patch.object(queues, "landed", return_value=set()))
         state.L["last_survey"]["p"] = state.now()
+        self.enterContext(patch.object(gateway, "save"))
+        self.enterContext(patch.object(queues, "publish"))
 
     def queue(self, *items):
-        (self.path / ".knowledge/what/is/queued.md").write_text(
-            "".join(f"- `what/is/the/queued/{name}.md`\n" for name, _ in items))
         for name, text in items:
-            (self.path / f".knowledge/what/is/the/queued/{name}.md").write_text(text)
+            record = item(name, queues.status(text), queues.depends(text), queues.needs_decomposition(text))
+            state.L["queue"][f"p:{record['item']}"] = dict(record, project="p", kind="queued", brief=text, hash=name, priority=len(state.L["queue"]))
 
     def test_the_first_entry_runs_first(self):
         self.queue(("urgent", "Status: queued\n\nNow."), ("later", "Status: queued\n\nLater."))
@@ -122,6 +85,39 @@ class Admission(unittest.TestCase):
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
         task["status"] = "running"
         self.assertIsNone(work.next_task())
+
+    def test_api_queue_is_durable_on_restart_and_never_writes_project(self):
+        gateway.api("queue", {"project": "p", "kind": "queued", "name": "core", "brief": "Build core"})
+        gateway.api("queue", {"project": "p", "kind": "queued", "name": "ui", "brief": "Depends on: core\nBuild UI"})
+        self.assertEqual(list(self.path.iterdir()), [])
+        self.assertEqual(work.next_task(), "p:core")
+        state.L["tasks"]["p:core"]["status"] = "review"
+        self.assertEqual(work.next_task(), "p:integrate")
+        queues.update("p", "core", "done")
+        state.L["tasks"]["p:core"]["status"] = "done"
+        restored = state.fresh(copy.deepcopy(state.L))
+        self.assertEqual(restored["queue"]["p:core"]["status"], "done")
+        state.L["tasks"]["p:integrate"]["status"] = "done"
+        self.assertEqual(work.next_task(), "p:ui")
+
+    def test_command_dispatch_and_retry_deduplication(self):
+        body = {"project": "p", "kind": "command", "name": "plan", "brief": "Plan the next stage"}
+        gateway.api("queue", body)
+        gateway.api("queue", body)
+        self.assertEqual(len(state.L["queue"]), 1)
+        task = state.L["tasks"][work.next_task()]
+        self.assertEqual((task["kind"], task["role"]), ("breakdown", "manager"))
+        self.assertNotIn("CointOS", task["worktree"])
+
+    def test_replacement_repoints_dependents(self):
+        p = work.CONFIG["projects"][0]
+        for name, brief in (("big", "Big"), ("after", "Depends on: big\nAfter"), ("small", "Small")):
+            queues.add(p, "queued", name, brief)
+        queues.update("p", "big", "blocked", "Status: blocked\nNeeds decomposition: split")
+        task = state.L["tasks"][work.next_task()]
+        gateway.api("replace", {"task": task["id"], "children": ["small"]})
+        self.assertEqual(state.L["queue"]["p:after"]["depends"], ["small"])
+        self.assertEqual(queues.landed(p), {"big"})
 
 
 if __name__ == "__main__":

@@ -77,8 +77,8 @@
   },
   "projects": [
     {
-      "name": "sandbox",
-      "path": "~/Projects/cointos-sandbox",
+      "name": "todo-cli",
+      "path": "~/Projects/todo-cli",
       "main_branch": "main"
     }
   ],

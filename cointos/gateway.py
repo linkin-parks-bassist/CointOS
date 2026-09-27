@@ -223,9 +223,35 @@ def api(action: str, body: dict):
             for agent_id in list(L["agents"]):
                 work.stop_agent(agent_id, "stopped by David", requeue=True, charge=False)
             log("paused")
+            save()
             return {"ok": True, "paused": True}
         if action == "return":
             work.send_back(L["tasks"][body["task"]], body["notes"])
+            save()
+            return {"ok": True}
+        if action in ("accept", "finish", "replace"):
+            task = L["tasks"][body["task"]]
+            if action == "accept":
+                work.accept(task, body["commit"])
+            elif action == "finish":
+                work.finish_manager(task)
+            else:
+                if task["kind"] != "decompose":
+                    raise ApiError("only a decomposition manager replaces tasks")
+                children = body["children"]
+                if not children or not isinstance(children, list):
+                    raise ApiError("children must list existing replacement item names")
+                records = queues.records()
+                for child in children:
+                    if child == task["item"] or f"{task['place']}:{child}" not in records:
+                        raise ApiError("replacement children must exist and exclude the parent")
+                for r in records.values():
+                    if r["project"] == task["place"] and task["item"] in r["depends"]:
+                        r["depends"] = list(dict.fromkeys(d for dep in r["depends"]
+                                                         for d in (children if dep == task["item"] else [dep])))
+                queues.update(task["place"], task["item"], "done")
+            save()
+            queues.publish()
             return {"ok": True}
         if action == "forget-task":
             # Operator cleanup: the queue leaf and worktree must be removed separately.
@@ -260,6 +286,8 @@ def api(action: str, body: dict):
             project = work.project_named(body.get("project", ""))
             item = queues.add(project, body.get("kind", "queued"), body["name"], body["brief"])
             log("queued", project=project["name"], item=item)
+            save()
+            queues.publish()
             return {"ok": True, "item": item}
     raise ApiError(f"unknown action {action!r}")
 

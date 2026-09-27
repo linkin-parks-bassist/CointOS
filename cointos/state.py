@@ -43,11 +43,11 @@ def fresh(previous: dict) -> dict:
               "held_for": None, "held_class": None, "held_until": 0, "turn_agent": None, "turn_since": 0}
              for name, shape in CONFIG["models"].items() for index in range(shape["lanes"])]
     return {
-        "started_at": now(), "updated_at": now(), "paused": previous.get("paused", False),
+        "started_at": now(), "updated_at": now(), "paused": previous.get("paused", True),
         "models": {name: {"up": False, "launching": False, "problems": ["not checked yet"]} for name in CONFIG["models"]},
         "lanes": lanes, "thoughts": {}, "agents": {}, "exiting": {}, "viewers": {}, "viewers_opening": {}, "dependency_problems": {},
         "viewers_showing": previous.get("viewers_showing", False),
-        "snapshots": previous.get("snapshots", {}), "tasks": previous.get("tasks", {}),
+        "queue": previous.get("queue", {}), "snapshots": previous.get("snapshots", {}), "tasks": previous.get("tasks", {}),
         "memory": {}, "model_memory": {name: {"memory_gb": shape["memory_gb"], "weights_gb": shape["weights_gb"]}
                                         for name, shape in CONFIG["models"].items()}, "guard": {"rung": 0, "rung_at": 0, "calm_since": None, "distress_since": None,
                                                         "killed": False, "blocked": False},

@@ -65,7 +65,7 @@ class Completion(unittest.TestCase):
     def item_run(self, on_branch, committed=True):
         """An item run that ended by itself, with its leaf's status on its branch."""
         branch = self.directory / "branch"
-        leaf = branch / ".knowledge/what/is/the/queued/item.md"
+        leaf = branch / ".work-report.md"
         leaf.parent.mkdir(parents=True)
         leaf.write_text(f"Status: {on_branch}\n\nThe brief.\n")
         self.enterContext(patch.object(agents, "committed", return_value=committed))

@@ -160,9 +160,9 @@ TOOLS = [
     tool("agents", "The live agents and what each is doing."),
     tool("jobs", "Recent tasks and how they ended."),
     tool("check", "The self-check invariants."),
-    tool("queue_item", "Add work to a project's queue: 'urgent' or 'queued' for concrete work, 'drafted' "
-         "for an idea a manager should break down.", {
-             "project": {"type": "string"}, "kind": {"type": "string", "enum": ["urgent", "queued", "drafted"]},
+    tool("queue_item", "Add work to a project's queue: 'urgent' or 'queued' for concrete work, 'command' "
+         "for any bounded managerial action or planning request.", {
+             "project": {"type": "string"}, "kind": {"type": "string", "enum": ["urgent", "queued", "command"]},
              "name": {"type": "string", "description": "a short name, a few words"},
              "brief": {"type": "string", "description": "the outcome wanted, where it lives, how to tell it is done"}},
          ["project", "kind", "name", "brief"]),

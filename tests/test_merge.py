@@ -31,6 +31,7 @@ class Landing(unittest.TestCase):
         self.ledger = {"tasks": {"p:task": {"worktree": str(self.tree), "kind": "survey", "place": "p"}}}
         ledger = self.ledger
         self.enterContext(patch.object(cli, "ledger", return_value=ledger))
+        self.api = self.enterContext(patch.object(cli, "call", return_value={"ok": True}))
         self.enterContext(patch.dict(cli.CONFIG, {"projects": [{"name": "p", "main_branch": "main"}]}))
         previous = os.getcwd()
         os.chdir(self.tree)
@@ -75,8 +76,7 @@ class Landing(unittest.TestCase):
 
 
 class Integration(unittest.TestCase):
-    """The integrator brings a worker's branch in as one change, drops the finished item's leaf,
-    and lands one commit whose trailer names the item; git keeps the account."""
+    """Integration preserves a report in the commit and signals daemon settlement."""
 
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -86,13 +86,9 @@ class Integration(unittest.TestCase):
         self.main.mkdir()
         git(self.main, "init", "-q", "-b", "main")
         git(self.main, "config", "user.email", "t@t"), git(self.main, "config", "user.name", "t")
-        self.item = "what/is/the/queued/parser.md"
-        self.leaf = Path(".knowledge") / self.item
-        (self.main / self.leaf).parent.mkdir(parents=True)
-        (self.main / self.leaf).write_text("Status: queued\n\nWrite a parser.\n")
-        self.index = Path(".knowledge/what/is/queued.md")
-        (self.main / self.index).write_text("Work queued, first first.\n\n- `what/is/the/queued/parser.md`\n"
-                                            "- `what/is/the/queued/docs.md`\n")
+        self.item = "parser"
+        self.leaf = Path(queues.REPORT)
+        (self.main / "README.md").write_text("Parser project\n")
         git(self.main, "add", "."), git(self.main, "commit", "-qm", "queue")
         git(self.main, "worktree", "add", "-q", "-b", "cointos/parser", str(self.worker))
         (self.worker / "parser.c").write_text("int parse;\n")
@@ -100,33 +96,55 @@ class Integration(unittest.TestCase):
         git(self.worker, "add", "."), git(self.worker, "commit", "-qm", "wip")
         git(self.main, "worktree", "add", "-q", "-b", "cointos/integrate", str(self.integrator))
         ledger = {"tasks": {
-            "p:what/is/the/queued/parser.md": {"worktree": str(self.worker), "branch": "cointos/parser", "kind": "item",
+            "p:parser": {"worktree": str(self.worker), "branch": "cointos/parser", "kind": "item",
                                            "place": "p", "item": self.item},
             "p:integrate": {"id": "p:integrate", "worktree": str(self.integrator), "kind": "integrate",
                             "place": "p", "item": self.item}}}
         self.enterContext(patch.object(cli, "ledger", return_value=ledger))
+        self.api = self.enterContext(patch.object(cli, "call", return_value={"ok": True}))
         self.enterContext(patch.dict(cli.CONFIG, {"projects": [{"name": "p", "main_branch": "main"}]}))
         previous = os.getcwd()
         os.chdir(self.integrator)
         self.addCleanup(os.chdir, previous)
 
-    def test_review_then_land_makes_one_commit_and_prunes_the_item_and_its_entry(self):
+    def test_review_land_and_retry_signal_the_commit_without_report_on_main(self):
         with contextlib.redirect_stdout(io.StringIO()):
             cli.review()
             cli.land("Add the parser")
-        self.assertEqual(sorted(git(self.main, "ls-files").split()), [".knowledge/what/is/queued.md", "parser.c"])
-        self.assertEqual(queues.entries((self.main / self.index).read_text(), "queued"), ["what/is/the/queued/docs.md"])
+            cli.land("Add the parser")  # API reply may have been lost
+        self.assertEqual(sorted(git(self.main, "ls-files").split()), ["README.md", "parser.c"])
         message = git(self.main, "log", "-1", "--format=%B")
         self.assertIn("parser.c parses", message)
-        self.assertEqual(queues.landed({"path": str(self.main), "main_branch": "main"}), {self.item})
-        self.assertEqual(len(git(self.main, "log", "--format=%h").split()), 2, "one commit for the item")
+        self.assertNotIn("Landed:", message)
+        self.api.assert_called_with("accept", {"task": "p:integrate", "commit": git(self.main, "rev-parse", "HEAD").strip()})
+        self.assertEqual(len(git(self.main, "log", "--format=%h").split()), 2)
 
-    def test_a_trailer_naming_items_still_on_main_does_not_land_them(self):
-        # A manager queueing items once named them in its commit's trailer, comma-joined.
-        (self.main / ".knowledge/what/is/the/queued/docs.md").write_text("Status: queued\n\nDocument it.\n")
-        git(self.main, "add", "."), git(self.main, "commit", "-qm",
-                                        f"Queue work\n\nLanded: {self.item}, what/is/the/queued/docs.md")
-        self.assertEqual(queues.landed({"path": str(self.main), "main_branch": "main"}), set())
+    def test_accept_verifies_landing_and_releases_dependency(self):
+        import copy
+        from cointos import state, work
+        previous = copy.deepcopy(state.L)
+        self.addCleanup(lambda: (state.L.clear(), state.L.update(previous)))
+        state.L.clear()
+        state.L.update(state.fresh({}))
+        project = {"name": "p", "path": str(self.main), "main_branch": "main"}
+        self.enterContext(patch.dict(work.CONFIG, projects=[project]))
+        self.enterContext(patch.object(work.lanes, "forget_owner"))
+        queues.add(project, "queued", "parser", "Write a parser")
+        worker = {"id": "p:parser", "place": "p", "item": "parser", "status": "review", "worktree": str(self.worker)}
+        task = {"id": "p:integrate", "kind": "integrate", "place": "p", "item": "parser", "worktree": str(self.integrator)}
+        state.L["tasks"].update({"p:parser": worker, "p:integrate": task})
+        commit = git(self.worker, "rev-parse", "HEAD").strip()
+        with self.assertRaises(ValueError):
+            work.accept(task, commit)
+        self.assertEqual(worker["status"], "review")
+        with contextlib.redirect_stdout(io.StringIO()):
+            cli.review()
+            cli.land("Add the parser")
+        commit = git(self.main, "rev-parse", "HEAD").strip()
+        work.accept(task, commit)
+        work.accept(task, commit)
+        self.assertEqual(worker["status"], "done")
+        self.assertEqual(queues.landed(project), {"parser"})
 
 
 if __name__ == "__main__":

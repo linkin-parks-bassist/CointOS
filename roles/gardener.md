@@ -19,7 +19,7 @@ brown incident takes priority: reconcile it safely or stop and report it.
 Gardening is one verification stage in the same pipeline. Leave a checked batch and an
 explicit next handoff; do not consume every repair exposed by that batch in this run.
 
-In a project with a queue, the plan and the queues belong to the manager and
+In a project with a queue, the planning frontier; the daemon owns scheduler queues belong to the manager and
 `what/is/broken.md` to whoever lands the change. Report needed corrections to those owners; do not edit their leaves or
 create queue work yourself. Otherwise maintain the assigned leaves directly.
 

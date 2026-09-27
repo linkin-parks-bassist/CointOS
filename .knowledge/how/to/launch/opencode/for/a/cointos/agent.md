@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T11:50:19+10:00"
+revised_at: "2026-09-27T17:00:01+10:00"
 ---
 
 Agents are OpenCode sessions whose provider is the CointOS gateway. The installed binary is `~/.local/bin/opencode`, checked as version 1.18.32 on 2026-09-27. The implementation is `cointos/agents.py`.
@@ -29,9 +29,9 @@ The test harness is `fake_llm.py` and `run_case.sh`. It was kept only in that se
 
 **Logs and watching.** Run files include server output, client errors and JSON events under `state/agents/<id>/`; OpenCode's own provider log is `~/.local/share/opencode/log/opencode.log`. `cointos watch [AGENT]` reads the live agent URL/session from the daemon ledger and invokes `opencode attach`. `cointos view --all` enables pop-up viewers, up to the configured limit; `--off` stops opening new ones. Existing idle viewer windows are reused for new agents.
 
-The run's PATH prepends this checkout's `bin/` and `~/.local/bin`; ripgrep is available there.
+The run's PATH prepends the installed runtime's `bin/` and `~/.local/bin`; ripgrep is available there.
 
 
-**OpenCode 2 assessment (2026-09-27).** This checkout still runs 1.18.32; V2 was not installed or live-tested. The official [migration guide](https://opencode.ai/v2/docs/migrate-v1) identifies incompatible plugin and server APIs; supported V1 configuration is translated, so wholesale config conversion is unnecessary. The installer can replace the same binary. The [CLI guide](https://opencode.ai/v2/docs/cli) describes a default shared service and explicit private-server options.
+**OpenCode 2 assessment (2026-09-27).** The installed runtime still uses 1.18.32; V2 was not installed or live-tested. The official [migration guide](https://opencode.ai/v2/docs/migrate-v1) identifies incompatible plugin and server APIs; supported V1 configuration is translated, so wholesale config conversion is unnecessary. The installer can replace the same binary. The [CLI guide](https://opencode.ai/v2/docs/cli) describes a default shared service and explicit private-server options.
 
 CointOS must preserve one supervised server/client unit per agent: a shared server outside the unit would undermine process ownership, memory caps and stop semantics. Before migration, port the installed knowledge-tree plugin, check MCP access and permission denials, adapt launch/attach and event parsing in agents.py plus viewers/watch, and test session resume. Re-run delayed-first-byte, streaming tool/reasoning, 503, truncated-stream, error-chunk and server-death cases; V1 retry findings above do not establish V2 behavior. Validate against an isolated V2 binary/config/data before replacing the installed V1. The GPU scheduler/backend and Coin's direct gateway/MCP design are independent of the harness; they need regression tests, not an assumed rewrite. V2 benefits remain candidates until measured locally.

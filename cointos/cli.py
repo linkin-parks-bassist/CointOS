@@ -149,7 +149,7 @@ def merge() -> None:
     task, main, checkout = task_here()
     if task["kind"] == "item":
         raise SystemExit("Workers do not land their work. Commit everything on your branch, with your item "
-                         "set to `Status: done` (or `blocked`), and stop: the integrator reviews your branch "
+                         "report in .work-report.md set to `Status: done` (or `blocked`), and stop: the integrator reviews your branch "
                          "and lands it, or sends it back with notes.")
     branch = git("branch", "--show-current").stdout.strip()
     again = "`git commit --no-edit`, and run `cointos merge` again"
@@ -185,48 +185,38 @@ def integration() -> tuple[dict, dict, str, Path]:
 
 
 def review() -> None:
-    """Bring the worker's branch into the integrator's worktree as one uncommitted change, drop
-    its endpoint leaf and index entry together if the item is done (a finished item leaves no
-    leaf; git keeps its history), and show what to check."""
+    """Stage one worker branch for review; its branch-local report goes in the commit."""
     task, worker, main, checkout = integration()
-    leaf = f".knowledge/{task['item']}"
-    account = git("show", f"{worker['branch']}:{leaf}").stdout
+    account = git("show", f"{worker['branch']}:{queues.REPORT}").stdout
     if not (git("diff", "--cached", "--quiet").returncode or conflicted()):
-        git("merge", "--squash", worker["branch"])
-        if (queues.status(account) or "") == "done":
-            git("rm", "-q", "-f", "--", leaf)
-            index = Path(task["worktree"]) / ".knowledge" / queues.index_leaf(Path(task["item"]).parent.name)
-            if index.exists():
-                index.write_text(queues.without_entry(index.read_text(encoding="utf-8"), task["item"]),
-                                 encoding="utf-8")
-                git("add", "--", str(index))
-    print(f"The worker's account of {task['item']}:\n\n{queues.answer(account).strip()}\n")
-    print("The change, staged in your worktree (`git diff --cached` shows it all):")
+        result = git("merge", "--squash", worker["branch"])
+        if result.returncode and not conflicted():
+            raise SystemExit(result.stderr.strip())
+        git("rm", "-q", "-f", "--ignore-unmatch", "--", queues.REPORT)
+    print(f"Worker report for {task['item']}:\n\n{account}\n")
     print(git("diff", "--cached", "--stat").stdout)
     if conflicted():
-        resolve(conflicted(), "carry on with the review; `cointos land` commits it")
-    print("Next: check the change against the item and run the tests. Fix small things yourself. Bring "
-          "every leaf the change makes untrue up to date in its owning leaf, and `what/is/broken.md` when the "
-          "change breaks or fixes something. Then `cointos land \"<one-line summary>\"`, or "
-          "`cointos return \"<what must change>\"`.")
+        resolve(conflicted(), "carry on with review; cointos land commits it")
+    print('Check the diff and tests, maintain the project tree and plan, then cointos land "summary", '
+          'or cointos return "what must change".')
 
 
 def land(summary: str) -> None:
-    """Commit the reviewed change as one commit, with the worker's account and a `Landed:` trailer
-    naming the item if its leaf is gone, and land it on main."""
+    """Commit, merge and signal the daemon; retrying after merge resends settlement."""
     task, worker, main, checkout = integration()
     if conflicted():
-        resolve(conflicted(), "run `cointos land` again")
-    leaf = f".knowledge/{task['item']}"
+        resolve(conflicted(), "run cointos land again")
+    account = git("show", f"{worker['branch']}:{queues.REPORT}").stdout.strip()
+    git("rm", "-q", "-f", "--ignore-unmatch", "--", queues.REPORT)
     git("add", "-A")
-    if git("diff", "--cached", "--quiet").returncode == 0:
-        raise SystemExit("nothing to land: run `cointos review` first")
-    account = queues.answer(git("show", f"{worker['branch']}:{leaf}").stdout).strip()
-    trailer = "" if (Path(task["worktree"]) / leaf).exists() else f"\n\nLanded: {task['item']}"
-    result = git("commit", "-q", "-m", f"{summary.strip()}\n\n{account}{trailer}")
-    if result.returncode != 0:
-        raise SystemExit(result.stderr.strip() or result.stdout.strip())
+    if git("diff", "--cached", "--quiet").returncode:
+        result = git("commit", "-q", "-m", f"{summary.strip()}\n\n{account}")
+        if result.returncode:
+            raise SystemExit(result.stderr.strip() or result.stdout.strip())
+    elif not account or git("log", "-1", "--format=%B").stdout.strip() != f"{summary.strip()}\n\n{account}":
+        raise SystemExit("nothing reviewed to land; run cointos review first")
     merge()
+    call("accept", {"task": task["id"], "commit": git("rev-parse", "HEAD").stdout.strip()})
 
 
 def send_back(notes: str) -> None:
@@ -290,8 +280,9 @@ def view(slot: int) -> None:
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(prog="cointos", description="Control CointOS.")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("status", "agents", "check", "go", "up", "merge", "review"):
+    for name in ("status", "agents", "check", "go", "up", "merge", "review", "finish"):
         sub.add_parser(name)
+    sub.add_parser("replace", help="manager: replace oversized task with queued children").add_argument("children", nargs="+")
     sub.add_parser("land", help="integrator: land the reviewed item").add_argument("summary")
     sub.add_parser("return", help="integrator: send the item back to its worker").add_argument("notes")
     sub.add_parser("jobs").add_argument("--all", action="store_true")
@@ -307,7 +298,7 @@ def main(argv=None) -> None:
     queue.add_argument("project")
     queue.add_argument("name")
     queue.add_argument("brief")
-    queue.add_argument("--kind", default="queued", choices=("urgent", "queued", "drafted"))
+    queue.add_argument("--kind", default="queued", choices=("urgent", "queued", "command"))
     args = parser.parse_args(argv)
 
     if args.command == "status":
@@ -353,6 +344,9 @@ def main(argv=None) -> None:
         land(args.summary)
     elif args.command == "return":
         send_back(args.notes)
+    elif args.command in ("finish", "replace"):
+        task, _, _ = task_here()
+        call(args.command, {"task": task["id"], **({"children": args.children} if args.command == "replace" else {})})
     elif args.command == "queue":
         print(call("queue", {"project": args.project, "name": args.name, "brief": args.brief, "kind": args.kind})["item"])
 

@@ -199,6 +199,7 @@ def main() -> None:
         lanes.forget_orphans()
         log("daemon started")
     save()
+    work.queues.publish()
     gateway.serve()
     lanes.start()
 

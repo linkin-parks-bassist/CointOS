@@ -1,53 +1,16 @@
-"""Work queues in each project's knowledge tree.
+"""Daemon-owned scheduler records, published as current answers in the runtime tree.
 
-`what/is/queued.md` answers what is queued: its endpoints in priority order. Each endpoint,
-`what/is/the/queued/<name>.md`, describes one item: its status line, an optional `Depends on:`
-line naming other endpoints, and its brief. Drafted ideas have the same shape under `drafted`.
-Urgent work is simply listed first."""
+The ledger is the durable source; the runtime leaves are its readable projection.
+Project trees never contain scheduler records. All mutations run under the daemon lock.
+"""
 from __future__ import annotations
-
 import hashlib
 import re
 import subprocess
 from pathlib import Path
+from cointos.config import ROOT
 
-KINDS = ("queued", "drafted")  # work for workers; ideas for managers to break down
-STATUSES = ("queued", "in progress", "blocked", "done", "drafted")
-
-
-def index_leaf(kind: str) -> str:
-    """The leaf answering what is <kind>: its members in priority order, first first."""
-    return f"what/is/{kind}.md"
-
-
-def endpoint(kind: str, name: str) -> str:
-    """The leaf describing one member: what is the <kind> <name>."""
-    return f"what/is/the/{kind}/{name}.md"
-
-
-def entries(text: str, kind: str) -> list[str]:
-    """The endpoints an index names, in its order (its priority). Pure."""
-    found = re.findall(rf"what/is/the/{kind}/[A-Za-z0-9._-]+\.md", answer(text))
-    return list(dict.fromkeys(found))
-
-
-EMPTY = re.compile(r"^Nothing is (queued|drafted)\.$")  # an index's line while it lists nothing
-
-
-def with_entry(text: str, item: str, first: bool) -> str:
-    """The index text with `item` listed first or last. Front matter and prose stay. Pure."""
-    lines = [line for line in text.rstrip("\n").split("\n") if not EMPTY.match(line.strip())]
-    listed = [i for i, line in enumerate(lines) if re.search(r"what/is/the/[a-z]+/[A-Za-z0-9._-]+\.md", line)]
-    at = (listed[0] if first else listed[-1] + 1) if listed else len(lines)
-    return "\n".join(lines[:at] + [f"- `{item}`"] + lines[at:]) + "\n"
-
-
-def without_entry(text: str, item: str) -> str:
-    """The index text without the lines naming `item`; says it is empty once nothing is left. Pure."""
-    kind = Path(item).parent.name
-    left = "".join(line for line in text.splitlines(keepends=True) if item not in line)
-    return left if entries(left, kind) else left.rstrip("\n") + f"\n\nNothing is {kind}.\n"
-
+REPORT = ".work-report.md"
 
 def needs_decomposition(text: str) -> bool:
     return status(text) == "blocked" and "needs decomposition:" in answer(text).lower()
@@ -77,20 +40,6 @@ def depends(text: str) -> list[str]:
         if found:
             return [name.strip(" `*") for name in found[1].split(",") if name.strip(" `*")]
     return []
-
-
-def landed(project: dict) -> set[str]:
-    """The items landed on the project's main branch. A landed item's leaf is gone (a leaf is an
-    answer, never a log); its landing commit names it in a `Landed:` trailer, so git keeps the
-    history. A trailer counts only once its item's leaf has left main: any commit can carry one,
-    such as a manager's that queues the items it names."""
-    git = ["git", "-C", project["path"]]
-    trailers = subprocess.run(git + ["log", project["main_branch"], "--format=%(trailers:key=Landed,valueonly)"],
-                              capture_output=True, text=True).stdout
-    named = {item.strip() for line in trailers.splitlines() for item in line.split(",") if item.strip()}
-    present = subprocess.run(git + ["ls-tree", "-r", "--name-only", project["main_branch"], "--", ".knowledge"],
-                             capture_output=True, text=True).stdout.splitlines()
-    return named - {path.removeprefix(".knowledge/") for path in present}
 
 
 def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
@@ -135,78 +84,85 @@ def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
     return result
 
 
-def read_item(root: Path, item: str) -> dict | None:
-    """The item at `.knowledge/<item>` under `root`, or None."""
-    try:
-        text = (root / ".knowledge" / item).read_text(encoding="utf-8")
-    except OSError:
-        return None
-    body = answer(text).strip()
-    return {"item": item, "status": status(text), "depends": depends(text), "brief": body,
-            "decompose": needs_decomposition(text), "hash": hashlib.sha256(body.encode()).hexdigest()[:16]}
-
-
-def scan(project: dict) -> list[dict]:
-    """Every member of the project's queue and drafted indexes, in priority order, as
-    {item, kind, position, status, depends, decompose, brief, hash}. An entry whose endpoint
-    is missing is skipped."""
-    root = Path(project["path"])
-    items = []
-    for kind in KINDS:
-        try:
-            text = (root / ".knowledge" / index_leaf(kind)).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for position, item in enumerate(entries(text, kind)):
-            found = read_item(root, item)
-            if found:
-                items.append({**found, "kind": kind, "position": position})
-    return items
-
 
 def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60] or "item"
 
 
-INDEX_ANSWERS = {
-    "queued": "Work queued for workers, highest priority first. Each entry names the endpoint leaf that "
-              "describes it; managers add and reorder entries, and landing removes a finished endpoint "
-              "with its entry.\n\nNothing is queued.\n",
-    "drafted": "Ideas drafted for managers to break down, highest priority first. Each entry names the "
-               "endpoint leaf that describes it.\n\nNothing is drafted.\n",
-}
+def records() -> dict:
+    from cointos.state import L
+    return L.setdefault("queue", {})
+
+
+def scan(project: dict) -> list[dict]:
+    return [dict(record, position=i) for i, record in enumerate(sorted(records().values(), key=lambda r: r["priority"]))
+            if record["project"] == project["name"] and record["status"] != "done"]
+
+
+def landed(project: dict) -> set[str]:
+    return {r["item"] for r in records().values()
+            if r["project"] == project["name"] and r["status"] == "done"}
 
 
 def add(project: dict, kind: str, name: str, brief: str) -> str:
-    """Write a new endpoint leaf with kt, list it in its index (first for urgent work, else last),
-    and commit both on the project's main branch.
-
-    Committing matters: agents work in worktrees made from the main branch, and a merge
-    cannot land over an untracked copy of the same leaf.
-    """
-    if kind not in ("urgent", *KINDS):
-        raise ValueError(f"kind must be one of urgent, {', '.join(KINDS)}")
-    first, kind = kind == "urgent", "queued" if kind == "urgent" else kind
-    item = endpoint(kind, slug(name))
-    path = Path(project["path"])
-    if (path / ".knowledge" / item).exists():
-        raise ValueError(f"{item} already exists in {project['name']}")
-    status_line = "Status: drafted" if kind == "drafted" else "Status: queued"
-    index = path / ".knowledge" / index_leaf(kind)
-
-    def capture(question, text):
-        subprocess.run(["kt", "capture", "--local", question, text], cwd=path, check=True,
-                       capture_output=True, text=True)
-
-    capture(f"what is the {kind} {slug(name)}", f"{status_line}\n\n{brief.strip()}\n")
-    if not index.exists():
-        capture(f"what is {kind}", INDEX_ANSWERS[kind])
-    index.write_text(with_entry(index.read_text(encoding="utf-8"), item, first), encoding="utf-8")
-    branch = subprocess.run(["git", "-C", str(path), "branch", "--show-current"],
-                            capture_output=True, text=True).stdout.strip()
-    if branch == project["main_branch"]:
-        leaves = [f".knowledge/{item}", f".knowledge/{index_leaf(kind)}"]
-        subprocess.run(["git", "-C", str(path), "add", "--", *leaves], check=True, capture_output=True)
-        subprocess.run(["git", "-C", str(path), "commit", "-m", f"Queue {item}", "--", *leaves],
-                       check=True, capture_output=True)
+    if kind not in ("urgent", "queued", "command"):
+        raise ValueError("kind must be urgent, queued or command")
+    if not name.strip() or not brief.strip():
+        raise ValueError("name and brief must not be empty")
+    item = slug(name)
+    if item in ("integrate", "garden", "garden-audit") or item.startswith(("decompose-", "survey-", "maintenance-")):
+        raise ValueError("name is reserved for scheduler tasks")
+    key = f"{project['name']}:{item}"
+    record = {"project": project["name"], "item": item,
+              "kind": "queued" if kind == "urgent" else kind, "status": "queued",
+              "brief": brief.strip(), "depends": depends(brief), "decompose": False,
+              "hash": hashlib.sha256(brief.strip().encode()).hexdigest()[:16],
+              "priority": (min((r["priority"] for r in records().values()), default=0) - 1 if kind == "urgent"
+                           else max((r["priority"] for r in records().values()), default=0) + 1)}
+    if key in records():
+        if all(records()[key][k] == record[k] for k in ("project", "item", "kind", "brief")):
+            return item  # retry after lost API response
+        raise ValueError(f"{key} already exists; choose another name")
+    records()[key] = record
     return item
+
+
+def update(project: str, item: str, status_value: str, report: str = "") -> None:
+    record = records()[f"{project}:{item}"]
+    record.update(status=status_value, decompose=needs_decomposition(report))
+    if report:
+        record["report"] = report
+    record["hash"] = hashlib.sha256(repr(record).encode()).hexdigest()[:16]
+
+
+def report(task: dict) -> str:
+    try:
+        return (Path(task["worktree"]) / REPORT).read_text()
+    except OSError:
+        return ""
+
+
+def publish() -> None:
+    """Refresh the derived runtime queue answers through kt; called only by the daemon."""
+    for kind, question in (("queued", "what is queued"), ("command", "what is the command queue")):
+        body = "The daemon alone owns this queue. Submit changes through its API.\n"
+        for r in sorted(records().values(), key=lambda r: r["priority"]):
+            if r["kind"] == kind and r["status"] != "done":
+                body += f"\n## {r['project']}:{r['item']}\n\nStatus: {r['status']}\n\n{r['brief']}\n"
+                if r.get("report"):
+                    body += f"\nCurrent blocker: {r['report']}\n"
+        if "\n## " not in body:
+            body += "\nThe queue is empty.\n"
+        address = "local:" + question.replace(" ", "/") + ".md"
+        result = subprocess.run(["kt", "--lean", "open", address], cwd=ROOT, capture_output=True, text=True)
+        if result.returncode == 0:
+            text = result.stdout
+            revision = re.search(r"Revision: ([0-9a-f]{64})", result.stderr)
+            if revision is None:
+                raise RuntimeError("kt did not return a queue leaf revision")
+            if text.strip() == body.strip():
+                continue
+            command = ["kt", "rewrite", address, revision[1], body]
+        else:
+            command = ["kt", "add", "--local", question, body]
+        subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)

@@ -53,7 +53,8 @@ def remove_worktree(place: dict, task: dict) -> bool:
 
 def committed(task: dict) -> bool:
     """Whether the task's worktree has everything committed."""
-    return not git("-C", task["worktree"], "status", "--porcelain", check=False).stdout.strip()
+    result = git("-C", task["worktree"], "status", "--porcelain", check=False)
+    return result.returncode == 0 and not result.stdout.strip()
 
 
 def discard_worktree(place: dict, task: dict) -> None:
@@ -122,24 +123,17 @@ def prompt(task: dict, place: dict) -> str:
               "or `git stash` yourself. If it reports conflicts, resolve them as it says and run it again. "
               "Only what lands counts: commit nothing after that. If it refuses, say why in your final answer.")
     if task["kind"] == "item":
-        assignment = (f"{where}\n\nYour item: `.knowledge/{task['item']}` (read it with kt). As it was "
-                      f"queued:\n\n{task['brief']}\n\nWhen your work and your item's new status are committed "
-                      "on your branch, stop. Do not land it: the integrator reviews your branch and lands it, or "
-                      "sends it back to you with notes.")
+        assignment = (f"{where}\n\nYour task: {task['item']}\n\n{task['brief']}\n\n"
+                      "Write .work-report.md with Status: done or Status: blocked, evidence and boundary report. "
+                      "Commit your work and report on this branch, then stop. The integrator maintains the project tree.")
     elif task["kind"] == "integrate":
-        assignment = (f"{where}\n\nIntegrate the finished item `.knowledge/{task['item']}` from its worker's "
-                      "branch. Start with `cointos review` in your worktree.")
-    elif task["kind"] == "breakdown":
-        assignment = (f"{where}\n\nOutline the concern pipeline and elaborate only the next small frontier of "
-                      f"the drafted idea `.knowledge/{task['item']}`:\n\n"
-                      f"{task['brief']}\n\n{finish}")
-    elif task["kind"] == "decompose":
-        assignment = (f"{where}\n\nA worker found the queued item `.knowledge/{task['item']}` too big and "
-                      "returned it blocked with `Needs decomposition:`:\n\n"
-                      f"{task['brief']}\n\nReplace it with the smaller children it needs: write their endpoints "
-                      "under `what/is/the/queued/`, list them in `what/is/queued.md` where the item was, repoint "
-                      "every `Depends on:` that named the item, then remove the item's endpoint and index "
-                      f"entry. Split only this item.\n\n{finish}")
+        assignment = (f"{where}\n\nReview task {task['item']}:\n\n{task['brief']}\n\n"
+                      "Start with cointos review. Maintain the project's tree and plan before cointos land.")
+    elif task["kind"] in ("breakdown", "decompose"):
+        assignment = (f"{where}\n\nCommand or decomposition task {task['item']}:\n\n{task['brief']}\n\n"
+                      "Propose bounded tasks with cointos queue through the daemon API. "
+                      "For decomposition, queue the children then use cointos replace CHILD... to repoint dependents. "
+                      f"{finish} Then run cointos finish to signal completion.")
     elif task["kind"] == "survey":
         assignment = f"{where}\n\nSurvey one concern: check neighboring boundaries or elaborate one idea's next frontier.\n\n{finish}"
     elif task["kind"] == "garden":

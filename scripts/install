@@ -1,13 +1,84 @@
-#!/usr/bin/env bash
-# Install CointOS to run from this checkout: systemd user units and `cointos` on PATH.
-set -euo pipefail
-root="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-units="$HOME/.config/systemd/user"
-mkdir -p "$units" "$HOME/.local/bin"
-for unit in "$root"/systemd/*.service; do
-  sed "s|@ROOT@|$root|g" "$unit" > "$units/$(basename "$unit")"
-done
-ln -sfn "$root/bin/cointos" "$HOME/.local/bin/cointos"
-systemctl --user daemon-reload
-systemctl --user enable cointosd.service cointos-coin.service
-echo "installed from $root; start with: cointos up"
+#!/usr/bin/env python3
+"""Install a runtime copy in ~/.CointOS. Never resume autonomous work."""
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import urllib.request
+
+source = Path(__file__).resolve().parents[1]
+target = Path.home() / '.CointOS'
+units = Path.home() / '.config/systemd/user'
+
+
+def run(*args, **kwargs):
+    return subprocess.run(args, check=True, text=True, **kwargs)
+
+
+def install():
+    if source == target:
+        raise SystemExit('Run scripts/install from the source repository.')
+    if target.exists() and not (target / '.runtime-install').exists():
+        raise SystemExit('Archive the previous ~/.CointOS installation before installing.')
+    config = json.loads((source / 'config/cointos.json').read_text())
+    url = f"http://127.0.0.1:{config['port']}/api/ledger"
+    try:
+        with urllib.request.urlopen(url, timeout=config['timeouts']['api_seconds']) as response:
+            live = json.load(response)
+        if live['agents'] or not live['paused']:
+            raise SystemExit('Pause CointOS and wait until no agents are running before installation.')
+    except OSError:
+        pass
+    active = run('systemctl', '--user', 'list-units', 'cointos-agent-*', '--state=active,activating',
+                 '--no-legend', '--no-pager', capture_output=True).stdout.strip()
+    if active:
+        raise SystemExit('Agent units are still running; installation refused.')
+    run('systemctl', '--user', 'stop', 'cointos-coin.service', 'cointosd.service')
+    target.mkdir(parents=True, exist_ok=True)
+    os.chmod(target, 0o700)
+    # Retain durable runtime state on updates. First installation migrates source state
+    # only after its daemon has stopped, including its final snapshot metadata.
+    if not (target / 'state').exists() and (source / 'state').exists():
+        shutil.copytree(source / 'state', target / 'state', ignore=shutil.ignore_patterns('worktrees'))
+    for name in ('cointos', 'roles', 'web', 'bin', 'systemd', 'config'):
+        dest = target / name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    (target / '.runtime-install').write_text(str(source) + '\n')
+    if not (target / '.knowledge').exists():
+        run('kt', 'init', 'CointOS installed runtime. Services run from this directory; source development '
+            'lives in ~/Projects/CointOS. cointos/ implements the daemon and CLI, roles/ holds agent '
+            'instructions, config/ holds operational settings and state/ holds durable runtime data. '
+            'Managed projects are independent repositories under ~/Projects with their own knowledge trees. '
+            'what/ owns runtime operation (what/is/cointos.md) and the daemon-owned task and command '
+            'queues. where/ owns this orientation. how/, why/, does/ and is/ are empty. '
+            'Only the daemon writes scheduler queues; agents submit changes through its API.', cwd=target)
+        run('kt', 'add', '--local', 'what is cointos',
+            'CointOS runs local OpenCode agents through a pre-emptive GPU gateway. Coin provides Telegram '
+            'control. cointos status, agents, jobs and check inspect the daemon; stop pauses and go resumes. '
+            'The daemon alone owns scheduling records and publishes current queues in this tree. '
+            'Managers submit tasks with cointos queue PROJECT NAME BRIEF --kind queued|urgent|command. '
+            'Workers commit .work-report.md on their project branch. Integrators review, maintain the '
+            'project tree and plan, commit and merge with cointos land, which signals daemon settlement. '
+            'Managers commit and merge planning changes, then cointos finish completes command tasks. '
+            'For decomposition, queue children and cointos replace CHILD... before finishing. '
+            'Runtime queues are read-only to agents. Worktrees live beside project repos under '
+            '~/Projects/.worktrees/<project>/<task>, on work/<task> branches. The project owns its '
+            'orientation, spec, plan and broken leaves. scripts/install in the source repo updates '
+            'this runtime only while paused with no agents; installation leaves CointOS paused.', cwd=target)
+    units.mkdir(parents=True, exist_ok=True)
+    for template in (source / 'systemd').glob('*.service'):
+        (units / template.name).write_text(template.read_text().replace('@ROOT@', str(target)))
+    executable = Path.home() / '.local/bin/cointos'
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.unlink(missing_ok=True)
+    executable.symlink_to(target / 'bin/cointos')
+    run('systemctl', '--user', 'daemon-reload')
+    run('systemctl', '--user', 'enable', 'cointosd.service', 'cointos-coin.service')
+    print(f'Installed {target}; services are stopped. Start with cointos up; pause is preserved.')
+
+
+if __name__ == '__main__':
+    install()

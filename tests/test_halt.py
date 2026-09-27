@@ -14,7 +14,7 @@ class Halt(unittest.TestCase):
         self.stopping = state.STOPPING.is_set()
         state.STOPPING.clear()
         state.L.clear()
-        state.L.update(state.fresh({}))
+        state.L.update(state.fresh({"paused": False}))
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.ledger = Path(self.directory.name) / "ledger.json"

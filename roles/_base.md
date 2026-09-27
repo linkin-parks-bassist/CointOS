@@ -10,12 +10,11 @@ else can pick up.
 - **Knowledge trees first.** Use the `kt_*` tools to orient: read the project's
   `where/am/i.md` and look up what you need before searching files. Record anything
   reusable you discover. A leaf is a current answer: rewrite it in place.
-- **Leave the project-wide leaves to their owners.** Many agents work at once, and a leaf
-  that everyone edits collides. A project's `what/is/the/plan.md` (its frontier and next
-  steps), `what/is/queued.md` and `what/is/drafted.md` belong to its manager.
-  `what/is/broken.md` (current defects) is kept by whoever lands the change that breaks or
-  fixes something: the integrator for queued work. Current facts belong in the leaf that
-  owns them, never in a project-wide status leaf. Do not edit leaves that are not yours.
+- **Ownership.** The daemon alone writes scheduler queues in the installed runtime.
+  Managers propose tasks through its API. Workers report on their branch; integrators
+  maintain the project's knowledge tree, plan and broken leaves when accepting work.
+  Managers maintain the remaining planning frontier for their bounded planning stage.
+  Never write scheduler records into a project tree or edit the runtime queue directly.
 - **Do the step you were given, well.** Work on one concern, one small interface and one
   hard algorithm or edge-case family. If the assignment spans distinct mechanisms,
   reject it with a concrete decomposition request in your item and stop; do not attempt
@@ -43,20 +42,14 @@ else can pick up.
 
 ## Work queues
 
-Each project keeps two queues in its own knowledge tree. Each queue is an index leaf that
-lists endpoint leaves in priority order, first first:
+The globally readable runtime tree at `~/.CointOS/.knowledge` explains the system.
+The daemon owns its task and general command queues. `cointos queue PROJECT NAME
+"BRIEF" --kind queued|urgent|command` submits through its API. Use a `Depends on:`
+line naming comma-separated task names when prerequisites must be accepted first.
+Commands can request any bounded managerial action, including project creation and
+planning. The project tree contains project knowledge, never scheduler bookkeeping.
 
-- `what/is/queued.md` lists work ready for workers; each item is described at
-  `what/is/the/queued/<item>.md`. Urgent work is simply listed first.
-- `what/is/drafted.md` lists ideas David drafted, to be broken down; each is described at
-  `what/is/the/drafted/<item>.md`.
-
-An endpoint's first line is its status: `Status: queued`, `Status: in progress`,
-`Status: blocked`, `Status: done`, or `Status: drafted` for ideas. The rest is the
-current brief: the outcome wanted, where it lives, and what is known so far. An item
-that another must land first says so on its own line: `Depends on:
-what/is/the/queued/<item>.md`. Only indexed endpoints are queued.
-
-A finished item leaves no leaf behind. When the integrator lands it, the endpoint and its
-index entry are deleted together and its account goes into the landing commit, which
-names it in a `Landed:` trailer: git keeps the history, the tree keeps only current answers.
+Workers commit `.work-report.md` on their branch, beginning with `Status: done` or
+`Status: blocked`. This report is an artifact for review, outside the knowledge tree.
+Integrators preserve its account in the landing commit and remove the report from main.
+`cointos land` merges and signals the daemon to settle; `cointos return` requests rework.
