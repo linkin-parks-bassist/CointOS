@@ -114,6 +114,12 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .history .when { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
 .history .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .history .alert-line .what { color: var(--accent); font-weight: 700; }
+.memdetail { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 8px; }
+.memdetail > div { display: grid; grid-template-columns: minmax(140px,1fr) auto; gap: 3px 12px; padding: 5px 0; font-size: 12px; }
+.memdetail span { display: flex; align-items: center; gap: 8px; }
+.memdetail i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.memdetail b { font-variant-numeric: tabular-nums; }
+.memdetail small { grid-column: 1 / -1; color: var(--ink-faint); padding-left: 17px; }
 </style>
 </head>
 <body>
@@ -244,6 +250,11 @@ function renderMemory(M) {
   const gib = gb => gb * 1e9 / 2 ** 30;
   const physical = gib(m.physical_gb), available = Math.min(physical, Math.max(0, gib(m.available_gb)));
   const values = [physical - available, available];
+  const loaded = Object.entries(M.models || {}).filter(([, model]) => model.up)
+    .map(([name]) => M.model_memory[name]);
+  const weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
+  const runtimeBudget = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
+  const saved = (M.saved_bytes || 0) / 2 ** 30;
   MEMORY_PARTS = MEMORY_COLOURS.map(([name, colour], i) => [name, values[i], colour]);
   if (!$("donut")) {
     $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
@@ -253,7 +264,7 @@ function renderMemory(M) {
       `<text x="80" y="76" class="big" id="donut-value"></text><text x="80" y="96" class="small" id="donut-label"></text></svg>` +
       `<div class="legend">` + MEMORY_COLOURS.map(([name, colour], i) =>
         `<div class="item" data-i="${i}" onmouseenter="focusPart(${i})" onmouseleave="focusPart(-1)"><i style="background:${colour}"></i>` +
-        `<span>${name}</span><b></b><em></em></div>`).join("") + `</div></div><div class="memfacts" id="memfacts"></div>`;
+        `<span>${name}</span><b></b><em></em></div>`).join("") + `</div></div><div class="memdetail" id="memdetail"></div><div class="memfacts" id="memfacts"></div>`;
   }
   const total = values.reduce((n, v) => n + v, 0), C = 2 * Math.PI * 58, gap = 2;
   let at = 0;
@@ -267,8 +278,12 @@ function renderMemory(M) {
     setText(item.querySelector("b"), `${values[i].toFixed(1)} GiB`);
     setText(item.querySelector("em"), `${total ? Math.round(values[i] / total * 100) : 0}%`);
   });
+  setHTML($("memdetail"), `<div><span><i style="background:#9f3b52"></i>Model weights</span><b>~${weights.toFixed(1)} GiB</b><small>configured estimate</small></div>` +
+    `<div><span><i style="background:#e9687e"></i>KV-cache / runtime</span><b>~${runtimeBudget.toFixed(1)} GiB</b><small>configured load estimate, not measured use</small></div>` +
+    `<div><span><i style="background:#ec98a5"></i>Saved contexts</span><b>${saved.toFixed(1)} GiB</b><small>files in memory tier</small></div>` +
+    `<div><span><i style="background:#28262b"></i>OS / applications</span><b>—</b><small>included in use; not separately measured</small></div>`);
   setHTML($("memfacts"), `pressure ${m.psi} · swap ${gib(m.swap_gb).toFixed(2)} GiB` +
-    `<br>Saved context files: ${(M.saved_bytes / 2 ** 30).toFixed(1)} GiB · availability includes reclaimable memory` +
+    `<br>Detail figures are not additive. Available includes reclaimable memory.` +
     (M.guard && M.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (M.guard && M.guard.killed ? ` · <b>work model killed</b>` : ""));
   focusPart(FOCUSED);
 }
