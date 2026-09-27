@@ -1,9 +1,11 @@
 ---
 status: green
-revised_at: "2026-09-27T11:25:11+10:00"
+revised_at: "2026-09-27T11:40:09+10:00"
 ---
 
 The two-hour soak passed its check, agent-count and delivery criteria (06:07–08:07 on 2026-09-27; see `what/is/the/state.md`). Keep sandbox-only scope for project work. What remains needs David's presence or decision.
+
+0. **First: make every task small** (`what/is/the/shape/of/cointos/work.md`). Current tasks are too large for the local models. Design with David, then build: managers break ideas into pipelined single-concern stages; reviewers report on boundaries and pass up to higher-level coherence reviewers; routine gardeners check 1–3 random leaves and end, with separate broad-scale gardeners watching for tree poisoning. The C JSON parser in the sandbox is its first test; its current manager was given the old, too-large breakdown task.
 
 1. Kill recovery: SIGKILL an agent unit mid-run and time its task's resumption (under 30 s) with checks green afterwards. The harness refused this overnight; David runs it or authorizes it.
 2. Coin under load: ten Telegram messages spread across a multi-agent run, each answered visibly within 15 s. This needs David's messages or explicit authorization to send test messages.
