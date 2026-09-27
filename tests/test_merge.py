@@ -28,7 +28,8 @@ class Landing(unittest.TestCase):
         (self.main / "state.md").write_text("one\n")
         git(self.main, "add", "."), git(self.main, "commit", "-qm", "start")
         git(self.main, "worktree", "add", "-q", "-b", "cointos/task", str(self.tree))
-        ledger = {"tasks": {"p:task": {"worktree": str(self.tree), "kind": "item", "place": "p"}}}
+        self.ledger = {"tasks": {"p:task": {"worktree": str(self.tree), "kind": "survey", "place": "p"}}}
+        ledger = self.ledger
         self.enterContext(patch.object(cli, "ledger", return_value=ledger))
         self.enterContext(patch.dict(cli.CONFIG, {"projects": [{"name": "p", "main_branch": "main"}]}))
         previous = os.getcwd()
@@ -62,6 +63,15 @@ class Landing(unittest.TestCase):
         git(self.tree, "add", "state.md"), git(self.tree, "commit", "-q", "--no-edit")
         self.land()
         self.assertEqual((self.main / "state.md").read_text(), "theirs and mine\n")
+
+
+    def test_a_worker_does_not_land_its_own_work(self):
+        self.ledger["tasks"]["p:task"]["kind"] = "item"
+        self.commit(self.tree, "work.c", "int x;\n")
+        with self.assertRaises(SystemExit) as refused:
+            self.land()
+        self.assertIn("integrator", str(refused.exception.code))
+        self.assertNotIn("work.c", git(self.main, "ls-files"))
 
 
 class Integration(unittest.TestCase):

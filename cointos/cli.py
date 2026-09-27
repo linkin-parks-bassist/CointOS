@@ -147,6 +147,10 @@ def merge() -> None:
     way, never with git merge. A conflict is left in the worktree with plain instructions;
     nothing lands until it is resolved."""
     task, main, checkout = task_here()
+    if task["kind"] == "item":
+        raise SystemExit("Workers do not land their work. Commit everything on your branch, with your item "
+                         "set to `Status: done` (or `blocked`), and stop: the integrator reviews your branch "
+                         "and lands it, or sends it back with notes.")
     branch = git("branch", "--show-current").stdout.strip()
     again = "`git commit --no-edit`, and run `cointos merge` again"
     if not branch or branch == main:
