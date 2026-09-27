@@ -7,6 +7,7 @@ worktree of the repository that holds it, landing on that repository's main bran
 from __future__ import annotations
 
 import hashlib
+import random
 import subprocess
 from pathlib import Path
 
@@ -43,3 +44,13 @@ def rank(health: dict) -> list:
     if health["yellow"]:
         return [3, -health["yellow"]]
     return [6]
+
+
+def pending(health: dict) -> list[str]:
+    """Root-relative paths needing verification, in health priority order."""
+    return [line.split("\t")[1].split(":", 1)[1] for line in health["leaves"]]
+
+
+def select(health: dict, leaves: list[str], limit: int) -> list[str]:
+    """A bounded repair batch, or a random routine sample when the tree is green."""
+    return pending(health)[:limit] if health["leaves"] else random.sample(sorted(leaves), min(limit, len(leaves)))

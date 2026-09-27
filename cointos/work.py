@@ -182,12 +182,17 @@ def settle(agent_id: str, outcome: dict) -> None:
         finished = landed in ("in progress", "done", "blocked") or branch == "blocked"
         detail = f"idea status {landed} on main" + ("" if branch in (None, landed) else f", {branch} on its branch")
     elif task["kind"] == "garden":
-        # Like an item, the tree on the main branch is the truth: gardening is finished when
-        # every leaf there is green again.
+        # Completion belongs to the assigned batch, not the whole tree. Changes must land.
         health = trees.health(where, CONFIG["timeouts"]["command_seconds"])
         L["trees"][where["name"]] = {**health, "checked_at": now()}
-        finished = outcome.get("finish") == "stop" and not health["leaves"]
+        remaining = set(task["brief"].splitlines()) & set(trees.pending(health))
+        merged = agents.git("-C", where["path"], "merge-base", "--is-ancestor", task["branch"],
+                            where["main_branch"], check=False).returncode == 0
+        finished = outcome.get("finish") == "stop" and merged and agents.committed(task)
         detail = f"run finished with {outcome.get('finish')}; {health['brown']} brown, {health['yellow']} yellow on main"
+        if finished and remaining:
+            alert(f"Gardener finished with unresolved leaves in {where['name']}: {', '.join(sorted(remaining))}. "
+                  "Check its report before further work on that concern.")
     else:
         finished = outcome.get("finish") == "stop"
         detail = f"run finished with {outcome.get('finish')}"
@@ -299,14 +304,23 @@ def next_task() -> str | None:
     for tree in CONFIG["trees"]:
         health = tree_health(tree)
         known = tasks.get(f"{tree['name']}:garden")
-        if health is None or (known and known["status"] in ("running", "waiting")):
+        if health is None or any(t["kind"] == "garden" and t["place"] == tree["name"]
+                                 and t["status"] in ("running", "waiting") for t in tasks.values()):
             continue
         changed = health["leaves"] and not (known and known["leaf_hash"] == health["hash"])
         if changed or now() - L["last_garden"].get(tree["name"], 0) > CONFIG["garden"]["every_seconds"]:
             def garden(t=tree, h=health):
                 L["last_garden"][t["name"]] = now()
-                return new_task(t, "garden", "gardener", None, "\n".join(h["leaves"]), h["hash"], trees.rank(h), "garden")
+                root = trees.root(t)
+                leaves = [str(p.relative_to(root)) for p in root.rglob("*.md")]
+                selected = trees.select(h, leaves, CONFIG["garden"]["leaves_per_pass"])
+                return new_task(t, "garden", "gardener", None, "\n".join(selected), h["hash"], trees.rank(h), "garden")
             candidates.append((trees.rank(health), garden))
+        elif now() - L["last_garden"].get(f"{tree['name']}:audit", 0) > CONFIG["garden"]["audit_every_seconds"]:
+            def audit(t=tree):
+                L["last_garden"][f"{t['name']}:audit"] = now()
+                return new_task(t, "garden", "tree-auditor", None, "", None, RANKS["survey"], "garden-audit")
+            candidates.append((RANKS["survey"], audit))
     spawner = CONFIG["spawner"]
     for project in CONFIG["projects"]:
         if now() - L["last_survey"].get(project["name"], 0) > spawner["survey_every_seconds"]:

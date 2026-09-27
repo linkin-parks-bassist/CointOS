@@ -227,6 +227,22 @@ def api(action: str, body: dict):
         if action == "return":
             work.send_back(L["tasks"][body["task"]], body["notes"])
             return {"ok": True}
+        if action == "forget-task":
+            # Operator cleanup: the queue leaf and worktree must be removed separately.
+            # Keep the daemon the only ledger writer, including when discarding test work.
+            if not L["paused"] or L["agents"]:
+                raise ApiError("pause and stop all agents before forgetting work")
+            task_id = body["task"]
+            task = L["tasks"].get(task_id)
+            if task is not None:
+                lanes.forget_owner(task_id)
+                for lane in L["lanes"]:
+                    if lane["resident"] == task_id:
+                        lane["resident"] = None  # a later graceful stop must not save this owner again
+                del L["tasks"][task_id]
+                log("task forgotten", task=task_id)
+            save()
+            return {"ok": True}
         if action == "go":
             L["paused"] = False
             log("resumed")

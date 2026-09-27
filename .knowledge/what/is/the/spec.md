@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T01:01:58+10:00"
+revised_at: "2026-09-27T11:56:35+10:00"
 ---
 
 Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design is `what/is/the/architecture/of/cointos.md`; the working rules are `how/to/keep/cointos/simple.md`.
@@ -16,9 +16,11 @@ Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design
 7. **The scheduler is pre-emptive.** David has intended this since inception. A lane can be taken from the agent using it at any moment, mid-generation, and given to another; the interrupted agent resumes later where it stopped, losing no work. Nothing an agent does holds a lane beyond the scheduler's decision. (David, 2026-09-26: "it has been the intention since inception that the cointos scheduler would be pre-emptive.")
 8. **One control surface.** `cointos status|agents|jobs|check|stop|go|halt|up` and the dashboard at `http://127.0.0.1:4200` show and control everything, from the ledger.
 
+9. **Small concern pipeline.** Assign one concern and a small interface per worker. Managers elaborate bounded frontiers; workers and integrators report and verify boundaries; higher-level coherence review operates over those contracts. Routine gardeners verify 1–3 leaves, while separate auditors inspect structural tree poisoning. Agents calculate with code/tools. See `what/is/the/shape/of/cointos/work.md`.
+
 ## Acceptance (seen live)
 
-- **Soak:** 2 hours unattended with at least 4 live agents on the 2 work lanes. `cointos check` stays green throughout, and at least 3 queue items reach `Status: done` with commits.
+- **Soak:** 2 hours unattended with at least 4 live agents on the 2 work lanes. `cointos check` stays green throughout, and at least 3 queue items land with commits (in the integrator workflow, their leaves are removed and Landed: trailers identify them).
 - **Coin under load:** 10 Telegram messages spread across the soak all get visible replies within 15 s.
 - **Workstation:** David uses the desktop normally during the soak without sluggishness. His own local OpenCode session is served ahead of background agents.
 - **Halt/up:** `cointos halt` mid-soak leaves no CointOS process running and no model loaded. After `cointos up`, the interrupted tasks resume.

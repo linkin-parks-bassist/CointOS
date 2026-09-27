@@ -18,7 +18,7 @@ OPENCODE = str(Path.home() / ".local/bin/opencode")
 GLOBAL_OPENCODE = Path.home() / ".config/opencode/opencode.json"
 PROVIDER = "cointos"
 ROLE_FILES = {"worker": "worker.md", "manager": "manager.md", "steward": "steward.md", "gardener": "gardener.md",
-              "integrator": "integrator.md"}
+              "integrator": "integrator.md", "tree-auditor": "tree-auditor.md"}
 
 
 def agent_dir(agent_id: str) -> Path:
@@ -130,17 +130,19 @@ def prompt(task: dict, place: dict) -> str:
         assignment = (f"{where}\n\nIntegrate the finished item `.knowledge/{task['item']}` from its worker's "
                       "branch. Start with `cointos review` in your worktree.")
     elif task["kind"] == "breakdown":
-        assignment = (f"{where}\n\nBreak down the drafted idea `.knowledge/{task['item']}`:\n\n"
+        assignment = (f"{where}\n\nOutline the concern pipeline and elaborate only the next small frontier of "
+                      f"the drafted idea `.knowledge/{task['item']}`:\n\n"
                       f"{task['brief']}\n\n{finish}")
     elif task["kind"] == "survey":
-        assignment = f"{where}\n\nSurvey this project and keep its queue right.\n\n{finish}"
+        assignment = f"{where}\n\nSurvey one concern: check neighboring boundaries or elaborate one idea's next frontier.\n\n{finish}"
     elif task["kind"] == "garden":
-        found = (f"`kt status` found these leaves needing care:\n\n{task['brief']}" if task["brief"]
-                 else "Every leaf is green: this is the routine pass.")
-        assignment = f"{where}\n\nTend this tree. {found}\n\n{finish}"
+        found = ("Inspect one structural concern across a small representative sample of this tree."
+                 if task["role"] == "tree-auditor" else
+                 f"Verify only these selected root-relative leaves (brown first when present):\n\n{task['brief']}")
+        assignment = f"{where}\n\n{found}\n\n{finish}"
     else:
-        assignment = (f"{where}\n\nDo a maintenance check of CointOS: run `cointos check`, "
-                      f"`cointos status` and `cointos agents`, and look at the knowledge tree.\n\n{finish}")
+        assignment = (f"{where}\n\nRun `cointos check`, then investigate only one reported health concern. "
+                      f"If checks are green, report that and end.\n\n{finish}")
     return "\n\n".join(parts) + "\n\n# Your assignment\n\n" + assignment
 
 

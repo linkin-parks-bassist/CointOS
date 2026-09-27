@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from cointos import agents, checks, state, work
 
@@ -87,6 +88,31 @@ class Completion(unittest.TestCase):
         (self.directory / "branch").rename(self.directory / "old")
         self.assertEqual(self.item_run("done", committed=False)["status"], "waiting")
         self.assertIn("uncommitted", state.L["tasks"]["test"]["note"])
+
+    def garden_run(self, pending, merged=True, clean=True):
+        state.L["tasks"]["test"].update(kind="garden", brief="what/is/selected.md", branch="test",
+                                        worktree=str(self.directory))
+        health = {"leaves": [f"yellow\tlocal:{p}\tunverified" for p in pending],
+                  "brown": 0, "yellow": len(pending)}
+        with patch.object(work, "place", return_value={"name": "sandbox", "path": "unused", "main_branch": "main"}), \
+                patch.object(work.trees, "health", return_value=health), \
+                patch.object(agents, "git", return_value=SimpleNamespace(returncode=0 if merged else 1)), \
+                patch.object(agents, "committed", return_value=clean):
+            work.settle("worker-test", {"finish": "stop"})
+        return state.L["tasks"]["test"]["status"]
+
+    def test_garden_batch_can_finish_with_other_leaves_still_yellow(self):
+        self.assertEqual(self.garden_run(["what/is/other.md"]), "done")
+
+    def test_garden_reports_unresolved_selected_leaves_instead_of_looping(self):
+        self.assertEqual(self.garden_run(["what/is/selected.md"]), "done")
+        self.assertIn("what/is/selected.md", state.L["alerts"][-1]["text"])
+
+    def test_garden_cannot_finish_without_landing(self):
+        self.assertEqual(self.garden_run([], merged=False), "waiting")
+
+    def test_garden_cannot_finish_with_uncommitted_corrections(self):
+        self.assertEqual(self.garden_run([], clean=False), "waiting")
 
 
 if __name__ == "__main__":

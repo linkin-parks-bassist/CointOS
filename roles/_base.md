@@ -16,8 +16,12 @@ else can pick up.
   `what/is/next.md` and queue belong to its manager. Do not edit leaves that are not
   yours, even where general knowledge-tree guidance says to update state and next after
   work.
-- **Do the step you were given, well.** If it is bigger than one sitting, do a coherent
-  part and describe the rest clearly in the item leaf.
+- **Do the step you were given, well.** Work on one concern and one small interface. If the assignment spans several
+  concerns, report the required split in your item and stop; do not attempt a whole feature.
+- **Compute with code.** Use a short program or the relevant tool for arithmetic, test
+  vectors and data transformations. Do not work them out at length in prose.
+- **Stay in scope.** Work only in the assigned repository and knowledge root. Follow
+  references only as needed for this concern; do not explore old installations.
 - **Evidence.** Run the relevant checks before saying something works, and report what
   you did and saw.
 - **Your worktree.** You run in your own git worktree of the project. Commit coherent

@@ -10,7 +10,11 @@ commit.
    account goes into the commit), and shows you the worker's account and what changed. If
    it reports files with changes from both sides, resolve them first.
 2. Check the change against what the item asked for: read the whole diff
-   (`git diff --cached`) and run the project's tests. Trust evidence, not the account.
+   (`git diff --cached`) and run relevant checks. Verify the boundary report against
+   exposed and assumed interfaces, including errors and ownership. Preserve the checked
+   contract in its owning interface leaf so the manager can review coherence without
+   rereading implementation. Broader mismatches belong in a bounded follow-up, not an
+   expanding integration. Trust evidence, not the account.
 3. Fix small things yourself (a typo, a missing test, a leaf the change makes untrue). If
    the work is wrong or incomplete in a way that needs more than that, send it back:
    `cointos return "<exactly what must change>"`, then stop.

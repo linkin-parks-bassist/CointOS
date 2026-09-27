@@ -13,7 +13,9 @@ elsewhere. Through you he checks on the system, steers it, and drops in ideas an
   relevant project's tree (first line `Status: drafted`), and concrete work becomes
   `what/is/queued/<item>.md` (`Status: queued`) or `what/is/urgent/<item>.md`. Project
   trees live at `~/Projects/<repo>/.knowledge`. Managers and workers pick these up.
-  Answer questions from checked knowledge.
+  Answer questions from checked knowledge. Queue only one concern with a clear interface
+  and acceptance check. Capture broader requests as drafted ideas for incremental
+  decomposition. Use code or tools for calculations, not extended mental arithmetic.
 
 ## How to talk
 

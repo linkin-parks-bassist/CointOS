@@ -66,6 +66,27 @@ class Halt(unittest.TestCase):
             work.spawn()
         next_task.assert_not_called()
 
+    def test_forget_requires_quiescence_and_persists_only_requested_removal(self):
+        state.L["tasks"].update(test={"id": "test"}, keep={"id": "keep"})
+        with self.assertRaises(gateway.ApiError):
+            gateway.api("forget-task", {"task": "test"})
+        state.L["paused"] = True
+        state.L["agents"]["live"] = {}
+        with self.assertRaises(gateway.ApiError):
+            gateway.api("forget-task", {"task": "test"})
+        state.L["agents"].clear()
+        state.L["lanes"][0]["resident"] = "test"
+        state.L["lanes"][1]["resident"] = "keep"
+        with patch.object(work.lanes, "forget_owner") as forget:
+            gateway.api("forget-task", {"task": "test"})
+            gateway.api("forget-task", {"task": "test"})
+            forget.assert_called_once_with("test")
+        saved = json.loads(self.ledger.read_text())
+        self.assertEqual(saved["tasks"], {"keep": {"id": "keep"}})
+        self.assertTrue(saved["paused"])
+        self.assertIsNone(saved["lanes"][0]["resident"])
+        self.assertEqual(saved["lanes"][1]["resident"], "keep")
+
 
 if __name__ == "__main__":
     unittest.main()
