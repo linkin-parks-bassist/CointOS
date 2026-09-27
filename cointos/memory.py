@@ -22,32 +22,6 @@ def physical_bytes() -> int:
         return 0
 
 
-def _cgroup_bytes(group: Path) -> int:
-    try:
-        return int((group / "memory.current").read_text())
-    except (OSError, ValueError):
-        return 0
-
-
-def cointos_bytes(config: dict, cgroup_root: Path = Path("/sys/fs/cgroup"),
-                  membership: Path = Path("/proc/self/cgroup")) -> int:
-    """Memory charged to Lemonade and the live CointOS user units.
-
-    This is deliberately approximate presentation accounting: cgroup charges give the dashboard
-    a much better CointOS/other split than configured model capacities, while the guard continues
-    to use MemAvailable and the server's reclaim-aware budget.
-    """
-    groups = {Path(config["server_cgroup"])}
-    try:
-        own = next(line.split("::", 1)[1] for line in membership.read_text().splitlines()
-                   if line.startswith("0::"))
-        app_slice = (cgroup_root / own.lstrip("/")).parent
-        groups.update(app_slice.glob("cointos*.service"))
-    except (OSError, StopIteration):
-        pass
-    return sum(_cgroup_bytes(group) for group in groups)
-
-
 def measure() -> dict:
     """Available memory, swap in use and memory pressure, from /proc."""
     values = {}

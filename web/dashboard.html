@@ -252,18 +252,15 @@ function renderMemory(M) {
   if (m.physical_gb === undefined) return;
   const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
   const loaded = Object.entries(M.models).filter(([, model]) => model.up).map(([name]) => M.model_memory[name]);
-  let weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
-  let kv = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
-  let saved = M.saved_bytes / 2 ** 30;
-  const free = gib(m.available_gb), physical = gib(m.physical_gb);
-  // Linux measures the CointOS side of the boundary (Lemonade plus CointOS services and agents).
-  // Keep the useful configured breakdown, scaled to that measured total, and give everything else
-  // actually in use to the Operating System segment.
-  const used = Math.max(0, physical - free), estimate = weights + kv + saved;
-  const cointos = m.cointos_gb === undefined ? estimate : Math.min(used, gib(m.cointos_gb));
-  const scale = estimate ? cointos / estimate : 0;
-  weights *= scale; kv *= scale; saved *= scale;
-  const system = Math.max(0, used - cointos);
+  const weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
+  const kv = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
+  const saved = M.saved_bytes / 2 ** 30, physical = gib(m.physical_gb);
+  // MemAvailable includes reclaimable model-weight pages, so it cannot itself be the chart's Free
+  // segment without counting those weights twice. Use it to find real non-reclaimable use, remove
+  // CointOS's KV and snapshots, then make Free the remainder of the physical partition.
+  const used = Math.max(0, physical - gib(m.available_gb));
+  const system = Math.max(0, used - kv - saved);
+  const free = Math.max(0, physical - system - weights - kv - saved);
   const values = [system, weights, kv, saved, free];
   MEMORY_PARTS = MEMORY_COLOURS.map(([name, colour], i) => [name, values[i], colour]);
   if (!$("donut")) {

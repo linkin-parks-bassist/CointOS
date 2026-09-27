@@ -97,7 +97,6 @@ class Handler(BaseHTTPRequestHandler):
         try:
             while True:
                 measured = memory.measure()
-                measured["cointos_gb"] = round(memory.cointos_bytes(CONFIG) / memory.GB, 1)
                 with LOCK:
                     frame = {"agents": L["agents"], "thoughts": L["thoughts"],
                              "memory": {**L["memory"], **measured}, "models": L["models"], "model_memory": L["model_memory"],

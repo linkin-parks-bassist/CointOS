@@ -1,6 +1,4 @@
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 from cointos import checks, config, memory
 
@@ -20,19 +18,6 @@ def snap(bytes_gb, last_run, model="work", tokens=10_000):
 
 
 class Memory(unittest.TestCase):
-    def test_cointos_memory_includes_inference_and_each_live_unit(self):
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            inference = root / "inference.slice"
-            app = root / "user.slice" / "app.slice"
-            for group, value in ((inference, 10), (app / "cointosd.service", 20),
-                                 (app / "cointos-agent-a.service", 30), (app / "unrelated.service", 40)):
-                group.mkdir(parents=True)
-                (group / "memory.current").write_text(str(value))
-            membership = root / "membership"
-            membership.write_text("0::/user.slice/app.slice/cointosd.service\n")
-            self.assertEqual(memory.cointos_bytes({"server_cgroup": str(inference)}, root, membership), 60)
-
     def test_nothing_forgotten_when_it_fits(self):
         self.assertEqual(memory.to_forget({"a": snap(2, 1)}, need_gb=1, headroom=5), [])
 
