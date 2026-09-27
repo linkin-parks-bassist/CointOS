@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T12:42:47+10:00"
+revised_at: "2026-09-27T12:48:48+10:00"
 ---
 
 CointOS runs from this checkout on rebuild/simple-core. The pre-emptive core, integrator delivery, dependency queues, bounded gardening and revised small-concern prompts are implemented. Full live acceptance remains open.
@@ -30,7 +30,7 @@ CointOS runs from this checkout on rebuild/simple-core. The pre-emptive core, in
 
 **Focused-run verification.** Backend reports one Qwen3.8 work lane and two front-model lanes; max_agents is two and gardening is disabled. Only the JSON manager resumed, in the same session ses_f1f615313ffeRYdGciQB3ItPp2 and worktree. Its restart was cold: history shows checkpoints discarded as diverged from the resumed conversation and restored=0 for a 27,589-token prompt. No role prompt changed during this reload; the exact differing token prefix is not established. Do not promise warm resume solely from session persistence. Investigate token-sequence stability without interrupting the current read.
 
-**Memory display.** The original five segments, legend, labels and layout remain. Loaded-model weights and configured KV capacity are shown unscaled; saved contexts use measured bytes. MemAvailable establishes non-reclaimable use but is not itself shown as Free because it includes reclaimable weight pages. Operating System is non-reclaimable use minus KV and saved contexts; Free is the remaining physical partition. This deliberately leaves small CointOS process overhead in Operating System. With the current two models and snapshots, a checked sample rendered approximately 19.0 GiB weights, 23.8 GiB KV, 11.6 GiB saved contexts, 22.7 GiB Operating System and 50.8 GiB Free. The guard and admission accounting are unchanged. The separately requested balanced agent-card layout is retained.
+**Memory display.** The original five segments, legend, labels and layout remain. Loaded-model weights and configured KV capacity are shown unscaled; saved contexts use measured bytes. MemAvailable establishes non-reclaimable use but is not itself shown as Free because it includes reclaimable weight pages. Operating System is non-reclaimable use minus KV and saved contexts; Free is the remaining physical partition. This deliberately leaves small CointOS process overhead in Operating System. With the current two models and snapshots, a checked sample rendered approximately 20.4 GB weights, 25.6 GB KV, 7.8 GB saved contexts, 20.3 GB Operating System and 53.9 GB Free. The dashboard follows the ordinary RAM convention: configured model values stay as authored, byte counters use powers-of-two conversion, and every value is labelled GB. The guard and admission accounting are unchanged. The separately requested balanced agent-card layout is retained.
 
 
 **Agent-card layout.** Full-width balanced rows hold at most three cards, with smaller rows above denser rows (one fills the width; four are 2+2; five are 2+3). Responsive capacity drops to two or one on smaller viewports. Row arithmetic was checked for counts 1–10 and capacities 1–3, and dashboard JavaScript syntax passes. Cards remain updated in place. No daemon restart is required.

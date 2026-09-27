@@ -252,8 +252,8 @@ function renderMemory(M) {
   if (m.physical_gb === undefined) return;
   const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
   const loaded = Object.entries(M.models).filter(([, model]) => model.up).map(([name]) => M.model_memory[name]);
-  const weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
-  const kv = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
+  const weights = loaded.reduce((n, x) => n + x.weights_gb, 0);
+  const kv = loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0);
   const saved = M.saved_bytes / 2 ** 30, physical = gib(m.physical_gb);
   // MemAvailable includes reclaimable model-weight pages, so it cannot itself be the chart's Free
   // segment without counting those weights twice. Use it to find real non-reclaimable use, remove
