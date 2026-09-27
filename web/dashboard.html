@@ -105,6 +105,10 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .check.ok { color: var(--ink); font-weight: 900; background: var(--paper); }
 .check.no { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); } .check.no + .check.no { margin-top: 6px; }
 .meta.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Finished work, folded away; opened, a bounded list that keeps its scroll through updates. */
+.done summary { cursor: pointer; list-style: none; } .done summary::-webkit-details-marker { display: none; }
+.done summary h3 { display: inline-block; } .done summary h3::before { content: "▸ "; } .done[open] summary h3::before { content: "▾ "; }
+.done-list { max-height: 420px; overflow: auto; }
 .history { font-size: 13px; max-height: 360px; overflow: auto; }
 .history div { display: flex; gap: 12px; padding: 4px 0; border-top: 1px solid var(--line-soft); }
 .history .when { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
@@ -119,9 +123,10 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
   <div class="alert" id="alert"></div>
   <div id="agents"></div>
   <div class="grid">
-    <section class="panel wide"><h2>Work</h2><div id="work"></div></section>
     <section class="panel wide machine"><h2>Machine</h2><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
       <div id="checks"></div></section>
+    <section class="panel wide"><h2>Work</h2><div id="work"></div>
+      <details class="done" id="done"><summary><h3>Done <span id="done-count"></span></h3></summary><div class="done-list" id="done-list"></div></details></section>
     <section class="panel wide"><h2>Recently</h2><div class="history" id="history"></div></section>
   </div>
 </main>
@@ -198,15 +203,20 @@ function renderAgents(S) {
 }
 
 function renderWork(L) {
-  const groups = [["running", "In progress"], ["waiting", "Up next"], ["done", "Done"], ["failed", "Gave up"]];
+  const groups = [["running", "In progress"], ["waiting", "Up next"], ["failed", "Gave up"]];
   const tasks = Object.values(L.tasks).sort((a, b) => b.updated_at - a.updated_at);
-  $("work").innerHTML = tasks.length ? groups.map(([status, title]) => {
-    const some = tasks.filter(t => t.status === status).slice(0, status === "done" ? 10 : 50);
-    return some.length ? `<h3>${title}</h3>` + some.map(t => `<div class="row ${status}"><div class="bar"></div>` +
-      `<div class="who">${esc(t.place)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
-      `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
-      `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div></div>`).join("") : "";
-  }).join("") : `<p class="muted">No work yet.</p>`;
+  const rows = (status, some) => some.map(t => `<div class="row ${status}"><div class="bar"></div>` +
+    `<div class="who">${esc(t.place)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
+    `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
+    `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div></div>`).join("");
+  setHTML($("work"), tasks.length ? groups.map(([status, title]) => {
+    const some = tasks.filter(t => t.status === status);
+    return some.length ? `<h3>${title}</h3>` + rows(status, some) : "";
+  }).join("") : `<p class="muted">No work yet.</p>`);
+  const done = tasks.filter(t => t.status === "done");
+  $("done").style.display = done.length ? "" : "none";
+  setText($("done-count"), `· ${done.length}`);
+  setHTML($("done-list"), rows("done", done));
 }
 
 const short_task = t => String(t || "").replace(/^[^:]+:/, "").replace(/^what\/is\/\w+\//, "").replace(/\.md$/, "");
