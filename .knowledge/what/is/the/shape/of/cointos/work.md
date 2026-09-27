@@ -1,9 +1,11 @@
 ---
 status: green
-revised_at: "2026-09-27T11:40:01+10:00"
+revised_at: "2026-09-27T11:43:17+10:00"
 ---
 
 David's direction of 2026-09-27, not yet built: **everything small, pipelined, hardware-like.** The local models (Qwen 27B and 4B) are slow, small and not very bright, so no agent should be given a large task. They do simple things; CointOS gets complicated things done through heavy use of abstraction, since an abstract concept is itself small and simple by design.
+
+The picture is hardware: agents are execution units, and work flows through them like a pipeline. But an agent is not a fixed-function unit. A moderately competent model such as the Qwen 27B has enough conceptual flexibility inside one small, well-bounded task to turn hardware-like deterministic processing into real project work. The aim is to use that flexibility within each stage, and never to rely on it across a large task.
 
 - **Break work down by concern, not by feature.** Not "JSON parser in C" into "parser + CLI + utils", but into a pipeline of atomic-ish stages with clear boundaries: tokenizer, lexer, parser, serializer and so on. Each item is hyper-manageable: one concern, one small interface.
 - **Coherence by reverse feedback up the abstraction levels.** Small local pieces risk being locally sensible and globally incoherent. Reviewers of a piece report on its boundary: the interface it exposes and assumes, not its internals. Higher-level reviewers take those boundary reports and check coherence at the system level, each keeping its own concern small by working only at its level of abstraction.
