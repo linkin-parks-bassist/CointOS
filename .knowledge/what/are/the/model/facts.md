@@ -1,13 +1,13 @@
 ---
 status: green
-revised_at: "2026-09-27T11:59:04+10:00"
+revised_at: "2026-09-27T12:17:39+10:00"
 ---
 
 **Qwen3.8-27B-GGUF: the work model.**
 - David: this is the minimum competent model for agent work. 4B- and 8B-class models are not used for agent work.
 - Weights about 17.5 GB.
-- Shape: `ctx_size` 262,144 with `--parallel 2` (2 lanes of 131,072 tokens).
-- Launch arguments: `--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0` (MTP speculative decoding), plus `--slot-save-path` from the backend for context snapshots. No `--reasoning-budget`. About 38.5 GB of memory loaded; the 4B about 6.6 GB.
+- Current JSON-parser test shape: `ctx_size` 131,072 with `--parallel 1` (one lane of 131,072 tokens). Normal two-lane shape is 262,144 total; the per-agent context allowance is preserved.
+- Launch arguments: `--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0` (MTP speculative decoding), plus `--slot-save-path` from the backend for context snapshots. No `--reasoning-budget`. Earlier two-lane memory observation was about 38.5 GB; the 4B about 6.6 GB. The one-lane shape has not been separately memory-benchmarked; its configured 39 GB admission estimate remains conservative.
 - Earlier observed speed (not a current benchmark): about 20–25 visible tokens/s for one request with MTP, and about 13 tokens/s aggregate across two concurrent requests. Prefill runs at about 170 tokens/s, so an uncached 20k-token agent prompt costs about 2 minutes of lane time, and generation on the other lane drops to about 1–3 tokens/s meanwhile.
 - A hybrid (recurrent plus attention) model: prompt reuse needs a saved state, not merely a shared prefix (`how/does/lemonade/serve/models.md`).
 - Supports tool calling.

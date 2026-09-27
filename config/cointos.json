@@ -12,8 +12,8 @@
   "front_model": "Qwen3.5-4B-GGUF",
   "models": {
     "Qwen3.8-27B-GGUF": {
-      "ctx_size": 262144,
-      "lanes": 2,
+      "ctx_size": 131072,
+      "lanes": 1,
       "memory_gb": 39,
       "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0",
       "weights_gb": 17.5
@@ -67,7 +67,7 @@
     "exit_grace_seconds": 30
   },
   "spawner": {
-    "max_agents": 4,
+    "max_agents": 2,
     "interval_seconds": 5,
     "max_runs_per_task": 5,
     "survey_every_seconds": 21600,
@@ -82,20 +82,7 @@
       "main_branch": "main"
     }
   ],
-  "trees": [
-    {
-      "name": "cointos",
-      "path": "~/Projects/CointOS",
-      "tree": ".knowledge",
-      "main_branch": "rebuild/simple-core"
-    },
-    {
-      "name": "sandbox",
-      "path": "~/Projects/cointos-sandbox",
-      "tree": ".knowledge",
-      "main_branch": "main"
-    }
-  ],
+  "trees": [],
   "garden": {
     "check_seconds": 60,
     "every_seconds": 86400,

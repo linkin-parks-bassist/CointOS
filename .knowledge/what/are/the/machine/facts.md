@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-09-27T00:28:34+10:00"
+revised_at: "2026-09-27T12:19:46+10:00"
 ---
 
 The workstation is `DDRiver`, an AMD Ryzen AI MAX+ 395 with Radeon 8060S (Strix Halo), 128 GiB unified physical memory and a GNOME desktop. Live inspection on 2026-09-27 reports Ubuntu 24.04.5 LTS and kernel 7.0.0-31-generic. David's desktop and personal work outrank autonomous agents.
 
-**Memory is one pool.** GPU and ordinary host allocations share RAM. `memory.physical_bytes()` totals online memory blocks (137.4 decimal GB, approximately 128 GiB); `MemTotal` excludes boot reservations. The ledger and CLI use decimal GB. The dashboard converts to GiB but currently labels them GB.
+**Memory is one pool.** GPU and ordinary host allocations share RAM. `memory.physical_bytes()` totals online memory blocks (137.4 decimal GB, approximately 128 GiB); `MemTotal` excludes boot reservations. The ledger and CLI use decimal GB. The dashboard converts and labels memory values in GiB. It shows MemAvailable versus physical memory unavailable to that measure (in use/reserved), not separate measured OS/model/KV allocations. Saved-context file bytes are separate because file length is not resident memory.
 
 **Measurements.**
 - `MemAvailable` in `/proc/meminfo` and PSI `full avg10` in `/proc/pressure/memory` drive workstation headroom and distress.

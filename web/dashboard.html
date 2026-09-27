@@ -234,21 +234,16 @@ function renderMachine(L) {
                 saved_bytes: Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0)});
 }
 
-const MEMORY_COLOURS = [["Operating System", "#28262b"], ["Model weights", "#9f3b52"], ["KV-cache", "#e9687e"],
-                        ["Saved contexts", "#ec98a5"], ["Free", "#ece3e0"]];
+const MEMORY_COLOURS = [["In use / reserved", "#9f3b52"], ["Available", "#ece3e0"]];
 
 function renderMemory(M) {
-  // The operating system in ink, CointOS's parts in steps of the site's rose (validated as an
-  // ordinal ramp), free memory as pale paper; clockwise from midnight. Built once, then updated.
+  // MemAvailable is an availability estimate, not free pages. Admission budgets and
+  // snapshot file lengths cannot partition physical RAM into resident allocations.
   const m = M.memory || {};
   if (m.physical_gb === undefined) return;
-  const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
-  const loaded = Object.entries(M.models).filter(([, model]) => model.up).map(([name]) => M.model_memory[name]);
-  const weights = gib(loaded.reduce((n, x) => n + x.weights_gb, 0));
-  const kv = gib(loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0));
-  const saved = M.saved_bytes / 2 ** 30, free = gib(m.available_gb), physical = gib(m.physical_gb);
-  const system = Math.max(0, physical - weights - kv - saved - free);
-  const values = [system, weights, kv, saved, free];
+  const gib = gb => gb * 1e9 / 2 ** 30;
+  const physical = gib(m.physical_gb), available = Math.min(physical, Math.max(0, gib(m.available_gb)));
+  const values = [physical - available, available];
   MEMORY_PARTS = MEMORY_COLOURS.map(([name, colour], i) => [name, values[i], colour]);
   if (!$("donut")) {
     $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
@@ -269,10 +264,11 @@ function renderMemory(M) {
     at += length;
   });
   document.querySelectorAll(".legend .item").forEach((item, i) => {
-    setText(item.querySelector("b"), `${values[i].toFixed(1)} GB`);
+    setText(item.querySelector("b"), `${values[i].toFixed(1)} GiB`);
     setText(item.querySelector("em"), `${total ? Math.round(values[i] / total * 100) : 0}%`);
   });
-  setHTML($("memfacts"), `pressure ${m.psi} · swap ${m.swap_gb} GB` +
+  setHTML($("memfacts"), `pressure ${m.psi} · swap ${gib(m.swap_gb).toFixed(2)} GiB` +
+    `<br>Saved context files: ${(M.saved_bytes / 2 ** 30).toFixed(1)} GiB · availability includes reclaimable memory` +
     (M.guard && M.guard.blocked ? ` · <b>background waiting for memory</b>` : "") + (M.guard && M.guard.killed ? ` · <b>work model killed</b>` : ""));
   focusPart(FOCUSED);
 }
@@ -284,7 +280,7 @@ function focusPart(i) {
   document.querySelectorAll("#donut .seg").forEach(seg => seg.style.opacity = i < 0 || +seg.dataset.i === i ? 1 : .35);
   document.querySelectorAll(".legend .item").forEach(item => item.classList.toggle("on", +item.dataset.i === i));
   const total = MEMORY_PARTS.reduce((n, p) => n + p[1], 0);
-  setText($("donut-value"), i < 0 ? `${total.toFixed(0)} GB` : `${MEMORY_PARTS[i][1].toFixed(1)} GB`);
+  setText($("donut-value"), i < 0 ? `${total.toFixed(0)} GiB` : `${MEMORY_PARTS[i][1].toFixed(1)} GiB`);
   setText($("donut-label"), i < 0 ? "memory" : MEMORY_PARTS[i][0].toLowerCase());
 }
 
