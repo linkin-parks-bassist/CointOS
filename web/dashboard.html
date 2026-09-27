@@ -31,9 +31,9 @@ main { max-width: 1600px; margin: auto; padding: 26px 16px 60px; }
 .dot.bad { background: var(--accent-bright); }
 .alert { margin-top: 18px; padding: 13px 18px; border-left: 5px solid var(--accent-bright); background: var(--accent-wash); }
 .alert:empty { display: none; }
-.agents { margin-top: 26px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-/* Two or three agents share one row; four make a square. */
-@media (min-width: 1100px) { .agents.fitted { grid-template-columns: repeat(var(--n), minmax(0, 1fr)); } }
+.agents { margin-top: 26px; display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); --capacity: 1; }
+@media (min-width: 700px) { .agents { --capacity: 2; } }
+@media (min-width: 1100px) { .agents { --capacity: 3; } }
 .agent { --c: var(--accent-bright); position: relative; background: var(--dark); color: var(--dark-text); border: 2px solid var(--dark); box-shadow: 7px 7px 0 var(--pink-shadow);
   padding: 18px 20px 11px; display: grid; grid-template-columns: 18px 1fr auto; gap: 4px 14px; min-width: 0; }
 /* The agent's state, as a flat square: solid (and slowly pulsing) while the model works for it,
@@ -163,6 +163,13 @@ function phase(L, a) {
 function setText(el, value) { if (el.textContent !== value) el.textContent = value; }
 function setHTML(el, value) { if (el.dataset.html !== value) { el.dataset.html = value; el.innerHTML = value; } }
 
+// Balance rows with the smaller rows first; each row still fills the full width.
+function agentRowSizes(count, capacity) {
+  if (!count) return [];
+  const rows = Math.ceil(count / capacity), small = Math.floor(count / rows), larger = count % rows;
+  return Array.from({length: rows}, (_, i) => small + (i >= rows - larger ? 1 : 0));
+}
+
 function renderAgents(S) {
   const agents = Object.values(S.agents).sort((a, b) => a.started_at - b.started_at);
   let grid = $("agents").querySelector(".agents");
@@ -172,8 +179,8 @@ function renderAgents(S) {
     return;
   }
   if (!grid) { $("agents").innerHTML = `<div class="agents"></div>`; $("agents").dataset.html = ""; grid = $("agents").firstChild; }
-  grid.classList.toggle("fitted", agents.length >= 2 && agents.length <= 4);
-  grid.style.setProperty("--n", agents.length === 4 ? 2 : agents.length);
+  const capacity = Number(getComputedStyle(grid).getPropertyValue("--capacity"));
+  const spans = agentRowSizes(agents.length, capacity).flatMap(size => Array(size).fill(6 / size));
   const cards = new Map([...grid.children].map(card => [card.dataset.id, card]));
   agents.forEach((a, index) => {
     let card = cards.get(a.id);
@@ -186,6 +193,7 @@ function renderAgents(S) {
     }
     if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
     cards.delete(a.id);
+    card.style.gridColumn = `span ${spans[index]}`;
     const [kind, label, detail, share] = phase(S, a), q = selector => card.querySelector(selector);
     const mark = q(".mark");
     if (mark.className !== `mark ${kind}`) mark.className = `mark ${kind}`;

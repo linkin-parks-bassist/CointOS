@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T12:23:49+10:00"
+revised_at: "2026-09-27T12:25:31+10:00"
 ---
 
 CointOS runs from this checkout on rebuild/simple-core. The pre-emptive core, integrator delivery, dependency queues, bounded gardening and revised small-concern prompts are implemented. Full live acceptance remains open.
@@ -31,3 +31,6 @@ CointOS runs from this checkout on rebuild/simple-core. The pre-emptive core, in
 **Focused-run verification.** Backend reports one Qwen3.8 work lane and two front-model lanes; max_agents is two and gardening is disabled. Only the JSON manager resumed, in the same session ses_f1f615313ffeRYdGciQB3ItPp2 and worktree. Its restart was cold: history shows checkpoints discarded as diverged from the resumed conversation and restored=0 for a 27,589-token prompt. No role prompt changed during this reload; the exact differing token prefix is not established. Do not promise warm resume solely from session persistence. Investigate token-sequence stability without interrupting the current read.
 
 **Memory display.** The dashboard no longer subtracts configured model budgets and snapshot file lengths to invent an OS remainder. Its ring shows available versus in use/reserved physical RAM. The detailed panel retains estimated model weights, estimated KV/runtime load, saved-context file size, and an explicitly unmeasured OS/applications row. All values use GiB, and details are labelled non-additive. This restores useful detail without inventing OS usage or claiming configured load estimates measure live residency. Browser verification was unavailable (no connected browser); served source and script syntax are checked separately.
+
+
+**Agent-card layout.** Full-width balanced rows hold at most three cards, with smaller rows above denser rows (one fills the width; four are 2+2; five are 2+3). Responsive capacity drops to two or one on smaller viewports. Row arithmetic was checked for counts 1–10 and capacities 1–3, and dashboard JavaScript syntax passes. Cards remain updated in place. No daemon restart is required.
