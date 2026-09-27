@@ -196,6 +196,7 @@ def main() -> None:
     work.load_keys()
     with LOCK:
         work.adopt(previous)
+        lanes.forget_orphans()
         log("daemon started")
     save()
     gateway.serve()

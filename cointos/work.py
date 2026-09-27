@@ -181,6 +181,12 @@ def settle(agent_id: str, outcome: dict) -> None:
         branch = (queues.read_item(Path(task["worktree"]), task["item"]) or {}).get("status")
         finished = landed in ("in progress", "done", "blocked") or branch == "blocked"
         detail = f"idea status {landed} on main" + ("" if branch in (None, landed) else f", {branch} on its branch")
+    elif task["kind"] == "decompose":
+        # Finished once main no longer holds the item as blocked awaiting decomposition: the
+        # manager replaced it with smaller children (or rescoped it).
+        on_main = queues.read_item(Path(where["path"]), task["item"])
+        finished = not (on_main or {}).get("decompose") and outcome.get("finish") == "stop"
+        detail = f"{task['item']} " + ("replaced" if on_main is None else f"{on_main['status']} on main")
     elif task["kind"] == "garden":
         # Completion belongs to the assigned batch, not the whole tree. Changes must land.
         health = trees.health(where, CONFIG["timeouts"]["command_seconds"])
@@ -228,7 +234,8 @@ def send_back(integration: dict, notes: str) -> None:
 
 # Lower runs first. Finished work is landed before new work starts, so branches stay close to
 # main. Gardening ranks by how bad its tree is (`trees.rank`).
-RANKS = {"urgent": [1], "integrate": [2], "queued": [4], "drafted": [5], "survey": [6], "maintenance": [7]}
+# Queue members rank by their index position after their kind: urgent work is listed first.
+RANKS = {"integrate": [2], "decompose": [3], "queued": [4], "drafted": [5], "survey": [6], "maintenance": [7]}
 
 
 def new_task(where: dict, kind: str, role: str, item: str | None, brief: str, leaf_hash: str | None, rank: list,
@@ -285,15 +292,25 @@ def next_task() -> str | None:
         for found in scanned[project["name"]]:
             if ready[project["name"]][found["item"]] != "ready":
                 continue
+            rank = RANKS[found["kind"]] + [found["position"]]
+            if found["decompose"]:  # a worker found it too big: a manager replaces it with smaller children
+                name = f"decompose-{Path(found['item']).stem}"
+                known = tasks.get(f"{project['name']}:{name}")
+                if not (known and (known["status"] in ("running", "waiting") or known["leaf_hash"] == found["hash"])):
+                    candidates.append((RANKS["decompose"], lambda p=project, f=found, n=name: new_task(
+                        p, "decompose", "manager", f["item"], f["brief"], f["hash"], RANKS["decompose"], n)))
+                continue
             known = tasks.get(f"{project['name']}:{found['item']}")
+            if known and known["status"] == "waiting":
+                known["rank"] = rank  # a manager may have reordered the index
             if known and (known["status"] in ("running", "waiting", "review") or known["leaf_hash"] == found["hash"]):
                 continue
-            if found["kind"] in ("urgent", "queued") and found["status"] == "queued":
-                candidates.append((RANKS[found["kind"]], lambda p=project, f=found: new_task(
-                    p, "item", "worker", f["item"], f["brief"], f["hash"], RANKS[f["kind"]])))
+            if found["kind"] == "queued" and found["status"] == "queued":
+                candidates.append((rank, lambda p=project, f=found, r=rank: new_task(
+                    p, "item", "worker", f["item"], f["brief"], f["hash"], r)))
             elif found["kind"] == "drafted" and found["status"] == "drafted":
-                candidates.append((RANKS["drafted"], lambda p=project, f=found: new_task(
-                    p, "breakdown", "manager", f["item"], f["brief"], f["hash"], RANKS["drafted"])))
+                candidates.append((rank, lambda p=project, f=found, r=rank: new_task(
+                    p, "breakdown", "manager", f["item"], f["brief"], f["hash"], r)))
     for project in CONFIG["projects"]:  # one integration at a time per project, oldest first
         integrating = tasks.get(f"{project['name']}:integrate")
         finished = [t for t in tasks.values() if t["place"] == project["name"] and t["status"] == "review"]

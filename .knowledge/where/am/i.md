@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T14:14:47+10:00"
+revised_at: "2026-09-27T14:51:05+10:00"
 ---
 
 CointOS is David's autonomous, local-first agent ecosystem. This checkout on `rebuild/simple-core` is both its source and its installed runtime: the enabled `cointosd.service` and `cointos-coin.service` run here, and `~/.local/bin/cointos` points to `bin/cointos`.
@@ -11,7 +11,7 @@ Read these first, in order:
 1. `what/is/cointos.md`: purpose and priorities.
 2. `how/to/keep/cointos/simple.md`: governing development rules.
 3. `what/is/the/architecture/of/cointos.md`: design and implementation boundaries; `what/is/the/shape/of/cointos/work.md` and `what/are/the/cointos/roles.md`: bounded work and role ownership.
-4. `what/is/the/spec.md`, `what/is/the/plan.md`, `what/is/the/state.md`, `what/is/next.md`: requirements, milestones, evidence and next work.
+4. `what/is/the/spec.md`: requirements and acceptance; `what/is/the/plan.md`: the frontier (milestones, current state, evidence and ordered next work); `what/is/broken.md`: current defects.
 
 Tree branches:
 - `what/` owns purpose, architecture, project lifecycle, roles, machine and model facts.

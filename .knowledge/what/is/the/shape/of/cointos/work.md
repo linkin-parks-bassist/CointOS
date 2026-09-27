@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T14:25:26+10:00"
+revised_at: "2026-09-27T14:45:44+10:00"
 ---
 
 David's direction of 2026-09-27 is **everything small, pipelined, hardware-like**. Local models have useful flexibility within one well-bounded concern; CointOS must not rely on that flexibility across a large assignment. Agents are execution units, work flows through their stages, and abstraction keeps the next level small too.
@@ -21,4 +21,4 @@ David's direction of 2026-09-27 is **everything small, pipelined, hardware-like*
 
 The role prompts and scheduler implement these bounds; live task-quality acceptance remains to be demonstrated. Earlier oversized sandbox worker, manager and gardener runs took tens of minutes to over an hour and accumulated large shared-lane contexts. Those observations motivate the scope limit, not an arbitrary time-based kill of useful model work.
 
-David has authorized a fresh C JSON-parser request through ordinary intake to exercise the infrastructure. OpenCode stays at 1.18.32. what/is/next.md owns the current exercise and operational next step.
+David has authorized a fresh C JSON-parser request through ordinary intake to exercise the infrastructure. OpenCode stays at 1.18.32. `what/is/the/plan.md` owns the current exercise and operational next step.

@@ -36,6 +36,24 @@ class Snapshots(unittest.TestCase):
         self.assertEqual(state.L["snapshots"], {})
         self.assertEqual(len(self.forgotten), 1)
 
+    def test_a_state_saved_as_its_task_is_forgotten_is_not_kept(self):
+        self.while_saving = lambda: state.L["tasks"].pop("t")
+        self.assertFalse(lanes.keep(0, [1, 2, 3], "t", "suspended"))
+        self.assertEqual(state.L["snapshots"], {})
+
+    def test_coin_david_and_shared_starts_are_kept_without_tasks(self):
+        for tokens, owner in enumerate(("coin", "user", "shared")):
+            self.assertTrue(lanes.keep(0, [tokens], owner, "checkpoint"))
+        self.assertEqual(sorted(s["owner"] for s in state.L["snapshots"].values()), ["coin", "shared", "user"])
+
+    def test_orphaned_snapshots_are_forgotten_but_review_and_untasked_ones_kept(self):
+        state.L["tasks"]["r"] = {"id": "r", "status": "review"}
+        for name, owner in (("a", "gone"), ("b", "r"), ("c", "shared"), ("d", "coin"), ("e", "t")):
+            state.L["snapshots"][name] = {"owner": owner}
+        lanes.forget_orphans()
+        self.assertEqual(sorted(state.L["snapshots"]), ["b", "c", "d", "e"])
+        self.assertEqual(self.forgotten, ["a"])
+
     def test_a_task_does_not_save_the_state_its_next_thought_has_left_behind(self):
         # The lane holds the end of t's last thought, which the conversation, as rendered
         # again for its next thought, does not go on from.

@@ -133,6 +133,13 @@ def prompt(task: dict, place: dict) -> str:
         assignment = (f"{where}\n\nOutline the concern pipeline and elaborate only the next small frontier of "
                       f"the drafted idea `.knowledge/{task['item']}`:\n\n"
                       f"{task['brief']}\n\n{finish}")
+    elif task["kind"] == "decompose":
+        assignment = (f"{where}\n\nA worker found the queued item `.knowledge/{task['item']}` too big and "
+                      "returned it blocked with `Needs decomposition:`:\n\n"
+                      f"{task['brief']}\n\nReplace it with the smaller children it needs: write their endpoints "
+                      "under `what/is/the/queued/`, list them in `what/is/queued.md` where the item was, repoint "
+                      "every `Depends on:` that named the item, then remove the item's endpoint and index "
+                      f"entry. Split only this item.\n\n{finish}")
     elif task["kind"] == "survey":
         assignment = f"{where}\n\nSurvey one concern: check neighboring boundaries or elaborate one idea's next frontier.\n\n{finish}"
     elif task["kind"] == "garden":

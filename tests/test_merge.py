@@ -86,10 +86,13 @@ class Integration(unittest.TestCase):
         self.main.mkdir()
         git(self.main, "init", "-q", "-b", "main")
         git(self.main, "config", "user.email", "t@t"), git(self.main, "config", "user.name", "t")
-        self.item = "what/is/queued/parser.md"
+        self.item = "what/is/the/queued/parser.md"
         self.leaf = Path(".knowledge") / self.item
         (self.main / self.leaf).parent.mkdir(parents=True)
         (self.main / self.leaf).write_text("Status: queued\n\nWrite a parser.\n")
+        self.index = Path(".knowledge/what/is/queued.md")
+        (self.main / self.index).write_text("Work queued, first first.\n\n- `what/is/the/queued/parser.md`\n"
+                                            "- `what/is/the/queued/docs.md`\n")
         git(self.main, "add", "."), git(self.main, "commit", "-qm", "queue")
         git(self.main, "worktree", "add", "-q", "-b", "cointos/parser", str(self.worker))
         (self.worker / "parser.c").write_text("int parse;\n")
@@ -97,7 +100,7 @@ class Integration(unittest.TestCase):
         git(self.worker, "add", "."), git(self.worker, "commit", "-qm", "wip")
         git(self.main, "worktree", "add", "-q", "-b", "cointos/integrate", str(self.integrator))
         ledger = {"tasks": {
-            "p:what/is/queued/parser.md": {"worktree": str(self.worker), "branch": "cointos/parser", "kind": "item",
+            "p:what/is/the/queued/parser.md": {"worktree": str(self.worker), "branch": "cointos/parser", "kind": "item",
                                            "place": "p", "item": self.item},
             "p:integrate": {"id": "p:integrate", "worktree": str(self.integrator), "kind": "integrate",
                             "place": "p", "item": self.item}}}
@@ -107,15 +110,23 @@ class Integration(unittest.TestCase):
         os.chdir(self.integrator)
         self.addCleanup(os.chdir, previous)
 
-    def test_review_then_land_makes_one_commit_and_prunes_the_item(self):
+    def test_review_then_land_makes_one_commit_and_prunes_the_item_and_its_entry(self):
         with contextlib.redirect_stdout(io.StringIO()):
             cli.review()
             cli.land("Add the parser")
-        self.assertEqual(sorted(git(self.main, "ls-files").split()), ["parser.c"])
+        self.assertEqual(sorted(git(self.main, "ls-files").split()), [".knowledge/what/is/queued.md", "parser.c"])
+        self.assertEqual(queues.entries((self.main / self.index).read_text(), "queued"), ["what/is/the/queued/docs.md"])
         message = git(self.main, "log", "-1", "--format=%B")
         self.assertIn("parser.c parses", message)
         self.assertEqual(queues.landed({"path": str(self.main), "main_branch": "main"}), {self.item})
         self.assertEqual(len(git(self.main, "log", "--format=%h").split()), 2, "one commit for the item")
+
+    def test_a_trailer_naming_items_still_on_main_does_not_land_them(self):
+        # A manager queueing items once named them in its commit's trailer, comma-joined.
+        (self.main / ".knowledge/what/is/the/queued/docs.md").write_text("Status: queued\n\nDocument it.\n")
+        git(self.main, "add", "."), git(self.main, "commit", "-qm",
+                                        f"Queue work\n\nLanded: {self.item}, what/is/the/queued/docs.md")
+        self.assertEqual(queues.landed({"path": str(self.main), "main_branch": "main"}), set())
 
 
 if __name__ == "__main__":

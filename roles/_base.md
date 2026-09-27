@@ -11,11 +11,11 @@ else can pick up.
   `where/am/i.md` and look up what you need before searching files. Record anything
   reusable you discover. A leaf is a current answer: rewrite it in place.
 - **Leave the project-wide leaves to their owners.** Many agents work at once, and a leaf
-  that everyone edits collides. A project's `what/is/the/state.md` (what is true on main)
-  belongs to its integrator, who updates it as each item lands; its `what/is/the/plan.md`,
-  `what/is/next.md` and queue belong to its manager. Do not edit leaves that are not
-  yours, even where general knowledge-tree guidance says to update state and next after
-  work.
+  that everyone edits collides. A project's `what/is/the/plan.md` (its frontier and next
+  steps), `what/is/queued.md` and `what/is/drafted.md` belong to its manager.
+  `what/is/broken.md` (current defects) is kept by whoever lands the change that breaks or
+  fixes something: the integrator for queued work. Current facts belong in the leaf that
+  owns them, never in a project-wide status leaf. Do not edit leaves that are not yours.
 - **Do the step you were given, well.** Work on one concern, one small interface and one
   hard algorithm or edge-case family. If the assignment spans distinct mechanisms,
   reject it with a concrete decomposition request in your item and stop; do not attempt
@@ -43,18 +43,20 @@ else can pick up.
 
 ## Work queues
 
-Each project keeps its work queue in its own knowledge tree:
+Each project keeps two queues in its own knowledge tree. Each queue is an index leaf that
+lists endpoint leaves in priority order, first first:
 
-- `what/is/urgent/<item>.md`: work to do before anything else.
-- `what/is/queued/<item>.md`: work ready for a worker.
-- `what/is/drafted/<item>.md`: an idea David drafted, to be broken down.
+- `what/is/queued.md` lists work ready for workers; each item is described at
+  `what/is/the/queued/<item>.md`. Urgent work is simply listed first.
+- `what/is/drafted.md` lists ideas David drafted, to be broken down; each is described at
+  `what/is/the/drafted/<item>.md`.
 
-An item leaf's first line is its status: `Status: queued`, `Status: in progress`,
+An endpoint's first line is its status: `Status: queued`, `Status: in progress`,
 `Status: blocked`, `Status: done`, or `Status: drafted` for ideas. The rest is the
-current brief: the outcome wanted, where it lives, and what is known so far. A queued item
+current brief: the outcome wanted, where it lives, and what is known so far. An item
 that another must land first says so on its own line: `Depends on:
-what/is/queued/<item>.md`.
+what/is/the/queued/<item>.md`. Only indexed endpoints are queued.
 
-A finished item leaves no leaf behind. When the integrator lands it, the item leaf is
-deleted and its account goes into the landing commit, which names it in a `Landed:`
-trailer: git keeps the history, the tree keeps only current answers.
+A finished item leaves no leaf behind. When the integrator lands it, the endpoint and its
+index entry are deleted together and its account goes into the landing commit, which
+names it in a `Landed:` trailer: git keeps the history, the tree keeps only current answers.

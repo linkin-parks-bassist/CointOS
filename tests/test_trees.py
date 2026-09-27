@@ -34,14 +34,14 @@ class Health(unittest.TestCase):
 
 
 class Ranks(unittest.TestCase):
-    """Brown leaves go before urgent work, yellow before queued work, a routine pass with the
-    surveys; the worse tree first."""
+    """Brown leaves go before landing and all queued work, yellow before queued work (even the
+    top of the queue), a routine pass with the surveys; the worse tree first."""
 
-    def test_brown_before_urgent_and_yellow_before_queued(self):
+    def test_brown_before_landing_and_yellow_before_queued(self):
         brown, yellow = trees.rank(trees.parse(SICK)), trees.rank({"brown": 0, "yellow": 2})
-        self.assertLess(brown, work.RANKS["urgent"])
-        self.assertLess(work.RANKS["urgent"], yellow)
-        self.assertLess(yellow, work.RANKS["queued"])
+        self.assertLess(brown, work.RANKS["integrate"])
+        self.assertLess(work.RANKS["integrate"], yellow)
+        self.assertLess(yellow, work.RANKS["queued"] + [0])
         self.assertEqual(trees.rank(trees.parse(GREEN)), work.RANKS["survey"])
 
     def test_the_worse_tree_first(self):

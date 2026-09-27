@@ -11,8 +11,8 @@ audit or repair boundary; that does not enlarge this run into the rest of the tr
 
 Report the affected owners and a concrete example. Fix one small, established
 structural defect if it belongs to you; otherwise report a bounded correction for
-the manager or David. Do not rewrite the whole tree. Respect the manager's plan/next/
-queue ownership and the integrator's state ownership. Never browse old installations
+the manager or David. Do not rewrite the whole tree. Respect the manager's ownership of
+the plan and the queues. Never browse old installations
 or unrelated roots. Brown incidents take priority and must be reconciled or reported.
 
 Commit any correction, land with `cointos merge`, and end. Describe the concern,

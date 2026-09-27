@@ -18,7 +18,7 @@ For an idea, sketch a short pipeline of concerns and their interfaces, not a lis
 large features. This run is itself one decomposition stage: advance one abstraction
 boundary and elaborate only the next one to three concerns. Its valid output may be a
 smaller decomposition frontier rather than worker-ready items. Leave later concerns as
-a short remaining frontier in the idea leaf and set it to `Status: in progress`.
+a short remaining frontier in the idea's endpoint and set it to `Status: in progress`.
 Decomposition proceeds through several manager handoffs; do not recursively perform
 all of those stages inside one run. A first split exposes interfaces, and later manager
 runs split the next frontier again as those interfaces become concrete.
@@ -53,16 +53,21 @@ Every queued item must specify:
 - Its parent idea or higher-level concern, and dependencies on earlier items.
 
 When a worker returns an item with `Status: blocked` and a `Needs decomposition:`
-section, treat that as useful sizing feedback. Replace the oversized item with smaller
-children that preserve its outcome and exclusions. Those children may themselves be
+section, CointOS dispatches a manager for it. Treat that as useful sizing feedback.
+Replace the oversized item with smaller children that preserve its outcome and
+exclusions: list them in `what/is/queued.md` where the item was, repoint every
+`Depends on:` that named it, and remove its endpoint and index entry. Those children may themselves be
 decomposition stages; do not assume one resplit makes them worker-ready, and do not send
 the same scope back to the worker with different wording.
 
-Put `Depends on: what/is/queued/<item>.md` immediately after the status when an item
-requires earlier work to land. Several dependencies are comma-separated. Only landed
+Queue an item by writing its endpoint `what/is/the/queued/<item>.md` and listing it in
+`what/is/queued.md`. The index order is the priority: first runs first, so put urgent
+work at the top and reorder entries when priorities change. Put `Depends on:
+what/is/the/queued/<item>.md` immediately after the status when an item requires earlier
+work to land. Several dependencies are comma-separated. Only landed
 items satisfy dependencies. Independent items may run in parallel.
 
-For a survey, choose one concern from plan/next or one in-progress idea. Read the
+For a survey, choose one concern from the plan or one in-progress idea. Read the
 relevant interface leaves and landing accounts: compare one to three neighboring
 boundaries at their common abstraction level, not their implementation internals.
 Record the resulting contract or unresolved mismatch in its owning concept leaf.
@@ -75,7 +80,8 @@ Recomposition is pipelined too. Review one shared boundary or one layer of neigh
 contracts per run. If coherence depends on several other boundaries, record the current
 result and leave explicit bounded follow-ups rather than absorbing the whole review.
 
-Update only the relevant plan/next guidance and queue. Remove obsolete items; remove
-an idea only when its remaining frontier is empty and every required item has landed.
-The state leaf belongs to the integrator. Commit, land with `cointos merge`, and end.
+Update only the relevant part of `what/is/the/plan.md` and the queues. Remove obsolete
+items and ideas, each endpoint together with its index entry; remove an idea only when
+its remaining frontier is empty and every required item has landed. Current facts
+belong in their owning leaves, not in the plan. Commit, land with `cointos merge`, and end.
 Nothing useful to queue is a valid outcome. Do not generate busywork.

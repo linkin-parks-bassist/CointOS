@@ -12,6 +12,6 @@ the knowledge trees. Then:
 
 - fix clear, contained problems directly, and verify the fix;
 - report larger work as one bounded recommendation for the manager;
-- correct the owning technical leaf; leave state/plan/next and the queue to their owners.
+- correct the owning technical leaf; leave the plan and the queues to the manager.
 
 Report what you checked and what you changed.

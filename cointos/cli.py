@@ -186,8 +186,8 @@ def integration() -> tuple[dict, dict, str, Path]:
 
 def review() -> None:
     """Bring the worker's branch into the integrator's worktree as one uncommitted change, drop
-    its item leaf if the item is done (a finished item leaves no leaf; git keeps its history), and
-    show what to check."""
+    its endpoint leaf and index entry together if the item is done (a finished item leaves no
+    leaf; git keeps its history), and show what to check."""
     task, worker, main, checkout = integration()
     leaf = f".knowledge/{task['item']}"
     account = git("show", f"{worker['branch']}:{leaf}").stdout
@@ -195,14 +195,20 @@ def review() -> None:
         git("merge", "--squash", worker["branch"])
         if (queues.status(account) or "") == "done":
             git("rm", "-q", "-f", "--", leaf)
+            index = Path(task["worktree"]) / ".knowledge" / queues.index_leaf(Path(task["item"]).parent.name)
+            if index.exists():
+                index.write_text(queues.without_entry(index.read_text(encoding="utf-8"), task["item"]),
+                                 encoding="utf-8")
+                git("add", "--", str(index))
     print(f"The worker's account of {task['item']}:\n\n{queues.answer(account).strip()}\n")
     print("The change, staged in your worktree (`git diff --cached` shows it all):")
     print(git("diff", "--cached", "--stat").stdout)
     if conflicted():
         resolve(conflicted(), "carry on with the review; `cointos land` commits it")
     print("Next: check the change against the item and run the tests. Fix small things yourself. Bring "
-          "`.knowledge/what/is/the/state.md` (and any leaf the change makes untrue) up to date. Then "
-          "`cointos land \"<one-line summary>\"`, or `cointos return \"<what must change>\"`.")
+          "every leaf the change makes untrue up to date in its owning leaf, and `what/is/broken.md` when the "
+          "change breaks or fixes something. Then `cointos land \"<one-line summary>\"`, or "
+          "`cointos return \"<what must change>\"`.")
 
 
 def land(summary: str) -> None:

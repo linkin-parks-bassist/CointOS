@@ -293,10 +293,26 @@ def forget_owner(owner: str) -> None:
         BACKEND.forget(CONFIG, name)
 
 
+UNTASKED = frozenset({"user", "coin", "shared"})  # conversations that are not tasks
+
+
+def forget_orphans() -> None:
+    """Forget snapshots whose owner is neither untasked nor a task in the ledger: saved before
+    the rule above, or left by a task forgotten while one of its saves was in flight. A task
+    awaiting review keeps its snapshots, since being sent back resumes it. Caller holds LOCK."""
+    for owner in {s["owner"] for s in L["snapshots"].values()} - UNTASKED - set(L["tasks"]):
+        forget_owner(owner)
+        log("snapshot forgotten", owner=owner, reason="its conversation is over")
+
+
 def live(owner: str | None) -> bool:
-    """Whether a conversation can still go on, so that its context is worth saving. Caller holds LOCK."""
+    """Whether a conversation can still go on, so that its context is worth saving. An owner that
+    is neither untasked nor a task in the ledger is over: a forgotten task, or an agent that ended
+    while a request was in flight. Caller holds LOCK."""
+    if owner in UNTASKED:
+        return True
     task = L["tasks"].get(owner or "")
-    return owner is not None and (task is None or task["status"] in ("running", "waiting"))
+    return task is not None and task["status"] in ("running", "waiting")
 
 
 def switch(position: int, tokens: list[int], owner: str) -> str | None:
