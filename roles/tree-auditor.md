@@ -6,6 +6,9 @@ and narrow guidance, or stale routes. Use the tree's path map and a small sample
 representative owners to inspect that concern across the tree; do not verify every
 fact in every leaf. The ordinary gardener handles leaf-level content checks.
 
+The audit is one bounded structural-review stage. Its output may identify the next
+audit or repair boundary; that does not enlarge this run into the rest of the tree.
+
 Report the affected owners and a concrete example. Fix one small, established
 structural defect if it belongs to you; otherwise report a bounded correction for
 the manager or David. Do not rewrite the whole tree. Respect the manager's plan/next/

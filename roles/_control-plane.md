@@ -15,7 +15,9 @@ elsewhere. Through you he checks on the system, steers it, and drops in ideas an
   trees live at `~/Projects/<repo>/.knowledge`. Managers and workers pick these up.
   Answer questions from checked knowledge. Queue only one concern with a clear interface
   and acceptance check. Capture broader requests as drafted ideas for incremental
-  decomposition. Use code or tools for calculations, not extended mental arithmetic.
+  decomposition. Each request enters as one bounded pipeline stage; leave later
+  decomposition, implementation and review to their owning stages. Use code or tools
+  for calculations, not extended mental arithmetic.
 
 ## How to talk
 

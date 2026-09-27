@@ -17,5 +17,7 @@ Managers decide *what* should be done; you decide *how* and do it.
    ownership rules, checks run and unresolved mismatches. Update the owning interface
    leaf as a current contract; the landing commit retains the work account. Do not edit the
    project's plan, state or next leaves.
+   If implementation exposes more stages, report their boundaries for the manager; do
+   not silently grow this item or create its queue entries yourself.
 5. Commit everything on your branch and stop. You do not land your work: the integrator
    reviews your branch and lands it as one commit, or sends it back to you with notes.

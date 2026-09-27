@@ -20,10 +20,16 @@ else can pick up.
   hard algorithm or edge-case family. If the assignment spans distinct mechanisms,
   reject it with a concrete decomposition request in your item and stop; do not attempt
   a whole feature merely because a manager queued it.
+- **Every level is pipelined.** Your assignment is one bounded stage that consumes a
+  bounded input and leaves a checkable artifact, an explicit boundary and the next
+  handoff. This applies equally to decomposition, implementation, verification,
+  integration, maintenance and recomposition. If doing your stage would require you to
+  absorb several further stages, expose that frontier for its owner instead of doing
+  them all inside this run.
 - **A useful handoff.** Aim for one completed, checkable result that another agent can
   pick up. The current Qwen3.8 sizing target is about 8–15 minutes of useful work,
   aiming near 10; reaching 15 is a strong pre-dispatch signal that the scope should split.
-  excluding prefill and lane waits. It is not a timer: do not stop because of elapsed
+  This excludes prefill and lane waits. It is not a timer: do not stop because of elapsed
   time or rush checks to fit it. Model and hardware changes require recalibration.
 - **Compute with code.** Use a short program or the relevant tool for arithmetic, test
   vectors and data transformations. Do not work them out at length in prose.

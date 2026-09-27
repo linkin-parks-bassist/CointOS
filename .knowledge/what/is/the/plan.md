@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T12:17:40+10:00"
+revised_at: "2026-09-27T14:13:35+10:00"
 ---
 
 The pre-emptive core is implemented. The two-hour sandbox soak established check stability, four-agent concurrency and delivery; it did not establish Coin latency, workstation responsiveness or every recovery scenario. Small-concern role prompts, bounded gardening and a separate structural auditor are implemented but need live quality acceptance. Obsolete test work is erased; David has authorized a fresh C JSON-parser exercise through ordinary intake. what/is/the/state.md owns evidence, and what/is/next.md orders the remaining work. Sole Survivor is off the roadmap; catastrophic recovery remains David's remote intervention.
@@ -17,4 +17,4 @@ Build the architecture in `what/is/the/architecture/of/cointos.md` in milestones
 The core stays around 3,000 lines (`how/to/keep/cointos/simple.md`).
 
 
-**Current integration stage.** Validate a new small concern pipeline with a bounded manager frontier, worker boundary reports, integrator landing/send-back, and manager-level coherence checking. After restoring ambient configuration, demonstrate a 1–3-leaf routine gardener and a separate single-concern tree audit. The old runs remain discarded; the fresh JSON-parser brief states only software requirements, with decomposition supplied by the infrastructure. Keep sandbox-only project scope. Keep OpenCode 1.18.32 unchanged by David's request. Its V2 assessment remains background knowledge for a future decision.
+**Current integration stage.** Validate the invariant that every level of work is internally pipelined: each manager run advances one decomposition boundary, each worker implements one concern, each integrator verifies and lands one boundary, and manager-level recomposition checks one shared contract layer. A stage may hand off another stage of the same kind; decomposition does not have to produce worker-ready items in one pass. After restoring ambient configuration, demonstrate a 1–3-leaf routine gardener and a separate single-concern tree audit. The old runs remain discarded; the fresh JSON-parser brief states only software requirements, with decomposition supplied by the infrastructure. Keep sandbox-only project scope. Keep OpenCode 1.18.32 unchanged by David's request. Its V2 assessment remains background knowledge for a future decision.

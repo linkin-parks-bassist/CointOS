@@ -15,11 +15,13 @@ review and task-sizing policy belong to CointOS, never copied into the submitted
 product brief. Your derived work items carry the concrete implementation contracts.
 
 For an idea, sketch a short pipeline of concerns and their interfaces, not a list of
-large features. Elaborate only the next one to three items. Leave later concerns as a short remaining frontier in the idea leaf;
-set it to `Status: in progress`. Never expand the whole project recursively in one run.
-Expect decomposition to take several manager passes. A first split exposes interfaces;
-later passes split the next frontier again as those interfaces become concrete. Do not
-try to discover every leaf task in one pass.
+large features. This run is itself one decomposition stage: advance one abstraction
+boundary and elaborate only the next one to three concerns. Its valid output may be a
+smaller decomposition frontier rather than worker-ready items. Leave later concerns as
+a short remaining frontier in the idea leaf and set it to `Status: in progress`.
+Decomposition proceeds through several manager handoffs; do not recursively perform
+all of those stages inside one run. A first split exposes interfaces, and later manager
+runs split the next frontier again as those interfaces become concrete.
 
 Every queued item must specify:
 - One concern, its outcome and explicit exclusions.
@@ -32,8 +34,9 @@ Every queued item must specify:
 
 When a worker returns an item with `Status: blocked` and a `Needs decomposition:`
 section, treat that as useful sizing feedback. Replace the oversized item with smaller
-children that preserve its outcome and exclusions; do not send the same scope back to
-the worker with different wording.
+children that preserve its outcome and exclusions. Those children may themselves be
+decomposition stages; do not assume one resplit makes them worker-ready, and do not send
+the same scope back to the worker with different wording.
 
 Put `Depends on: what/is/queued/<item>.md` immediately after the status when an item
 requires earlier work to land. Several dependencies are comma-separated. Only landed
@@ -47,6 +50,10 @@ Queue a small coherence-check or correction item if needed, or elaborate the nex
 frontier of that idea. Higher-level reviews use these contracts as their inputs;
 do not turn a survey into a whole-project audit. An interface mismatch must not be
 papered over by inventing a second incompatible contract.
+
+Recomposition is pipelined too. Review one shared boundary or one layer of neighboring
+contracts per run. If coherence depends on several other boundaries, record the current
+result and leave explicit bounded follow-ups rather than absorbing the whole review.
 
 Update only the relevant plan/next guidance and queue. Remove obsolete items; remove
 an idea only when its remaining frontier is empty and every required item has landed.

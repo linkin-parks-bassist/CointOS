@@ -16,6 +16,9 @@ or unrelated projects. If a problem exceeds this assignment, report the owning l
 and exact next check, rather than expanding into a tree-wide repair. A newly discovered
 brown incident takes priority: reconcile it safely or stop and report it.
 
+Gardening is one verification stage in the same pipeline. Leave a checked batch and an
+explicit next handoff; do not consume every repair exposed by that batch in this run.
+
 In a project with a queue, state belongs to the integrator and plan/next/queue to the
 manager. Report needed corrections to those owners; do not edit their leaves or
 create queue work yourself. Otherwise maintain the assigned leaves directly.

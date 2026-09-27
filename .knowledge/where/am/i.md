@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-09-27T12:07:11+10:00"
+revised_at: "2026-09-27T14:14:47+10:00"
 ---
 
 CointOS is David's autonomous, local-first agent ecosystem. This checkout on `rebuild/simple-core` is both its source and its installed runtime: the enabled `cointosd.service` and `cointos-coin.service` run here, and `~/.local/bin/cointos` points to `bin/cointos`.
 
-The Python implementation is in `cointos/`, configuration in `config/cointos.json`, agent prompts in `roles/`, dashboard in `web/`, unit templates in `systemd/`, and pure-function tests in `tests/`. Runtime state is under `state/`. The pre-emptive core is implemented and agents have completed work; full acceptance remains to be demonstrated. Only the sandbox is configured for autonomous project work. Obsolete test runs were erased; David has authorized a fresh C JSON-parser exercise through ordinary sandbox intake. Small-concern role prompts, bounded gardeners and a separate structural tree auditor are implemented, with live quality acceptance pending. OpenCode remains 1.18.32; V2 migration is deferred by David's request.
+The Python implementation is in `cointos/`, configuration in `config/cointos.json`, agent prompts in `roles/`, dashboard in `web/`, unit templates in `systemd/`, and pure-function tests in `tests/`. Runtime state is under `state/`. The pre-emptive core is implemented and agents have completed work; full acceptance remains to be demonstrated. Only the sandbox is configured for autonomous project work. Obsolete test runs were erased; David has authorized a fresh C JSON-parser exercise through ordinary sandbox intake. Every role prompt now applies the same bounded pipeline rule at its own level, including decomposition and recomposition; bounded gardeners and a separate structural tree auditor are implemented, with live quality acceptance pending. OpenCode remains 1.18.32; V2 migration is deferred by David's request.
 
 Read these first, in order:
 1. `what/is/cointos.md`: purpose and priorities.

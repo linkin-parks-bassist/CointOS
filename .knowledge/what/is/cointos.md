@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T00:58:13+10:00"
+revised_at: "2026-09-27T14:13:34+10:00"
 ---
 
 CointOS is David's personal, local-first, autonomous agent ecosystem, developed in `/home/david/Projects/CointOS`. It is not a tool David "uses" turn by turn. It runs by itself, continuously, and keeps the GPU busy with useful work.
@@ -11,7 +11,7 @@ CointOS is David's personal, local-first, autonomous agent ecosystem, developed 
 - **Three role classes.** A steward class keeps the system alive: Coin and maintenance stewards. A managerial class builds and maintains priority queues of work: decomposition, ordering, review and audit. A worker class carries those queues out. See `what/are/the/cointos/roles.md`.
 - **Work sources.** Agents carry out work David has submitted as to-be-done, and they maintain and improve the system itself. They are not limited to either.
 - **Where work lands.** Project work happens in ordinary git repositories under `~/Projects/`.
-- **Idea pipeline.** David drafts ideas. Without further prompting, agents break them into small, elaborated, manageable chunks, then implement, test, review and audit them.
+- **Idea pipeline.** David drafts ideas. Without further prompting, agents advance them through bounded stages of decomposition, implementation, testing, review, integration and audit. Every level, including decomposition and recomposition, leaves a checkable artifact and a smaller explicit frontier for the next stage.
 - **Remote control.** The system is largely controllable from afar through Cointelprofessional ("Coin") on Telegram, which must essentially never be unavailable. Coin reads and edits knowledge trees directly.
 - **Deep knowledge-tree integration.** Agents orient, record and hand off through knowledge trees; work queues are knowledge-tree leaves.
 - **Harnessed local intelligence.** Local models do the work in a well-harnessed, curated way: small concrete tasks, bounded context, review.

@@ -15,6 +15,9 @@ commit.
    contract in its owning interface leaf so the manager can review coherence without
    rereading implementation. Broader mismatches belong in a bounded follow-up, not an
    expanding integration. Trust evidence, not the account.
+   Integration and verification are pipeline stages too: establish this item's boundary
+   and landing decision. Do not absorb a multi-item reconciliation or a whole-project
+   review into this run.
 3. Fix small things yourself (a typo, a missing test, a leaf the change makes untrue). If
    the work is wrong or incomplete in a way that needs more than that, send it back:
    `cointos return "<exactly what must change>"`, then stop.
