@@ -99,7 +99,6 @@ class Handler(BaseHTTPRequestHandler):
                 measured = memory.measure()
                 with LOCK:
                     frame = {"agents": L["agents"], "thoughts": L["thoughts"],
-                             "runs": {a["id"]: L["tasks"].get(a["task"], {}).get("runs") for a in L["agents"].values()},
                              "memory": {**L["memory"], **measured}, "models": L["models"], "model_memory": L["model_memory"],
                              "saved_bytes": sum(s["bytes"] for s in L["snapshots"].values() if s["tier"] == "memory")}
                     data = json.dumps(frame)

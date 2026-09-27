@@ -71,7 +71,7 @@ def start_agent(task_id: str) -> None:
     L["agents"][agent_id] = {
         "id": agent_id, "role": task["role"], "place": task["place"], "task": task_id, "title": task["title"],
         "class": "background", "state": "starting", "pid": None, "url": None, "session": task.get("session"),
-        "doing": None, "thoughts": 0, "repeats": 0, "last_thought": None, "last_activity": now(),
+        "doing": None, "thoughts": 0, "generated": 0, "repeats": 0, "last_thought": None, "last_activity": now(),
         "started_at": now()}
     log("agent started", agent=agent_id, task=task_id, run=task["runs"])
     threading.Thread(target=agent_thread, args=(agent_id, dict(task), key), daemon=True).start()

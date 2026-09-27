@@ -342,6 +342,15 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
 
 # ---------------------------------------------------------------- lanes
 
+def arrived(thought: dict, run: dict, new: list[int]) -> None:
+    """New tokens of a thought, as the model writes them: to its asker, and onto its agent's count."""
+    run["queue"].put(new)
+    with LOCK:
+        agent = L["agents"].get(thought["agent"])
+        if agent is not None:
+            agent["generated"] += len(new)
+
+
 def worker(position: int) -> None:
     """Advance, one step at a time, whichever thought holds this lane."""
     chunk, read_chunk = CONFIG["scheduler"]["chunk_tokens"], CONFIG["scheduler"]["read_chunk_tokens"]
@@ -378,7 +387,7 @@ def worker(position: int) -> None:
                 result, holds = {"tokens": [], "done": False}, upto
             else:
                 result = BACKEND.think(CONFIG, model, index, tokens, held, min(chunk, run["max"] - len(run["generated"])),
-                                       run["sampling"], run["queue"].put)
+                                       run["sampling"], lambda new: arrived(thought, run, new))
                 holds = tokens + result["tokens"][:-1] if result["tokens"] else tokens
             failure = None
         except BACKEND.Lost as error:  # the server dropped the lane's state: it holds nothing known
