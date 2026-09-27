@@ -103,10 +103,10 @@ def prompt(task: dict, place: dict) -> str:
         where = (f"Project: {place['name']}, repository {place['path']}, main branch "
                  f"`{place['main_branch']}`.\nYour worktree: {task['worktree']}, on branch `{task['branch']}`.")
         refused = "If `cointos merge` refuses, set the item to `Status: blocked` with the reason."
-    finish = ("When your work is committed, bring your branch up to date with "
-              f"`git merge {place['main_branch']}` (resolve any conflicts and re-check), then run "
-              "`cointos merge` in your worktree to land it on the main branch. Only what lands counts: "
-              f"commit nothing after that. {refused}")
+    finish = ("When your work is committed, land it with `cointos merge` in your worktree: it brings your "
+              f"branch up to date with `{place['main_branch']}` and lands it. Never run `git merge`, `git rebase` "
+              "or `git stash` yourself. If it reports conflicts, resolve them as it says and run it again. "
+              f"Only what lands counts: commit nothing after that. {refused}")
     if task["kind"] == "item":
         assignment = (f"{where}\n\nYour item: `.knowledge/{task['item']}` (read it with kt). As it was "
                       f"queued:\n\n{task['brief']}\n\n{finish}")

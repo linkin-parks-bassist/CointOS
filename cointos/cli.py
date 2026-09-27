@@ -114,9 +114,21 @@ def halt(keep_coin: bool) -> None:
 
 
 def merge() -> None:
-    """Land the current worktree's branch on its task's main branch, fast-forward only."""
+    """Land the current worktree's branch on its task's main branch: bring the branch up to date
+    with main, then fast-forward main to it. Agents land only this way, never with git merge. A
+    conflict is left in the worktree with plain instructions; nothing lands until it is resolved."""
     def git(*args, cwd=None):
         return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+
+    def conflicted():
+        return git("diff", "--name-only", "--diff-filter=U").stdout.split()
+
+    def resolve(files):
+        raise SystemExit(
+            "Main changed the same lines as your branch in:\n  " + "\n  ".join(files) + "\n"
+            "Nothing has landed. Open each file, keep what both sides meant (main's changes are other "
+            "agents' finished work; do not drop them) and remove the <<<<<<< ======= >>>>>>> markers. "
+            "Then `git add` those files, `git commit --no-edit`, and run `cointos merge` again.")
     branch = git("branch", "--show-current").stdout.strip()
     here = Path(git("rev-parse", "--show-toplevel").stdout.strip() or ".").resolve()
     checkout = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()).parent
@@ -127,15 +139,24 @@ def merge() -> None:
                 if p["name"] == task["place"])["main_branch"]
     if not branch or branch == main:
         raise SystemExit("run this in your task worktree, on your task branch")
+    if conflicted():
+        resolve(conflicted())
     if git("status", "--porcelain").stdout.strip():
-        raise SystemExit("your worktree has uncommitted changes; commit them first")
+        raise SystemExit("your worktree has uncommitted changes; commit them first, then run `cointos merge` again")
+    if git("merge", "--no-edit", main).returncode != 0:
+        if conflicted():
+            resolve(conflicted())
+        git("merge", "--abort")
+        raise SystemExit(f"bringing your branch up to date with {main} failed; nothing has landed")
     if git("branch", "--show-current", cwd=checkout).stdout.strip() != main:
-        raise SystemExit(f"the checkout {checkout} is not on {main}; cannot merge now")
+        raise SystemExit(f"the main checkout {checkout} is not on {main} right now; nothing has landed. "
+                         "Try `cointos merge` again later.")
     result = git("merge", "--ff-only", branch, cwd=checkout)
     if result.returncode != 0:
-        raise SystemExit(f"fast-forward merge refused (run `git merge {main}` in your worktree first):\n"
-                         + result.stderr.strip())
-    print(f"merged {branch} into {main}")
+        raise SystemExit("main could not take your branch; nothing has landed. If main moved meanwhile, run "
+                         "`cointos merge` again. Otherwise the main checkout has someone's uncommitted edits "
+                         "in the same files; try again later.\n" + result.stderr.strip())
+    print(f"landed {branch} on {main}")
 
 
 def watch(agent_id: str | None) -> None:

@@ -17,7 +17,8 @@ Depending on your assignment:
 - **Survey the project.** Read the project's plan, state and next leaves and its open
   queue. Queue the next one to three steps that genuinely move the plan forward, mark
   anything urgent, and close out items that are already done or no longer make sense.
-  Keep the plan, state and next leaves current.
+  Keep the plan, state and next leaves current: they are yours alone (only surveys edit
+  them), so rewrite them from what the finished items say.
 - **Review.** Look at recently finished items and their commits. If something is wrong
   or incomplete, queue a precise follow-up item for it.
 

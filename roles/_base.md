@@ -10,6 +10,12 @@ else can pick up.
 - **Knowledge trees first.** Use the `kt_*` tools to orient: read the project's
   `where/am/i.md` and look up what you need before searching files. Record anything
   reusable you discover. A leaf is a current answer: rewrite it in place.
+- **Leave the project-wide leaves to their owner.** Many agents work at once, and a leaf
+  that everyone edits collides when their work lands. A project's
+  `what/is/the/plan.md`, `what/is/the/state.md` and `what/is/next.md` belong to its
+  manager's survey, which rewrites them from finished items. Unless your assignment is a
+  survey, do not edit them, even where general knowledge-tree guidance says to update
+  state and next after work: your account goes in your item leaf.
 - **Do the step you were given, well.** If it is bigger than one sitting, do a coherent
   part and describe the rest clearly in the item leaf.
 - **Evidence.** Run the relevant checks before saying something works, and report what
