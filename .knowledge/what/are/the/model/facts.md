@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T12:17:39+10:00"
+revised_at: "2026-09-27T12:50:56+10:00"
 ---
 
 **Qwen3.8-27B-GGUF: the work model.**
@@ -16,6 +16,8 @@ revised_at: "2026-09-27T12:17:39+10:00"
 - Weights about 2.9 GB; kept loaded (pinned).
 - Shape: `ctx_size` 65,536 with `--parallel 2` (2 lanes of 32,768 tokens).
 - Fast first replies for Coin. Its configured arguments also include `--cache-ram 0`; the server's extra RAM prompt cache is disabled for both models, while CointOS retains its own slot snapshots.
+
+**Size provenance.** The configured whole-model admission sizes (`memory_gb`: 39 for Qwen3.8 and 7 for Qwen3.5) round up live loaded-memory observations of about 38.5 GB and 6.6 GB recorded during the 2026-09-26 scheduler rebuild. The configured weight estimates (17.5 and 2.9) originated in this model-facts leaf when the fresh CointOS base was created, then were copied into config by the later dashboard commit. No underlying file-size measurement or external source was retained for those weight figures, and the Lemonade-owned GGUF paths are not stat-readable by David's user. Treat them as inherited estimates until measured through Lemonade or another authorized interface.
 
 **Lanes are set at load.** `--parallel` is a llama-server start option and the KV buffer is allocated at load, so the lane count is part of how a model is loaded.
 
