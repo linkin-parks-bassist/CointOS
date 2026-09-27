@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T00:26:51+10:00"
+revised_at: "2026-09-27T10:09:54+10:00"
 ---
 
 CointOS is David's autonomous, local-first agent ecosystem. This checkout on `rebuild/simple-core` is both its source and its installed runtime: the enabled `cointosd.service` and `cointos-coin.service` run here, and `~/.local/bin/cointos` points to `bin/cointos`.
@@ -19,4 +19,4 @@ Tree branches:
 - `where/` owns this orientation and the archive reuse map at `where/are/reusable/cointos/parts.md`.
 - `why/`, `does/` and `is/` are currently empty.
 
-The previous installation at `~/.CointOS` is retained but its old `agent-*` services are inactive and activatable units disabled. The current `cointos halt` stops this checkout's live system; it is not an old-installation cleanup prerequisite. Lemonade remains shared with other clients. Never touch `~/Avnet` or professional data.
+The previous installation at `~/.CointOS` is retained but its old `agent-*` services are inactive and activatable units disabled. The current `cointos halt` stops this checkout's live system; it is not an old-installation cleanup prerequisite. Lemonade remains shared with other clients. `~/Avnet` and other professional data must never reach a hosted model other than the work-provided GitHub Copilot: a hosted assistant (Claude, Codex and the like) working on CointOS never reads it. CointOS's local agents run on local models, so the restriction is not about them.
