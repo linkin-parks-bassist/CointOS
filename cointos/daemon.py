@@ -79,6 +79,7 @@ def guard() -> None:
     and let the effect show before the next. Sustained pressure is a shortcut to the top. The
     core (daemon, front-desk model, Coin) stays. Caller holds LOCK."""
     measured, server = memory.measure(), BACKEND.budget(CONFIG)
+    measured.setdefault("cointos_gb", round(memory.cointos_bytes(CONFIG) / memory.GB, 1))
     L["memory"] = {**measured, "server": server, "headroom_gb": memory.headroom_gb(CONFIG, measured, server)}
     state, limits = L["guard"], CONFIG["memory"]
     short = L["memory"]["headroom_gb"] < 0 and not lanes.make_room(0.0)  # rung 1 happens here, always
