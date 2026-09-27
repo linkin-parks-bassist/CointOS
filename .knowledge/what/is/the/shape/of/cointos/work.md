@@ -1,9 +1,13 @@
 ---
 status: green
-revised_at: "2026-09-27T11:59:47+10:00"
+revised_at: "2026-09-27T12:07:10+10:00"
 ---
 
 David's direction of 2026-09-27 is **everything small, pipelined, hardware-like**. Local models have useful flexibility within one well-bounded concern; CointOS must not rely on that flexibility across a large assignment. Agents are execution units, work flows through their stages, and abstraction keeps the next level small too.
+
+**Current sizing calibration.** David's experience with Qwen3.8 on the current hardware (2026-09-27) is that a useful atomic operation takes about 10–20 minutes of substantive work, ideally around 15, excluding prefill and lane waits. At observed speeds around 7–25 tokens/s, productivity relative to duration drops sharply beyond roughly 25 minutes. Use this to estimate scope and produce a completed, checkable handoff; it is not a run timer, deadline, token quota or new kill condition. Recalibrate when the model or hardware changes. Future models have no assumed capability or release date here.
+
+**Separation of concerns.** Product briefs state desired software behavior and acceptance. Workflow and model-specific task sizing live in CointOS policy, role prompts and orchestration. Do not insert them into a product brief to coach an infrastructure test. Derived work items carry the concrete contracts that the manager determines; the submitted brief does not prescribe decomposition. Evaluate the infrastructure through ordinary intake without manually supplying its intermediate work.
 
 **Concern pipelines.** Break work by interface and responsibility, not a few large features. A parser may separate lexical recognition, value construction and serialization; the precise stages depend on its contract. Each item gives one outcome, exclusions, inputs/outputs, error and ownership rules, affected area, dependencies and an executable check. Managers sketch the pipeline but elaborate only the next one to three items per run, retaining an unexpanded frontier in the idea. Surveys advance that frontier. Workers block oversized items with the requested split instead of attempting a whole feature. All roles compute with code/tools rather than extended prose arithmetic.
 
@@ -13,4 +17,4 @@ David's direction of 2026-09-27 is **everything small, pipelined, hardware-like*
 
 The role prompts and scheduler implement these bounds; live task-quality acceptance remains to be demonstrated. Earlier oversized sandbox worker, manager and gardener runs took tens of minutes to over an hour and accumulated large shared-lane contexts. Those observations motivate the scope limit, not an arbitrary time-based kill of useful model work.
 
-The obsolete test assignments were cancelled at David's request. Autonomy remains paused with no replacement queue. Next is a deliberately small pipeline exercise when resumed; what/is/next.md owns that sequence.
+David has authorized a fresh C JSON-parser request through ordinary intake to exercise the infrastructure. OpenCode stays at 1.18.32. what/is/next.md owns the current exercise and operational next step.

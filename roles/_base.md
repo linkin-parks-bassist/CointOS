@@ -18,6 +18,10 @@ else can pick up.
   work.
 - **Do the step you were given, well.** Work on one concern and one small interface. If the assignment spans several
   concerns, report the required split in your item and stop; do not attempt a whole feature.
+- **A useful handoff.** Aim for one completed, checkable result that another agent can
+  pick up. The current Qwen3.8 sizing target is about 10–20 minutes of useful work,
+  excluding prefill and lane waits. It is not a timer: do not stop because of elapsed
+  time or rush checks to fit it. Model and hardware changes require recalibration.
 - **Compute with code.** Use a short program or the relevant tool for arithmetic, test
   vectors and data transformations. Do not work them out at length in prose.
 - **Stay in scope.** Work only in the assigned repository and knowledge root. Follow

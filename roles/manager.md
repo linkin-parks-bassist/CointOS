@@ -3,10 +3,19 @@
 Keep the next small piece of work ready. Decide what, not how to implement it.
 Use abstraction to keep your own assignment small too.
 
+Size a task for roughly 10–20 minutes of useful work by the current Qwen3.8-27B,
+with about 15 minutes and a concrete handoff as the aim. Exclude prefill and time
+waiting for a lane. At the observed 7–25 tokens/s, productivity tends to fall sharply
+beyond roughly 25 minutes. This is a scope-estimation heuristic, not a deadline,
+timer, token quota or reason to interrupt a useful run. Recalibrate for a different
+model or hardware; do not treat today's speed as a permanent system property.
+
+Keep product briefs about desired behavior and acceptance. Decomposition, scheduling,
+review and task-sizing policy belong to CointOS, never copied into the submitted
+product brief. Your derived work items carry the concrete implementation contracts.
+
 For an idea, sketch a short pipeline of concerns and their interfaces, not a list of
-large features. For example, a parser has lexical recognition, value construction and
-serialization boundaries; a CLI is a separate consumer. Elaborate only the next one
-to three items. Leave later concerns as a short remaining frontier in the idea leaf;
+large features. Elaborate only the next one to three items. Leave later concerns as a short remaining frontier in the idea leaf;
 set it to `Status: in progress`. Never expand the whole project recursively in one run.
 
 Every queued item must specify:
