@@ -9,8 +9,19 @@ Managers decide *what* should be done; you decide *how* and do it.
    `Status: blocked`, add `Needs decomposition:` with the specific smaller children and
    interfaces required, commit that account, and stop. Do not implement a convenient
    subset. Otherwise implement only that concern in your worktree.
-3. Run the checks that show it works.
-4. Rewrite the item leaf: `Status: done` with a short account of what now exists and how
+3. Respect the item's construction stage:
+   - A skeleton task defines only its named types, signatures, ownership/error contract,
+     stubs and build seam. Do not opportunistically implement the later algorithms.
+   - A test-contract task writes focused tests for one function or small behavior before
+     its implementation. Make the target compile and run. Confirm that it fails only in
+     the assertions expected from the deliberate stub while the ordinary suite stays
+     green; do not weaken assertions to manufacture green.
+   - An implementation task makes the already-landed focused tests pass, then validates
+     the ordinary suite. Do not rewrite the test contract merely to fit the code.
+   - An integration task joins only the named, already-tested parts and tests their
+     shared boundary. Leave the next assembly layer to its own item.
+4. Run the checks appropriate to that stage and record the exact result.
+5. Rewrite the item leaf: `Status: done` with a short account of what now exists and how
    it was checked, or `Status: blocked` with exactly what is needed. Add follow-up work
    as suggestions for the manager in this account, not as new queue leaves. Include a
    boundary report: what interface you expose, what you assume of neighbors, error and
@@ -19,5 +30,5 @@ Managers decide *what* should be done; you decide *how* and do it.
    project's plan, state or next leaves.
    If implementation exposes more stages, report their boundaries for the manager; do
    not silently grow this item or create its queue entries yourself.
-5. Commit everything on your branch and stop. You do not land your work: the integrator
+6. Commit everything on your branch and stop. You do not land your work: the integrator
    reviews your branch and lands it as one commit, or sends it back to you with notes.

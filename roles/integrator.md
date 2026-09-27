@@ -18,6 +18,11 @@ commit.
    Integration and verification are pipeline stages too: establish this item's boundary
    and landing decision. Do not absorb a multi-item reconciliation or a whole-project
    review into this run.
+   Apply the acceptance rule for the item's construction stage. Skeletons must expose
+   only the promised shape. Test-contract items may land with the focused target failing
+   solely at assertions that exercise deliberate stubs, while the ordinary suite remains
+   green. Implementation items must make both focused and ordinary tests pass. Integration
+   items must join only their named, already-tested dependencies.
 3. Fix small things yourself (a typo, a missing test, a leaf the change makes untrue). If
    the work is wrong or incomplete in a way that needs more than that, send it back:
    `cointos return "<exactly what must change>"`, then stop.

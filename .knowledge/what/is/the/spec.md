@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T14:13:35+10:00"
+revised_at: "2026-09-27T14:25:27+10:00"
 ---
 
 Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design is `what/is/the/architecture/of/cointos.md`; the working rules are `how/to/keep/cointos/simple.md`.
@@ -16,7 +16,7 @@ Requirements for the CointOS MVP. The vision is `what/is/cointos.md`; the design
 7. **The scheduler is pre-emptive.** David has intended this since inception. A lane can be taken from the agent using it at any moment, mid-generation, and given to another; the interrupted agent resumes later where it stopped, losing no work. Nothing an agent does holds a lane beyond the scheduler's decision. (David, 2026-09-26: "it has been the intention since inception that the cointos scheduler would be pre-emptive.")
 8. **One control surface.** `cointos status|agents|jobs|check|stop|go|halt|up` and the dashboard at `http://127.0.0.1:4200` show and control everything, from the ledger.
 
-9. **Pipelined work at every level.** Every assignment is one bounded stage that consumes a bounded input and leaves a checkable artifact, an explicit boundary and the next handoff. This applies to decomposition, implementation, verification, integration, maintenance and recomposition. Manager runs advance one decomposition layer and may hand off another decomposition frontier; workers implement one concern and small interface; integrators verify and land one boundary; higher-level review operates over a bounded set of contracts. Routine gardeners verify 1–3 leaves, while separate auditors inspect one structural concern. Agents calculate with code/tools. See `what/is/the/shape/of/cointos/work.md`.
+9. **Pipelined work at every level.** Every assignment is one bounded stage that consumes a bounded input and leaves a checkable artifact, an explicit boundary and the next handoff. This applies to decomposition, implementation, verification, integration, maintenance and recomposition. Manager runs advance one decomposition layer and may hand off another decomposition frontier. New software proceeds through small skeleton tasks, a focused test-contract task before each matching function implementation, then bounded integration layers that assemble already-tested parts into the complete system. Workers complete one such stage; integrators verify and land one boundary; higher-level review operates over a bounded set of contracts. Routine gardeners verify 1–3 leaves, while separate auditors inspect one structural concern. Agents calculate with code/tools. See `what/is/the/shape/of/cointos/work.md`.
 
 ## Acceptance (seen live)
 
