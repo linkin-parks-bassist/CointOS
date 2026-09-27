@@ -7,11 +7,12 @@ observed (`what/is/the/architecture/of/cointos.md`, *Agents*).
 from __future__ import annotations
 
 import secrets
+import subprocess
 import threading
 import time
 from pathlib import Path
 
-from cointos import agents, lanes, queues
+from cointos import agents, lanes, queues, trees
 from cointos.config import KEYS, STATE, read_json, write_json
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, log, now
 
@@ -46,6 +47,12 @@ def project_named(name: str) -> dict:
     raise ValueError(f"unknown project {name!r}; configured: {[p['name'] for p in CONFIG['projects']]}")
 
 
+def place(task: dict) -> dict:
+    """Where a task works: the tree it gardens, or else its project."""
+    configured = CONFIG["trees"] if task["kind"] == "garden" else CONFIG["projects"]
+    return next(p for p in configured if p["name"] == task["place"])
+
+
 # ---------------------------------------------------------------- an agent's life
 
 class Ended(Exception):
@@ -62,7 +69,7 @@ def start_agent(task_id: str) -> None:
     keep_key(agent_id, key)
     task.update(status="running", runs=task["runs"] + 1, agent=agent_id, note=None, updated_at=now())
     L["agents"][agent_id] = {
-        "id": agent_id, "role": task["role"], "project": task["project"], "task": task_id, "title": task["title"],
+        "id": agent_id, "role": task["role"], "place": task["place"], "task": task_id, "title": task["title"],
         "class": "background", "state": "starting", "pid": None, "url": None, "session": task.get("session"),
         "doing": None, "thoughts": 0, "repeats": 0, "last_thought": None, "last_activity": now(),
         "started_at": now()}
@@ -89,7 +96,7 @@ def agent_thread(agent_id: str, task: dict | None, key: str | None) -> None:
             agent["last_activity"] = now()
     try:
         if task is not None:
-            agents.launch(CONFIG, agent_id, task, project_named(task["project"]), key)
+            agents.launch(CONFIG, agent_id, task, place(task), key)
         outcome = agents.watch(agent_id, on_event)
     except Ended:
         outcome = None
@@ -116,7 +123,7 @@ def stop_agent(agent_id: str, reason: str, requeue: bool, charge: bool = True) -
         exhausted = task["runs"] >= CONFIG["spawner"]["max_runs_per_task"]
         end_task(task, "waiting" if requeue and not exhausted else "failed", reason)
         if task["status"] == "failed":
-            alert(f"Gave up on {task['title']} in {task['project']} after {task['runs']} runs: {reason}")
+            alert(f"Gave up on {task['title']} in {task['place']} after {task['runs']} runs: {reason}")
     finish_agent(agent_id, reason)
     threading.Thread(target=agents.stop, args=(agent_id,), daemon=True).start()
 
@@ -144,23 +151,30 @@ def settle(agent_id: str, outcome: dict) -> None:
     """An agent's run ended by itself: decide whether its task is finished. Caller holds LOCK."""
     agent = L["agents"][agent_id]
     task = L["tasks"][agent["task"]]
-    project = project_named(task["project"])
+    where = place(task)
     if task["kind"] in ("item", "breakdown"):
         # The item on the main branch is the truth: it is what the queues, David and later agents
         # see. A status set only on the task branch is undelivered, except `blocked`, which can be
         # the very reason the branch could not land.
-        landed = (queues.read_item(Path(project["path"]), task["item"]) or {}).get("status")
+        landed = (queues.read_item(Path(where["path"]), task["item"]) or {}).get("status")
         branch = (queues.read_item(Path(task["worktree"]), task["item"]) or {}).get("status")
         accepted = ("done", "blocked") if task["kind"] == "item" else ("in progress", "done", "blocked")
         finished = landed in accepted or branch == "blocked"
         detail = f"item status {landed} on main" + ("" if branch in (None, landed) else f", {branch} on its branch")
+    elif task["kind"] == "garden":
+        # Like an item, the tree on the main branch is the truth: gardening is finished when
+        # every leaf there is green again.
+        health = trees.health(where, CONFIG["timeouts"]["command_seconds"])
+        L["trees"][where["name"]] = {**health, "checked_at": now()}
+        finished = outcome.get("finish") == "stop" and not health["leaves"]
+        detail = f"run finished with {outcome.get('finish')}; {health['brown']} brown, {health['yellow']} yellow on main"
     else:
         finished = outcome.get("finish") == "stop"
         detail = f"run finished with {outcome.get('finish')}"
     if outcome.get("error"):
         detail += f"; {outcome['error']}"
     if finished:
-        merged = agents.remove_worktree(project, task)
+        merged = agents.remove_worktree(where, task)
         end_task(task, "done", detail + ("" if merged else "; branch not merged"),
                  result=(outcome.get("text") or "")[-CONFIG["result_chars"]:])
         log("task finished", task=task["id"], detail=task["note"])
@@ -171,22 +185,42 @@ def settle(agent_id: str, outcome: dict) -> None:
 
 # ---------------------------------------------------------------- tasks and the spawner
 
-def new_task(project: dict, kind: str, role: str, item: str | None, brief: str, leaf_hash: str | None) -> str:
-    name = Path(item).stem if item else f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}"
-    task_id = f"{project['name']}:{item or name}"
+RANKS = {"urgent": [1], "queued": [3], "drafted": [4], "survey": [5], "maintenance": [6]}  # gardening: trees.rank
+
+
+def new_task(where: dict, kind: str, role: str, item: str | None, brief: str, leaf_hash: str | None, rank: list,
+             name: str | None = None) -> str:
+    name = name or (Path(item).stem if item else f"{kind}-{time.strftime('%Y%m%d-%H%M%S')}")
+    task_id = f"{where['name']}:{item or name}"
     L["tasks"][task_id] = {
-        "id": task_id, "project": project["name"], "kind": kind, "role": role, "item": item,
+        "id": task_id, "place": where["name"], "kind": kind, "role": role, "item": item, "rank": rank,
         "title": name if item else kind, "brief": brief, "leaf_hash": leaf_hash, "status": "waiting", "runs": 0,
-        "session": None, "agent": None, "worktree": str(STATE / "worktrees" / project["name"] / name),
+        "session": None, "agent": None, "worktree": str(STATE / "worktrees" / where["name"] / name),
         "branch": f"cointos/{name}", "created_at": now(), "updated_at": now(), "note": None,
     }
     log("task created", task=task_id)
     return task_id
 
 
+def tree_health(tree: dict) -> dict | None:
+    """The tree's health, re-read every `garden.check_seconds`; None while it cannot be read
+    (David is told once per new reason). Caller holds LOCK."""
+    seen = L["trees"].get(tree["name"])
+    if seen is None or now() - seen["checked_at"] >= CONFIG["garden"]["check_seconds"]:
+        try:
+            seen = {**trees.health(tree, CONFIG["timeouts"]["command_seconds"]), "checked_at": now()}
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            if (seen or {}).get("error") != str(error):
+                alert(f"Cannot read the {tree['name']} knowledge tree's health: {error}")
+            seen = {"error": str(error), "checked_at": now()}
+        L["trees"][tree["name"]] = seen
+    return None if "error" in seen else seen
+
+
 def next_task() -> str | None:
-    """The next task to run, creating it from the queues if needed; an item runs only once every
-    item it depends on is done on main (`queues.readiness`). Caller holds LOCK."""
+    """The next task to run, creating it if needed: begun tasks first, then new work, each in
+    rank order (`RANKS`, `trees.rank`). An item runs only once every item it depends on is done
+    on main (`queues.readiness`). Caller holds LOCK."""
     tasks = L["tasks"]
     scanned = {project["name"]: queues.scan(project) for project in CONFIG["projects"]}
     ready = {project: queues.readiness(items) for project, items in scanned.items()}
@@ -198,12 +232,12 @@ def next_task() -> str | None:
     L["dependency_problems"] = problems
 
     def runnable(task):
-        return not task.get("item") or ready.get(task["project"], {}).get(task["item"], "ready") == "ready"
+        return not task.get("item") or ready.get(task["place"], {}).get(task["item"], "ready") == "ready"
 
-    waiting = sorted((t for t in tasks.values() if t["status"] == "waiting" and runnable(t)), key=lambda t: t["created_at"])
+    waiting = [t for t in tasks.values() if t["status"] == "waiting" and runnable(t)]
     if waiting:
-        return waiting[0]["id"]
-    candidates = []
+        return min(waiting, key=lambda t: (t["rank"], t["created_at"]))["id"]
+    candidates = []  # (rank, how to create the task)
     for project in CONFIG["projects"]:
         for found in scanned[project["name"]]:
             if ready[project["name"]][found["item"]] != "ready":
@@ -212,22 +246,36 @@ def next_task() -> str | None:
             if known and (known["status"] in ("running", "waiting") or known["leaf_hash"] == found["hash"]):
                 continue
             if found["kind"] in ("urgent", "queued") and found["status"] == "queued":
-                candidates.append((0 if found["kind"] == "urgent" else 1, "item", "worker", project, found))
+                candidates.append((RANKS[found["kind"]], lambda p=project, f=found: new_task(
+                    p, "item", "worker", f["item"], f["brief"], f["hash"], RANKS[f["kind"]])))
             elif found["kind"] == "drafted" and found["status"] == "drafted":
-                candidates.append((2, "breakdown", "manager", project, found))
-    if candidates:
-        _, kind, role, project, found = min(candidates, key=lambda c: c[0])
-        return new_task(project, kind, role, found["item"], found["brief"], found["hash"])
+                candidates.append((RANKS["drafted"], lambda p=project, f=found: new_task(
+                    p, "breakdown", "manager", f["item"], f["brief"], f["hash"], RANKS["drafted"])))
+    for tree in CONFIG["trees"]:
+        health = tree_health(tree)
+        known = tasks.get(f"{tree['name']}:garden")
+        if health is None or (known and known["status"] in ("running", "waiting")):
+            continue
+        changed = health["leaves"] and not (known and known["leaf_hash"] == health["hash"])
+        if changed or now() - L["last_garden"].get(tree["name"], 0) > CONFIG["garden"]["every_seconds"]:
+            def garden(t=tree, h=health):
+                L["last_garden"][t["name"]] = now()
+                return new_task(t, "garden", "gardener", None, "\n".join(h["leaves"]), h["hash"], trees.rank(h), "garden")
+            candidates.append((trees.rank(health), garden))
     spawner = CONFIG["spawner"]
     for project in CONFIG["projects"]:
         if now() - L["last_survey"].get(project["name"], 0) > spawner["survey_every_seconds"]:
-            L["last_survey"][project["name"]] = now()
-            return new_task(project, "survey", "manager", None, "", None)
+            def survey(p=project):
+                L["last_survey"][p["name"]] = now()
+                return new_task(p, "survey", "manager", None, "", None, RANKS["survey"])
+            candidates.append((RANKS["survey"], survey))
     maintained = [p for p in CONFIG["projects"] if p["name"] == spawner["maintenance_project"]]
     if maintained and now() - L["last_maintenance"] > spawner["maintenance_every_seconds"]:
-        L["last_maintenance"] = now()
-        return new_task(maintained[0], "maintenance", "steward", None, "", None)
-    return None
+        def maintenance():
+            L["last_maintenance"] = now()
+            return new_task(maintained[0], "maintenance", "steward", None, "", None, RANKS["maintenance"])
+        candidates.append((RANKS["maintenance"], maintenance))
+    return min(candidates, key=lambda c: c[0])[1]() if candidates else None
 
 
 def spawn() -> None:

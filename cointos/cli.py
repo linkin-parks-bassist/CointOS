@@ -73,7 +73,7 @@ def show_agents(state: dict) -> None:
     if not state["agents"]:
         print("no live agents")
     for agent in state["agents"].values():
-        print(f"{agent['id']:16} {agent['state']:9} {agent['project']}:{agent['title']}  up {ago(now - agent['started_at'])}"
+        print(f"{agent['id']:16} {agent['state']:9} {agent['place']}:{agent['title']}  up {ago(now - agent['started_at'])}"
               f"  {agent['thoughts']} thoughts  last activity {ago(now - agent['last_activity'])} ago")
         if agent.get("doing"):
             print(f"{'':16} {agent['doing'][:140]}")
@@ -85,7 +85,7 @@ def show_jobs(state: dict, limit: int = 30) -> None:
     if not tasks:
         print("no tasks yet")
     for task in tasks:
-        print(f"{task['status']:8} {task['project']}:{task['title']:36} {task['role']:8} runs {task['runs']}"
+        print(f"{task['status']:8} {task['place']}:{task['title']:36} {task['role']:8} runs {task['runs']}"
               f"  {ago(now - task['updated_at'])} ago  {task.get('note') or ''}")
 
 
@@ -114,22 +114,23 @@ def halt(keep_coin: bool) -> None:
 
 
 def merge() -> None:
-    """Land the current worktree's branch on its project's main branch, fast-forward only."""
+    """Land the current worktree's branch on its task's main branch, fast-forward only."""
     def git(*args, cwd=None):
         return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     branch = git("branch", "--show-current").stdout.strip()
-    common = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip())
-    checkout = common.parent
-    project = next((p for p in CONFIG["projects"] if Path(p["path"]).resolve() == checkout.resolve()), None)
-    if project is None:
-        raise SystemExit(f"{checkout} is not a configured CointOS project")
-    main = project["main_branch"]
+    here = Path(git("rev-parse", "--show-toplevel").stdout.strip() or ".").resolve()
+    checkout = Path(git("rev-parse", "--path-format=absolute", "--git-common-dir").stdout.strip()).parent
+    task = next((t for t in ledger()["tasks"].values() if Path(t["worktree"]).resolve() == here), None)
+    if task is None:
+        raise SystemExit(f"{here} is not a CointOS task's worktree")
+    main = next(p for p in CONFIG["trees" if task["kind"] == "garden" else "projects"]
+                if p["name"] == task["place"])["main_branch"]
     if not branch or branch == main:
         raise SystemExit("run this in your task worktree, on your task branch")
     if git("status", "--porcelain").stdout.strip():
         raise SystemExit("your worktree has uncommitted changes; commit them first")
     if git("branch", "--show-current", cwd=checkout).stdout.strip() != main:
-        raise SystemExit(f"the project checkout {checkout} is not on {main}; cannot merge now")
+        raise SystemExit(f"the checkout {checkout} is not on {main}; cannot merge now")
     result = git("merge", "--ff-only", branch, cwd=checkout)
     if result.returncode != 0:
         raise SystemExit(f"fast-forward merge refused (run `git merge {main}` in your worktree first):\n"
@@ -175,7 +176,7 @@ def view(slot: int) -> None:
             time.sleep(CONFIG["viewers"]["poll_seconds"])
             continue
         idle_shown = False
-        title(f"CointOS {slot}: {agent['id']} on {agent['project']}: {agent['title']}")
+        title(f"CointOS {slot}: {agent['id']} on {agent['place']}: {agent['title']}")
         child = subprocess.Popen([agents.OPENCODE, "attach", agent["url"], "--session", agent["session"]])
         while child.poll() is None:
             time.sleep(CONFIG["viewers"]["poll_seconds"])

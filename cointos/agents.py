@@ -17,7 +17,7 @@ TIMEOUTS = load_config()["timeouts"]
 OPENCODE = str(Path.home() / ".local/bin/opencode")
 GLOBAL_OPENCODE = Path.home() / ".config/opencode/opencode.json"
 PROVIDER = "cointos"
-ROLE_FILES = {"worker": "worker.md", "manager": "manager.md", "steward": "steward.md"}
+ROLE_FILES = {"worker": "worker.md", "manager": "manager.md", "steward": "steward.md", "gardener": "gardener.md"}
 
 
 def agent_dir(agent_id: str) -> Path:
@@ -28,25 +28,25 @@ def git(*args, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], capture_output=True, text=True, check=check)
 
 
-def prepare_worktree(project: dict, task: dict) -> None:
+def prepare_worktree(place: dict, task: dict) -> None:
     """Create the task's worktree on its own branch from the main branch, once."""
     if Path(task["worktree"]).is_dir():
         return
     Path(task["worktree"]).parent.mkdir(parents=True, exist_ok=True)
-    exists = git("-C", project["path"], "rev-parse", "--verify", "--quiet", task["branch"], check=False).returncode == 0
+    exists = git("-C", place["path"], "rev-parse", "--verify", "--quiet", task["branch"], check=False).returncode == 0
     if exists:
-        git("-C", project["path"], "worktree", "add", task["worktree"], task["branch"])
+        git("-C", place["path"], "worktree", "add", task["worktree"], task["branch"])
     else:
-        git("-C", project["path"], "worktree", "add", "-b", task["branch"], task["worktree"], project["main_branch"])
+        git("-C", place["path"], "worktree", "add", "-b", task["branch"], task["worktree"], place["main_branch"])
 
 
-def remove_worktree(project: dict, task: dict) -> bool:
+def remove_worktree(place: dict, task: dict) -> bool:
     """Remove the worktree and branch once the branch is merged into main. Returns whether it was merged."""
-    merged = git("-C", project["path"], "merge-base", "--is-ancestor", task["branch"], project["main_branch"],
+    merged = git("-C", place["path"], "merge-base", "--is-ancestor", task["branch"], place["main_branch"],
                  check=False).returncode == 0
     if merged:
-        git("-C", project["path"], "worktree", "remove", "--force", task["worktree"], check=False)
-        git("-C", project["path"], "branch", "-d", task["branch"], check=False)
+        git("-C", place["path"], "worktree", "remove", "--force", task["worktree"], check=False)
+        git("-C", place["path"], "branch", "-d", task["branch"], check=False)
     return merged
 
 
@@ -90,17 +90,23 @@ def opencode_config(config: dict, key: str) -> dict:
     }
 
 
-def prompt(task: dict, project: dict) -> str:
+def prompt(task: dict, place: dict) -> str:
     """Base role, the agent's role, then its assignment."""
     roles = ROOT / "roles"
     parts = [(roles / "_base.md").read_text(), (roles / ROLE_FILES[task["role"]]).read_text()]
-    where = (f"Project: {project['name']}, repository {project['path']}, main branch "
-             f"`{project['main_branch']}`.\nYour worktree: {task['worktree']}, on branch `{task['branch']}`.")
-    finish = ("When your work and your item's new status are committed, bring your branch up to date with "
-              f"`git merge {project['main_branch']}` (resolve any conflicts and re-check), then run "
+    if task["kind"] == "garden":
+        where = (f"Tree: {place['name']}, the knowledge root `{place['tree']}` of repository {place['path']}, "
+                 f"main branch `{place['main_branch']}`.\nYour worktree: {task['worktree']}, on branch "
+                 f"`{task['branch']}`; your copy of the tree is `{Path(task['worktree']) / place['tree']}`.")
+        refused = "If `cointos merge` refuses, say why in your final answer."
+    else:
+        where = (f"Project: {place['name']}, repository {place['path']}, main branch "
+                 f"`{place['main_branch']}`.\nYour worktree: {task['worktree']}, on branch `{task['branch']}`.")
+        refused = "If `cointos merge` refuses, set the item to `Status: blocked` with the reason."
+    finish = ("When your work is committed, bring your branch up to date with "
+              f"`git merge {place['main_branch']}` (resolve any conflicts and re-check), then run "
               "`cointos merge` in your worktree to land it on the main branch. Only what lands counts: "
-              "commit nothing after that. If `cointos merge` refuses, set the item to "
-              "`Status: blocked` with the reason.")
+              f"commit nothing after that. {refused}")
     if task["kind"] == "item":
         assignment = (f"{where}\n\nYour item: `.knowledge/{task['item']}` (read it with kt). As it was "
                       f"queued:\n\n{task['brief']}\n\n{finish}")
@@ -109,6 +115,10 @@ def prompt(task: dict, project: dict) -> str:
                       f"{task['brief']}\n\n{finish}")
     elif task["kind"] == "survey":
         assignment = f"{where}\n\nSurvey this project and keep its queue right.\n\n{finish}"
+    elif task["kind"] == "garden":
+        found = (f"`kt status` found these leaves needing care:\n\n{task['brief']}" if task["brief"]
+                 else "Every leaf is green: this is the routine pass.")
+        assignment = f"{where}\n\nTend this tree. {found}\n\n{finish}"
     else:
         assignment = (f"{where}\n\nDo a maintenance check of CointOS: run `cointos check`, "
                       f"`cointos status` and `cointos agents`, and look at the knowledge tree.\n\n{finish}")
@@ -139,7 +149,7 @@ def unit(agent_id: str) -> str:
     return f"cointos-agent-{agent_id}"
 
 
-def launch(config: dict, agent_id: str, task: dict, project: dict, key: str) -> None:
+def launch(config: dict, agent_id: str, task: dict, place: dict, key: str) -> None:
     """Start an agent's run as its own systemd unit, outside the daemon, so that it outlives a
     daemon restart. The unit runs `python3 -m cointos.agents DIR` (`serve_run`); the daemon
     follows it through the files it writes (`watch`)."""
@@ -151,12 +161,12 @@ def launch(config: dict, agent_id: str, task: dict, project: dict, key: str) -> 
     resumed = bool(task.get("session"))
     text = ("Your previous run on this assignment stopped before it finished. Check where things "
             "stand and continue it to the end. Do not repeat finished work. It is finished only when "
-            f"it has landed on `{project['main_branch']}` with `cointos merge`.") if resumed else prompt(task, project)
+            f"it has landed on `{place['main_branch']}` with `cointos merge`.") if resumed else prompt(task, place)
     command = [OPENCODE, "run", "--dir", task["worktree"], "--format", "json", "--auto",
                "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/{config['work_model']}"]
     if resumed:
         command += ["--session", task["session"]]
-    spec = {"project": project, "task": task, "command": command, "text": text}
+    spec = {"place": place, "task": task, "command": command, "text": text}
     (directory / "run.json").write_text(json.dumps(spec))
     for stale in ("server.json", "exit.json"):
         (directory / stale).unlink(missing_ok=True)
@@ -175,7 +185,7 @@ def serve_run(directory: Path) -> None:
     """The agent's unit: its OpenCode server and client, their events into `events.jsonl`, and
     its exit code into `exit.json`. Nothing here depends on the daemon being up."""
     spec = json.loads((directory / "run.json").read_text())
-    prepare_worktree(spec["project"], spec["task"])
+    prepare_worktree(spec["place"], spec["task"])
     env = {**os.environ, "OPENCODE_CONFIG": str(directory / "opencode.json"),
            "PATH": f"{ROOT / 'bin'}:{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
     server, url = start_server(directory, spec["task"]["worktree"], env)

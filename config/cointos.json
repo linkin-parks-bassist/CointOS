@@ -82,6 +82,24 @@
       "main_branch": "main"
     }
   ],
+  "trees": [
+    {
+      "name": "cointos",
+      "path": "~/Projects/CointOS",
+      "tree": ".knowledge",
+      "main_branch": "rebuild/simple-core"
+    },
+    {
+      "name": "sandbox",
+      "path": "~/Projects/cointos-sandbox",
+      "tree": ".knowledge",
+      "main_branch": "main"
+    }
+  ],
+  "garden": {
+    "check_seconds": 60,
+    "every_seconds": 86400
+  },
   "history_length": 200,
   "coin": {
     "telegram_env": "~/.config/agent-ecosystem/telegram.env",

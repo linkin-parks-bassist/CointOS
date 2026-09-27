@@ -14,9 +14,8 @@ KEYS = STATE / "keys.json"
 
 def load(path: Path = CONFIG) -> dict:
     config = json.loads(path.read_text(encoding="utf-8"))
-    for project in config["projects"]:
-        project["path"] = str(Path(project["path"]).expanduser())
-        project.setdefault("main_branch", "main")
+    for place in config["projects"] + config["trees"]:
+        place["path"] = str(Path(place["path"]).expanduser())
     return config
 
 

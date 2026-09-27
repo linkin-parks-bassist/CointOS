@@ -55,6 +55,7 @@ def fresh(previous: dict) -> dict:
         "next_alert": previous.get("next_alert", 0), "checks": [], "failing": [],
         "user_last_thought": 0, "last_survey": previous.get("last_survey", {}),
         "last_maintenance": previous.get("last_maintenance", 0),
+        "trees": {}, "last_garden": previous.get("last_garden", {}),
     }
 
 

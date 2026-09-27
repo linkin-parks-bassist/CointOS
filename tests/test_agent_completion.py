@@ -22,12 +22,12 @@ class Completion(unittest.TestCase):
         self.enterContext(patch.object(agents, "stop"))
         self.enterContext(patch.object(agents, "remove_worktree", return_value=True))
         self.enterContext(patch.object(work, "keep_key"))
-        self.enterContext(patch.object(work, "project_named", return_value={}))
+        self.enterContext(patch.object(work, "place", return_value={}))
         self.enterContext(patch.object(work.lanes, "cancel_agent"))
         self.enterContext(patch.object(work.lanes, "forget_owner"))
         self.enterContext(patch.object(work.threading, "Thread"))
         state.L["tasks"]["test"] = {
-            "id": "test", "title": "test", "project": "sandbox", "kind": "survey",
+            "id": "test", "title": "test", "place": "sandbox", "kind": "survey",
             "status": "running", "runs": 1, "agent": "worker-test"}
         state.L["agents"]["worker-test"] = {
             "task": "test", "state": "running", "session": None, "repeats": 0,
@@ -68,7 +68,7 @@ class Completion(unittest.TestCase):
             leaf = root / ".knowledge/what/is/queued/item.md"
             leaf.parent.mkdir(parents=True)
             leaf.write_text(f"Status: {status}\n\nThe brief.\n")
-        self.enterContext(patch.object(work, "project_named", return_value={"path": str(main)}))
+        self.enterContext(patch.object(work, "place", return_value={"path": str(main)}))
         state.L["tasks"]["test"].update(kind="item", item="what/is/queued/item.md", worktree=str(branch))
         (self.directory / "exit.json").write_text('{"code": 0}')
         work.agent_thread("worker-test", None, None)

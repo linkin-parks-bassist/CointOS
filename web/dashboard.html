@@ -173,7 +173,7 @@ function renderAgents(S) {
     if (mark.className !== `mark ${kind}`) mark.className = `mark ${kind}`;
     const rate = q(".rate");
     setHTML(rate, a.rate && a.state === "thinking" ? `${a.rate.toFixed(1)}<small> tok/s</small>` : "");
-    setText(q(".role"), `${a.role} · ${a.project}`);
+    setText(q(".role"), `${a.role} · ${a.place}`);
     setText(q(".work"), a.title.replace(/-/g, " "));
     setText(q(".meta"), `${a.id} · up ${ago(a.started_at)} · ${a.thoughts} thoughts · run ${S.runs[a.id] ?? "?"}`);
     const live = a.live || {};
@@ -194,7 +194,7 @@ function renderWork(L) {
   $("work").innerHTML = tasks.length ? groups.map(([status, title]) => {
     const some = tasks.filter(t => t.status === status).slice(0, status === "done" ? 10 : 50);
     return some.length ? `<h3>${title}</h3>` + some.map(t => `<div class="row ${status}"><div class="bar"></div>` +
-      `<div class="who">${esc(t.project)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
+      `<div class="who">${esc(t.place)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
       `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
       `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div></div>`).join("") : "";
   }).join("") : `<p class="muted">No work yet.</p>`;
