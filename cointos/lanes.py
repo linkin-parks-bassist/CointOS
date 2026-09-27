@@ -272,6 +272,9 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
     name = secrets.token_hex(6)
     saved = BACKEND.save(CONFIG, model, index, name)
     with LOCK:
+        if not live(owner):  # its conversation ended while the state was being written
+            BACKEND.forget(CONFIG, name)
+            return False
         for older in [n for n, s in L["snapshots"].items()
                       if s["owner"] == owner and s["model"] == model and s["tokens"] <= len(held)
                       and (kind == "checkpoint" or s["kind"] == "suspended")
@@ -304,7 +307,10 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
     with LOCK:
         lane = dict(L["lanes"][position])
         held = HELD.get(position) or []
-        worth = bool(held) and live(lane["resident"])
+        # A task's conversation is one line: when the lane holds the same task's conversation
+        # but not the start of where it goes on, that state has diverged and is of no use.
+        diverged = lane["resident"] == owner and owner in L["tasks"] and not begins(held, tokens)
+        worth = bool(held) and live(lane["resident"]) and not diverged
     save = worth and keep(position, held, lane["resident"], "suspended")
     with LOCK:
         candidates = sorted(((s["tokens"], name) for name, s in L["snapshots"].items()
