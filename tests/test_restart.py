@@ -127,3 +127,26 @@ class LiveRestart(unittest.TestCase):
             daemon.shutdown()
         self.assertEqual(calls, ['persist', 'save'])
         self.assertEqual(state.L['history'][-1]['event'], 'shutdown step failed')
+
+
+class QuiescenceIsNotSilence(unittest.TestCase):
+    def setUp(self):
+        support.fresh_ledger(self, {'paused': False})
+
+    def agent(self):
+        state.L['agents']['x'] = {'id': 'x', 'state': 'running', 'task': None, 'repeats': 0,
+                                  'last_activity': state.now() - 1000}
+
+    def test_an_agent_blocked_by_deployment_quiescence_is_not_stopped_as_silent(self):
+        self.agent()
+        state.L['quiescing'] = True
+        with patch.object(daemon.lifecycle, 'stop') as stop:
+            daemon.look_after_agents()
+        stop.assert_not_called()
+        self.assertGreater(state.L['agents']['x']['last_activity'], state.now() - 5)
+
+    def test_without_quiescence_a_silent_agent_is_still_stopped(self):
+        self.agent()
+        with patch.object(daemon.lifecycle, 'stop') as stop:
+            daemon.look_after_agents()
+        stop.assert_called_once_with('x', 'silent too long', requeue=True)

@@ -1,16 +1,16 @@
 ---
 status: green
-revised_at: "2026-09-30T13:09:41+10:00"
+revised_at: "2026-10-01T07:52:36+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
+- **The installed daemon stops tool-running agents as silent during a live install.** Deployment quiescence refuses new thoughts; an agent whose next request is refused makes no progress, and the silence check (30 s) stopped it as `silent too long` after about 2½ minutes of quiescence, costing a run. Source now counts quiescence as activity in `daemon.look_after_agents` (unit-covered). The fix only protects installs performed by a daemon that already has it, so the next live install is still exposed; after that, one live install must show a tool-running agent surviving quiescence.
 - **Automatic managerial recovery lacks live proof.** Failed worker items now route through one bounded manager pass using lifecycle state and assignment/receipt evidence, without magic report phrases. Unit coverage checks confirmed blockers, exhausted retries, brief correction, invalid prerequisite readiness and unresolved-manager escalation. Live automatic handoff and manager completion remain unproved; a manually queued Pigen correction does not establish this boundary.
-
 - **Oversized read-heavy work can consume every fresh retry without an artifact.** Bounded recovery and manager supersession now fail honestly, but useful completion after an artifact-preserving fresh recovery remains unproved.
 - **Warm reboot recovery after the second-pass repairs is unproved.** Complete normalized system/developer-prefix pinning and active-unit-only run adoption are installed and unit-covered. A later explicitly authorized reboot must prove warm disk-tier reuse and that dead units return tasks to waiting without charging an attempt.
 - **OpenCode 1.18.33 has no verified message-free noninteractive session continuation.** Empty `run --session` exits with “You must provide a message or a command.” CointOS therefore sends the real user turn `Continue.` for gaps under three hours and one concise reorientation after longer gaps. Zero-message continuation would require another verified OpenCode interface; it does not block current work.
-- **Several receipt/recovery paths lack focused live proof:** stale-run refusal against a newer active run, ordinary process-death auto-resume, silence/loop handling, remaining budget-exhaustion cases and halt/up. CLI-launched system-operator completion and proactive sequential same-role prefix reuse are proved.
+- **Several receipt/recovery paths lack focused live proof:** stale-run refusal against a newer active run, ordinary process-death auto-resume, loop handling, remaining budget-exhaustion cases and halt/up. CLI-launched system-operator completion and proactive sequential same-role prefix reuse are proved.
 - **Full acceptance is incomplete:** Coin visible-reply latency under load, workstation responsiveness and user priority, multi-agent integration/send-back, two-lane/four-agent sustained soak, and ordinary-intake pipeline quality still need live evidence.
 - **Snapshot durability needs churn evidence:** disk restores, save-size estimation, owner retirement, the reported `app.slice` OOM victim and a guarded midnight crossing remain unresolved.
 - **Manager parallelism and local-agent output quality need observation**, but CointOS development must not wait on slow Pigen output for primary evidence.

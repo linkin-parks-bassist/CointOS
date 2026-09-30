@@ -130,7 +130,9 @@ def look_after_agents() -> None:
             holding = [t for t in mine if t["lane"] is not None]
             agent["state"] = ("reading" if any(t["reading"] for t in holding) else "thinking" if holding
                               else "waiting" if mine else "running")
-            if mine:
+            if mine or L["quiescing"]:
+                # Deployment quiescence refuses new thoughts; waiting on it is the daemon's
+                # silence, not the agent's.
                 agent["last_activity"] = now()
         if agent["repeats"] > limits["max_identical_thoughts"]:
             lifecycle.stop(agent_id, "repeating one thought", requeue=True)
