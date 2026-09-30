@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""Install a runtime copy in ~/.CointOS. Never resume autonomous work."""
+"""Install a runtime copy in ~/.CointOS; optionally preserve compatible live agent units."""
+import argparse
+import atexit
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import urllib.request
+import time
 
 source = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(source))
+from cointos import config as configuration, kt  # noqa: E402  (standalone: only subprocess)
 target = Path.home() / '.CointOS'
 units = Path.home() / '.config/systemd/user'
 
@@ -16,69 +22,111 @@ def run(*args, **kwargs):
     return subprocess.run(args, check=True, text=True, **kwargs)
 
 
-def install():
+def api(url, action, body=None):
+    request = urllib.request.Request(url.rsplit('/ledger', 1)[0] + '/' + action,
+                                     data=json.dumps(body or {}).encode(), headers={'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.load(response)
+
+
+def drain(url, seconds):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if api(url, 'prepare-restart', {'quiesce': True})['ready']:
+            return
+        time.sleep(.2)
+    api(url, 'cancel-restart')
+    raise SystemExit('Live installation cancelled: daemon did not reach a quiet request boundary.')
+
+
+def install(live=False, wait_seconds=60):
     if source == target:
         raise SystemExit('Run scripts/install from the source repository.')
     if target.exists() and not (target / '.runtime-install').exists():
         raise SystemExit('Archive the previous ~/.CointOS installation before installing.')
     config = json.loads((source / 'config/cointos.json').read_text())
-    url = f"http://127.0.0.1:{config['port']}/api/ledger"
+    installed_config = target / 'config/cointos.json'
+    if live:
+        try:
+            previous = json.loads(installed_config.read_text())
+        except (OSError, ValueError):
+            raise SystemExit('Live installation refused: installed runtime configuration is unavailable.')
+        incompatible = configuration.live_incompatibilities(previous, config)
+        if incompatible:
+            raise SystemExit('Live installation refused: preserved-process configuration changed (' +
+                             ', '.join(incompatible) + '); use a paused full installation.')
+    else:
+        previous = config
+    # A live installer talks to the process that exists now. Compatibility above guarantees
+    # that its endpoint is also the endpoint the candidate daemon will retain.
+    url = f"http://127.0.0.1:{previous['port']}/api/ledger"
     try:
         with urllib.request.urlopen(url, timeout=config['timeouts']['api_seconds']) as response:
-            live = json.load(response)
-        if live['agents'] or not live['paused']:
+            ledger = json.load(response)
+        if not live and (ledger['agents'] or not ledger['paused']):
             raise SystemExit('Pause CointOS and wait until no agents are running before installation.')
     except OSError:
-        pass
+        if live:
+            raise SystemExit('Live installation requires a reachable CointOS daemon.')
     active = run('systemctl', '--user', 'list-units', 'cointos-agent-*', '--state=active,activating',
                  '--no-legend', '--no-pager', capture_output=True).stdout.strip()
-    if active:
+    if active and not live:
         raise SystemExit('Agent units are still running; installation refused.')
-    run('systemctl', '--user', 'stop', 'cointos-coin.service', 'cointosd.service')
+    if live:
+        drain(url, min(wait_seconds, config['timeouts']['command_seconds']))
+        run('systemctl', '--user', 'stop', 'cointosd.service')
+        restart_needed = [True]
+        def restore_daemon():
+            if restart_needed[0]:
+                subprocess.run(['systemctl', '--user', 'start', 'cointosd.service'])
+        atexit.register(restore_daemon)
+    else:
+        restart_needed = [False]
+        run('systemctl', '--user', 'stop', 'cointos-coin.service', 'cointosd.service')
     target.mkdir(parents=True, exist_ok=True)
     os.chmod(target, 0o700)
-    # Retain durable runtime state on updates. First installation migrates source state
-    # only after its daemon has stopped, including its final snapshot metadata.
-    if not (target / 'state').exists() and (source / 'state').exists():
-        shutil.copytree(source / 'state', target / 'state', ignore=shutil.ignore_patterns('worktrees'))
+    # Project enrollment is user-managed runtime configuration. Source projects.json is
+    # only the first-install seed; upgrades must not erase projects added through the CLI.
+    projects_registry = target / 'config/projects.json'
+    saved_projects = projects_registry.read_bytes() if projects_registry.exists() else None
     for name in ('cointos', 'roles', 'web', 'bin', 'systemd', 'config'):
         dest = target / name
         if dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    if saved_projects is not None:
+        projects_registry.write_bytes(saved_projects)
     (target / '.runtime-install').write_text(str(source) + '\n')
+    run(str(source / 'scripts/upgrade-ledger'), str(target / 'state/cointos.json'))
+    orientation = (source / 'runtime/where-am-i.md').read_text()
     if not (target / '.knowledge').exists():
-        run('kt', 'init', 'CointOS installed runtime. Services run from this directory; source development '
-            'lives in ~/Projects/CointOS. cointos/ implements the daemon and CLI, roles/ holds agent '
-            'instructions, config/ holds operational settings and state/ holds durable runtime data. '
-            'Managed projects are independent repositories under ~/Projects with their own knowledge trees. '
-            'what/ owns runtime operation (what/is/cointos.md) and the daemon-owned task and command '
-            'queues. where/ owns this orientation. how/, why/, does/ and is/ are empty. '
-            'Only the daemon writes scheduler queues; agents submit changes through its API.', cwd=target)
-        run('kt', 'add', '--local', 'what is cointos',
-            'CointOS runs local OpenCode agents through a pre-emptive GPU gateway. Coin provides Telegram '
-            'control. cointos status, agents, jobs and check inspect the daemon; stop pauses and go resumes. '
-            'The daemon alone owns scheduling records and publishes current queues in this tree. '
-            'Managers submit tasks with cointos queue PROJECT NAME BRIEF --kind queued|urgent|command. '
-            'Workers commit .work-report.md on their project branch. Integrators review, maintain the '
-            'project tree and plan, commit and merge with cointos land, which signals daemon settlement. '
-            'Managers commit and merge planning changes, then cointos finish completes command tasks. '
-            'For decomposition, queue children and cointos replace CHILD... before finishing. '
-            'Runtime queues are read-only to agents. Worktrees live beside project repos under '
-            '~/Projects/.worktrees/<project>/<task>, on work/<task> branches. The project owns its '
-            'orientation, spec, plan and broken leaves. scripts/install in the source repo updates '
-            'this runtime only while paused with no agents; installation leaves CointOS paused.', cwd=target)
+        run('kt', 'init', orientation, cwd=target)
+    kt.write(target, 'where am i', orientation)
+    kt.write(target, 'what is cointos', (source / 'runtime/what-is-cointos.md').read_text())
     units.mkdir(parents=True, exist_ok=True)
     for template in (source / 'systemd').glob('*.service'):
-        (units / template.name).write_text(template.read_text().replace('@ROOT@', str(target)))
+        rendered = template.read_text().replace('@ROOT@', str(target)).replace('@HOME@', str(Path.home()))
+        (units / template.name).write_text(rendered)
     executable = Path.home() / '.local/bin/cointos'
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.unlink(missing_ok=True)
     executable.symlink_to(target / 'bin/cointos')
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', 'cointosd.service', 'cointos-coin.service')
-    print(f'Installed {target}; services are stopped. Start with cointos up; pause is preserved.')
+    if live:
+        run('systemctl', '--user', 'start', 'cointosd.service')
+        restart_needed[0] = False
+        print(f'Live-installed {target}; existing agent units were preserved and the daemon was replaced.')
+    else:
+        print(f'Installed {target}; services are stopped. Start with cointos up; pause is preserved.')
 
 
 if __name__ == '__main__':
-    install()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--live', action='store_true', help='replace a configuration-compatible daemon around live agents')
+    parser.add_argument('--wait-seconds', type=float, default=60,
+                        help='maximum live-drain wait before cancelling (default: 60)')
+    args = parser.parse_args()
+    if args.wait_seconds <= 0:
+        parser.error('--wait-seconds must be positive')
+    install(args.live, args.wait_seconds)

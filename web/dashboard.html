@@ -23,6 +23,10 @@ main { max-width: 1600px; margin: auto; padding: 26px 16px 60px; }
   border-bottom: 2px solid var(--dark); padding-bottom: 14px; }
 .mark { margin: 0; font-size: clamp(40px, 5vw, 64px); line-height: .92; letter-spacing: -.07em; font-weight: 900; }
 .mark em { font-style: normal; color: var(--accent-bright); }
+.scheduler-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 32px; margin: 14px 0; }
+.scheduler-control { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.scheduler-control select { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); padding: 6px 10px; }
+.scheduler-control small { color: var(--ink-faint); }
 .stamp { color: var(--ink-faint); font-size: 13px; }
 .summary { margin: 16px 0 0; font-size: clamp(17px, 2vw, 22px); line-height: 1.35; color: var(--ink-soft); }
 .summary b { color: var(--ink); font-weight: 900; }
@@ -54,7 +58,7 @@ main { max-width: 1600px; margin: auto; padding: 26px 16px 60px; }
 .agent .now { grid-column: 1 / -1; margin-top: 10px; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent .now b { color: var(--c); }
 /* The agent's words as they stream, bottom-anchored like a terminal, at a fixed height. */
-.agent .live { position: relative; grid-column: 1 / -1; margin-top: 10px; height: 6.4em; overflow: hidden; display: flex;
+.agent .live { position: relative; grid-column: 1 / -1; margin-top: 10px; height: 7.9em; overflow: hidden; display: flex;
   flex-direction: column; justify-content: flex-end; font: 12.5px/1.45 ui-monospace, monospace; background: var(--dark-2);
   border: 1px solid var(--dark-line); padding: 8px 10px; }
 /* The oldest words fade into the box; the box itself keeps its edges. */
@@ -73,6 +77,33 @@ main { max-width: 1600px; margin: auto; padding: 26px 16px 60px; }
 .panel { border: 1px solid var(--line); background: var(--paper); box-shadow: 4px 4px 0 var(--shadow); padding: 20px 22px; min-width: 0; }
 .panel.wide { grid-column: 1 / -1; }
 h2 { font-size: clamp(24px, 2.6vw, 30px); line-height: 1; letter-spacing: -.055em; margin: 0 0 12px; font-weight: 900; }
+.panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.panel-heading h2 { margin-bottom: 12px; }
+.scout-control { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.scout-control button { font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent); background: var(--paper);
+  border: 1px solid var(--accent); padding: 7px 11px; cursor: pointer; box-shadow: 2px 2px 0 var(--pink-shadow); }
+.scout-control button:hover:not(:disabled) { background: var(--accent-wash); }
+.scout-control button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--pink-shadow); }
+.scout-control button:disabled { color: var(--ink-faint); border-color: var(--line); box-shadow: none; cursor: default; }
+.scout-control small { color: var(--ink-faint); }
+.project-list { display: grid; gap: 0; }
+.project-row { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(260px, 1.4fr) auto; gap: 8px 18px;
+  align-items: center; padding: 11px 0; border-top: 1px solid var(--line-soft); }
+.project-row:first-child { border-top: 0; }
+.project-name { font-weight: 900; font-size: 17px; }
+.project-path { color: var(--ink-faint); overflow-wrap: anywhere; }
+.project-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.project-controls input[type=number] { width: 72px; }
+.project-controls button, .project-form button { font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent);
+  background: var(--paper); border: 1px solid var(--accent); padding: 7px 10px; cursor: pointer; }
+.project-form { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 13px; }
+.project-form summary { cursor: pointer; font-weight: 900; color: var(--accent); }
+.project-fields { display: grid; grid-template-columns: 150px minmax(180px, 1fr) minmax(220px, 2fr) 100px auto;
+  gap: 10px; align-items: end; margin-top: 12px; }
+.project-fields label { display: grid; gap: 3px; color: var(--ink-faint); font-size: 12px; }
+.project-fields input, .project-fields select { min-width: 0; width: 100%; font: inherit; padding: 6px 8px;
+  color: var(--ink); background: var(--paper); border: 1px solid var(--line); }
+@media (max-width: 900px) { .project-row, .project-fields { grid-template-columns: 1fr; } .project-controls { justify-content: flex-start; } }
 h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-faint); margin: 18px 0 4px; }
 .row { display: grid; grid-template-columns: 5px 1fr auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
 .row .bar { grid-row: 1 / 3; background: var(--line-soft); border: 1px solid var(--dark); }
@@ -123,10 +154,41 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
   <div class="alert" id="alert"></div>
   <div id="agents"></div>
   <div class="grid">
-    <section class="panel wide machine"><h2>Machine</h2><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
+    <section class="panel wide machine"><h2>Machine</h2>
+      <div class="scheduler-controls">
+      <div class="scheduler-control"><label for="slice">GPU time slice</label>
+        <select id="slice" disabled aria-describedby="slice-status">
+          <option value="1">1 s</option><option value="2">2 s</option><option value="5">5 s</option>
+          <option value="10">10 s</option><option value="15">15 s</option><option value="30">30 s</option>
+          <option value="60">60 s</option><option value="120">120 s</option><option value="300">300 s</option>
+        </select><small id="slice-status" role="status" aria-live="polite">Connecting…</small>
+      </div>
+      <div class="scheduler-control"><label for="chunk">Generation step</label>
+        <select id="chunk" disabled aria-describedby="chunk-status">
+          <option value="8">8 tokens</option><option value="16">16 tokens</option>
+          <option value="32">32 tokens</option><option value="48">48 tokens</option>
+          <option value="64">64 tokens</option><option value="96">96 tokens</option>
+          <option value="128">128 tokens</option><option value="256">256 tokens</option>
+        </select><small id="chunk-status" role="status" aria-live="polite">Connecting…</small>
+      </div>
+      </div><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
       <div id="checks"></div></section>
-    <section class="panel wide"><h2>Work</h2><div id="work"></div>
-      <details class="done" id="done"><summary><h3>Done <span id="done-count"></span></h3></summary><div class="done-list" id="done-list"></div></details></section>
+    <section class="panel wide"><h2>Projects</h2><div class="project-list" id="projects"></div>
+      <details class="project-form"><summary>Add or create project</summary>
+        <div class="project-fields">
+          <label>Action<select id="project-action"><option value="add">Add existing</option><option value="new">Create new</option></select></label>
+          <label>Name <input id="project-name" placeholder="derived from folder for existing"></label>
+          <label>Path <input id="project-path" placeholder="~/Projects/name"></label>
+          <label>Priority <input id="project-priority" type="number" value="100"></label>
+          <button id="project-submit" type="button">Add project</button>
+        </div><small id="project-status" role="status" aria-live="polite"></small>
+      </details></section>
+    <section class="panel wide"><div class="panel-heading"><h2>Work</h2>
+      <div class="scout-control"><small id="scout-status" role="status" aria-live="polite"></small><button id="scout-now" type="button">Spawn scout</button></div>
+    </div><div id="work"></div>
+      <details class="done" id="failed"><summary><h3>Gave up <span id="failed-count"></span></h3></summary><div class="done-list" id="failed-list"></div></details>
+      <details class="done" id="done"><summary><h3>Done <span id="done-count"></span></h3></summary><div class="done-list" id="done-list"></div></details>
+      <div class="scout-control"><button id="clear-task-history" type="button">Clear task history</button><small id="clear-task-status" role="status" aria-live="polite"></small></div></section>
     <section class="panel wide"><h2>Recently</h2><div class="history" id="history"></div></section>
   </div>
 </main>
@@ -137,6 +199,51 @@ const ago = t => { const s = Math.max(0, Date.now() / 1000 - t) | 0;
   return s < 120 ? s + "s" : s < 7200 ? (s / 60 | 0) + "m" : (s / 3600 | 0) + "h"; };
 
 const short = model => model.replace(/-GGUF$/, "");
+
+async function projectAction(action, body) {
+  const response = await fetch(`/api/project-${action}`, {method: "POST", headers: {"Content-Type": "application/json"},
+                                                           body: JSON.stringify(body)});
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `Project ${action} failed`);
+  return result;
+}
+
+async function setProject(name, settings) {
+  try { await projectAction("set", {project: name, settings}); }
+  catch (error) { $("project-status").textContent = error.message; }
+}
+async function removeProject(name) {
+  try { await projectAction("remove", {project: name}); }
+  catch (error) { $("project-status").textContent = error.message; }
+}
+function renderProjects(L) {
+  const projects = L.projects || [];
+  setHTML($("projects"), projects.length ? projects.map(p => `<div class="project-row">` +
+    `<div><div class="project-name">${esc(p.name)}</div><span class="chip">${esc(p.main_branch)}</span></div>` +
+    `<div class="project-path">${esc(p.path)}</div><div class="project-controls">` +
+    `<label>Priority <input type="number" value="${esc(p.priority ?? 100)}" onchange='setProject(${JSON.stringify(p.name)}, {priority:Number(this.value)})'></label>` +
+    `<label><input type="checkbox" ${p.enabled === false ? "" : "checked"} onchange='setProject(${JSON.stringify(p.name)}, {enabled:this.checked})'> enabled</label>` +
+    `<button type="button" onclick='removeProject(${JSON.stringify(p.name)})'>Remove</button></div></div>`).join("")
+    : `<p class="muted">No projects registered.</p>`);
+}
+
+$("project-action").addEventListener("change", event => {
+  $("project-submit").textContent = event.target.value === "new" ? "Create project" : "Add project";
+});
+$("project-submit").addEventListener("click", async event => {
+  const action = $("project-action").value, name = $("project-name").value.trim(), path = $("project-path").value.trim();
+  if (action === "new" && !name) { $("project-status").textContent = "A new project needs a name."; return; }
+  if (action === "add" && !path) { $("project-status").textContent = "An existing project needs its path."; return; }
+  event.target.disabled = true; $("project-status").textContent = action === "new" ? "Creating…" : "Adding…";
+  try {
+    const body = {priority: Number($("project-priority").value)};
+    if (name) body.name = name;
+    if (path) body.path = path;
+    await projectAction(action, body);
+    $("project-name").value = ""; $("project-path").value = ""; $("project-status").textContent = "Saved";
+  } catch (error) { $("project-status").textContent = error.message; }
+  finally { event.target.disabled = false; }
+});
 
 // What an agent is doing right now, from its thoughts.
 function phase(L, a) {
@@ -197,7 +304,9 @@ function renderAgents(S) {
     setText(rate, a.rate && a.state === "thinking" && kind === "thinking" && share === undefined ? `${a.rate.toFixed(1)} tok/s` : "idle");
     setText(q(".role"), `${a.role} · ${a.place}`);
     setText(q(".work"), a.title.replace(/-/g, " "));
-    setText(q(".meta"), a.id);
+    const effort = Object.values(S.thoughts).find(t => t.agent === a.id && t.reasoning_effort)?.reasoning_effort
+      || S.tasks?.[a.task]?.reasoning_effort || a.reasoning_effort;
+    setText(q(".meta"), `${a.id}${effort ? ` · reasoning ${effort}` : ""}`);
     const live = a.live || {};
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
       ((kind === "tools" || !(live.reasoning || live.content)) && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
@@ -211,22 +320,89 @@ function renderAgents(S) {
 }
 
 function renderWork(L) {
-  const groups = [["running", "In progress"], ["review", "Waiting for the integrator"], ["waiting", "Up next"],
-                  ["failed", "Gave up"]];
+  const groups = [["running", "In progress"], ["review", "Waiting for the integrator"], ["waiting", "Up next"]];
   const tasks = Object.values(L.tasks).sort((a, b) => b.updated_at - a.updated_at);
+  const records = Object.values(L.queue || {});
+  const queued = records.filter(r => r.status !== "done" && !r.replaced_by &&
+    (!L.tasks[`${r.project}:${r.item}`] || L.tasks[`${r.project}:${r.item}`].status === "waiting" ||
+      (r.status === "blocked" && L.tasks[`${r.project}:${r.item}`].status === "done")))
+    .sort((a, b) => a.priority - b.priority);
+  const queuedIds = new Set(queued.map(r => `${r.project}:${r.item}`));
+  const stem = name => name.split("/").pop().replace(/\.[^.]+$/, "");
+  const queueRows = queued.map(r => {
+    const needed = (r.depends || []).filter(name => !records.some(d => d.project === r.project &&
+      d.status === "done" && (d.item === name || stem(d.item) === stem(name))));
+    const problem = L.dependency_problems?.[`${r.project}:${r.item}`];
+    const status = problem || (needed.length ? `blocked (depends on ${needed.join(", ")})`
+      : r.status === "blocked" ? "blocked" : "waiting");
+    return `<div class="row ${needed.length || r.status === "blocked" ? "failed" : "waiting"}"><div class="bar"></div>` +
+      `<div class="who">${esc(r.project)}: ${esc(r.item.replace(/-/g, " "))}</div>` +
+      `<div class="state">Status: ${esc(status)}</div>` +
+      `<div class="meta">${esc(r.kind === "command" ? "Command" : "Worker task")}` +
+      `${r.depends?.length ? ` · Depends on: ${esc(r.depends.join(", "))}` : ""}` +
+      `${r.report ? ` · ${esc(r.report)}` : ""}</div></div>`;
+  }).join("");
+  const taskLabel = t => t.kind === "steward" ? "system: loose ends" : `${t.place}: ${t.title.replace(/-/g, " ")}`;
   const rows = (status, some) => some.map(t => `<div class="row ${status}"><div class="bar"></div>` +
-    `<div class="who">${esc(t.place)}: ${esc(t.title.replace(/-/g, " "))}</div>` +
+    `<div class="who">${esc(taskLabel(t))}</div>` +
     `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
-    `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div></div>`).join("");
-  setHTML($("work"), tasks.length ? groups.map(([status, title]) => {
-    const some = tasks.filter(t => t.status === status);
-    return some.length ? `<h3>${title}</h3>` + rows(status, some) : "";
-  }).join("") : `<p class="muted">No work yet.</p>`);
+    `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div>` +
+    `${t.replaced_by ? `<div class="meta">Replaced by: ${esc(t.replaced_by.join(", "))} · ${esc(t.replacement_reason)}</div>` : ""}` +
+    `${t.acceptance ? `<div class="meta">Accepted via ${esc(t.acceptance.via)} · ${esc(t.acceptance.commit.slice(0, 12))}</div>` : ""}` +
+    `${t.fresh_retries ? `<div class="meta">Fresh recoveries: ${esc(t.fresh_retries)}</div>` : ""}</div>`).join("");
+  setHTML($("work"), groups.map(([status, title]) => {
+    const queueSection = status === "review" ? `<h3>Queue</h3>${queueRows || '<p class="muted">No queued tasks.</p>'}` : "";
+    const some = tasks.filter(t => t.status === status && !queuedIds.has(t.id));
+    return queueSection + (some.length ? `<h3>${title}</h3>` + rows(status, some) : "");
+  }).join("") + (L.incidents?.length ? `<h3>Needs diagnosis</h3>` + L.incidents.map(i =>
+    `<p class="muted">${esc(i.task)} · ${esc(i.reason)}</p>`).join("") : ""));
   const done = tasks.filter(t => t.status === "done");
+  const failed = tasks.filter(t => t.status === "failed");
   $("done").style.display = done.length ? "" : "none";
   setText($("done-count"), `· ${done.length}`);
   setHTML($("done-list"), rows("done", done));
+  $("failed").style.display = failed.length ? "" : "none";
+  setText($("failed-count"), `· ${failed.length}`);
+  setHTML($("failed-list"), rows("failed", failed));
+  $("clear-task-history").disabled = CLEARING || !(done.length + failed.length);
+  const scouting = tasks.some(t => t.kind === "steward" && (t.status === "waiting" || t.status === "running"));
+  $("scout-now").disabled = scouting || L.paused || SCOUTING;
+  if (!SCOUTING) $("scout-status").textContent = scouting ? "Scout scheduled" : L.paused ? "Paused" : "";
 }
+
+let SCOUTING = false;
+$("scout-now").addEventListener("click", async event => {
+  SCOUTING = true;
+  event.target.disabled = true;
+  $("scout-status").textContent = "Scheduling…";
+  try {
+    const response = await fetch("/api/scout", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not schedule scout");
+    $("scout-status").textContent = result.created ? "Scout scheduled" : "Already scheduled";
+  } catch (error) {
+    $("scout-status").textContent = error.message;
+  } finally {
+    SCOUTING = false;
+  }
+});
+
+let CLEARING = false;
+$("clear-task-history").addEventListener("click", async event => {
+  CLEARING = true;
+  event.target.disabled = true;
+  $("clear-task-status").textContent = "Clearing…";
+  try {
+    const response = await fetch("/api/clear-task-history", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not clear task history");
+    $("clear-task-status").textContent = `${result.removed} removed`;
+  } catch (error) {
+    $("clear-task-status").textContent = error.message;
+  } finally {
+    CLEARING = false;
+  }
+});
 
 const short_task = t => String(t || "").replace(/^[^:]+:/, "").replace(/^what\/is\/\w+\//, "").replace(/\.md$/, "");
 
@@ -315,7 +491,7 @@ function sentence(h) {
     case "agent ended": return `${h.agent} ended: ${h.reason}`;
     case "agent adopted": return `${h.agent} carried on through a daemon restart`;
     case "task created": return `new task: ${short_task(h.task)}`;
-    case "task finished": return `${short_task(h.task)} finished: ${h.detail}`;
+    case "receipt": return `${short_task(h.task)} finished: ${h.disposition}`;
     case "switch": return `${lane}: ${h.out ? short_task(h.out) : "empty"} → ${short_task(h.into)}` +
       (h.restored ? ` (restored ${h.restored.toLocaleString()} tokens)` : " (cold)") + (h.saved ? ", saved the outgoing" : "");
     case "shared prefix saved": return `shared start saved: ${h.tokens.toLocaleString()} tokens`;
@@ -332,6 +508,45 @@ function sentence(h) {
   }
 }
 
+const schedulerControls = [
+  {id: "slice", key: "slice_seconds", unit: "s", saving: false, error: ""},
+  {id: "chunk", key: "chunk_tokens", unit: "tokens", saving: false, error: ""}
+];
+function renderScheduler(L) {
+  for (const control of schedulerControls) {
+    const input = $(control.id), value = L.scheduler?.[control.key];
+    if (value === undefined) continue;
+    if (![...input.options].some(o => Number(o.value) === value))
+      input.add(new Option(`${value} ${control.unit}`, String(value)));
+    if (!control.saving && document.activeElement !== input) input.value = String(value);
+    input.disabled = control.saving;
+    $(control.id + "-status").textContent = control.saving ? "Saving…" :
+      control.error || L.config_error || `${value} ${control.unit} active · changes apply live`;
+  }
+}
+for (const control of schedulerControls) $(control.id).addEventListener("change", async event => {
+  control.saving = true;
+  control.error = "";
+  event.target.disabled = true;
+  const status = $(control.id + "-status");
+  status.textContent = "Saving…";
+  try {
+    const response = await fetch("/api/scheduler", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({[control.key]: Number(event.target.value)})});
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Could not save scheduler setting");
+    status.textContent = `${result[control.key]} ${control.unit} active · changes apply live`;
+  } catch (error) {
+    control.error = error.message;
+    status.textContent = control.error;
+  } finally {
+    control.saving = false;
+    event.target.disabled = false;
+    event.target.blur();
+  }
+});
+
 function render(L) {
   const agents = Object.values(L.agents), failing = L.checks.filter(c => !c.ok);
   const count = s => Object.values(L.tasks).filter(t => t.status === s).length;
@@ -346,7 +561,9 @@ function render(L) {
   LAST = {paused: L.paused, guard: L.guard};
   renderAgents(L);
   renderWork(L);
+  renderProjects(L);
   renderMachine(L);
+  renderScheduler(L);
   renderChecks(L);
   $("history").innerHTML = L.history.slice(-60).reverse().map(h =>
     `<div class="${h.event === "alert" ? "alert-line" : ""}"><span class="when">${new Date(h.at * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>` +
@@ -363,7 +580,7 @@ poll();
 // Agent cards and memory, ten times a second.
 new EventSource("/api/live").onmessage = event => {
   const F = JSON.parse(event.data);
-  renderAgents({...F, paused: LAST.paused});
+  renderAgents({...F, tasks: LAST.tasks, paused: LAST.paused});
   renderMemory({...F, guard: LAST.guard});
 };
 </script>

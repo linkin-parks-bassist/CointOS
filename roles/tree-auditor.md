@@ -15,5 +15,6 @@ the manager or David. Do not rewrite the whole tree. Respect the manager's owner
 the planning frontier; the daemon owns scheduler queues. Never browse old installations
 or unrelated roots. Brown incidents take priority and must be reconciled or reported.
 
-Commit any correction, land with `cointos merge`, and end. Describe the concern,
-evidence, and unresolved owner decisions. A clean sample is a valid result.
+Commit any correction, land with `cointos merge`, and end with one receipt:
+`cointos finish --complete "..."` describing the concern, evidence and unresolved owner
+decisions, or `cointos finish --blocked "..."`. A clean sample is a valid result.

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-27T17:00:00+10:00"
+revised_at: "2026-09-29T08:35:18+10:00"
 ---
 
 CointOS is David's personal, local-first, autonomous agent ecosystem, developed in `/home/david/Projects/CointOS`. It is not a tool David "uses" turn by turn. It runs by itself, continuously, and keeps the GPU busy with useful work.
@@ -8,10 +8,10 @@ CointOS is David's personal, local-first, autonomous agent ecosystem, developed 
 **What it does, in perpetuity:**
 
 - **Agents spawn, look around, act, and recede.** An agent is spawned and given a role. It orients itself (expedited by its role and by knowledge trees), decides by its own judgement what needs doing, does a piece of it, and goes back into the void. This repeats indefinitely.
-- **Three role classes.** A steward class keeps the system alive: Coin and maintenance stewards. A managerial class proposes work through the daemon API: decomposition, ordering, review and audit. A worker class carries those queues out. See `what/are/the/cointos/roles.md`.
+- **Three role classes.** A steward class observes and tends the system: Coin and the periodic loose-end steward, which may garden knowledge trees while leaving product implementation to project agents, and periodic gardeners providing free maintenance across all CointOS-owned trees. A managerial class proposes work through the daemon API: decomposition, ordering, review and audit. A worker class carries those queues out. See `what/are/the/cointos/roles.md`.
 - **Work sources.** Agents carry out work David has submitted as to-be-done, and they maintain and improve the system itself. They are not limited to either.
 - **Where work lands.** Project work happens in ordinary git repositories under `~/Projects/`.
-- **Idea pipeline.** David submits commands and product requests. Without further prompting, agents advance them through bounded stages of decomposition, implementation, testing, review, integration and audit. Every level, including decomposition and recomposition, leaves a checkable artifact and a smaller explicit frontier for the next stage.
+- **Idea pipeline.** David submits commands and product requests. Without further prompting, agents advance them through bounded stages of decomposition, implementation, testing, review, integration and audit. A retrospective test auditor samples recent accepted work against its specification and queues managerial correction when green tests are semantically incomplete. Every level, including decomposition and recomposition, leaves a checkable artifact and a smaller explicit frontier for the next stage.
 - **Remote control.** The system is largely controllable from afar through Cointelprofessional ("Coin") on Telegram, which must essentially never be unavailable. Coin reads and edits knowledge trees directly.
 - **Deep knowledge-tree integration.** Agents orient, record and hand off through knowledge trees; the daemon owns queues in the runtime and publishes them as knowledge-tree answers.
 - **Harnessed local intelligence.** Local models do the work in a well-harnessed, curated way: small concrete tasks, bounded context, review.

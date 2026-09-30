@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Upgrade a stopped daemon's ledger to the current task schema, once, in place.
+
+The runtime assumes the current schema and carries no compatibility branches; this script is
+where older ledgers are brought up to it. `scripts/install` runs it while the daemon is stopped.
+It refuses ledgers with running or reviewed work (settle or forget it first) and is idempotent.
+
+Changes: task records gain `record`, `record_hash` (was `leaf_hash`), `worker`, `receipt`;
+a manager's `handoff`/`settled` become its receipt; a waiting task's old session is dropped, because
+its prompts never asked for a receipt; an integration's `validated`/`validated_worker`
+become `landing` (`accepted` is dropped: acceptance lives on the worker); tree auditors become
+kind `tree-audit`; only worker items keep a `stage`. The `last_*` cadence timestamps become
+`cadence`. Queue records lose the unused `consumed_dependencies` and command records their stage, and
+gain `held_by`; tasks gain `revision`.
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+RECORD_KINDS = ("item", "breakdown", "decompose")
+
+
+def upgrade_task(task: dict) -> None:
+    if "receipt" not in task:  # a task from before receipts
+        if task["status"] in ("running", "review"):
+            raise SystemExit(f"{task['id']} is {task['status']}; settle or forget it before upgrading")
+        task["session"] = None  # its conversation's prompts never asked for a receipt: start fresh
+    kind = "tree-audit" if task["kind"] == "garden" and task["role"] == "tree-auditor" else task["kind"]
+    task["kind"] = kind
+    task.setdefault("record_hash", task.pop("leaf_hash", None))
+    task.setdefault("record", f"{task['place']}:{task['item']}" if kind in RECORD_KINDS and task.get("item") else None)
+    task.setdefault("worker", f"{task['place']}:{task['item']}" if kind == "integrate" else None)
+    task.setdefault("result", None)
+    task.setdefault("revision", None)
+    task.setdefault("note", None)
+    task.pop("settled", None)
+    handoff = task.pop("handoff", None)
+    task.setdefault("receipt", {"run": task.get("agent"), "disposition": handoff["outcome"], "summary": handoff["detail"],
+                                "evidence": {}, "at": task["updated_at"]} if handoff else None)
+    validated, worker_commit = task.pop("validated", None), task.pop("validated_worker", None)
+    task.pop("accepted", None)
+    if validated and "landing" not in task:
+        task["landing"] = {"commit": validated, "worker_commit": worker_commit}
+    if kind != "item":
+        task["stage"] = None
+
+
+def upgrade(ledger: dict) -> dict:
+    for task in ledger.get("tasks", {}).values():
+        upgrade_task(task)
+    cadence = ledger.setdefault("cadence", {})
+    if "last_steward" in ledger:
+        cadence.setdefault("steward:system", ledger.pop("last_steward"))
+    if "last_test_auditor" in ledger:
+        cadence.setdefault("test-audit:system", ledger.pop("last_test_auditor"))
+    for key, at in ledger.pop("last_garden", {}).items():
+        tree, _, audit = key.partition(":")
+        cadence.setdefault(f"{'tree-audit' if audit else 'garden'}:{tree}", at)
+    for record in ledger.get("queue", {}).values():
+        record.pop("consumed_dependencies", None)
+        record.setdefault("held_by", None)
+        if record["kind"] == "command":
+            record["stage"] = None
+    return ledger
+
+
+def main(path: Path) -> None:
+    if not path.exists():
+        return
+    ledger = upgrade(json.loads(path.read_text()))
+    temporary = path.with_name(f".{path.name}.upgrade")
+    temporary.write_text(json.dumps(ledger, indent=1, sort_keys=True) + "\n")
+    os.replace(temporary, path)
+    print(f"upgraded {path}")
+
+
+if __name__ == "__main__":
+    main(Path(sys.argv[1]))

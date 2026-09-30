@@ -137,8 +137,18 @@ def render(config: dict, model: str, conversation: dict) -> dict:
     text = _server(model, "/apply-template", body, config["timeouts"]["server_seconds"])["prompt"]
     tokens = _server(model, "/tokenize", {"content": text, "add_special": False, "parse_special": True},
                      config["timeouts"]["render_seconds"])["tokens"]
-    return {"tokens": tokens, "reader": {"thinking": text.endswith("<think>\n"),
-                                         "tools": conversation.get("tools") or []}}
+    reader = {"thinking": text.endswith("<think>\n"), "tools": conversation.get("tools") or []}
+    if reader["thinking"] and conversation.get("reasoning_budget") is not None:
+        # Resolve model-specific tokens; never assume another tokenizer's special IDs.
+        def tokenize(value):
+            return _server(model, "/tokenize", {"content": value, "add_special": False, "parse_special": True},
+                           config["timeouts"]["render_seconds"])["tokens"]
+        marker = tokenize("</think>")
+        if len(marker) != 1:
+            raise ValueError("Reasoning budgets require a single closing-think special token")
+        reader.update(reasoning_budget=conversation["reasoning_budget"], think_end=marker[0],
+                      think_close=tokenize("\n</think>\n\n"))
+    return {"tokens": tokens, "reader": reader}
 
 
 def _complete(config: dict, model: str, lane: int, body: dict, held: int, on_tokens=None) -> dict:

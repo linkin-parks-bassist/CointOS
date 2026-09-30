@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-09-27T00:28:59+10:00"
+revised_at: "2026-09-29T15:06:17+10:00"
 ---
 
-This is an archive reference, not the current runtime map. The corresponding responsibilities now live in `cointos/agents.py`, `kt_mcp.py`, `coin.py`, `cli.py` and `web/dashboard.html`; installation uses `scripts/install`. Consult those first. The old files remain available for historical comparison.
+This is an archive reference, not the current runtime map (`what/is/the/architecture/of/cointos.md`, *Source layout*, owns that). The corresponding responsibilities now live in `cointos/opencode.py`, `kt_mcp.py`, `coin.py`, `cli.py` and `web/dashboard.html`; installation uses `scripts/install`. Consult those first. The old files remain available for historical comparison.
 
 These parts, at git tag `archive/pre-rebuild` (read one with `git show archive/pre-rebuild:PATH`), record the earlier implementations (all eight paths verified present in the tag):
 

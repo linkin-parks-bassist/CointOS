@@ -1,0 +1,35 @@
+{
+ "version": 1,
+ "projects": [
+  {
+   "enabled": true,
+   "main_branch": "main",
+   "name": "todo-cli",
+   "path": "~/Projects/todo-cli",
+   "priority": 100,
+   "test_policy": {
+    "manifest": "tests/contracts.json",
+    "non_code": [
+     ".knowledge/**",
+     ".work-report.md",
+     "*.md"
+    ],
+    "protected": [
+     "tests/**",
+     "test/**",
+     "test_*.py",
+     "**/test_*.py",
+     "*_test.py",
+     "**/*_test.py",
+     "conftest.py",
+     "**/conftest.py",
+     "pytest.ini",
+     "pyproject.toml",
+     "setup.cfg",
+     "tox.ini",
+     ".github/workflows/**"
+    ]
+   }
+  }
+ ]
+}

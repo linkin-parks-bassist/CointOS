@@ -14,7 +14,8 @@ import threading
 import time
 import traceback
 
-from cointos import agents, checks, gateway, lanes, memory, viewers, work
+from cointos import (checks, gateway, keys, lanes, lifecycle, memory, opencode, queues, recovery, runs, settings,
+                     snapshots, spawner, viewers)
 from cointos.config import LEDGER, read_json
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, fresh, log, now, save
 
@@ -48,7 +49,7 @@ def check_models() -> None:
         for name, state in L["models"].items():
             if state["up"] or (L["guard"]["killed"] and name == CONFIG["work_model"]):
                 continue
-            if not lanes.make_room(CONFIG["models"][name]["memory_gb"]):
+            if not snapshots.make_room(CONFIG["models"][name]["memory_gb"]):
                 state["problems"] = [f"waiting for {CONFIG['models'][name]['memory_gb']} GB of headroom"]
                 continue
             state["launching"] = True
@@ -80,8 +81,9 @@ def guard() -> None:
     core (daemon, front-desk model, Coin) stays. Caller holds LOCK."""
     measured, server = memory.measure(), BACKEND.budget(CONFIG)
     L["memory"] = {**measured, "server": server, "headroom_gb": memory.headroom_gb(CONFIG, measured, server)}
+    snapshots.room(0.0)  # bound caches before general pressure reaches the desktop
     state, limits = L["guard"], CONFIG["memory"]
-    short = L["memory"]["headroom_gb"] < 0 and not lanes.make_room(0.0)  # rung 1 happens here, always
+    short = L["memory"]["headroom_gb"] < 0 and not snapshots.make_room(0.0)  # rung 1 happens here, always
     distress = memory.distressed(CONFIG, measured)
     state["distress_since"] = (state["distress_since"] or now()) if distress else None
     urgent = distress and now() - state["distress_since"] >= limits["distress_seconds"]
@@ -110,7 +112,7 @@ def climb(rung: int, why: str) -> None:
         if step == 2:
             for agent_id, agent in list(L["agents"].items()):
                 if agent["class"] == "background":
-                    work.stop_agent(agent_id, "memory needed", requeue=True, charge=False)
+                    lifecycle.stop(agent_id, "memory needed", requeue=True, charge=False)
         if step == 3:
             threading.Thread(target=BACKEND.kill, args=(CONFIG, CONFIG["work_model"]), daemon=True).start()
     state.update(rung=rung, rung_at=now())
@@ -131,28 +133,32 @@ def look_after_agents() -> None:
             if mine:
                 agent["last_activity"] = now()
         if agent["repeats"] > limits["max_identical_thoughts"]:
-            work.stop_agent(agent_id, "repeating one thought", requeue=True)
+            lifecycle.stop(agent_id, "repeating one thought", requeue=True)
     for agent_id in checks.silent_agents(CONFIG, L, now()):
-        work.stop_agent(agent_id, "silent too long", requeue=True)
+        lifecycle.stop(agent_id, "silent too long", requeue=True)
 
 
 def tick(timers: dict) -> None:
     with LOCK:
+        settings.refresh()
         guard()  # memory is measured first: everything after asks whether something fits
     if now() - timers["models"] >= CONFIG["model_check_seconds"]:
         timers["models"] = now()
         check_models()
-    processes = agents.find_processes()
+    processes = opencode.find_processes()
     windows = viewers.open_windows() if CONFIG["viewers"]["max_viewers"] else set()
     with LOCK:
         lanes.schedule()  # time is an input too: a slice runs out between events
         look_after_agents()
+        recovery.enforce()
+        _, _, queue_changed = spawner.refresh()
+        L["incidents"] = recovery.incidents()
         if CONFIG["viewers"]["max_viewers"]:
             viewers.look_after(windows)
         if now() - timers["spawn"] >= CONFIG["spawner"]["interval_seconds"]:
             timers["spawn"] = now()
             try:
-                work.spawn()
+                spawner.spawn()
             except Exception as error:
                 traceback.print_exc()
                 alert(f"Spawner error: {type(error).__name__}: {error}")
@@ -166,6 +172,8 @@ def tick(timers: dict) -> None:
                 alert(f"Self-check failed: {check['name']}: {check['detail']}")
         L["failing"] = failing
     save()
+    if queue_changed:
+        queues.publish()
 
 
 def shutdown() -> None:
@@ -177,10 +185,18 @@ def shutdown() -> None:
     STOPPING.set()  # lanes finish the step in flight and take no more
     with LOCK:
         LOCK.notify_all()
-    lanes.save_all()
-    if system_stopping():
-        lanes.persist()
-    save()
+    stopping = system_stopping()
+    steps = [("save lane contexts", lanes.save_all)]
+    if stopping:
+        steps.append(("persist snapshots", snapshots.persist))
+    steps.append(("save final ledger", save))
+    for name, step in steps:
+        try:
+            step()
+        except Exception as error:
+            traceback.print_exc()
+            with LOCK:
+                log("shutdown step failed", step=name, error=f"{type(error).__name__}: {error}")
 
 
 def system_stopping() -> bool:
@@ -193,13 +209,13 @@ def main() -> None:
     faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1` shows every thread's stack
     previous = read_json(LEDGER, {}) or {}
     L.update(fresh(previous))
-    work.load_keys()
+    keys.load()
     with LOCK:
-        work.adopt(previous)
-        lanes.forget_orphans()
+        runs.adopt(previous)
+        snapshots.forget_orphans()
         log("daemon started")
     save()
-    work.queues.publish()
+    queues.publish()
     gateway.serve()
     lanes.start()
 

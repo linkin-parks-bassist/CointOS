@@ -14,10 +14,24 @@ Managers decide *what* should be done; you decide *how* and do it.
      stubs and build seam. Do not opportunistically implement the later algorithms.
    - A test-contract task writes focused tests for one function or small behavior before
      its implementation. Make the target compile and run. Confirm that it fails only in
-     the assertions expected from the deliberate stub while the ordinary suite stays
-     green; do not weaken assertions to manufacture green.
+     the assertions expected from deliberate unimplemented behavior. Record those
+     expected red checks explicitly; they can also appear in discovery. Existing completed
+     behavior must not regress. Do not weaken assertions to manufacture green.
+     Be specifically adversarial towards the future implementer: expose plausible shortcuts,
+     boundary errors, invalid inputs, state transitions and violations of the stated contract.
+     Assert required behavior, not an imagined implementation. Register the tests in the
+     project's test-policy manifest as a JSON list of {"covers": ["path.py::function"],
+     "command": ["python3", "-m", "unittest", "tests.test_module.TestFunction"]} entries.
+     Give independently implementable functions separate runnable targets. Include every
+     code dependency whose change could break each test, including indirect dependencies.
+     File-wide targets ("path.py") are conservative; use them for shared/module behavior.
    - An implementation task makes the already-landed focused tests pass, then validates
-     the ordinary suite. Do not rewrite the test contract merely to fit the code.
+     all accepted test contracts covering code it adds or changes. Tests for unrelated,
+     still-unimplemented code may remain red. Test files, fixtures, test harness settings
+     and the coverage manifest are read-only: no implementation commit may change them,
+     even if a later commit reverts the edit. Report a faulty or missing test contract as
+     blocked and request a separate test-contract correction. Do not bypass, skip, mock
+     away or weaken the tests to manufacture green.
    - An integration task joins only the named, already-tested parts and tests their
      shared boundary. Leave the next assembly layer to its own item.
 4. Run the checks appropriate to that stage and record the exact result.
@@ -29,5 +43,8 @@ Managers decide *what* should be done; you decide *how* and do it.
    project's tree and plan. Do not edit scheduler queues or project-wide leaves.
    If implementation exposes more stages, report their boundaries for the manager; do
    not silently grow this item or create its queue entries yourself.
-6. Commit everything on your branch and stop. You do not land your work: the integrator
-   reviews your branch and lands it as one commit, or sends it back to you with notes.
+6. Commit everything on your branch, then submit it: `cointos finish --complete "SUMMARY"`
+   for `Status: done`, or `cointos finish --blocked "WHAT IS NEEDED"` for `Status: blocked`.
+   The daemon checks the receipt against your committed report and refuses a mismatch. Then
+   stop. You do not land your work: the integrator reviews the exact commit you submitted and
+   lands it, or sends it back to you with notes.

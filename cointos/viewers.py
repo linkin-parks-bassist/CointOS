@@ -9,26 +9,15 @@ The daemon gives each agent that has started a viewer: an idle open window if th
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
 
+from cointos import opencode
 from cointos.config import ROOT
 from cointos.state import CONFIG, L, log, now
 
+
 def open_windows() -> set[int]:
     """The slots whose viewer window is running, from the processes carrying COINTOS_VIEWER."""
-    found = set()
-    for proc in Path("/proc").iterdir():
-        if not proc.name.isdigit():
-            continue
-        try:
-            environ = (proc / "environ").read_bytes()
-        except OSError:
-            continue
-        for entry in environ.split(b"\0"):
-            if entry.startswith(b"COINTOS_VIEWER="):
-                found.add(int(entry[15:]))
-                break
-    return found
+    return {int(slot) for slot in opencode.processes_by("COINTOS_VIEWER")}
 
 
 def open_window(slot: int) -> None:

@@ -6,6 +6,7 @@ After=network-online.target cointosd.service
 Type=simple
 WorkingDirectory=@ROOT@
 Environment=PYTHONUNBUFFERED=1
+Environment=PATH=@ROOT@/bin:@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/python3 -m cointos.coin
 Restart=always
 RestartSec=3

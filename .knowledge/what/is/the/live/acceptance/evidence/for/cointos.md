@@ -1,12 +1,24 @@
 ---
 status: green
-revised_at: "2026-09-27T17:05:50+10:00"
+revised_at: "2026-09-30T10:49:00+10:00"
 ---
 
-Full autonomous acceptance is not established. The specification defines the required scenarios; the plan lists remaining demonstrations.
+Full autonomous acceptance is not established. Source currently passes 264 unit tests; those prove mechanisms, not every live scenario.
 
-Current layout verification on 2026-09-27: both services run from ~/.CointOS, its runtime tree is allowed everywhere through kt, and CointOS is paused with zero agents. All eight live cointos check invariants pass. The Todo continuation command was accepted through the API, survived reinstall/restart and repeated submission without duplication, and appears in the runtime command-queue leaf. Installed code/config/roles match the source. The source suite passes 98 tests, including actual kt queue publication, sorted-JSON priority persistence, integration acceptance and settlement retry. The sandbox retains its 217 passing tests. These checks do not demonstrate autonomous prompt quality or complete Todo behavior.
+## Proven live boundary
 
-Historical evidence retained from the former plan: a two-hour soak on 2026-09-27 took 1,360 five-second samples. Its seven then-existing checks remained green; four agents appeared in 1,357 samples and three in the other samples; three sandbox items landed. This predates the integrator and bounded roles and cannot certify them, Coin timing or workstation/user priority. Recorded evidence paths are gitignored logs/evidence/m3-20260927.log and logs/evidence/lanewatch.log; those historical logs were not re-audited during the layout migration.
+- **Receipt lifecycle:** workers, integrators, managers, gardeners, tree auditors, stewards and test auditors have completed through checked receipts. Terminal commands flush and acknowledge the exact receipt before their managed unit is retired. Final text, transport finish markers and process exit do not settle a task. Ordinary completed runs leave no stray units.
+- **Directed run control:** `cointos kill AGENT` stops one run, refunds its attempt and durably holds unfinished work with artifacts preserved. Only `cointos resume TASK` releases that hold; `go` does not.
+- **Restart admission:** ordinary daemon drain closes spawn admission while existing conversations, landing validations and receipts continue. Deployment quiescence lets admitted thoughts finish, retryably blocks new thoughts, and has both a clean cancellation path and a successful replacement path.
+- **Compatible live installation:** cointosd has been replaced around exact surviving agent units and session IDs without relaunch or continuation injection. The installer accepts daemon-policy drift, rejects gateway/backend/model identity drift before side effects, and restarts cointosd if a later installation step fails.
+- **Continuation:** OpenCode 1.18.33 rejects empty noninteractive session resume. The installed fallback persists the minimal real user turn `Continue.` for gaps under three hours and one concise reorientation after longer gaps; live sessions accepted it and continued.
+- **Shutdown baseline:** a real reboot proved one daemon start, explicit service PATH, cointosd-before-agent stop ordering, independent shutdown obligations and disk spill. It also exposed the prefix-pinning and dead-unit-adoption defects now repaired in source; their repaired reboot behavior is not yet proved.
+- **Reasoning calibration:** live Qwen3.8 agents use per-reply caps of 256/384/1,024 tokens for low/medium/xhigh. Test-contract workers default medium and other tasks default low unless explicitly overridden.
+- **Operator lifecycle and sequential role reuse:** bounded read-only system operators ran with explicit low effort and 180-second/2,000-token generation limits, called the live status/check controls, submitted checked complete receipts, and had their units retired with all nine checks green. After installation, the first operator cold-started at 0 of 21,533 prompt tokens and seeded a 21,147-token shared operator prefix; the next same-role operator restored all 21,147 tokens, reached its first tool call in under 20 seconds and completed seconds later. Prefill does not spend generation budget. CLI-launched lifecycle and proactive same-role prefix reuse are proved; Coin-triggered launch and latency quality are not.
+- **Pipeline evidence:** ordinary intake has produced accepted Pigen/Todo work through worker, integration, managerial and retrospective-audit roles. This demonstrates useful flow, not the sustained four-agent/two-lane acceptance scenario.
 
-Earlier recorded bounded observations include token-level resume and chunked reading; 0.2–1.5-second slot save/restore; a shared 10,832-token start occupying 0.87 GB; first token 1.6 seconds after Coin pre-emption; suspended-startup silence recovery in 29.97 seconds; and a single-task halt/up retaining worktree/session, refunding its run and later delivering. These are prior observations, not current guarantees. Cold resume after reload and malformed continuation remain open defects.
+## Not yet accepted
+
+The current gaps are the focused live paths and whole-system scenarios listed in `what/is/broken.md`: repaired reboot recovery, useful fresh recovery, lost-reply/stale-run/process-death/halt paths, Coin response timing, workstation priority, concurrent integration, snapshot churn and the sustained soak.
+
+`what/is/the/plan.md` owns their execution order. Runtime events and Git own chronology; this leaf records only the present evidence boundary.

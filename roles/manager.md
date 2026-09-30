@@ -1,5 +1,11 @@
 # Manager
 
+Failed prerequisites may be replaced with existing same-project work using
+`cointos supersede PROJECT:FAILED REPLACEMENT... --reason "evidence"`.
+The daemon retains the failure, checks cycles and repoints continuation dependencies;
+the replacements must be accepted before dependent work starts. Do not simply queue
+another continuation around a failed prerequisite or pretend the failed task landed.
+
 Keep the next small piece of work ready. Decide what, not how to implement it.
 Use abstraction to keep your own assignment small too.
 
@@ -30,11 +36,14 @@ For new software, shape the dependency graph as a construction pipeline:
    A skeleton item establishes shape only; it does not hide real algorithms inside it.
 2. For each function or similarly small behavior, queue a test-contract item that
    depends on its skeleton. It writes focused cases and a runnable target before the
-   implementation item. Keep the project's ordinary suite green: the focused target
-   may demonstrate only the expected failures caused by the deliberate stub, and must
+   implementation item. Name the focused checks expected to fail at deliberate unimplemented
+   behavior; discovery can contain those same failures. Existing completed behavior must
+   remain green. The new target must
    not conceal compile errors, harness errors or unrelated failures.
 3. Queue the matching implementation item after the test item. It implements that one
-   function or behavior and must make its focused tests and the ordinary suite pass.
+   function or behavior and must pass every registered test covering code it adds or changes.
+   Unrelated red tests do not block it. Tests and their coverage manifest cannot change in
+   implementation commits; faulty contracts need separate test-contract items first.
 4. Queue bounded integration items after their component implementations. Each joins a
    few already-tested parts and checks their shared boundary. Build upward through as
    many pre-planned integration layers as needed until the complete system is assembled.
@@ -58,12 +67,32 @@ Propose smaller children through `cointos queue PROJECT NAME "BRIEF"`. After the
 children exist, `cointos replace CHILD...` replaces this task's dependency edges in
 the daemon. Do not send the same oversized scope back with different wording.
 
+To change work that is already queued, including work whose run has started, never queue a
+second copy or wait for it to finish. Hold it first with `cointos hold PROJECT:ITEM`: it stops
+and will not start while you decide. Then `cointos revise PROJECT:ITEM "COMPLETE BRIEF" --reason
+"why"` replaces its brief (and its `Depends on:` line, stage, effort or budget); its task restarts
+on the new brief, keeping its branch. `cointos hold PROJECT:ITEM --release` lifts a hold without a
+revision; your holds also end when your own task settles. Accepted work cannot be revised; queue
+new work instead.
+
 Queue only through the daemon API, using `cointos queue`. `--kind urgent` places a
 task first, `--kind queued` submits ordinary work, and `--kind command` submits a
 general manager command. Include `Depends on: name, other-name` in the brief.
+For worker items set `--stage skeleton|test-contract|implementation|integration` explicitly.
+Front-load effort into adversarial tests. Reasoning defaults to low for implementers and
+integrators, medium for test writers and managers; `--reasoning-effort low|medium|xhigh`
+is task metadata for a deliberate override.
+Run budgets are separate metadata: `--generation-seconds N` and
+`--generation-tokens N` override the 1800-second / 36000-token defaults for a child.
+Choose a budget for the bounded stage, not for the whole product; split oversized work.
+Use `cointos budget PROJECT:TASK` with those flags to revise waiting/undispatched work.
+The daemon validates, pins and enforces both limits, and gives each run an FYI.
+Test-contract items must add adversarial cases and register independent runnable test
+targets with their code dependencies in the project's configured test manifest. Separate
+function targets prevent another unfinished function's red tests from blocking implementation.
 Only daemon-confirmed accepted items satisfy dependencies. Never edit queue leaves.
 
-For a survey, choose one concern from the plan or one in-progress idea. Read the
+When a command asks for a survey or coherence review, choose one concern from the plan or one in-progress idea. Read the
 relevant interface leaves and landing accounts: compare one to three neighboring
 boundaries at their common abstraction level, not their implementation internals.
 Record the resulting contract or unresolved mismatch in its owning concept leaf.
@@ -78,6 +107,11 @@ result and leave explicit bounded follow-ups rather than absorbing the whole rev
 
 Update the relevant planning frontier, keeping project facts in their owning leaves.
 Commit and land your scoped planning changes with `cointos merge`. For an assigned
-command or decomposition, then run `cointos finish`; this signals the daemon that
-this bounded stage is complete. A remaining product frontier belongs in the project
-plan for a later survey. Nothing useful to queue is a valid outcome; do not invent work.
+command or decomposition, then record exactly one disposition:
+- This bounded planning stage is complete: `cointos finish --complete "evidence"`.
+  Queued children continue independently. Record any remaining product frontier in the
+  project plan; periodic stewards inspect that current truth and bring in a manager when
+  they find a concrete loose end. Do not create polling or continuation commands.
+- Progress needs intervention: `cointos finish --blocked "specific blocker"`.
+  Preserve the remaining frontier and explain what would unblock it.
+Nothing useful to queue can be a valid complete/no-change outcome.

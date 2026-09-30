@@ -1,8 +1,9 @@
 import copy
 import queue
 import unittest
+from unittest.mock import patch
 
-from cointos import lanes, state
+from cointos import lanes, state, settings
 
 WORK = state.CONFIG["work_model"]
 
@@ -82,6 +83,119 @@ class Turns(unittest.TestCase):
         lane = self.finish_on_lane("a", turn_began)
         self.assertEqual(lane["held_for"], "a")
         self.assertLessEqual(lane["held_until"], turn_began + self.slice)
+
+    def test_shorter_live_slice_yields_only_after_current_gpu_step(self):
+        original = state.CONFIG["scheduler"]["slice_seconds"]
+        self.addCleanup(lambda: state.CONFIG["scheduler"].update(slice_seconds=original))
+        self.thought("a", [1, 2, 3, 4])
+        lanes.schedule()
+        self.read_done("a")
+        lane = state.L["lanes"][0]
+        began = state.now() - 10
+        lane["turn_since"] = state.L["thoughts"]["a"]["since"] = began
+        self.thought("b", [9, 9, 9])
+        lanes.BUSY[0] = "a"
+        settings.apply(5)
+        self.assertEqual(lane["holder"], "a")
+        self.assertEqual(lane["turn_since"], began)
+        lanes.BUSY.clear()
+        lanes.schedule()
+        self.assertEqual(lane["holder"], "b")
+
+    def test_longer_live_slice_keeps_elapsed_turn_and_reading_protection(self):
+        original = state.CONFIG["scheduler"]["slice_seconds"]
+        self.addCleanup(lambda: state.CONFIG["scheduler"].update(slice_seconds=original))
+        self.thought("a", [1, 2, 3, 4])
+        lanes.schedule()
+        lane = state.L["lanes"][0]
+        began = state.now() - 100
+        lane["turn_since"] = state.L["thoughts"]["a"]["since"] = began
+        self.thought("b", [9, 9, 9])
+        settings.apply(1)
+        self.assertEqual(lane["holder"], "a", "cold reading remains protected")
+        self.read_done("a")
+        began = state.now() - 10
+        lane["turn_since"] = state.L["thoughts"]["a"]["since"] = began
+        settings.apply(60)
+        self.assertEqual(lane["holder"], "a")
+        self.assertEqual(lane["turn_since"], began)
+
+    def test_live_chunk_changes_take_effect_at_next_step_without_losing_tokens(self):
+        original = state.CONFIG['scheduler']['chunk_tokens']
+        self.addCleanup(lambda: state.CONFIG['scheduler'].update(chunk_tokens=original))
+        self.addCleanup(state.STOPPING.clear)
+        state.CONFIG['scheduler']['chunk_tokens'] = 96
+        self.thought('a', [1, 2, 3])
+        lanes.RUNS['a'].update(sampling={}, max=1000)
+        lanes.schedule()
+        self.read_done('a')
+        calls = []
+        def think(config, model, index, tokens, held, count, sampling, on_tokens):
+            calls.append((count, list(tokens)))
+            committed = len(lanes.RUNS['a']['generated'])
+            for n in range(count):
+                on_tokens([7])
+                self.assertEqual(state.L['thoughts']['a']['generated'], committed + n + 1)
+                self.assertEqual(len(lanes.RUNS['a']['generated']), committed)
+            if len(calls) == 1:
+                settings.apply(self.slice, 16)
+                self.assertEqual(lanes.BUSY[0], 'a')
+            else:
+                state.STOPPING.set()
+            return {'tokens': [7] * count, 'done': False}
+        with patch.object(lanes.BACKEND, 'think', side_effect=think):
+            lanes.worker(0)
+        self.assertEqual([c[0] for c in calls], [96, 16])
+        self.assertEqual(calls[1][1], [1, 2, 3] + [7] * 96)
+        self.assertEqual(lanes.RUNS['a']['generated'], [7] * 112)
+        self.assertEqual(state.L['thoughts']['a']['generated'], 112)
+
+    def test_budget_closure_extends_warm_context_before_answer_generation(self):
+        self.addCleanup(state.STOPPING.clear)
+        self.thought('a', [1, 2, 3])
+        run = lanes.RUNS['a']
+        run.update(sampling={}, max=100, reader={'reasoning_budget': 2,
+                   'think_end': 99, 'think_close': [10, 99, 10]})
+        lanes.schedule()
+        self.read_done('a')
+        calls, reads = [], []
+        def think(config, model, index, tokens, held, count, sampling, on_tokens):
+            calls.append((list(tokens), held, count))
+            new = [7, 8] if len(calls) == 1 else [42]
+            on_tokens(new)
+            if len(calls) == 2:
+                state.STOPPING.set()
+            return {'tokens': new, 'done': len(calls) == 2}
+        def prefill(config, model, index, tokens, held):
+            reads.append((list(tokens), held))
+        with patch.object(lanes.BACKEND, 'think', side_effect=think), \
+             patch.object(lanes.BACKEND, 'prefill', side_effect=prefill), \
+             patch.object(lanes, 'log'):
+            lanes.worker(0)
+        self.assertEqual(calls[0][2], 2)
+        self.assertEqual(reads, [([1, 2, 3, 7, 8, 10, 99], 4)])
+        self.assertEqual(calls[1][:2], ([1, 2, 3, 7, 8, 10, 99, 10], 7))
+        streamed = []
+        while not run['queue'].empty():
+            streamed.append(run['queue'].get_nowait())
+        self.assertEqual(streamed, [[7, 8], [10, 99, 10], [42], {'end': 'done'}])
+
+    def test_declared_shared_prefix_is_saved_without_a_concurrent_peer(self):
+        self.addCleanup(state.STOPPING.clear)
+        self.thought('a', [1, 2, 3, 4, 5])
+        run = lanes.RUNS['a']
+        run.update(sampling={}, max=100, reader={}, shared=3)
+        lanes.schedule()
+        saved = []
+
+        def prefill(config, model, index, tokens, held):
+            state.STOPPING.set()
+
+        with patch.object(lanes.BACKEND, 'prefill', side_effect=prefill), \
+             patch.object(lanes.snapshots, 'shared', return_value=False), \
+             patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens: saved.append(list(tokens))):
+            lanes.worker(0)
+        self.assertEqual(saved, [[1, 2, 3]])
 
     def test_the_end_of_a_thought_restarts_the_silence_clock(self):
         state.L["agents"]["a"] = {"last_activity": state.now() - 2400, "repeats": 0, "last_thought": None,

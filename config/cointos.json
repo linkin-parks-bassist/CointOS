@@ -9,6 +9,15 @@
   "model_check_seconds": 5,
   "keepalive_seconds": 10,
   "work_model": "Qwen3.8-27B-GGUF",
+  "reasoning": {
+    "default": "low",
+    "test-contract": "medium",
+    "budgets": {
+      "low": 256,
+      "medium": 384,
+      "xhigh": 1024
+    }
+  },
   "front_model": "Qwen3.5-4B-GGUF",
   "models": {
     "Qwen3.8-27B-GGUF": {
@@ -56,7 +65,8 @@
     "distress_seconds": 30,
     "disk_snapshots_gb": 100,
     "shed_step_seconds": 3,
-    "calm_seconds": 120
+    "calm_seconds": 120,
+    "snapshots_gb": 24
   },
   "checks": {
     "idle_lane_seconds": 5,
@@ -70,19 +80,19 @@
     "max_agents": 2,
     "interval_seconds": 5,
     "max_runs_per_task": 5,
-    "survey_every_seconds": 21600,
-    "maintenance_every_seconds": 21600,
-    "maintenance_project": "CointOS",
+    "max_launch_failures": 2,
+    "steward_every_seconds": 21600,
+    "test_auditor_every_seconds": 21600,
     "user_quiet_seconds": 120
   },
-  "projects": [
+  "trees": [
     {
-      "name": "todo-cli",
-      "path": "~/Projects/todo-cli",
-      "main_branch": "main"
+      "name": "CointOS",
+      "path": "~/Projects/CointOS",
+      "tree": ".knowledge",
+      "main_branch": "rebuild/simple-core"
     }
   ],
-  "trees": [],
   "garden": {
     "check_seconds": 60,
     "every_seconds": 86400,
@@ -135,5 +145,17 @@
     "mcp_close_seconds": 5
   },
   "alerts_kept": 50,
-  "result_chars": 2000
+  "result_chars": 2000,
+  "recovery": {
+    "generation_seconds": 1800,
+    "generation_tokens": 36000,
+    "artifact_seconds": 600,
+    "artifact_tokens": 12000,
+    "handoff_chars": 6000,
+    "fresh_retries": 2,
+    "repeated_rejections": 2
+  },
+  "journal": {
+    "bytes": 8388608
+  }
 }

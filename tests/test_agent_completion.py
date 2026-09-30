@@ -1,118 +1,312 @@
-import copy
+"""Receipt-driven completion: one typed receipt per run; process exit only reconciles."""
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from types import SimpleNamespace
 
-from cointos import agents, checks, state, work
+from cointos import api, checks, lifecycle, opencode, queues, runs, snapshots, state, tasks, trees
+from tests import support
 
 
 class Completion(unittest.TestCase):
     def setUp(self):
-        previous = copy.deepcopy(state.L)
-        self.addCleanup(lambda: (state.L.clear(), state.L.update(previous)))
-        state.L.clear()
-        state.L.update(state.fresh({}))
-        directory = self.enterContext(tempfile.TemporaryDirectory())
-        self.directory = Path(directory)
-        self.enterContext(patch.object(agents, "agent_dir", return_value=self.directory))
-        self.enterContext(patch.object(agents, "active", return_value=False))
-        self.enterContext(patch.object(agents.time, "sleep"))
-        self.enterContext(patch.object(agents, "stop"))
-        self.enterContext(patch.object(agents, "remove_worktree", return_value=True))
-        self.enterContext(patch.object(work, "keep_key"))
-        self.enterContext(patch.object(work, "place", return_value={}))
-        self.enterContext(patch.object(work.lanes, "cancel_agent"))
-        self.enterContext(patch.object(work.lanes, "forget_owner"))
-        self.enterContext(patch.object(work.threading, "Thread"))
-        state.L["tasks"]["test"] = {
-            "id": "test", "title": "test", "place": "sandbox", "kind": "survey",
-            "status": "running", "runs": 1, "agent": "worker-test"}
-        state.L["agents"]["worker-test"] = {
-            "task": "test", "state": "running", "session": None, "repeats": 0,
-            "thoughts": 1, "last_activity": state.now(), "started_at": state.now()}
+        support.fresh_ledger(self)
+        support.quiet(self)
+        self.run_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(opencode, "run_dir", return_value=self.run_dir))
+        self.enterContext(patch.object(opencode, "active", return_value=False))
+        self.project = support.project(self, support.repository(self))
+        self.task = support.running(tasks.create("steward", tasks.SYSTEM, "loose-ends", "Look around", [6]), "run-1")
 
-    def test_exit_before_settlement_is_healthy_and_final_events_are_drained(self):
-        events = [
-            {"type": "text", "sessionID": "session", "part": {"type": "text", "text": "Done"}},
-            {"type": "step_finish", "part": {"reason": "stop"}}]
-        (self.directory / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
-        (self.directory / "exit.json").write_text('{"code": 0}')
-        # Force the exact production interleaving: no process, still in ledger, before watch settles.
-        result = checks.evaluate(state.CONFIG, state.L, state.now(), {})
-        self.assertTrue(all(c["ok"] for c in result), result)
-        work.agent_thread("worker-test", None, None)
-        task = state.L["tasks"]["test"]
-        self.assertEqual(task["status"], "done")
-        self.assertEqual(task["result"], "Done")
-        self.assertEqual(task["session"], "session")
-        self.assertEqual(state.L["agents"], {})
-        self.assertEqual(state.L["alerts"], [])
+    def end(self, *events, code=0, agent="run-1"):
+        """The run's unit has exited having written these events; its observer reports it."""
+        (self.run_dir / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+        (self.run_dir / "exit.json").write_text(json.dumps({"code": code}))
+        runs.follow(agent, None, None)
 
-    def test_unexpected_unit_death_requeues_the_task(self):
-        work.agent_thread("worker-test", None, None)
-        self.assertEqual(state.L["tasks"]["test"]["status"], "waiting")
-        self.assertEqual(state.L["agents"], {})
+    # ------------------------------------------------ process exit only reconciles
 
-    def test_repeated_unfinished_runs_still_raise_a_real_failure(self):
-        state.L["tasks"]["test"]["runs"] = state.CONFIG["spawner"]["max_runs_per_task"]
-        work.agent_thread("worker-test", None, None)
-        self.assertEqual(state.L["tasks"]["test"]["status"], "failed")
-        self.assertEqual(len(state.L["alerts"]), 1)
+    def test_exit_after_receipt_releases_the_run_and_keeps_the_settlement(self):
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Nothing fell between owners")
+        self.assertEqual((self.task["status"], self.task["agent"]), ("done", None))
+        # A normal exit precedes the observer's release: not an invariant violation.
+        self.assertTrue(all(c["ok"] for c in checks.evaluate(state.CONFIG, state.L, state.now(), {})))
+        self.end({"type": "text", "part": {"type": "text", "text": "Done"}},
+                 {"type": "step_finish", "part": {"reason": "tool-calls"}})
+        self.assertEqual((self.task["status"], self.task["result"]), ("done", "Nothing fell between owners"))
+        self.assertEqual((state.L["agents"], state.L["alerts"]), ({}, []))
 
-    def item_run(self, on_branch, committed=True):
-        """An item run that ended by itself, with its leaf's status on its branch."""
-        branch = self.directory / "branch"
-        leaf = branch / ".work-report.md"
-        leaf.parent.mkdir(parents=True)
-        leaf.write_text(f"Status: {on_branch}\n\nThe brief.\n")
-        self.enterContext(patch.object(agents, "committed", return_value=committed))
-        state.L["tasks"]["test"].update(kind="item", item="what/is/the/queued/item.md", worktree=str(branch))
-        (self.directory / "exit.json").write_text('{"code": 0}')
-        work.agent_thread("worker-test", None, None)
-        return state.L["tasks"]["test"]
+    def test_receipt_keeps_the_active_conversation_warm_until_release(self):
+        state.L["snapshots"]["warm"] = {"owner": self.task["id"]}
+        with patch.object(snapshots.BACKEND, "forget") as forget:
+            lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+            self.assertIn("warm", state.L["snapshots"])
+            lifecycle.release("run-1", "run ended")
+        self.assertNotIn("warm", state.L["snapshots"])
+        forget.assert_called_once_with(state.CONFIG, "warm")
 
-    def test_a_worker_hands_its_committed_item_to_review(self):
-        self.assertEqual(self.item_run("done")["status"], "review")
+    def test_receipt_delivery_schedules_the_exact_run_for_retirement(self):
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        with patch.object(lifecycle.threading, "Thread") as thread:
+            lifecycle.receipt_delivered(self.task["id"], "run-1")
+        target = thread.call_args.kwargs["target"]
+        with patch.object(lifecycle, "stop") as stop, patch.object(lifecycle, "save"):
+            target()
+        stop.assert_called_once_with("run-1", "completion receipt delivered", requeue=False, charge=False)
 
-    def test_a_blocked_item_is_reviewed_too(self):
-        self.assertEqual(self.item_run("blocked")["status"], "review")
+    def test_receipt_delivery_rejects_another_run(self):
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        with self.assertRaisesRegex(ValueError, "no completion receipt"):
+            lifecycle.receipt_delivered(self.task["id"], "run-2")
 
-    def test_unfinished_or_uncommitted_work_requeues_the_task(self):
-        self.assertEqual(self.item_run("in progress")["status"], "waiting")
-        state.L["tasks"]["test"].update(status="running", agent="worker-test")
-        state.L["agents"]["worker-test"] = {"task": "test", "state": "running", "session": None, "repeats": 0,
-                                            "thoughts": 1, "last_activity": state.now(), "started_at": state.now()}
-        (self.directory / "branch").rename(self.directory / "old")
-        self.assertEqual(self.item_run("done", committed=False)["status"], "waiting")
-        self.assertIn("uncommitted", state.L["tasks"]["test"]["note"])
+    def test_final_text_and_a_stop_marker_without_a_receipt_are_not_completion(self):
+        self.end({"type": "text", "part": {"type": "text", "text": "Complete final summary"}},
+                 {"type": "step_finish", "part": {"reason": "stop"}})
+        self.assertEqual((self.task["status"], self.task["receipt"]), ("waiting", None))
+        self.assertIn("without a completion receipt (finish marker stop, exit code 0)", self.task["note"])
 
-    def garden_run(self, pending, merged=True, clean=True):
-        state.L["tasks"]["test"].update(kind="garden", brief="what/is/selected.md", branch="test",
-                                        worktree=str(self.directory))
-        health = {"leaves": [f"yellow\tlocal:{p}\tunverified" for p in pending],
-                  "brown": 0, "yellow": len(pending)}
-        with patch.object(work, "place", return_value={"name": "sandbox", "path": "unused", "main_branch": "main"}), \
-                patch.object(work.trees, "health", return_value=health), \
-                patch.object(agents, "git", return_value=SimpleNamespace(returncode=0 if merged else 1)), \
-                patch.object(agents, "committed", return_value=clean):
-            work.settle("worker-test", {"finish": "stop"})
-        return state.L["tasks"]["test"]["status"]
+    def test_a_transcript_ending_after_tool_calls_is_decided_by_the_receipt_alone(self):
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Queued one command")
+        self.end({"type": "step_start", "part": {"type": "step-start"}},
+                 {"type": "step_finish", "part": {"reason": "tool-calls"}}, code=1)
+        self.assertEqual(self.task["status"], "done")
 
-    def test_garden_batch_can_finish_with_other_leaves_still_yellow(self):
-        self.assertEqual(self.garden_run(["what/is/other.md"]), "done")
+    def test_an_unexpected_unit_death_requeues_the_task(self):
+        runs.follow("run-1", None, None)
+        self.assertEqual((self.task["status"], state.L["agents"]), ("waiting", {}))
 
-    def test_garden_reports_unresolved_selected_leaves_instead_of_looping(self):
-        self.assertEqual(self.garden_run(["what/is/selected.md"]), "done")
+    def test_runner_errors_are_diagnostics_on_the_retry(self):
+        with patch.object(opencode, "watch", side_effect=RuntimeError("serve failed")):
+            runs.follow("run-1", None, None)
+        self.assertEqual(self.task["status"], "waiting")
+        self.assertIn("RuntimeError: serve failed", self.task["note"])
+
+    def test_launch_failures_are_uncharged_bounded_and_held(self):
+        self.task["runs"] = 1
+        state.L["agents"]["run-1"]["engaged"] = False
+        self.end(code=1)
+        self.assertEqual((self.task["status"], self.task["runs"], self.task["launch_failures"]),
+                         ("waiting", 0, 1))
+        support.running(self.task, "run-2", worktree=False)
+        state.L["agents"]["run-2"]["engaged"] = False
+        self.end(code=1, agent="run-2")
+        self.assertEqual((self.task["status"], self.task["runs"], self.task["launch_failures"]),
+                         ("waiting", 0, 2))
+        self.assertEqual(self.task["admission_hold"], "repeated infrastructure launch failure")
+        self.assertIn("before reaching the model", state.L["alerts"][-1]["text"])
+
+    def test_first_gateway_admission_clears_launch_failures_in_the_reducer(self):
+        self.task["launch_failures"] = 1
+        state.L["agents"]["run-1"]["engaged"] = False
+        lifecycle.engaged("run-1")
+        self.assertTrue(state.L["agents"]["run-1"]["engaged"])
+        self.assertEqual(self.task["launch_failures"], 0)
+
+    def test_every_kind_shares_one_bounded_retry_limit(self):
+        limit = state.CONFIG["spawner"]["max_runs_per_task"]
+        for attempt in range(2, limit + 1):
+            runs.follow(f"run-{attempt - 1}", None, None)
+            self.assertEqual(self.task["status"], "waiting")
+            support.running(self.task, f"run-{attempt}", worktree=False)
+        runs.follow(f"run-{limit}", None, None)
+        self.assertEqual((self.task["status"], len(state.L["alerts"])), ("failed", 1))
+
+    def test_a_session_learned_by_the_observer_belongs_to_the_current_run_only(self):
+        runs.observed("run-1", "session", "session-a")
+        self.assertEqual(self.task["session"], "session-a")
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        runs.observed("run-1", "session", "session-b")
+        self.assertEqual(self.task["session"], "session-a")
+
+    # ------------------------------------------------ receipts
+
+    def test_a_lost_reply_retry_returns_the_recorded_receipt(self):
+        first = lifecycle.submit(self.task["id"], "run-1", "complete", "Clean finding")
+        self.assertIs(lifecycle.submit(self.task["id"], "run-1", "complete", "Clean finding"), first)
+        with self.assertRaisesRegex(ValueError, "different completion receipt"):
+            lifecycle.submit(self.task["id"], "run-1", "blocked", "Clean finding")
+
+    def test_a_stale_run_cannot_submit_or_disturb_a_newer_run(self):
+        lifecycle.stop("run-1", "silent too long", requeue=True)
+        support.running(self.task, "run-2", worktree=False)
+        with self.assertRaisesRegex(ValueError, "only its current run"):
+            lifecycle.submit(self.task["id"], "run-1", "complete", "Late summary")
+        state.L["agents"]["run-1"] = {**state.L["agents"]["run-2"], "id": "run-1"}  # its late exit report
+        lifecycle.ended("run-1", {"finish": "stop", "code": 0})
+        self.assertEqual((self.task["status"], self.task["agent"]), ("running", "run-2"))
+        self.assertNotIn("run-1", state.L["agents"])
+
+    def test_a_directed_stop_after_the_receipt_does_not_requeue(self):
+        lifecycle.submit(self.task["id"], "run-1", "blocked", "David must choose the boundary")
+        lifecycle.stop("run-1", "stopped by David", requeue=True, charge=False)
+        self.assertEqual((self.task["status"], self.task["runs"], self.task["receipt"]["disposition"]), ("done", 1, "blocked"))
+        self.assertIn("David must choose the boundary", state.L["alerts"][-1]["text"])
+
+    def test_a_directed_stop_before_the_receipt_is_uncharged(self):
+        lifecycle.stop("run-1", "system halted", requeue=True, charge=False)
+        self.assertEqual((self.task["status"], self.task["runs"]), ("waiting", 0))
+
+    def test_killing_a_run_never_decides_its_task_failed(self):
+        api.kill_agent({"agent": "run-1"})
+        self.assertEqual((self.task["status"], self.task["runs"], self.task["receipt"]), ("waiting", 0, None))
+        self.assertNotIn("run-1", state.L["agents"])
+
+    def test_a_receipt_needs_its_kinds_disposition_and_a_summary(self):
+        with self.assertRaisesRegex(ValueError, "needs a summary"):
+            lifecycle.submit(self.task["id"], "run-1", "complete", " ")
+        with self.assertRaisesRegex(ValueError, "complete or blocked"):
+            lifecycle.submit(self.task["id"], "run-1", "returned", "No")
+        self.assertEqual(self.task["status"], "running")
+
+    # ------------------------------------------------ evidence by kind
+
+    def worker(self, report: str, commit=True) -> dict:
+        worker = support.running(support.queued(self.project, "parser"), "worker-1")
+        (Path(worker["worktree"]) / queues.REPORT).write_text(report)
+        if commit:
+            support.commit(worker["worktree"])
+        return worker
+
+    def test_a_worker_receipt_submits_its_committed_branch_for_review(self):
+        worker = self.worker("Status: done\n\nParser exists.\n")
+        receipt = lifecycle.submit(worker["id"], "worker-1", "complete", "Parser exists")
+        self.assertEqual(worker["status"], "review")
+        self.assertEqual(receipt["evidence"], {"commit": support.git.head(worker["worktree"]), "report": "done"})
+        lifecycle.release("worker-1", "run ended")
+        self.assertTrue(Path(worker["worktree"]).is_dir(), "the integrator still needs the worker's branch")
+
+    def test_a_blocked_worker_is_reviewed_too(self):
+        worker = self.worker("Status: blocked\n\nNeeds decomposition: split.\n")
+        lifecycle.submit(worker["id"], "worker-1", "blocked", "Needs decomposition")
+        self.assertEqual(worker["status"], "review")
+
+    def test_a_worker_receipt_must_match_one_committed_report(self):
+        worker = self.worker("Status: done\n")
+        with self.assertRaisesRegex(ValueError, "Status: blocked"):
+            lifecycle.submit(worker["id"], "worker-1", "blocked", "Stuck")
+        (Path(worker["worktree"]) / queues.REPORT).write_text("Status: in progress\n")
+        support.commit(worker["worktree"])
+        with self.assertRaisesRegex(ValueError, "Status: done"):
+            lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
+        self.assertEqual((worker["status"], worker["receipt"]), ("running", None))
+
+    def test_an_uncommitted_worker_cannot_finish(self):
+        worker = self.worker("Status: done\n", commit=False)
+        with self.assertRaisesRegex(ValueError, "commit"):
+            lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
+
+    def gardener(self, pending: list[str]) -> dict:
+        tree = {"name": "p", "path": self.project["path"], "main_branch": "main", "tree": ".knowledge"}
+        self.enterContext(patch.dict(state.CONFIG, trees=[tree]))
+        health = {"leaves": [f"yellow\tlocal:{p}\tunverified" for p in pending], "brown": 0, "yellow": len(pending)}
+        self.enterContext(patch.object(trees, "health", return_value=health))
+        return support.running(tasks.create("garden", tree, "garden", "what/is/selected.md", [3]), "gardener-1")
+
+    def test_a_garden_batch_can_finish_with_other_leaves_still_yellow(self):
+        garden = self.gardener(["what/is/other.md"])
+        lifecycle.submit(garden["id"], "gardener-1", "complete", "Checked the batch")
+        self.assertEqual(garden["status"], "done")
+
+    def test_a_garden_reports_unresolved_selected_leaves_instead_of_looping(self):
+        garden = self.gardener(["what/is/selected.md"])
+        receipt = lifecycle.submit(garden["id"], "gardener-1", "complete", "Checked the batch")
+        self.assertEqual(receipt["evidence"]["unresolved"], ["what/is/selected.md"])
         self.assertIn("what/is/selected.md", state.L["alerts"][-1]["text"])
 
-    def test_garden_cannot_finish_without_landing(self):
-        self.assertEqual(self.garden_run([], merged=False), "waiting")
+    def test_a_garden_cannot_finish_without_landing_or_with_uncommitted_corrections(self):
+        garden = self.gardener([])
+        (Path(garden["worktree"]) / "leaf.md").write_text("corrected\n")
+        with self.assertRaisesRegex(ValueError, "commit"):
+            lifecycle.submit(garden["id"], "gardener-1", "complete", "Corrected")
+        support.commit(garden["worktree"])
+        with self.assertRaisesRegex(ValueError, "cointos merge"):
+            lifecycle.submit(garden["id"], "gardener-1", "complete", "Corrected")
+        support.git.run(self.project["path"], "merge", "--ff-only", garden["branch"])
+        lifecycle.submit(garden["id"], "gardener-1", "complete", "Corrected")
+        lifecycle.release("gardener-1", "run ended")
+        self.assertFalse(Path(garden["worktree"]).exists(), "a landed worktree is removed")
 
-    def test_garden_cannot_finish_with_uncommitted_corrections(self):
-        self.assertEqual(self.garden_run([], clean=False), "waiting")
+    def test_a_system_operator_needs_only_its_summary(self):
+        operator = support.running(tasks.request_operator("look", "Look.", None, None, None, None), "operator-1")
+        lifecycle.submit(operator["id"], "operator-1", "complete", "Restarted the viewer")
+        self.assertEqual(operator["status"], "done")
+
+    # ------------------------------------------------ integrators
+
+    def integration(self) -> tuple[dict, dict]:
+        worker = self.worker("Status: done\n")
+        lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
+        lifecycle.release("worker-1", "run ended")
+        integration = tasks.create("integrate", self.project, "integrate-parser", worker["brief"], [2],
+                                   item="parser", worker=worker["id"])
+        return support.running(integration, "integrator-1"), worker
+
+    def acceptance(self, worker, commit="main"):
+        return {"commit": commit, "worker_commit": worker["receipt"]["evidence"]["commit"], "via": "landing"}
+
+    def test_an_integrator_completes_only_through_a_landing(self):
+        integration, worker = self.integration()
+        with self.assertRaisesRegex(ValueError, "cointos land"):
+            lifecycle.submit(integration["id"], "integrator-1", "complete", "Looks good")
+        with self.assertRaisesRegex(ValueError, "not the one its receipt submitted"):
+            lifecycle.landed(integration, "integrator-1", worker, {**self.acceptance(worker), "worker_commit": "other"})
+        lifecycle.landed(integration, "integrator-1", worker, self.acceptance(worker))
+        self.assertEqual((worker["status"], integration["status"]), ("done", "done"))
+        self.assertEqual(integration["receipt"]["evidence"]["commit"], "main")
+        (Path(integration["worktree"]) / "note.md").write_text("an edit that never landed\n")
+        support.commit(integration["worktree"])
+        lifecycle.release("integrator-1", "run ended")
+        self.assertFalse(Path(worker["worktree"]).exists(), "an accepted worker's branch is discarded")
+        self.assertTrue(Path(integration["worktree"]).exists(), "an unlanded integration branch stays")
+
+    def test_a_landing_from_another_run_is_refused(self):
+        integration, worker = self.integration()
+        with self.assertRaisesRegex(ValueError, "only its current run"):
+            lifecycle.landed(integration, "integrator-0", worker, self.acceptance(worker))
+        self.assertEqual(worker["status"], "review")
+
+    def test_a_return_is_the_integrators_receipt(self):
+        integration, worker = self.integration()
+        lifecycle.returned(integration, "integrator-1", "Handle empty input")
+        lifecycle.returned(integration, "integrator-1", "Handle empty input")  # a lost reply is safe
+        self.assertEqual((worker["status"], worker["review"], worker["rejections"], worker["receipt"]),
+                         ("waiting", "Handle empty input", 1, None))
+        self.assertEqual((integration["status"], integration["receipt"]["disposition"]), ("done", "returned"))
+
+    def test_a_blocked_integrator_fails_its_worker_instead_of_respawning(self):
+        integration, worker = self.integration()
+        lifecycle.submit(integration["id"], "integrator-1", "blocked", "Main checkout is dirty")
+        self.assertEqual((integration["status"], worker["status"]), ("failed", "failed"))
+
+    # ------------------------------------------------ daemon replacement
+
+    def test_a_run_lost_in_a_daemon_replacement_waits_again(self):
+        state.L["agents"].clear()
+        with patch.object(opencode, "find_processes", return_value={}):
+            runs.adopt({})
+        self.assertEqual((self.task["status"], self.task["agent"]), ("waiting", None))
+
+    def test_a_run_that_outlived_the_daemon_is_followed_again(self):
+        previous = {"agents": dict(state.L["agents"])}
+        state.L["agents"].clear()
+        with patch.object(runs.keys, "recorded", return_value={"run-1": "key"}), \
+                patch.object(opencode, "active", return_value=True), \
+                patch.object(opencode, "find_processes", return_value={}), patch.object(runs.threading, "Thread") as thread:
+            runs.adopt(previous)
+        self.assertEqual((self.task["status"], list(state.L["agents"])), ("running", ["run-1"]))
+        thread.assert_called_once_with(target=runs.follow, args=("run-1", None, None), daemon=True)
+
+    def test_a_keyed_run_whose_unit_died_during_shutdown_is_orphaned_uncharged(self):
+        previous = {"agents": dict(state.L["agents"])}
+        before = self.task["runs"]
+        state.L["agents"].clear()
+        with patch.object(runs.keys, "recorded", return_value={"run-1": "key"}), \
+                patch.object(opencode, "active", return_value=False), \
+                patch.object(opencode, "find_processes", return_value={}):
+            runs.adopt(previous)
+        self.assertEqual((self.task["status"], self.task["agent"], self.task["runs"]),
+                         ("waiting", None, before))
 
 
 if __name__ == "__main__":

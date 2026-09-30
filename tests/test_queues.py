@@ -1,10 +1,8 @@
 import copy
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from cointos import queues, state, work, gateway
+from cointos import api, lifecycle, queues, spawner, state
+from tests import support
 
 
 def item(name, status="queued", depends=(), decompose=False):
@@ -54,70 +52,87 @@ class Readiness(unittest.TestCase):
 
 
 class Admission(unittest.TestCase):
-    """Index order is priority, and a worker's decomposition request dispatches a manager."""
+    """Queue order is priority, and a worker's decomposition request dispatches a manager."""
 
     def setUp(self):
-        previous = copy.deepcopy(state.L)
-        self.addCleanup(lambda: (state.L.clear(), state.L.update(previous)))
-        state.L.clear()
-        state.L.update(state.fresh({}))
-        self.path = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        project = {"name": "p", "path": str(self.path), "main_branch": "main"}
-        self.enterContext(patch.dict(work.CONFIG, projects=[project], trees=[]))
-        state.L["last_survey"]["p"] = state.now()
-        self.enterContext(patch.object(gateway, "save"))
-        self.enterContext(patch.object(queues, "publish"))
+        support.fresh_ledger(self)
+        support.quiet(self)
+        self.repo = support.repository(self)
+        self.project = support.project(self, self.repo)
+        state.L["cadence"]["steward:system"] = state.now()
 
-    def queue(self, *items):
-        for name, text in items:
-            record = item(name, queues.status(text), queues.depends(text), queues.needs_decomposition(text))
-            state.L["queue"][f"p:{record['item']}"] = dict(record, project="p", kind="queued", brief=text, hash=name, priority=len(state.L["queue"]))
+    def queue(self, *entries):
+        for name, brief, status, report in entries:
+            queues.add(self.project, "queued", name, brief)
+            if status != "queued":
+                queues.update("p", name, status, report)
 
     def test_the_first_entry_runs_first(self):
-        self.queue(("urgent", "Status: queued\n\nNow."), ("later", "Status: queued\n\nLater."))
-        self.assertEqual(work.next_task(), "p:what/is/the/queued/urgent.md")
+        self.queue(("urgent", "Now.", "queued", ""), ("later", "Later.", "queued", ""))
+        self.assertEqual(spawner.next_task()["id"], "p:urgent")
 
     def test_needs_decomposition_dispatches_a_manager_once(self):
-        self.queue(("big", "Status: blocked\n\nNeeds decomposition: split lexing from parsing."),
-                   ("after", "Status: queued\nDepends on: what/is/the/queued/big.md\n\nAfter."))
-        task = state.L["tasks"][work.next_task()]
-        self.assertEqual((task["kind"], task["role"], task["item"]), ("decompose", "manager", "what/is/the/queued/big.md"))
+        self.queue(("big", "Big.", "blocked", "Status: blocked\n\nNeeds decomposition: split lexing from parsing."),
+                   ("after", "Depends on: big\n\nAfter.", "queued", ""))
+        task = spawner.next_task()
+        self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("decompose", "manager", "big", "p:big"))
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
         task["status"] = "running"
-        self.assertIsNone(work.next_task())
+        self.assertIsNone(spawner.next_task())
 
     def test_api_queue_is_durable_on_restart_and_never_writes_project(self):
-        gateway.api("queue", {"project": "p", "kind": "queued", "name": "core", "brief": "Build core"})
-        gateway.api("queue", {"project": "p", "kind": "queued", "name": "ui", "brief": "Depends on: core\nBuild UI"})
-        self.assertEqual(list(self.path.iterdir()), [])
-        self.assertEqual(work.next_task(), "p:core")
-        state.L["tasks"]["p:core"]["status"] = "review"
-        self.assertEqual(work.next_task(), "p:integrate")
+        api.dispatch("queue", {"project": "p", "kind": "queued", "name": "core", "brief": "Build core"})
+        api.dispatch("queue", {"project": "p", "kind": "queued", "name": "ui", "brief": "Depends on: core\nBuild UI"})
+        self.assertEqual(support.git.run(self.repo, "status", "--porcelain"), "")
+        core = spawner.next_task()
+        self.assertEqual(core["id"], "p:core")
+        core["status"] = "review"
+        integration = spawner.next_task()
+        self.assertEqual((integration["id"], integration["worker"]), ("p:integrate-core-1", "p:core"))
         queues.update("p", "core", "done")
-        state.L["tasks"]["p:core"]["status"] = "done"
+        core["status"] = integration["status"] = "done"
         restored = state.fresh(copy.deepcopy(state.L))
         self.assertEqual(restored["queue"]["p:core"]["status"], "done")
-        state.L["tasks"]["p:integrate"]["status"] = "done"
-        self.assertEqual(work.next_task(), "p:ui")
+        self.assertEqual(spawner.next_task()["id"], "p:ui")
+
+    def test_acceptance_reconciles_a_stale_blocked_queue_record(self):
+        worker = support.queued(self.project, "stale")
+        queues.update("p", "stale", "blocked", "Status: blocked\n\nOld attempt")
+        worker.update(status="done", acceptance={"commit": "abc", "worker_commit": "def", "via": "landing"})
+        _, _, changed = spawner.refresh()
+        record = state.L["queue"]["p:stale"]
+        self.assertTrue(changed)
+        self.assertEqual((record["status"], record["commit"]), ("done", "abc"))
+        self.assertNotIn("report", record)
 
     def test_command_dispatch_and_retry_deduplication(self):
         body = {"project": "p", "kind": "command", "name": "plan", "brief": "Plan the next stage"}
-        gateway.api("queue", body)
-        gateway.api("queue", body)
+        api.dispatch("queue", body)
+        api.dispatch("queue", body)
         self.assertEqual(len(state.L["queue"]), 1)
-        task = state.L["tasks"][work.next_task()]
-        self.assertEqual((task["kind"], task["role"]), ("breakdown", "manager"))
+        task = spawner.next_task()
+        self.assertEqual((task["kind"], task["role"], task["stage"]), ("breakdown", "manager", None))
         self.assertNotIn("CointOS", task["worktree"])
 
-    def test_replacement_repoints_dependents(self):
-        p = work.CONFIG["projects"][0]
+    def test_replacement_repoints_dependents_and_the_receipt_retires_the_item(self):
         for name, brief in (("big", "Big"), ("after", "Depends on: big\nAfter"), ("small", "Small")):
-            queues.add(p, "queued", name, brief)
+            queues.add(self.project, "queued", name, brief)
         queues.update("p", "big", "blocked", "Status: blocked\nNeeds decomposition: split")
-        task = state.L["tasks"][work.next_task()]
-        gateway.api("replace", {"task": task["id"], "children": ["small"]})
+        task = spawner.next_task()
+        with self.assertRaisesRegex(ValueError, "running decomposition manager"):
+            api.dispatch("replace", {"task": task["id"], "run": "someone", "children": ["small"]})
+        support.running(task, "manager-1")
+        api.dispatch("replace", {"task": task["id"], "run": "manager-1", "children": ["small"]})
         self.assertEqual(state.L["queue"]["p:after"]["depends"], ["small"])
-        self.assertEqual(queues.landed(p), {"big"})
+        self.assertEqual(queues.landed(self.project), set(), "replaced, not settled")
+        lifecycle.submit(task["id"], "manager-1", "complete", "Split into small")
+        self.assertEqual(queues.landed(self.project), {"big"})
+
+    def test_clear_history_keeps_only_terminal_records_needed_by_live_work(self):
+        self.queue(("old", "Old.", "done", ""), ("needed", "Needed.", "done", ""),
+                   ("next", "Depends on: needed\n\nNext.", "queued", ""), ("dead", "No replacement.", "blocked", ""))
+        self.assertEqual(set(queues.clear_history(set())), {"p:old", "p:dead"})
+        self.assertEqual(set(state.L["queue"]), {"p:needed", "p:next"})
 
 
 if __name__ == "__main__":

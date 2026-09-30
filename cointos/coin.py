@@ -7,19 +7,17 @@ the daemon's API and the kt tools. Alerts from the daemon are forwarded as they 
 from __future__ import annotations
 
 import json
-import os
 import queue
 import re
-import subprocess
 import threading
 import time
 import traceback
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from cointos import cli, config as configuration, kt_mcp
+from cointos.client import Unreachable, call, ledger
 from cointos.config import KEYS, ROOT, STATE
 
 CONFIG = configuration.load()
@@ -102,8 +100,8 @@ def complete(model: str, messages: list[dict], timeout: float, **options) -> dic
 
 def live_summary() -> str:
     try:
-        state = cli.call()
-    except (OSError, urllib.error.URLError):
+        state = ledger()
+    except Unreachable:
         return "The CointOS daemon is not reachable right now (it may be halted or restarting)."
     agents = [f"{a['id']} {a['state']} on {a['place']}: {a['title']}" for a in state["agents"].values()]
     tasks = sorted(state["tasks"].values(), key=lambda t: t["updated_at"], reverse=True)[:8]
@@ -115,37 +113,38 @@ def live_summary() -> str:
         f"Models: {', '.join(models)}. Memory headroom: {memory.get('headroom_gb')} GB.",
         "Recent tasks: " + "; ".join(f"{t['place']}:{t['title']} {t['status']}" for t in tasks),
         "Self-check: " + ("green" if not failing else "failing: " + "; ".join(failing)),
-        "Configured projects: " + ", ".join(p["name"] for p in CONFIG["projects"]),
+        "Configured projects: " + ", ".join(p["name"] for p in state.get("projects", CONFIG["projects"])),
     ])
 
 
-def fast_reply(message: str, history: list[dict], summary: str) -> tuple[str, bool]:
-    """The front desk's immediate reply, and whether a deeper turn should follow."""
+def trim_fast_reply(text: str) -> str:
+    """Drop a final question from a multi-sentence front-desk reply."""
+    text = text.strip()
+    if text.endswith("?"):
+        boundaries = list(re.finditer(r"[.!?]\s+", text))
+        if boundaries:
+            text = text[:boundaries[-1].start() + 1]
+    return text
+
+
+def fast_reply(message: str, history: list[dict], summary: str) -> str:
+    """The front desk's immediate, brief reply. It cannot act: a deeper turn with tools follows
+    every message except a plain status request, and stays silent if this reply covered it."""
     system = (f"{ROLE}\n\nYou are Coin's front desk: reply at once, briefly. Live state now:\n{summary}\n\n"
-              "If the message is conversation, or the live state above answers it, answer it and set deeper "
-              "to false. If it asks for an action (queuing work, drafting an idea, stopping, halting or "
-              "restarting, editing knowledge) or needs careful thought or facts not shown above, set deeper to "
-              "true and only acknowledge in a few words (for example \"On it.\"): a deeper turn with tools "
-              "follows and does the work. You cannot act: never say that anything was done, queued, stopped, "
-              "halted or started.\n"
-              'Reply as JSON: {"reply": "<your message to David>", "deeper": true|false}.')
+              "If the message is conversation, or the live state above answers it, answer it. If it asks for an "
+              "action (queuing work, drafting an idea, stopping, halting or restarting, editing knowledge) or needs "
+              "careful thought or facts not shown above, only acknowledge in a few words (for example \"On it.\"): "
+              "a deeper turn with tools follows and does the work. You cannot act: never say that anything was done, "
+              "queued, stopped, halted or started.")
     try:
         answer = complete(CONFIG["front_model"], [{"role": "system", "content": system}, *history,
                                                   {"role": "user", "content": message}], timeout=SETTINGS["reply_seconds"],
-                          max_tokens=SETTINGS["reply_tokens"], temperature=0.4, response_format={"type": "json_object"},
+                          max_tokens=SETTINGS["reply_tokens"], temperature=0.4,
                           chat_template_kwargs={"enable_thinking": False})
     except (OSError, ValueError, KeyError, urllib.error.URLError):
         traceback.print_exc()
-        return "On it; give me a moment.", True
-    content = (answer.get("content") or "").strip()
-    found = re.search(r"\{.*\}", content, re.DOTALL)
-    try:
-        parsed = json.loads(found[0]) if found else {}
-    except ValueError:
-        parsed = {}
-    if not isinstance(parsed, dict) or not str(parsed.get("reply") or "").strip():
-        return content or "On it.", True
-    return str(parsed["reply"]).strip(), bool(parsed.get("deeper", True))
+        return "On it; give me a moment."
+    return trim_fast_reply(answer.get("content") or "") or "On it."
 
 
 # ---------------------------------------------------------------- deep turn
@@ -166,9 +165,37 @@ TOOLS = [
              "name": {"type": "string", "description": "a short name, a few words"},
              "brief": {"type": "string", "description": "the outcome wanted, where it lives, how to tell it is done"}},
          ["project", "kind", "name", "brief"]),
+    tool("hold_item", "Keep a queue item (PROJECT:ITEM) from starting while David decides; release=true lifts the hold.", {
+             "item": {"type": "string"}, "release": {"type": "boolean"}}, ["item"]),
+    tool("revise_item", "Change what a queue item (PROJECT:ITEM) asks for; its task restarts on the new brief.", {
+             "item": {"type": "string"}, "brief": {"type": "string", "description": "the complete revised brief"},
+             "reason": {"type": "string"}}, ["item", "brief", "reason"]),
+    tool("projects", "List projects registered with CointOS, including priority and enabled state."),
+    tool("project_add", "Register an existing Git repository with CointOS.", {
+             "path": {"type": "string"}, "name": {"type": "string"},
+             "main_branch": {"type": "string"}, "priority": {"type": "integer"},
+             "enabled": {"type": "boolean"}}, ["path"]),
+    tool("project_new", "Create a folder and Git repository, initialize its project knowledge tree, commit it, and register it with CointOS.", {
+             "name": {"type": "string"}, "path": {"type": "string"},
+             "main_branch": {"type": "string"}, "priority": {"type": "integer"},
+             "enabled": {"type": "boolean"}}, ["name"]),
+    tool("project_set", "Change a registered project's priority, enabled state or main branch.", {
+             "project": {"type": "string"}, "main_branch": {"type": "string"},
+             "priority": {"type": "integer"}, "enabled": {"type": "boolean"}}, ["project"]),
+    tool("project_remove", "Remove an idle project from CointOS without deleting its repository.", {
+             "project": {"type": "string"}}, ["project"]),
+    tool("run_agent", "Start one ad-hoc operator with explicit system/project scope, abilities, reasoning and budget.", {
+             "name": {"type": "string"}, "brief": {"type": "string"}, "project": {"type": "string"},
+             "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network"]}},
+             "reasoning_effort": {"type": "string", "enum": ["low", "medium", "xhigh"]},
+             "generation_seconds": {"type": "number"}, "generation_tokens": {"type": "integer"}},
+         ["name", "brief"]),
+    tool("scout", "Schedule the canonical system-wide loose-end scout now."),
     tool("pause_agents", "Stop running autonomous agents (their tasks are kept) and start no new ones."),
     tool("resume_agents", "Let autonomous agents run again."),
-    tool("stop_agent", "Stop one agent by id.", {"agent": {"type": "string"}}, ["agent"]),
+    tool("kill_agent", "Kill one run by agent id; preserve artifacts and hold unfinished work until explicitly resumed.",
+         {"agent": {"type": "string"}}, ["agent"]),
+    tool("resume_task", "Release a killed task for scheduling.", {"task": {"type": "string"}}, ["task"]),
     tool("halt", "Halt CointOS: stop the daemon and all agents and unload the models. Coin stays up."),
     tool("start", "Start CointOS again after a halt (or if it is down)."),
     tool("reply", "Finish this turn by sending David a message with new information: a result, an action "
@@ -178,27 +205,50 @@ TOOLS = [
 TERMINAL = {"reply", "finish_silently"}
 
 
-def capture(*argv) -> str:
-    result = subprocess.run([str(ROOT / "bin/cointos"), *argv], capture_output=True, text=True, timeout=CONFIG["timeouts"]["command_seconds"])
-    return (result.stdout + result.stderr).strip()
+def project_change(arguments: dict) -> dict:
+    changes = {key: arguments[key] for key in ("main_branch", "priority", "enabled") if arguments.get(key) is not None}
+    return call("project-set", {"project": arguments["project"], "settings": changes})
+
+
+def run_agent(arguments: dict) -> dict:
+    body = {key: arguments.get(key) for key in ("name", "brief", "project", "abilities", "reasoning_effort")}
+    body["budget"] = {key: arguments[key] for key in ("generation_seconds", "generation_tokens") if key in arguments} or None
+    return call("run-agent", body)
+
+
+def output(value: str) -> dict:
+    return {"ok": True, "output": value}
+
+
+# What each of Coin's own tools does; `reply` and `finish_silently` end the turn instead.
+EXECUTE = {
+    "status": lambda arguments: output(cli.status_text(ledger())),
+    "agents": lambda arguments: output(cli.agents_text(ledger())),
+    "jobs": lambda arguments: output(cli.jobs_text(ledger())),
+    "check": lambda arguments: output(cli.checks_text(ledger())[0]),
+    "queue_item": lambda arguments: call("queue", arguments),
+    "hold_item": lambda arguments: call("unhold" if arguments.get("release") else "hold", {"item": arguments["item"]}),
+    "revise_item": lambda arguments: call("revise", arguments),
+    "projects": lambda arguments: output(cli.projects_text(call("project-list")["projects"])),
+    "project_add": lambda arguments: call("project-add", arguments),
+    "project_new": lambda arguments: call("project-new", arguments),
+    "project_set": project_change,
+    "project_remove": lambda arguments: call("project-remove", arguments),
+    "run_agent": run_agent,
+    "scout": lambda arguments: call("scout"),
+    "pause_agents": lambda arguments: call("stop"),
+    "resume_agents": lambda arguments: call("go"),
+    "kill_agent": lambda arguments: call("kill-agent", arguments),
+    "resume_task": lambda arguments: call("resume-task", arguments),
+    "halt": lambda arguments: output(cli.halt(keep_coin=True)),
+    "start": lambda arguments: output(cli.up()),
+}
 
 
 def execute(name: str, arguments: dict) -> dict:
-    if name in ("status", "agents", "jobs", "check"):
-        return {"ok": True, "output": capture(name)}
-    if name == "queue_item":
-        return {"ok": True, **cli.call("queue", arguments)}
-    if name == "pause_agents":
-        return cli.call("stop")
-    if name == "resume_agents":
-        return cli.call("go")
-    if name == "stop_agent":
-        return cli.call("stop-agent", arguments)
-    if name == "halt":
-        return {"ok": True, "output": capture("halt", "--keep-coin")}
-    if name == "start":
-        return {"ok": True, "output": capture("up")}
-    return {"ok": False, "error": f"unknown tool {name}"}
+    if name not in EXECUTE:
+        return {"ok": False, "error": f"unknown tool {name}"}
+    return EXECUTE[name](arguments)
 
 
 def deep_turn(message: str, history: list[dict], first_reply: str, knowledge: dict | None) -> str | None:
@@ -230,10 +280,10 @@ def deep_turn(message: str, history: list[dict], first_reply: str, knowledge: di
                 return text or None
             messages.append({"role": "user", "content": "Finish with the `reply` or `finish_silently` tool."})
             continue
-        for call in calls:
-            name = call["function"]["name"]
+        for request in calls:
+            name = request["function"]["name"]
             try:
-                arguments = json.loads(call["function"].get("arguments") or "{}")
+                arguments = json.loads(request["function"].get("arguments") or "{}")
             except ValueError as error:
                 arguments, result = {}, {"ok": False, "error": f"invalid arguments: {error}"}
             else:
@@ -248,12 +298,10 @@ def deep_turn(message: str, history: list[dict], first_reply: str, knowledge: di
                     try:
                         result = (kt_mcp.call(knowledge, name, arguments) if knowledge and name in knowledge["names"]
                                   else execute(name, arguments))
-                    except SystemExit as error:  # cli.call reports API errors this way
-                        result = {"ok": False, "error": str(error)}
-                    except Exception as error:
+                    except Exception as error:  # a refusal or failure is a result the turn can use
                         result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
                     seen[signature] = result
-            messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "name": name,
+            messages.append({"role": "tool", "tool_call_id": request.get("id", ""), "name": name,
                              "content": json.dumps(result)[:20000]})
     return None
 
@@ -285,7 +333,7 @@ def alert_forwarder(token: str, allowed: set[int]) -> None:
     last = configuration.read_json(seen_path, None)
     while True:
         try:
-            alerts = cli.call()["alerts"]
+            alerts = ledger()["alerts"]
             if last is None:
                 last = max((a["id"] for a in alerts), default=0)
             fresh = [a for a in alerts if a["id"] > last]
@@ -324,28 +372,22 @@ def main() -> None:
                 continue
             history = recent(user)
             remember(user, "user", text)
-            if text.strip().lower() in ("/status", "status"):
-                reply, deeper = cli_text("status"), False
-            else:
-                reply, deeper = fast_reply(text, history, live_summary())
-            if reply:
-                remember(user, "assistant", reply)
-                try:
-                    send(token, chat, reply)
-                except Exception:
-                    traceback.print_exc()
-            # The front desk's own judgement of "deeper" is not trusted (a small model can claim an action
-            # it cannot take), so every message except a plain status request gets a deeper turn, which
-            # stays silent when the first reply already covered it.
-            if deeper or text.strip().lower() not in ("/status", "status"):
+            status_request = text.strip().lower() in ("/status", "status")
+            reply = status_text() if status_request else fast_reply(text, history, live_summary())
+            remember(user, "assistant", reply)
+            try:
+                send(token, chat, reply)
+            except Exception:
+                traceback.print_exc()
+            if not status_request:
                 turns.put((user, chat, text, history, reply))
 
 
-def cli_text(command: str) -> str:
+def status_text() -> str:
     try:
-        return capture(command)
-    except Exception as error:
-        return f"cointos {command} failed: {error}"
+        return cli.status_text(ledger())
+    except (Unreachable, ValueError) as error:
+        return f"cointos status failed: {error}"
 
 
 if __name__ == "__main__":

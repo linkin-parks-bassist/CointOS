@@ -2,7 +2,7 @@ import copy
 import unittest
 from unittest import mock
 
-from cointos import lanes, state
+from cointos import lanes, snapshots, state
 
 WORK = state.CONFIG["work_model"]
 
@@ -20,10 +20,10 @@ class Snapshots(unittest.TestCase):
         state.L["lanes"] = [lane for lane in state.L["lanes"] if lane["model"] == WORK][:1]
         state.L["tasks"]["t"] = {"id": "t", "status": "running"}
         self.forgotten = []
-        self.enterContext(mock.patch.object(lanes.BACKEND, "save", self.save))
-        self.enterContext(mock.patch.object(lanes.BACKEND, "forget", lambda config, name: self.forgotten.append(name)))
-        self.enterContext(mock.patch.object(lanes.BACKEND, "restore", lambda config, model, index, name: True))
-        self.enterContext(mock.patch.object(lanes, "make_room", lambda need: True))
+        self.enterContext(mock.patch.object(snapshots.BACKEND, "save", self.save))
+        self.enterContext(mock.patch.object(snapshots.BACKEND, "forget", lambda config, name: self.forgotten.append(name)))
+        self.enterContext(mock.patch.object(snapshots.BACKEND, "restore", lambda config, model, index, name: True))
+        self.enterContext(mock.patch.object(snapshots, "make_room", lambda need: True))
         self.while_saving = lambda: None
 
     def save(self, config, model, index, name):
@@ -32,25 +32,34 @@ class Snapshots(unittest.TestCase):
 
     def test_a_state_saved_as_its_task_ends_is_not_kept(self):
         self.while_saving = lambda: state.L["tasks"]["t"].update(status="done")
-        self.assertFalse(lanes.keep(0, [1, 2, 3], "t", "suspended"))
+        self.assertFalse(snapshots.keep(0, [1, 2, 3], "t", "suspended"))
         self.assertEqual(state.L["snapshots"], {})
         self.assertEqual(len(self.forgotten), 1)
 
     def test_a_state_saved_as_its_task_is_forgotten_is_not_kept(self):
         self.while_saving = lambda: state.L["tasks"].pop("t")
-        self.assertFalse(lanes.keep(0, [1, 2, 3], "t", "suspended"))
+        self.assertFalse(snapshots.keep(0, [1, 2, 3], "t", "suspended"))
         self.assertEqual(state.L["snapshots"], {})
 
     def test_coin_david_and_shared_starts_are_kept_without_tasks(self):
         for tokens, owner in enumerate(("coin", "user", "shared")):
-            self.assertTrue(lanes.keep(0, [tokens], owner, "checkpoint"))
+            self.assertTrue(snapshots.keep(0, [tokens], owner, "checkpoint"))
         self.assertEqual(sorted(s["owner"] for s in state.L["snapshots"].values()), ["coin", "shared", "user"])
+
+    def test_conversation_liveness_is_task_reachability_not_task_outcome(self):
+        self.assertTrue(snapshots.live("t"))
+        state.L["tasks"]["t"]["status"] = "review"
+        self.assertTrue(snapshots.live("t"), "reviewed work can be returned to this conversation")
+        state.L["tasks"]["t"]["status"] = "done"
+        self.assertFalse(snapshots.live("t"))
+        state.L["agents"]["run-1"] = {"task": "t"}
+        self.assertTrue(snapshots.live("t"), "a terminal task's surviving run can still issue a request")
 
     def test_orphaned_snapshots_are_forgotten_but_review_and_untasked_ones_kept(self):
         state.L["tasks"]["r"] = {"id": "r", "status": "review"}
         for name, owner in (("a", "gone"), ("b", "r"), ("c", "shared"), ("d", "coin"), ("e", "t")):
             state.L["snapshots"][name] = {"owner": owner}
-        lanes.forget_orphans()
+        snapshots.forget_orphans()
         self.assertEqual(sorted(state.L["snapshots"]), ["b", "c", "d", "e"])
         self.assertEqual(self.forgotten, ["a"])
 
