@@ -50,6 +50,7 @@ def settings(config: dict, key: str, task: dict, protected: list[str]) -> dict:
     abilities = set(task.get("abilities") or ["standard"])
     denied = DENIED_COMMANDS + ([] if "control" in abilities else LIFECYCLE_COMMANDS)
     network = "allow" if "network" in abilities else "deny"
+    private = {f"{path}/**": "deny" for path in private_paths()}
     return {
         "$schema": "https://opencode.ai/config.json",
         "model": f"{PROVIDER}/{work}",
@@ -68,13 +69,27 @@ def settings(config: dict, key: str, task: dict, protected: list[str]) -> dict:
         "permission": {
             "*": "allow", "webfetch": network, "websearch": network, "doom_loop": "deny",
             "bash": {"*": "allow", **{command: "deny" for command in denied}},
-            "external_directory": {"*": "deny", f"{home}/**": "allow", f"{home}/Avnet/**": "deny"},
-            "read": {"*": "allow", "*.env": "deny", f"{home}/Avnet/**": "deny"},
-            "edit": {"*": "allow", **{path: "deny" for path in protected}, f"{home}/Avnet/**": "deny"},
+            "external_directory": {"*": "deny", f"{home}/**": "allow", **private},
+            "read": {"*": "allow", "*.env": "deny", **private},
+            "edit": {"*": "allow", **{path: "deny" for path in protected}, **private},
         },
         "autoupdate": False, "share": "disabled",
     }
 
+
+
+PRIVATE_PATHS = Path("~/.config/cointos/private-paths").expanduser()
+
+
+def private_paths() -> list[str]:
+    """Directories no agent may read or edit, one per line in a machine-local file outside
+    every repository, so their names are never published with the source."""
+    try:
+        lines = PRIVATE_PATHS.read_text().splitlines()
+    except FileNotFoundError:
+        return []
+    return [str(Path(line.strip()).expanduser()).rstrip("/") for line in lines
+            if line.strip() and not line.lstrip().startswith("#")]
 
 def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protected: list[str]) -> None:
     """Start a run as its own systemd unit, outside the daemon, so that it outlives a daemon

@@ -22,6 +22,12 @@ or even having the daemon replaced underneath them.
   with bounded retries instead of loops.
 - **Stays inside a memory budget.** On unified-memory machines, a guard sheds cache, then
   background agents, then the work model before the desktop suffers.
+- **Thinks in knowledge trees.** CointOS is built on
+  [knowledgetrees](https://github.com/linkin-parks-bassist/knowledgetrees): every project, the
+  CointOS source and the installed runtime each keep a tree of short, current answers (orientation,
+  spec, plan, what is broken). Agents orient from them, managers keep the plan's frontier honest in
+  them, integrators update them as work lands, the runtime publishes its live queues into one, and
+  gardeners and tree auditors keep them verified.
 - **Tells you what is going on.** A live dashboard, a CLI, and a Telegram assistant ("Coin")
   over the same control API.
 
@@ -34,7 +40,8 @@ CointOS is a personal system built for one machine and is shared as-is. It expec
   localhost. The reference setup is a 128 GB unified-memory AMD workstation running
   Qwen3.8-27B for agents and Qwen3.5-4B for chat.
 - [OpenCode](https://opencode.ai) as the agent harness.
-- The `kt` knowledge-tree tool, which agents use for project orientation, specs and plans.
+- [knowledgetrees](https://github.com/linkin-parks-bassist/knowledgetrees) (`kt` and its MCP
+  server), which agents use for orientation, specs, plans and runtime state.
 
 Model names, lanes, memory sizes and paths live in `config/cointos.json`.
 
@@ -80,7 +87,8 @@ describing operation and the daemon-owned queues.
 Coin (Telegram) exposes the same project operations and can launch a bounded ad-hoc operator
 (`run_agent`; CLI `cointos agent run NAME BRIEF [--project P] [--reasoning-effort E]
 [--ability standard|control|network]...`). Abilities change real tool permissions; none
-grants sudo, package installation, systemd control, Git push or access to protected private data.
+grants sudo, package installation, systemd control, Git push or access to private directories.
+List those, one per line, in `~/.config/cointos/private-paths`; they are denied to every agent.
 
 ## Roles
 

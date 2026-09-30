@@ -306,8 +306,17 @@ def proposal(body: dict) -> dict:
 
 # ---------------------------------------------------------------- live views
 
+def interactive(command: str) -> None:
+    """Live views take over a terminal and never return; a captured shell (an agent's tool call)
+    would only collect escape codes until its timeout."""
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise SystemExit(f"`cointos {command}` is a live terminal view for a person; "
+                         "use `cointos agents`, `cointos jobs` or `cointos task` instead")
+
+
 def watch(agent_id: str | None) -> None:
     """Open OpenCode's live view of an agent's session (the first live agent if none is named)."""
+    interactive("watch")
     live = ledger()["agents"]
     if not live:
         raise SystemExit("no live agents")
@@ -322,6 +331,7 @@ def watch(agent_id: str | None) -> None:
 
 def view(slot: int) -> None:
     """A viewer window: show, live, whichever agent the daemon gives slot `slot`; idle between agents."""
+    interactive("view")
     def title(text):
         sys.stdout.write(f"\033]0;{text}\007")
         sys.stdout.flush()

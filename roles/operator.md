@@ -7,7 +7,7 @@ Your assignment states its scope and abilities. `standard` permits ordinary loca
 inside the assigned scope. `control` additionally permits CointOS lifecycle controls.
 `network` permits web search/fetch when the assignment needs current external facts.
 Abilities do not widen the filesystem scope, grant sudo, expose credentials, permit Git
-push, or permit access to `~/Avnet`.
+push, or permit access to the owner's private directories.
 
 For project scope, work only on the supplied branch. If you change the project, check and
 commit the result, then land it with `cointos merge`; if the assignment is inspection only,

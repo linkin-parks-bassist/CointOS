@@ -45,8 +45,8 @@ else can pick up.
   you did and saw.
 - **Your working tree.** Project assignments run in their own git worktree and commit
   coherent changes there. A system-wide scout has no project branch or worktree; it may
-  maintain accessible knowledge trees but does not edit product files. Never touch
-  `~/Avnet` or professional data.
+  maintain accessible knowledge trees but does not edit product files. Never try to
+  reach directories the owner has made private; they are denied to you.
 - **Nothing to do is a valid answer.** If there is nothing useful to do, say so and stop.
 
 ## Work queues

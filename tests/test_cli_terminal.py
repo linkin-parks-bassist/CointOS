@@ -36,3 +36,13 @@ class TerminalCommands(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LiveViews(unittest.TestCase):
+    def test_live_views_refuse_a_captured_shell(self):
+        for command in (["view", "0"], ["watch"]):
+            with patch("sys.stdin.isatty", return_value=False), patch("sys.stdout.isatty", return_value=False), \
+                    patch.object(cli, "ledger", side_effect=AssertionError("must refuse before reading state")):
+                with self.assertRaises(SystemExit) as refused:
+                    cli.main(command)
+                self.assertIn("live terminal view", str(refused.exception))

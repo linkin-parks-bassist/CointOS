@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T10:24:02+10:00"
+revised_at: "2026-10-01T07:43:45+10:00"
 ---
 
 CointOS is David's autonomous, local-first agent ecosystem. This repository on `rebuild/simple-core` is its source. `scripts/install` copies the runtime to `~/.CointOS`; `cointosd.service` and `cointos-coin.service` run there, and `~/.local/bin/cointos` points to its CLI. The installed runtime owns a separate globally readable knowledge tree explaining operation and publishing daemon-owned queues; its orientation and `what/is/cointos.md` are generated from this repository's `runtime/` sources during installation.
@@ -13,4 +13,4 @@ Read `what/is/cointos.md` for purpose, `how/to/keep/cointos/simple.md` for gover
 
 `what/` owns purpose, requirements, architecture, lifecycle, roles, machine/model facts, current defects and acceptance evidence. `how/` owns operating and development procedures, including Lemonade, Telegram, dashboard, manager dependency work, installation and inspection. `where/` owns this orientation and reusable-part locations. The canonical `why/`, `does/`, and `is/` branches currently have no direct answers; question phrases such as `how/does` and `how/is` are intentionally stored under the `how/` owner.
 
-The pre-rebuild installation and its legacy agent units are archived under `~/.local/share` and removed; its kt grant was revoked before the replacement runtime tree was registered. Lemonade is shared with other clients. `~/Avnet` and professional data must never reach a hosted model other than work-provided GitHub Copilot; hosted assistants working on CointOS never read it.
+The pre-rebuild installation and its legacy agent units are archived under `~/.local/share` and removed; its kt grant was revoked before the replacement runtime tree was registered. Lemonade is shared with other clients. This repository is intended to become public: it must not name private directories or employers. Directories agents must never reach are listed only in the machine-local `~/.config/cointos/private-paths`; the governing privacy rule is owned by the global tree (`where/must/professional/data/never/go.md`).

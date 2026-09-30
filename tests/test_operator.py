@@ -36,6 +36,20 @@ class OperatorTasks(unittest.TestCase):
         self.assertIn("cointos stop*", standard["bash"])
         self.assertNotIn("cointos stop*", powerful["bash"])
 
+    def test_private_directories_come_from_a_machine_local_file_and_survive_every_ability(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            listing = Path(tmp) / "private-paths"
+            listing.write_text("# comment\n\n/srv/secret/\n")
+            with patch.object(opencode, "PRIVATE_PATHS", listing):
+                for abilities in (["standard"], ["control", "network"]):
+                    permission = opencode.settings(state.CONFIG, "key", {"abilities": abilities}, [])["permission"]
+                    for kind in ("external_directory", "read", "edit"):
+                        self.assertEqual(permission[kind]["/srv/secret/**"], "deny")
+            with patch.object(opencode, "PRIVATE_PATHS", Path(tmp) / "absent"):
+                self.assertEqual(opencode.private_paths(), [])
+
     def test_invalid_ability_is_rejected_before_task_creation(self):
         with self.assertRaisesRegex(ValueError, "abilities"):
             tasks.request_operator("bad", "Brief", None, ["sudo"], None, None)

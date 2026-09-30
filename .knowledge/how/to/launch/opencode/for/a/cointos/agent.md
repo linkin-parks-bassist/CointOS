@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T10:48:50+10:00"
+revised_at: "2026-10-01T07:43:45+10:00"
 ---
 
 Agents are OpenCode sessions whose only model provider is the CointOS gateway. The installed binary is `~/.local/bin/opencode` 1.18.33. `cointos/opencode.py` owns per-run configuration, transient units, server/client supervision and event following; `runs.py` owns launch/adoption; `prompts.py` owns the launch message.
@@ -14,10 +14,11 @@ Each run gets a mode-0600 `state/agents/<id>/opencode.json` containing its gatew
 - the configured per-lane context limit and whole-reply `max_thought_tokens`;
 - knowledgetrees MCP enabled and other global MCP servers disabled;
 - sharing and autoupdate disabled;
-- broad work permission with web access, privilege/package management, systemd, Git push, lifecycle controls, secrets and `~/Avnet` denied unless the task carries an explicit ability that lifts the relevant CointOS denial;
+- broad work permission with web access, privilege/package management, systemd, Git push, lifecycle controls and secrets denied unless the task carries an explicit ability that lifts the relevant CointOS denial;
+- read, edit and external-directory denial for every directory listed in the machine-local, untracked `~/.config/cointos/private-paths` (one per line, `#` comments, `~` expanded; absent means none). No ability lifts it, and the source never names those directories;
 - edit-tool denial for protected test/harness paths on implementation work. Bash remains same-user capability; the landing gate, not OpenCode permission, enforces commit policy.
 
-Task reasoning effort is daemon metadata. The gateway pins it when rendering and enforces per-reply reasoning caps of 256/384/1,024 tokens for low/medium/xhigh, closing the think block on the same token history before answer/tool generation. Test-contract workers default medium; all others default low unless overridden. A changed effort applies to the next reply, not an already rendered thought.
+Task reasoning effort is daemon metadata. The gateway pins it when rendering and enforces per-reply reasoning caps of 256/384/1,024 tokens for low/medium/xhigh, closing the think block on the same token history before answer/tool generation. Test-contract workers and managers default medium; all others default low unless overridden. A changed effort applies to the next reply, not an already rendered thought.
 
 ## Stable task prefix
 
@@ -43,6 +44,6 @@ Generation time and generated tokens spend the task's run budget; prefill, lane 
 
 ## Inspection
 
-Run files live under `~/.CointOS/state/agents/<id>/`; OpenCode's provider log is `~/.local/share/opencode/log/opencode.log`. Use `cointos agents`, `cointos watch [AGENT]`, `cointos view --all|--off`, and `journalctl --user -u cointos-agent-<id>.service`. The daemon's bounded `state/events.jsonl` records lifecycle/gate/snapshot events without prompts.
+Run files live under `~/.CointOS/state/agents/<id>/`; OpenCode's provider log is `~/.local/share/opencode/log/opencode.log`. Use `cointos agents`, `cointos watch [AGENT]`, `cointos view --all|--off`, and `journalctl --user -u cointos-agent-<id>.service`. `cointos watch` and `cointos view N` are live terminal views that never return; they refuse to run unless stdin and stdout are terminals, so an agent's captured shell gets a pointer to `agents`/`jobs`/`task` instead of an endless stream of escape codes. The daemon's bounded `state/events.jsonl` records lifecycle/gate/snapshot events without prompts.
 
 OpenCode V2 remains deferred. Before replacing V1, an isolated exercise must preserve one supervised server/client unit per agent and prove plugin/MCP access, permissions, launch/attach, event parsing, delayed-first-byte handling, retry/stream-failure behavior and same-session resume. The GPU scheduler and Coin do not require redesign merely because the harness version changes.
