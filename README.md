@@ -1,12 +1,42 @@
 # CointOS
 
-David's autonomous, local-first agent ecosystem. One daemon, `cointosd`, owns the ledger,
-scheduling and every task's lifecycle. Agents are OpenCode sessions that work in independent
-project repositories and share pre-emptible GPU lanes on local models served by Lemonade /
-llama.cpp (Qwen3.8-27B for work, Qwen3.5-4B for Coin).
+**An operating system for local AI agents.** CointOS runs a small team of autonomous coding
+agents on a single workstation, entirely on local models. It treats the GPU the way a kernel
+treats a CPU: more agents than the hardware can serve at once take turns on pre-emptible model
+lanes, while their conversations, context caches and work survive being paused, swapped out,
+or even having the daemon replaced underneath them.
 
-Orientation lives in the knowledge tree: `kt where am i`, then `what/is/the/architecture/of/cointos.md`,
-`what/is/the/spec.md` and `what/is/the/plan.md`. Run checks with `python3 -m unittest discover`.
+![The CointOS dashboard: live agent cards, the work queue, GPU lanes and memory on one page](docs/dashboard.png)
+
+## What it does
+
+- **Schedules GPU time like CPU time.** A thought advances in bounded steps; between steps a
+  higher-priority conversation (a chat with you) pre-empts background work, and equal agents
+  share lanes by time slice. Saved KV-cache snapshots make switching back cheap.
+- **Runs a software pipeline, not a chatbot.** Managers break work into small staged items;
+  workers write adversarial test contracts first, then implementations on isolated branches;
+  integrators review and land through a gate that re-runs the protected tests on the exact
+  candidate. Stewards, test auditors and gardeners keep the projects and their knowledge honest.
+- **Owns every lifecycle.** An agent run only ends by submitting one receipt the daemon checks
+  against real artifacts. Crashes, budget exhaustion and restarts are recovered deliberately,
+  with bounded retries instead of loops.
+- **Stays inside a memory budget.** On unified-memory machines, a guard sheds cache, then
+  background agents, then the work model before the desktop suffers.
+- **Tells you what is going on.** A live dashboard, a CLI, and a Telegram assistant ("Coin")
+  over the same control API.
+
+## Requirements
+
+CointOS is a personal system built for one machine and is shared as-is. It expects:
+
+- Linux with systemd user services and Python 3.
+- [Lemonade](https://github.com/lemonade-sdk/lemonade) / llama.cpp serving GGUF models on
+  localhost. The reference setup is a 128 GB unified-memory AMD workstation running
+  Qwen3.8-27B for agents and Qwen3.5-4B for chat.
+- [OpenCode](https://opencode.ai) as the agent harness.
+- The `kt` knowledge-tree tool, which agents use for project orientation, specs and plans.
+
+Model names, lanes, memory sizes and paths live in `config/cointos.json`.
 
 ## Install and replace
 
@@ -50,7 +80,7 @@ describing operation and the daemon-owned queues.
 Coin (Telegram) exposes the same project operations and can launch a bounded ad-hoc operator
 (`run_agent`; CLI `cointos agent run NAME BRIEF [--project P] [--reasoning-effort E]
 [--ability standard|control|network]...`). Abilities change real tool permissions; none
-grants sudo, package installation, systemd control, Git push or access to Avnet/professional data.
+grants sudo, package installation, systemd control, Git push or access to protected private data.
 
 ## Roles
 
@@ -72,7 +102,7 @@ grants sudo, package installation, systemd control, Git push or access to Avnet/
 Every run ends with exactly one receipt the daemon checks against its artifacts:
 `cointos finish --complete "evidence"` or `--blocked "reason"`; an integrator's verified
 land/incorporate/return is its receipt. Process exit, finish markers and final text never
-complete a task. `cointos attention` raises an alert that Coin delivers to David.
+complete a task. `cointos attention` raises an alert that Coin delivers to the owner.
 
 ## Tests as contracts
 
@@ -107,7 +137,7 @@ changed underneath. Worker items with no branch artifact by 600 s or 12,000 toke
   most twice, then held with an alert.
 - `cointos kill AGENT` stops one run and holds its task until `cointos resume TASK`.
 - A failed worker item gets one automatic manager pass with its assignment and receipt evidence;
-  an unresolved or exhausted manager alerts David instead of looping.
+  an unresolved or exhausted manager alerts the owner instead of looping.
 - `cointos supersede`, `cointos incorporate` and `cointos clear-review` repair failed
   prerequisites, settle work already on main and withdraw stale infrastructure feedback.
 
@@ -121,8 +151,14 @@ costs re-reading. `state/events.jsonl` plus one rotated file keep bounded diagno
 
 ## Dashboard
 
-`http://127.0.0.1:4200`. A status strip (autonomy, agents, GPU lanes, queue, done, memory,
+`http://127.0.0.1:4200`, pictured above. A status strip (autonomy, agents, GPU lanes, queue, done, memory,
 self-checks) sits above two columns: live agent cards and Work (in progress, queue, waiting for
 the integrator, then folded **Done** and **Gave up**) on the left; Machine (GPU controls, lanes,
 memory breakdown, self-checks), Recently and Projects on the right. **Clear task history**
 removes terminal records no live work still references.
+
+## Development
+
+The repository's own knowledge tree (`.knowledge/`) is the design record: start with
+`kt where am i`, then `what/is/the/architecture/of/cointos.md`, `what/is/the/spec.md` and
+`what/is/the/plan.md`. Run the checks with `python3 -m unittest discover`.
