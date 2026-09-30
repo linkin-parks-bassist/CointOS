@@ -1,12 +1,12 @@
 ---
 status: green
-revised_at: "2026-10-01T07:44:06+10:00"
+revised_at: "2026-10-01T07:47:43+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
 
 1. **Prove automatic managerial recovery live:** integrator-confirmed worker blockers and exhausted worker retries must dispatch one manager pass without manual queueing or magic report wording; verify brief revision preserves unfinished work and an unresolved manager escalates without a loop.
-2. **Prepare the repository for public release (next repository change, agreed with David):** replace personal references to David with neutral wording ("the user"/"the owner") across roles, code, tests, runtime sources and this tree, and push for review before anything becomes public. Private directories are already out of the source. Before publishing, David chooses between rewriting Git history and publishing a fresh squashed repository, since past commits retain the old text. Also settle whether `master` replaces `rebuild/simple-core` as the CointOS tree's configured main branch (both currently point at the same commit).
+2. **Prepare the repository for public release (next repository change, agreed with David):** replace personal references to David with neutral wording ("the user"/"the owner") across roles, code, tests, runtime sources and this tree, and push for review before anything becomes public. Private directories are already out of the source. Before publishing, David chooses between rewriting Git history and publishing a fresh squashed repository, since past commits retain the old text.
 3. **At the next explicitly authorized reboot, prove the second-pass recovery fixes.** Verify complete-prefix warm disk reuse and that dead agent units return tasks to waiting without charging attempts. Do not reboot merely to test; the second-pass fixes are unit-covered.
 4. **When David authorizes the disruptive shape change, restore intended ambient capacity:** `max_agents=4`, two work-model lanes, `ctx_size=262144`, and intended gardening.
 5. **Close focused receipt/recovery paths live:** stale-run refusal against a newer active run, silence/loop handling, remaining exhaustion cases, ordinary process-death auto-resume and halt/up.

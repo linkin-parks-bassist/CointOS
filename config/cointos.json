@@ -91,7 +91,7 @@
       "name": "CointOS",
       "path": "~/Projects/CointOS",
       "tree": ".knowledge",
-      "main_branch": "rebuild/simple-core"
+      "main_branch": "master"
     }
   ],
   "garden": {
