@@ -28,6 +28,10 @@ class Metadata(unittest.TestCase):
         self.assertEqual(schema.default_effort(config, {"kind": "integrate", "stage": None}), "low")
         self.assertEqual(schema.default_effort(config, {"kind": "item", "stage": "implementation"}), "low")
         self.assertEqual(schema.default_effort(config, {"kind": "item", "stage": "test-contract"}), "medium")
+        managed = {"reasoning": {"default": "low", "manager": "medium"}}
+        self.assertEqual(schema.default_effort(managed, {"kind": "decompose", "stage": None}), "medium")
+        self.assertEqual(schema.default_effort(managed, {"kind": "breakdown", "stage": None}), "medium")
+        self.assertEqual(schema.default_effort(managed, {"kind": "item", "stage": "implementation"}), "low")
         self.assertEqual(schema.default_effort(config, {"kind": "item", "stage": "test-contract",
                                                          "reasoning_effort": "xhigh"}), "xhigh")
         with self.assertRaises(ValueError):

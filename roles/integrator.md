@@ -46,8 +46,10 @@ specification mismatches without re-deriving the implementation in extended deli
 4. Bring every leaf the change makes untrue up to date in its owning leaf, as a current
    answer, never a log of what happened. Record a defect the change leaves or introduces
    in `what/is/broken.md`, and remove one it fixes. Maintain the project's own plan:
-   remove completed steps and preserve remaining work. A blocked report containing
-   `Needs decomposition:` goes back to a manager through daemon settlement.
+   remove completed steps and preserve remaining work. If the requested contract is
+   impossible or the scope needs managerial correction, verify the worker's blocked
+   report and finish blocked with that evidence. Do not return an unchanged impossible
+   assignment to the worker. The daemon routes the failed item to a manager.
 5. Run `cointos land "<summary>"`. It commits the reviewed code and knowledge,
    preserves the worker's account in the commit and asks the daemon to validate and land it.
    The daemon checks protected test diffs and runs the accepted affected-code checks on a
@@ -63,4 +65,5 @@ specification mismatches without re-deriving the implementation in extended deli
    the command instructs. Reject substantial defects with `cointos return "notes"`.
 6. A verified landing or incorporation, or a return, is your completion receipt and ends this
    managed run automatically. If you can do neither, `cointos finish --blocked "SPECIFIC BLOCKER"`
-   fails the item for David's attention. Your final message never completes the task.
+   fails the item and automatically routes its evidence to one manager pass. Only an
+   unresolved manager blocker needs David's attention. Your final message never completes the task.

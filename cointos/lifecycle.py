@@ -50,8 +50,12 @@ def evidence(task: dict, disposition: str) -> dict:
         elif lands == "merge" and disposition == "complete" and not git.contains(where["path"], task["branch"],
                                                                                  where["main_branch"]):
             raise ValueError("land your committed branch with `cointos merge` before finishing")
-    if task["kind"] == "decompose" and disposition == "complete" and not task.get("replacements"):
-        raise ValueError("replace the oversized item with `cointos replace CHILD...` before finishing")
+    if task["kind"] == "decompose" and disposition == "complete":
+        record = queues.records().get(task["record"])
+        revised = record and record["hash"] != task["record_hash"] and (
+            record["status"] == "queued" or record.get("replaced_by"))
+        if not task.get("replacements") and not revised:
+            raise ValueError("revise the failed item or replace it with `cointos replace CHILD...` before finishing")
     if task["kind"] == "garden" and disposition == "complete":
         found.update(garden_health(task))
     return found
@@ -114,7 +118,7 @@ def _receive(task: dict, run: str | None, disposition: str, summary: str, found:
             _settle(worker, "failed", "could not be integrated: " + summary)
     else:
         _settle(task, "done", note, receipt=receipt, result=summary)
-    if disposition == "blocked":
+    if disposition == "blocked" and task["role"] not in ("worker", "integrator"):
         alert(f"{task['id']} blocked: {summary}")
     log("receipt", task=task["id"], run=run, disposition=disposition)
     return receipt
@@ -305,7 +309,8 @@ def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
 
 def fail(task: dict, reason: str) -> None:
     _settle(task, "failed", reason)
-    alert(f"Gave up on {task['title']} in {task['place']} after {task['runs']} runs: {reason}")
+    if task["role"] not in ("worker", "integrator"):
+        alert(f"Gave up on {task['title']} in {task['place']} after {task['runs']} runs: {reason}")
     if task["kind"] == "integrate" and L["tasks"][task["worker"]]["status"] == "review":
         _settle(L["tasks"][task["worker"]], "failed", "could not be integrated")
 
@@ -394,17 +399,24 @@ def project(task: dict) -> bool:
                 record.get("report") is not None or record.get("decompose")):
             return False
         queues.accepted(record["project"], record["item"], acceptance["commit"])
-    elif task["kind"] in ("item", "breakdown") and task["status"] == "failed":
-        if record["status"] != "queued" or task["record_hash"] != record["hash"]:
+    elif task["kind"] in ("item", "breakdown", "decompose") and task["status"] == "failed":
+        if task["record_hash"] != record["hash"] or (record["status"] != "queued" and task["kind"] != "decompose"):
             return False
+        report = (f"Assignment: {task['id']}\n\n{task['brief']}\n\n"
+                  f"Worker receipt: {receipt.get('summary', 'No completion receipt')}\n"
+                  f"Evidence: {receipt.get('evidence', {})}\n\n"
+                  f"Task failed: {task['note'] or 'run retries exhausted'}")
         queues.update(record["project"], record["item"], "blocked",
-                      "Task failed: " + (task["note"] or "run retries exhausted"))
+                      report, decompose=task["kind"] == "item")
     elif task["kind"] == "breakdown" and receipt and record["status"] == "queued":
         blocked = receipt["disposition"] == "blocked"
         queues.update(record["project"], record["item"], "blocked" if blocked else "done",
                       receipt["summary"] if blocked else "")
-    elif task["kind"] == "decompose" and receipt.get("disposition") == "complete" and record["status"] != "done":
+    elif (task["kind"] == "decompose" and receipt.get("disposition") == "complete"
+          and task["record_hash"] == record["hash"] and record["status"] != "done"):
         queues.update(record["project"], record["item"], "done")
+    elif task["kind"] == "decompose" and receipt.get("disposition") == "blocked" and task["record_hash"] == record["hash"]:
+        queues.update(record["project"], record["item"], "blocked", receipt["summary"])
     else:
         return False
     return True

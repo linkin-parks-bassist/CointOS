@@ -74,6 +74,7 @@ class Admission(unittest.TestCase):
     def test_needs_decomposition_dispatches_a_manager_once(self):
         self.queue(("big", "Big.", "blocked", "Status: blocked\n\nNeeds decomposition: split lexing from parsing."),
                    ("after", "Depends on: big\n\nAfter.", "queued", ""))
+        queues.update("p", "big", "blocked", "Split lexing from parsing", decompose=True)
         task = spawner.next_task()
         self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("decompose", "manager", "big", "p:big"))
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
@@ -117,7 +118,7 @@ class Admission(unittest.TestCase):
     def test_replacement_repoints_dependents_and_the_receipt_retires_the_item(self):
         for name, brief in (("big", "Big"), ("after", "Depends on: big\nAfter"), ("small", "Small")):
             queues.add(self.project, "queued", name, brief)
-        queues.update("p", "big", "blocked", "Status: blocked\nNeeds decomposition: split")
+        queues.update("p", "big", "blocked", "Split the scope", decompose=True)
         task = spawner.next_task()
         with self.assertRaisesRegex(ValueError, "running decomposition manager"):
             api.dispatch("replace", {"task": task["id"], "run": "someone", "children": ["small"]})

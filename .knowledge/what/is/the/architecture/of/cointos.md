@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T10:48:42+10:00"
+revised_at: "2026-10-01T06:43:04+10:00"
 ---
 
 # CointOS architecture
@@ -46,7 +46,7 @@ At each boundary:
 
 The server reports retained prompt state at each step. If it retained materially less than CointOS recorded, the backend raises `Lost` and the lane becomes cold instead of pretending its cache survived.
 
-Task reasoning effort is low, medium or xhigh. Test-contract workers default medium; others default low unless overridden. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`.
+Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`.
 
 ## Context and snapshot ownership
 
@@ -66,9 +66,9 @@ A run becomes assignment-engaged on its first admitted gateway thought. Exit bef
 
 Receipts are run-owned and idempotent. `cointos finish` handles ordinary roles; verified land/incorporate/return handles integrators. Evidence rules are data-driven: clean branch, report state, merged planning work or system summary as appropriate. Delivery acknowledgement is the process boundary that retires the exact run after the receipt has been printed/flushed.
 
-Ordinary death retains the OpenCode session. Directed `cointos kill` stops only the run, refunds its attempt and adds a durable task hold; only `cointos resume` releases it. Budget exhaustion may create a bounded fresh session with branch/files and a compact evidence packet, then fails for intervention. Hidden reasoning is never copied.
+Ordinary death retains the OpenCode session. Directed `cointos kill` stops only the run, refunds its attempt and adds a durable task hold; only `cointos resume` releases it. Budget exhaustion may create a bounded fresh session with branch/files and a compact evidence packet, then fails the assignment. A failed worker item automatically receives one bounded manager pass; an unresolved or exhausted manager escalates for intervention. Hidden reasoning is never copied.
 
-Queue state is derived from accepted/failed task state on every reconciliation. A queue item cannot be made done by deleting a leaf, moving a branch or ending a process.
+Queue state is derived from accepted/failed task state on every reconciliation. Failed worker items carry the assignment, worker receipt evidence and final failure into one manager recovery pass through the existing decomposition route. Report words do not control admission. Recovery managers may correct the brief or replace the work; their own blocked or exhausted outcome disables further automatic recovery for that unchanged failure. Manager admission does not depend on the failed assignment's prerequisite readiness, but explicit holds and project enablement still apply. Completing a manager revision does not accept the failed work or settle its revised queue record. A queue item cannot be made done by deleting a leaf, moving a branch or ending a process.
 
 ## Work construction and landing
 

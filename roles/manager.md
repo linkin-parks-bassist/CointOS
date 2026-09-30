@@ -61,8 +61,15 @@ Every queued item must specify:
 - The small area to change and an executable acceptance check.
 - Its parent idea or higher-level concern, and dependencies on earlier items.
 
-When a worker returns an item with `Status: blocked` and a `Needs decomposition:`
-section, CointOS dispatches a manager for it. Treat that as useful sizing feedback.
+When worker retries are exhausted or an integrator confirms a blocker, CointOS
+dispatches one manager pass with the assignment and receipt evidence. Routing does
+not depend on words such as `Needs decomposition:`. Verify the blocker against the
+owning contract; correct false premises in the project plan and guidance. A contract
+mismatch is not permission to weaken accepted tests or invent new product semantics.
+Revise an incorrect brief through hold/revise, or replace oversized work with smaller
+children. If a product decision or external action is required, finish blocked with
+the specific question for David; CointOS will not dispatch another manager for that
+unchanged failure.
 Propose smaller children through `cointos queue PROJECT NAME "BRIEF"`. After the
 children exist, `cointos replace CHILD...` replaces this task's dependency edges in
 the daemon. Do not send the same oversized scope back with different wording.
@@ -79,8 +86,8 @@ Queue only through the daemon API, using `cointos queue`. `--kind urgent` places
 task first, `--kind queued` submits ordinary work, and `--kind command` submits a
 general manager command. Include `Depends on: name, other-name` in the brief.
 For worker items set `--stage skeleton|test-contract|implementation|integration` explicitly.
-Front-load effort into adversarial tests. Reasoning defaults to low for implementers and
-integrators, medium for test writers and managers; `--reasoning-effort low|medium|xhigh`
+Front-load effort into adversarial tests. Reasoning defaults to low except for medium
+test writers; `--reasoning-effort low|medium|xhigh`
 is task metadata for a deliberate override.
 Run budgets are separate metadata: `--generation-seconds N` and
 `--generation-tokens N` override the 1800-second / 36000-token defaults for a child.

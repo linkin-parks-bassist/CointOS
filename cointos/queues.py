@@ -18,10 +18,6 @@ REPORT = ".work-report.md"
 RESERVED = ("garden", "tree-audit")
 RESERVED_PREFIXES = ("integrate-", "decompose-", "operator-", "loose-ends-", "test-audit-")
 
-def needs_decomposition(text: str) -> bool:
-    return status(text) == "blocked" and "needs decomposition:" in answer(text).lower()
-
-
 def answer(text: str) -> str:
     """A leaf's answer body, without front matter."""
     if text.startswith("---\n"):
@@ -61,7 +57,7 @@ def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
     """Each item's readiness from its `Depends on:` line: "ready" once every item it depends on
     has landed (`done`, item paths); "waiting" while any is still in the queue; otherwise the
     problem that keeps it from ever becoming ready (an unknown or blocked dependency, or a
-    cycle). A dependency blocked with `Needs decomposition:` keeps its dependents waiting: a
+    cycle). A blocked dependency awaiting its manager keeps its dependents waiting: a
     manager replaces it with smaller children and repoints them. Pure."""
     paths = {item["item"]: item for item in items}
     stems = {Path(item["item"]).stem: item["item"] for item in items}
@@ -169,9 +165,9 @@ def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=N
     record.update(status="queued", decompose=False, held_by=None, **revised)
 
 
-def update(project: str, item: str, status_value: str, report: str = "") -> None:
+def update(project: str, item: str, status_value: str, report: str = "", *, decompose: bool = False) -> None:
     record = records()[f"{project}:{item}"]
-    record.update(status=status_value, decompose=needs_decomposition(report))
+    record.update(status=status_value, decompose=decompose)
     if report:
         record["report"] = report
     record["hash"] = hashlib.sha256(repr(record).encode()).hexdigest()[:16]

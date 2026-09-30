@@ -18,26 +18,25 @@
 * { box-sizing: border-box; }
 body { margin: 0; color: var(--ink); font-size: 15px; line-height: 1.5; font-variant-numeric: tabular-nums;
   background: radial-gradient(circle at 88% 5%, #ffd8d8, transparent 25%), var(--bg); min-height: 100vh; }
-main { max-width: 1600px; margin: auto; padding: 26px 16px 60px; }
+main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .topline { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; flex-wrap: wrap;
   border-bottom: 2px solid var(--dark); padding-bottom: 14px; }
 .mark { margin: 0; font-size: clamp(40px, 5vw, 64px); line-height: .92; letter-spacing: -.07em; font-weight: 900; }
 .mark em { font-style: normal; color: var(--accent-bright); }
-.scheduler-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px 32px; margin: 14px 0; }
-.scheduler-control { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.scheduler-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin: 4px 0 14px; }
+.scheduler-control { display: grid; gap: 3px; }
+.scheduler-control label { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
+.scheduler-control small { font-size: 11px; line-height: 1.3; }
 .scheduler-control select { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); padding: 6px 10px; }
 .scheduler-control small { color: var(--ink-faint); }
 .stamp { color: var(--ink-faint); font-size: 13px; }
-.summary { margin: 16px 0 0; font-size: clamp(17px, 2vw, 22px); line-height: 1.35; color: var(--ink-soft); }
-.summary b { color: var(--ink); font-weight: 900; }
-.dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 10px;
-  background: var(--ink); border: 2px solid var(--dark); vertical-align: 1px; }
-.dot.bad { background: var(--accent-bright); }
 .alert { margin-top: 18px; padding: 13px 18px; border-left: 5px solid var(--accent-bright); background: var(--accent-wash); }
 .alert:empty { display: none; }
-.agents { margin-top: 26px; display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); --capacity: 1; }
-@media (min-width: 700px) { .agents { --capacity: 2; } }
-@media (min-width: 1100px) { .agents { --capacity: 3; } }
+.agents { display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); --capacity: 1; }
+/* Cards pair up once the agents column itself is wide enough, whatever the window does. */
+#agents { container-type: inline-size; }
+@container (min-width: 640px) { .agents { --capacity: 2; } }
+@container (min-width: 1250px) { .agents { --capacity: 3; } }
 .agent { --c: var(--accent-bright); position: relative; background: var(--dark); color: var(--dark-text); border: 2px solid var(--dark); box-shadow: 7px 7px 0 var(--pink-shadow);
   padding: 18px 20px 11px; display: grid; grid-template-columns: 18px 1fr auto; gap: 4px 14px; min-width: 0; }
 /* The agent's state, as a flat square: solid (and slowly pulsing) while the model works for it,
@@ -72,11 +71,29 @@ main { max-width: 1600px; margin: auto; padding: 26px 16px 60px; }
 /* Along the card's bottom edge, out of the layout: showing it moves nothing. */
 .agent .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--dark-2); }
 .agent .progress span { display: block; height: 100%; background: var(--c); transition: width 1.5s linear; }
-.empty { margin-top: 26px; padding: 26px; border: 2px dashed var(--line); color: var(--ink-soft); font-size: 18px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 20px; margin-top: 34px; }
-.panel { border: 1px solid var(--line); background: var(--paper); box-shadow: 4px 4px 0 var(--shadow); padding: 20px 22px; min-width: 0; }
-.panel.wide { grid-column: 1 / -1; }
-h2 { font-size: clamp(24px, 2.6vw, 30px); line-height: 1; letter-spacing: -.055em; margin: 0 0 12px; font-weight: 900; }
+.empty { padding: 26px; border: 2px dashed var(--line); color: var(--ink-soft); font-size: 18px; }
+/* Two columns: what agents are doing and what waits for them; beside it, the machine they share. */
+.cols { display: grid; gap: 22px; margin-top: 22px; align-items: start; }
+.col-main, .col-side { display: grid; gap: 22px; min-width: 0; align-content: start; }
+@media (min-width: 1100px) {
+  .cols { grid-template-columns: minmax(0, 1.7fr) minmax(360px, 1fr); }
+  .col-side { position: sticky; top: 14px; max-height: calc(100vh - 28px); overflow: auto; padding: 0 8px 8px 0; }
+}
+/* The whole system at a glance. */
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 18px; }
+.tile { background: var(--paper); border: 1px solid var(--line); box-shadow: 3px 3px 0 var(--shadow); padding: 10px 14px 9px; min-width: 0; }
+.tile span { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
+.tile b { display: block; font: 900 28px/1.05 ui-sans-serif, system-ui, sans-serif; letter-spacing: -.05em; margin: 3px 0 1px; }
+.tile small { display: block; font-size: 12px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile.dark { background: var(--dark); border-color: var(--dark); color: var(--dark-text); box-shadow: 3px 3px 0 var(--pink-shadow); }
+.tile.dark span, .tile.dark small { color: var(--dark-soft); } .tile.dark b { color: var(--accent-bright); }
+.tile.bad { background: var(--accent-wash); border-color: var(--accent); } .tile.bad b { color: var(--accent); }
+.tile .meter { height: 5px; margin-top: 6px; background: var(--line-soft); } .tile .meter i { display: block; height: 100%; background: var(--accent); transition: width 1s; }
+.panel { border: 1px solid var(--line); background: var(--paper); box-shadow: 4px 4px 0 var(--shadow); padding: 16px 18px; min-width: 0; }
+.fold > summary { cursor: pointer; list-style: none; } .fold > summary::-webkit-details-marker { display: none; }
+.fold > summary h2 { display: inline; } .fold > summary::after { content: " ▸"; color: var(--accent); font-weight: 900; }
+.fold[open] > summary::after { content: " ▾"; } .fold[open] > summary { margin-bottom: 10px; }
+h2 { font-size: clamp(21px, 2vw, 25px); line-height: 1; letter-spacing: -.055em; margin: 0 0 12px; font-weight: 900; }
 .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .panel-heading h2 { margin-bottom: 12px; }
 .scout-control { display: flex; align-items: center; gap: 10px; margin-left: auto; }
@@ -104,29 +121,35 @@ h2 { font-size: clamp(24px, 2.6vw, 30px); line-height: 1; letter-spacing: -.055e
 .project-fields input, .project-fields select { min-width: 0; width: 100%; font: inherit; padding: 6px 8px;
   color: var(--ink); background: var(--paper); border: 1px solid var(--line); }
 @media (max-width: 900px) { .project-row, .project-fields { grid-template-columns: 1fr; } .project-controls { justify-content: flex-start; } }
-h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-faint); margin: 18px 0 4px; }
-.row { display: grid; grid-template-columns: 5px 1fr auto; gap: 2px 12px; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+.col-side .project-row { grid-template-columns: 1fr; gap: 4px; } .col-side .project-controls { justify-content: flex-start; }
+.col-side .project-fields { grid-template-columns: 1fr 1fr; }
+h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); margin: 14px 0 3px; }
+.row { display: grid; grid-template-columns: 5px 1fr auto; gap: 1px 12px; padding: 7px 0; border-top: 1px solid var(--line-soft); }
 .row .bar { grid-row: 1 / 3; background: var(--line-soft); border: 1px solid var(--dark); }
 .row.running .bar { background: var(--accent-bright); } .row.done .bar { background: var(--ink-faint); }
 .row.failed .bar { background: var(--accent); }
 .row .who { font-weight: 900; letter-spacing: -.02em; overflow-wrap: anywhere; }
-.row .state { font-size: 14px; color: var(--ink-soft); text-align: right; }
+.row .state { font-size: 13px; color: var(--ink-soft); text-align: right; }
 .row .meta { grid-column: 2 / 4; font-size: 13px; color: var(--ink-faint); overflow-wrap: anywhere; }
 .muted { color: var(--ink-faint); }
 .chip { font-size: 12px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 20px; background: var(--bg); }
 .chip.held { background: var(--accent-wash); border-color: var(--accent); color: var(--accent); font-weight: 700; }
-.machine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px 40px; }
-.lane-row { display: grid; grid-template-columns: 130px 56px 1fr; align-items: center; gap: 8px; padding: 6px 0;
+.machine-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 6px 32px; }
+.lane-row { display: grid; grid-template-columns: 12px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 5px 0;
   border-top: 1px solid var(--line-soft); font-size: 14px; }
 .lane-row:first-of-type { border-top: 0; }
-.lane-row .name { font-weight: 900; }
-.lane-row .chip { justify-self: start; }
-.mem { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-top: 4px; }
-.donut { width: 160px; height: 160px; flex: none; }
-.donut .seg { transition: opacity .15s; cursor: default; }
-.donut text { text-anchor: middle; fill: var(--ink); font-family: inherit; }
-.donut .big { font-size: 20px; font-weight: 900; letter-spacing: -.03em; } .donut .small { font-size: 11px; fill: var(--ink-faint); }
-.legend { display: grid; gap: 4px; font-size: 14px; min-width: 240px; flex: 1; }
+.lane-row .name { font-weight: 900; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A lane as a square: filled while an agent holds it, outlined while free, faint while down. */
+.lane-row .sq { width: 12px; height: 12px; border: 2px solid var(--dark); }
+.lane-row.held .sq { background: var(--accent-bright); animation: pulse 2.4s ease-in-out infinite; }
+.lane-row.down .sq { border-color: var(--line-soft); }
+.memhead { display: flex; align-items: baseline; gap: 8px; }
+.memhead b { font: 900 26px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: -.05em; }
+.memhead span { color: var(--ink-faint); font-size: 13px; }
+.membar { display: flex; gap: 2px; height: 24px; margin: 8px 0 10px; padding: 2px; border: 2px solid var(--dark);
+  background: var(--paper); box-shadow: 3px 3px 0 var(--shadow); }
+.membar .seg { height: 100%; min-width: 0; transition: width 1s, opacity .15s; }
+.legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 1px 16px; font-size: 13px; }
 .legend .item { display: grid; grid-template-columns: 12px 1fr auto 40px; align-items: center; gap: 8px; padding: 2px 4px; }
 .legend .item.on { background: var(--accent-wash); }
 .legend i { width: 12px; height: 12px; border-radius: 2px; }
@@ -140,7 +163,7 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .done summary { cursor: pointer; list-style: none; } .done summary::-webkit-details-marker { display: none; }
 .done summary h3 { display: inline-block; } .done summary h3::before { content: "▸ "; } .done[open] summary h3::before { content: "▾ "; }
 .done-list { max-height: 420px; overflow: auto; }
-.history { font-size: 13px; max-height: 360px; overflow: auto; }
+.history { font-size: 13px; max-height: 320px; overflow: auto; }
 .history div { display: flex; gap: 12px; padding: 4px 0; border-top: 1px solid var(--line-soft); }
 .history .when { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
 .history .what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -150,11 +173,20 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 <body>
 <main>
   <div class="topline"><h1 class="mark">Coint<em>OS</em></h1><span class="stamp" id="stamp">connecting…</span></div>
-  <p class="summary" id="summary"></p>
+  <div class="strip" id="strip"></div>
   <div class="alert" id="alert"></div>
+  <div class="cols">
+  <div class="col-main">
   <div id="agents"></div>
-  <div class="grid">
-    <section class="panel wide machine"><h2>Machine</h2>
+    <section class="panel"><div class="panel-heading"><h2>Work</h2>
+      <div class="scout-control"><small id="scout-status" role="status" aria-live="polite"></small><button id="scout-now" type="button">Spawn scout</button></div>
+    </div><div id="work"></div>
+      <details class="done" id="done"><summary><h3>Done <span id="done-count"></span></h3></summary><div class="done-list" id="done-list"></div></details>
+      <details class="done" id="failed"><summary><h3>Gave up <span id="failed-count"></span></h3></summary><div class="done-list" id="failed-list"></div></details>
+      <div class="scout-control"><button id="clear-task-history" type="button">Clear task history</button><small id="clear-task-status" role="status" aria-live="polite"></small></div></section>
+  </div>
+  <aside class="col-side">
+    <section class="panel machine"><h2>Machine</h2>
       <div class="scheduler-controls">
       <div class="scheduler-control"><label for="slice">GPU time slice</label>
         <select id="slice" disabled aria-describedby="slice-status">
@@ -173,7 +205,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
       </div>
       </div><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
       <div id="checks"></div></section>
-    <section class="panel wide"><h2>Projects</h2><div class="project-list" id="projects"></div>
+    <section class="panel"><h2>Recently</h2><div class="history" id="history"></div></section>
+    <section class="panel"><details class="fold"><summary><h2>Projects</h2></summary><div class="project-list" id="projects"></div>
       <details class="project-form"><summary>Add or create project</summary>
         <div class="project-fields">
           <label>Action<select id="project-action"><option value="add">Add existing</option><option value="new">Create new</option></select></label>
@@ -182,14 +215,8 @@ h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
           <label>Priority <input id="project-priority" type="number" value="100"></label>
           <button id="project-submit" type="button">Add project</button>
         </div><small id="project-status" role="status" aria-live="polite"></small>
-      </details></section>
-    <section class="panel wide"><div class="panel-heading"><h2>Work</h2>
-      <div class="scout-control"><small id="scout-status" role="status" aria-live="polite"></small><button id="scout-now" type="button">Spawn scout</button></div>
-    </div><div id="work"></div>
-      <details class="done" id="failed"><summary><h3>Gave up <span id="failed-count"></span></h3></summary><div class="done-list" id="failed-list"></div></details>
-      <details class="done" id="done"><summary><h3>Done <span id="done-count"></span></h3></summary><div class="done-list" id="done-list"></div></details>
-      <div class="scout-control"><button id="clear-task-history" type="button">Clear task history</button><small id="clear-task-status" role="status" aria-live="polite"></small></div></section>
-    <section class="panel wide"><h2>Recently</h2><div class="history" id="history"></div></section>
+      </details></details></section>
+  </aside>
   </div>
 </main>
 <script>
@@ -354,8 +381,7 @@ function renderWork(L) {
     const queueSection = status === "review" ? `<h3>Queue</h3>${queueRows || '<p class="muted">No queued tasks.</p>'}` : "";
     const some = tasks.filter(t => t.status === status && !queuedIds.has(t.id));
     return queueSection + (some.length ? `<h3>${title}</h3>` + rows(status, some) : "");
-  }).join("") + (L.incidents?.length ? `<h3>Needs diagnosis</h3>` + L.incidents.map(i =>
-    `<p class="muted">${esc(i.task)} · ${esc(i.reason)}</p>`).join("") : ""));
+  }).join(""));
   const done = tasks.filter(t => t.status === "done");
   const failed = tasks.filter(t => t.status === "failed");
   $("done").style.display = done.length ? "" : "none";
@@ -412,7 +438,8 @@ function renderMachine(L) {
       const holder = L.thoughts[l.holder];
       const who = holder ? `<span class="chip held">${esc(holder.agent)}</span>`
         : `<span class="muted">${m.up ? "free" : m.launching ? "launching" : "down"}</span>`;
-      return `<div class="lane-row"><span class="name">${esc(short(name))}</span><span class="muted">lane ${l.index}</span>${who}</div>`;
+      return `<div class="lane-row ${holder ? "held" : m.up ? "" : "down"}"><span class="sq"></span><span class="name">${esc(short(name))}</span>` +
+        `<span class="muted">lane ${l.index}</span>${who}</div>`;
     }).join("")).join("");
   renderMemory({memory: L.memory, models: L.models, model_memory: L.model_memory, guard: L.guard,
                 saved_bytes: Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0)});
@@ -439,24 +466,22 @@ function renderMemory(M) {
   const free = Math.max(0, physical - system - weights - kv - saved);
   const values = [system, weights, kv, saved, free];
   MEMORY_PARTS = MEMORY_COLOURS.map(([name, colour], i) => [name, values[i], colour]);
-  if (!$("donut")) {
-    $("memory").innerHTML = `<h3>Memory</h3><div class="mem">` +
-      `<svg viewBox="0 0 160 160" class="donut" id="donut" onmouseleave="focusPart(-1)">` +
-      MEMORY_COLOURS.map(([, colour], i) => `<circle class="seg" data-i="${i}" r="58" cx="80" cy="80" fill="none" stroke="${colour}"` +
-        ` stroke-width="24" transform="rotate(-90 80 80)" onmouseenter="focusPart(${i})"></circle>`).join("") +
-      `<text x="80" y="76" class="big" id="donut-value"></text><text x="80" y="96" class="small" id="donut-label"></text></svg>` +
-      `<div class="legend">` + MEMORY_COLOURS.map(([name, colour], i) =>
+  if (!$("membar")) {
+    $("memory").innerHTML = `<h3>Memory</h3><div class="memhead"><b id="mem-value"></b><span id="mem-label"></span></div>` +
+      `<div class="membar" id="membar" onmouseleave="focusPart(-1)">` +
+      MEMORY_COLOURS.map(([, colour], i) => `<span class="seg" data-i="${i}" style="background:${colour}" onmouseenter="focusPart(${i})"></span>`).join("") +
+      `</div><div class="legend">` + MEMORY_COLOURS.map(([name, colour], i) =>
         `<div class="item" data-i="${i}" onmouseenter="focusPart(${i})" onmouseleave="focusPart(-1)"><i style="background:${colour}"></i>` +
-        `<span>${name}</span><b></b><em></em></div>`).join("") + `</div></div><div class="memfacts" id="memfacts"></div>`;
+        `<span>${name}</span><b></b><em></em></div>`).join("") + `</div><div class="memfacts" id="memfacts"></div>`;
   }
-  const total = values.reduce((n, v) => n + v, 0), C = 2 * Math.PI * 58, gap = 2;
-  let at = 0;
-  document.querySelectorAll("#donut .seg").forEach((seg, i) => {
-    const length = total ? values[i] / total * C : 0, arc = Math.max(0, length - gap);
-    seg.setAttribute("stroke-dasharray", `${arc} ${C - arc}`);
-    seg.setAttribute("stroke-dashoffset", `${-at}`);
-    at += length;
-  });
+  const total = values.reduce((n, v) => n + v, 0);
+  document.querySelectorAll("#membar .seg").forEach((seg, i) => seg.style.width = `${total ? values[i] / total * 100 : 0}%`);
+  const inUse = total - free;
+  if ($("tile-mem")) {
+    setText($("tile-mem").querySelector("b"), `${total ? Math.round(inUse / total * 100) : 0}%`);
+    setText($("tile-mem").querySelector("small"), `${inUse.toFixed(0)} of ${total.toFixed(0)} GB`);
+    $("tile-mem").querySelector(".meter i").style.width = `${total ? inUse / total * 100 : 0}%`;
+  }
   document.querySelectorAll(".legend .item").forEach((item, i) => {
     setText(item.querySelector("b"), `${values[i].toFixed(1)} GB`);
     setText(item.querySelector("em"), `${total ? Math.round(values[i] / total * 100) : 0}%`);
@@ -469,12 +494,13 @@ function renderMemory(M) {
 let MEMORY_PARTS = [], FOCUSED = -1;
 function focusPart(i) {
   FOCUSED = i;
-  if (!$("donut")) return;
-  document.querySelectorAll("#donut .seg").forEach(seg => seg.style.opacity = i < 0 || +seg.dataset.i === i ? 1 : .35);
+  if (!$("membar")) return;
+  document.querySelectorAll("#membar .seg").forEach(seg => seg.style.opacity = i < 0 || +seg.dataset.i === i ? 1 : .35);
   document.querySelectorAll(".legend .item").forEach(item => item.classList.toggle("on", +item.dataset.i === i));
   const total = MEMORY_PARTS.reduce((n, p) => n + p[1], 0);
-  setText($("donut-value"), i < 0 ? `${total.toFixed(0)} GB` : `${MEMORY_PARTS[i][1].toFixed(1)} GB`);
-  setText($("donut-label"), i < 0 ? "memory" : MEMORY_PARTS[i][0].toLowerCase());
+  const inUse = total - (MEMORY_PARTS[4]?.[1] || 0);
+  setText($("mem-value"), i < 0 ? `${inUse.toFixed(0)} GB` : `${MEMORY_PARTS[i][1].toFixed(1)} GB`);
+  setText($("mem-label"), i < 0 ? `in use of ${total.toFixed(0)} GB` : MEMORY_PARTS[i][0].toLowerCase());
 }
 
 function renderChecks(L) {
@@ -552,11 +578,21 @@ function render(L) {
   const count = s => Object.values(L.tasks).filter(t => t.status === s).length;
   const thinking = agents.filter(a => a.state === "thinking").length;
   $("stamp").textContent = "updated " + new Date(L.updated_at * 1000).toLocaleTimeString();
-  $("summary").innerHTML = `<span class="dot ${failing.length ? "bad" : ""}"></span>` +
-    (L.paused ? `<b>Paused.</b> ` : "") +
-    `<b>${agents.length} agent${agents.length === 1 ? "" : "s"}</b> at work, ${thinking} thinking right now · ` +
-    `${count("waiting")} task${count("waiting") === 1 ? "" : "s"} up next · ${count("done")} done` +
-    (failing.length ? ` · <b>self-check red</b>` : "");
+  if (!$("tile-mem")) $("strip").innerHTML = ["state", "agents", "lanes", "queue", "done", "mem", "checks"].map(id =>
+    `<div class="tile" id="tile-${id}"><span></span><b></b><small></small>${id === "mem" ? `<div class="meter"><i></i></div>` : ""}</div>`).join("");
+  const tile = (id, label, value, note, kind = "") => {
+    const el = $(`tile-${id}`);
+    if (el.className !== `tile ${kind}`.trim()) el.className = `tile ${kind}`.trim();
+    setText(el.querySelector("span"), label); setText(el.querySelector("b"), String(value)); setText(el.querySelector("small"), note);
+  };
+  const held = L.lanes.filter(l => L.thoughts[l.holder]).length;
+  tile("state", "CointOS", L.paused ? "Paused" : "Running", L.paused ? "cointos go resumes" : "autonomy on", L.paused ? "bad" : "dark");
+  tile("agents", "Agents", agents.length, `${thinking} thinking now`);
+  tile("lanes", "GPU lanes", `${held}/${L.lanes.length}`, "held by agents");
+  tile("queue", "Up next", count("waiting"), `${count("review")} awaiting integrator`);
+  tile("done", "Done", count("done"), `${count("failed")} gave up`);
+  setText($("tile-mem").querySelector("span"), "Memory");
+  tile("checks", "Self-checks", failing.length ? `${failing.length} red` : "✓", failing.length ? failing[0].name : `all ${L.checks.length} pass`, failing.length ? "bad" : "");
   $("alert").innerHTML = failing.map(c => esc(c.name + ": " + c.detail)).join("<br>");
   LAST = {paused: L.paused, guard: L.guard};
   renderAgents(L);

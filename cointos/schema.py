@@ -61,9 +61,10 @@ def effort(value) -> str | None:
 
 
 def default_effort(config: dict, task: dict) -> str:
-    """One global baseline; test-contract workers alone deliberate more. A task's own
-    daemon-owned override always wins."""
-    key = "test-contract" if task["kind"] == "item" and task["stage"] == "test-contract" else "default"
+    """One global baseline; test-contract workers, then a role with its own entry, deliberate
+    differently. A task's own daemon-owned override always wins."""
+    key = ("test-contract" if task["kind"] == "item" and task["stage"] == "test-contract"
+           else KINDS[task["kind"]]["role"])
     return task.get("reasoning_effort") or config["reasoning"].get(key, config["reasoning"]["default"])
 
 

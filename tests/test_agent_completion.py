@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import api, checks, lifecycle, opencode, queues, runs, snapshots, state, tasks, trees
+from cointos import api, checks, lifecycle, opencode, queues, runs, snapshots, spawner, state, tasks, trees
 from tests import support
 
 
@@ -278,6 +278,57 @@ class Completion(unittest.TestCase):
         integration, worker = self.integration()
         lifecycle.submit(integration["id"], "integrator-1", "blocked", "Main checkout is dirty")
         self.assertEqual((integration["status"], worker["status"]), ("failed", "failed"))
+
+    def test_verified_blocker_dispatches_one_manager_without_magic_words(self):
+        worker = self.worker("Status: blocked\n\nIdentical inputs share identity; requested output is impossible.\n")
+        lifecycle.submit(worker["id"], "worker-1", "blocked", "Contract mismatch")
+        lifecycle.release("worker-1", "run ended")
+        integration = support.running(tasks.create("integrate", self.project, "integrate-parser", worker["brief"],
+                                                   [2], item="parser", worker=worker["id"]), "integrator-1")
+        lifecycle.submit(integration["id"], "integrator-1", "blocked", "Verified identity mismatch; repair the brief")
+        lifecycle.release("integrator-1", "run ended")
+        record = queues.records()[worker["record"]]
+        self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
+        self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt David")
+        manager = spawner.next_task()
+        self.assertEqual((manager["role"], manager["item"]), ("manager", "parser"))
+        self.assertIn("Contract mismatch", manager["brief"])
+        self.assertIn("Verified identity mismatch", manager["brief"])
+        self.assertIn(worker["brief"], manager["brief"])
+        self.assertIs(spawner.next_task(), manager, "reconciliation must not create a second manager")
+        support.running(manager, "manager-1")
+        lifecycle.submit(manager["id"], "manager-1", "blocked", "David must choose the public contract")
+        self.assertFalse(record["decompose"])
+        self.assertIn("David must choose", state.L["alerts"][-1]["text"])
+        self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
+
+    def test_exhausted_worker_routes_to_manager_but_exhausted_manager_does_not_loop(self):
+        worker = support.queued(self.project, "exhausted", "Build one bounded concern")
+        lifecycle.fail(worker, "fresh retries exhausted")
+        manager = spawner.next_task()
+        self.assertEqual((manager["kind"], manager["item"]), ("decompose", "exhausted"))
+        lifecycle.fail(manager, "manager retries exhausted")
+        self.assertFalse(queues.records()[worker["record"]]["decompose"])
+        self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
+
+    def test_manager_can_correct_a_brief_without_accepting_the_failed_work(self):
+        worker = support.queued(self.project, "wrong", "Impossible contract")
+        lifecycle.fail(worker, "contract mismatch")
+        manager = support.running(spawner.next_task(), "manager-1")
+        api.dispatch("hold", {"item": worker["id"], "proposed_by": manager["id"], "run": "manager-1"})
+        api.dispatch("revise", {"item": worker["id"], "brief": "Corrected contract", "reason": "Identity is shared",
+                                "proposed_by": manager["id"], "run": "manager-1"})
+        lifecycle.submit(manager["id"], "manager-1", "complete", "Corrected the contract")
+        self.assertEqual((worker["status"], queues.records()[worker["record"]]["status"]), ("waiting", "queued"))
+        self.assertNotIn("wrong", queues.landed(self.project))
+        lifecycle.reconcile()
+        self.assertEqual(queues.records()[worker["record"]]["brief"], "Corrected contract")
+
+    def test_failed_assignment_dependencies_do_not_prevent_manager_repair(self):
+        worker = support.queued(self.project, "wrong-edge", "Depends on: missing\nBuild core")
+        lifecycle.fail(worker, "bad prerequisite")
+        manager = spawner.next_task()
+        self.assertEqual((manager["kind"], manager["item"]), ("decompose", "wrong-edge"))
 
     # ------------------------------------------------ daemon replacement
 

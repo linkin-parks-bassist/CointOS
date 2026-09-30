@@ -12,6 +12,7 @@
   "reasoning": {
     "default": "low",
     "test-contract": "medium",
+    "manager": "medium",
     "budgets": {
       "low": 256,
       "medium": 384,

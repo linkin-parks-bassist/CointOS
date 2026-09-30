@@ -1,133 +1,128 @@
 # CointOS
 
-David's autonomous local-agent ecosystem. The daemon owns scheduling; agents work
-in independent project repositories and share pre-emptive GPU lanes.
+David's autonomous, local-first agent ecosystem. One daemon, `cointosd`, owns the ledger,
+scheduling and every task's lifecycle. Agents are OpenCode sessions that work in independent
+project repositories and share pre-emptible GPU lanes on local models served by Lemonade /
+llama.cpp (Qwen3.8-27B for work, Qwen3.5-4B for Coin).
 
-Run `scripts/install` from this repository to copy the runtime into `~/.CointOS/`
-and configure its systemd user services. Pause first with `cointos stop` and wait
-until `cointos agents` reports none. Installation leaves services stopped; start
-with `cointos up`. Autonomous work remains paused until `cointos go`.
+Orientation lives in the knowledge tree: `kt where am i`, then `what/is/the/architecture/of/cointos.md`,
+`what/is/the/spec.md` and `what/is/the/plan.md`. Run checks with `python3 -m unittest discover`.
 
-The source knowledge tree explains development. The installed runtime has its own
-globally readable tree explaining runtime operation and daemon-owned task and command
-queues. Each project owns its orientation, spec, plan and broken leaves. Submit work
-through `cointos queue PROJECT NAME "BRIEF" --kind queued|urgent|command`.
+## Install and replace
 
-Project enrollment lives in `config/projects.json`, separate from operational daemon
-settings. `cointos project new NAME` creates `~/Projects/NAME`, initializes Git and a
-project knowledge tree, commits that tree, and registers the project. Use `cointos
-project add PATH` for an existing repository, `cointos project set NAME --priority N`
-to change its scheduling priority, and `--enable`/`--disable` to control admission.
-`cointos project list` and the dashboard Projects panel expose the same registry.
-Lower project priority numbers run first within the same lifecycle class.
+This repository is the source; `scripts/install` copies the runtime into `~/.CointOS/`,
+renders the systemd user units (`cointosd`, `cointos-coin`) and links `~/.local/bin/cointos`.
+Installed `config/projects.json` is user-managed and preserved across upgrades.
 
-Coin exposes those project operations over Telegram. It can also request a bounded
-ad-hoc operator with `run_agent`; the matching CLI is `cointos agent run NAME BRIEF`
-with optional `--project`, `--reasoning-effort`, generation limits, and repeated
-`--ability standard|control|network`. Abilities change the operator's actual tool
-permissions. They do not grant sudo, package installation, systemd control, Git push,
-or access to Avnet/professional data.
+- **Full install** (first install, or model/gateway/backend identity changes): `cointos stop`,
+  wait until `cointos agents` shows none, run `scripts/install`, then `cointos up`, check with
+  `cointos check`, and resume autonomy with `cointos go`.
+- **Live install** (code, prompts and daemon-policy config such as reasoning, recovery,
+  scheduling and spawning): `scripts/install --live [--wait-seconds N]`. Admitted thoughts
+  finish, new thoughts are retryably blocked, only cointosd is replaced, and running agent
+  units are adopted without relaunch. The drain cancels harmlessly after 60 s by default.
+  Incompatible changes are refused before anything is touched.
+- **Live settings:** GPU time slice and generation step (`scheduler.slice_seconds`,
+  `scheduler.chunk_tokens`) change from the dashboard or `POST /api/scheduler` and apply
+  at the next GPU step. Other settings need a live install.
+- **Dashboard-only changes:** the daemon reads `web/dashboard.html` on every request, so
+  copying that file into `~/.CointOS/web/` is enough.
 
-Worker tasks carry `--stage skeleton|test-contract|implementation|integration` and
-an optional `--reasoning-effort low|medium|xhigh`. The global default is low; only
-test-contract workers default to medium. Explicit per-task overrides still win.
-Snapshot RAM has a separate `memory.snapshots_gb` budget (24 decimal GB);
-cold caches spill to disk before active ones. Transfers are not credited as freed
-memory until complete. Budget changes need a drained daemon replacement.
+See `kt how to install cointos` and `kt how to restart cointos`.
 
-Per-reply reasoning is capped at 256/384/1,024 tokens for low/medium/xhigh,
-then generation continues into the answer or tool call. `reasoning.budgets` owns these
-limits; changing them currently needs a drained daemon replacement, not a model reload.
-Use `cointos reasoning PROJECT:TASK low|medium|xhigh` to change an existing task from its next reply.
-Test writers register adversarial checks and code dependencies in the project's
-configured test-contract manifest. Implementation landings cannot change protected
-tests or their harness; the daemon tests the exact candidate against all registered
-contracts covering changed code before advancing main. Unrelated red tests may remain.
-The verified acceptance receipt is the terminal authority for task and queue state:
-acceptance marks the queue item done, removes obsolete blocker/decomposition data, and
-the daemon reconciles legacy contradictions before computing dependencies. Successful
-land/incorporate API calls republish the derived runtime queue answers.
-For Python, named imports and private helpers follow their same-file callers; shared
-module changes still select the whole file. Reviewers must declare dynamic and cross-file dependencies.
-Failed implementation checks automatically return the task with failure details for another attempt.
-Every agent run ends with exactly one completion receipt that the daemon checks against its
-artifacts: `cointos finish --complete "evidence"`, or `--blocked "reason"` for a real blocker.
-An integrator's verified `cointos land`, `incorporate` or `return` is its receipt. Process exit,
-OpenCode finish markers and final text never complete a task; a run ending without a receipt is
-retried a bounded number of times (`cointos/lifecycle.py`, `what/is/the/agent/completion/model.md`).
-Managers record remaining work in the project plan before finishing their bounded stage.
-Periodic low-reasoning stewards inspect the runtime and all configured projects for concrete loose ends and
-may enqueue one bounded manager command; they never implement the work themselves. If a scout needs David,
-`cointos attention` raises a daemon alert that Coin delivers instead of leaving the request in its terminal. Their
-cadence uses a six-hour idle baseline multiplied by one plus the active/queued concern
-count, so scouting becomes less frequent while the factory is busy. The dashboard's Work
-header can schedule the same deduplicated scout immediately with **Spawn scout**. Scouts are
-system tasks launched from the installed runtime, with no project place, branch or worktree.
+## Projects and queues
 
-A medium-reasoning test auditor runs after recent accepted product work. It samples one landing,
-compares its tests with the owning specification, runs bounded relevant suites, and asks whether
-plausible wrong implementations could still pass. A concrete semantic coverage gap becomes one
-manager command in the owning project; a clean audit is valid. This retrospective loop provides
-eventual correction without requiring every landing to be perfect.
+Enrollment lives in `config/projects.json`, separate from `config/cointos.json`.
 
-Gardeners periodically sample and maintain the CointOS source tree and every registered project's
-knowledge tree. They do maintenance only: current-truth verification, repair, and renewal in a bounded
-batch. Structural tree auditors remain a separate slower pass.
-When a queue-backed task fails terminally, the daemon marks its matching queued record
-blocked with the failure reason and republishes the queue; failed tasks cannot remain live-looking zombies.
-The dashboard leaves active and queued work open, folds **Gave up** and **Done**, and its
-**Clear task history** action removes unreferenced terminal task records plus unneeded
-done/blocked queue history while retaining terminal prerequisites still used by live work.
-`cointos supersede PROJECT:FAILED REPLACEMENT... --reason "evidence"` repairs failed
-prerequisites without accepting the failed task. `cointos incorporate PROJECT:ITEM
---commit MAIN_SHA --worker-commit WORKER_SHA` verifies exact submitted implementation
-already present on main and records acceptance. Integration also runs accepted contracts
-for carried production changes and preserves existing tests and contracts.
-`cointos clear-review PROJECT:ITEM --reason "evidence"` withdraws obsolete infrastructure
-feedback from inactive waiting work and starts the next run in a fresh session.
+```
+cointos project new NAME            # create ~/Projects/NAME with Git and a knowledge tree
+cointos project add PATH            # register an existing repository
+cointos project set NAME --priority N --enable|--disable
+cointos project list
+cointos queue PROJECT NAME "BRIEF" --kind queued|urgent|command
+cointos task PROJECT:ITEM           # exact metadata, dependencies and receipts
+```
 
-`recovery` defaults each run to 1,800 seconds of generation or 36,000 generated tokens,
-including reasoning and excluding lane wait, prefill and tools. Tasks carry daemon-owned
-`budget` metadata with `generation_seconds` and `generation_tokens`; omitted limits inherit
-the defaults and are pinned when the task is created. Queue with
-`--generation-seconds 1800 --generation-tokens 36000` to override them, or use
-`cointos budget PROJECT:TASK --generation-tokens 36000` on waiting/undispatched work.
-The API accepts `budget` on `/api/queue` and `{task, budget}` on `/api/budget`.
-Every new or fresh-recovery run gets an FYI at the end of its launch prompt describing both
-limits and the accounting, plus its exact per-reply reasoning limit and an instruction to decide
-succinctly before using a tool or answering. A same-session continuation under three hours gets
-only `Continue.` because OpenCode rejects an empty invocation; after that it gets one concise reorientation. Active runs
-cannot have their limits changed underneath them.
-Worker items with no branch artifact at 600 generation seconds or 12,000 generated tokens
-recover early. Fresh recovery includes a bounded 6,000-character packet of recent outward
-text, tool actions/results and Git state; hidden reasoning is never copied.
-Up to two fresh-session retries preserve the branch
-and files; ordinary death/restart still resumes the same session. Committed done/blocked
-reports take precedence over the limit.
-A process that exits before its first gateway request is an infrastructure launch failure,
-not an assignment attempt. CointOS refunds it, retries at most twice, then durably holds the
-task and alerts instead of consuming work attempts or respawning forever.
-`state/events.jsonl` plus one rotated file retain bounded diagnostic events (8 MiB each),
-including snapshot and acceptance evidence without model prompts. Managed tasks pin their
-complete initial system/developer prefix by digest, so later runs do not invalidate warm context
-merely because generated startup context changed; each request journals only its system-prompt digest.
-These settings need
-a drained daemon replacement. Dashboard rows show replacements, acceptance receipts and incidents.
-Use `cointos task PROJECT:ITEM` to inspect its exact metadata, queue dependencies and receipts.
-See `kt what is the shape of cointos work` for coverage and enforcement boundaries.
+Lower priority numbers run first within a class. Each project owns its orientation, spec,
+plan and broken leaves. The installed runtime publishes a globally readable knowledge tree
+describing operation and the daemon-owned queues.
 
-Use `kt where am i` for orientation and `python3 -m unittest discover` for checks.
+Coin (Telegram) exposes the same project operations and can launch a bounded ad-hoc operator
+(`run_agent`; CLI `cointos agent run NAME BRIEF [--project P] [--reasoning-effort E]
+[--ability standard|control|network]...`). Abilities change real tool permissions; none
+grants sudo, package installation, systemd control, Git push or access to Avnet/professional data.
 
-The dashboard's Machine panel changes GPU time slice (seconds) and generation step
-(tokens). `scheduler.slice_seconds` and `scheduler.chunk_tokens` reload from the
-active runtime config each tick once this version is installed. Current GPU steps
-finish before the new chunk size is used. Other settings do not reload live yet. The restart hierarchy and current deployment
-limitations are documented in `kt how to restart cointos`. Restart drain closes spawn admission
-while allowing existing conversations and receipts to continue to a quiet request boundary;
-broader live replacement acceptance remains open.
-For configuration-compatible code or guidance changes, `scripts/install --live` lets admitted
-thoughts finish, retryably blocks new thoughts, replaces the installed runtime and restarts only
-cointosd while preserving live agent units. Daemon-policy configuration changes—including reasoning,
-recovery, scheduling and spawning policy—are compatible. Changes to the gateway endpoint, backend or
-loaded-model identity/topology are refused; use the paused full installation for those. The live drain cancels after 60 seconds by default without
-stopping anything; `--wait-seconds N` changes that bound.
+## Roles
+
+- **Managers** run one bounded decomposition stage, keep the project plan's remaining frontier
+  honest and queue children. They change queued work with `cointos hold` then `cointos revise`.
+- **Workers** implement one `skeleton`, `test-contract`, `implementation` or `integration` item
+  on an isolated branch and submit an exact commit with a `.work-report.md`.
+- **Integrators** review a worker against main and its contracts, maintain the project tree and
+  land through the daemon's exact-candidate gate (`cointos land|incorporate|return`).
+- **Stewards** periodically roam the runtime and projects for concrete loose ends and may queue
+  one manager command; they never implement. Cadence is a six-hour baseline multiplied by one
+  plus the active/queued concern count. **Spawn scout** on the dashboard schedules one now.
+- **Test auditors** (medium reasoning) sample a recent landing, compare its tests with the spec
+  and raise at most one manager command for a real coverage gap.
+- **Gardeners** verify a small batch of knowledge leaves per tree; **tree auditors** check one
+  structural concern across a sample.
+- **Operators** carry one user-requested ad-hoc assignment.
+
+Every run ends with exactly one receipt the daemon checks against its artifacts:
+`cointos finish --complete "evidence"` or `--blocked "reason"`; an integrator's verified
+land/incorporate/return is its receipt. Process exit, finish markers and final text never
+complete a task. `cointos attention` raises an alert that Coin delivers to David.
+
+## Tests as contracts
+
+Test-contract workers register adversarial checks and code dependencies in the project's
+test-contract manifest. Implementation landings cannot change protected tests or harnesses;
+the daemon runs every registered contract covering changed code on the exact candidate before
+main moves (for Python, same-file callers of changed helpers are followed). A failed gate
+returns the item with details. The verified acceptance receipt is the sole authority that
+marks a queue item done.
+
+## Reasoning and budgets
+
+Reasoning effort is `low`, `medium` or `xhigh`, capped per uninterrupted reasoning block at
+256 / 384 / 1,024 tokens (`reasoning.budgets`), after which the reply continues into its answer
+or tool call. Defaults: low globally; medium for test-contract workers and managers. Effort is
+pinned when a task is created; `cointos reasoning PROJECT:TASK EFFORT` changes an existing task
+from its next reply, and explicit overrides always win.
+
+Each run may spend 1,800 generation seconds or 36,000 generated tokens (reasoning included; lane
+wait, prefill and tools excluded). Override with `--generation-seconds`/`--generation-tokens` on
+`cointos queue`, or `cointos budget PROJECT:TASK ...` on waiting work; active runs are never
+changed underneath. Worker items with no branch artifact by 600 s or 12,000 tokens recover early.
+
+## Recovery
+
+- Ordinary death or daemon restart resumes the same OpenCode session. Gaps under three hours
+  resume with `Continue.`; longer gaps get one concise reorientation.
+- Budget exhaustion starts up to two fresh sessions that keep the branch and files and receive a
+  6,000-character packet of recent outward text, tool actions and Git state. Hidden reasoning is
+  never copied.
+- A process that exits before its first model request is a launch failure: refunded, retried at
+  most twice, then held with an alert.
+- `cointos kill AGENT` stops one run and holds its task until `cointos resume TASK`.
+- A failed worker item gets one automatic manager pass with its assignment and receipt evidence;
+  an unresolved or exhausted manager alerts David instead of looping.
+- `cointos supersede`, `cointos incorporate` and `cointos clear-review` repair failed
+  prerequisites, settle work already on main and withdraw stale infrastructure feedback.
+
+## Memory
+
+The workstation's 128 GB unified RAM is one pool. The memory guard sheds snapshots first, then
+background agents, then the work model under sustained pressure. Saved contexts have their own
+RAM budget (`memory.snapshots_gb`, 24 GB) and spill to a bounded disk tier; a cache miss only
+costs re-reading. `state/events.jsonl` plus one rotated file keep bounded diagnostic events
+(8 MiB each) without prompts.
+
+## Dashboard
+
+`http://127.0.0.1:4200`. A status strip (autonomy, agents, GPU lanes, queue, done, memory,
+self-checks) sits above two columns: live agent cards and Work (in progress, queue, waiting for
+the integrator, then folded **Done** and **Gave up**) on the left; Machine (GPU controls, lanes,
+memory breakdown, self-checks), Recently and Projects on the right. **Clear task history**
+removes terminal records no live work still references.

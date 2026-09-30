@@ -94,11 +94,11 @@ def reorder(scanned: dict) -> None:
 
 def queued_work(scanned: dict, ready: dict) -> list:
     """New tasks for ready queue records: a worker item or command, or a decomposition manager
-    for an item a worker returned as too big."""
+    for a failed worker item awaiting managerial recovery."""
     options = []
     for project in tasks.enabled_projects():
         for record in scanned[project["name"]]:
-            if record.get("replaced_by") or record["held_by"] or ready[project["name"]][record["item"]] != "ready":
+            if record.get("replaced_by") or record["held_by"]:
                 continue
             if record["decompose"]:
                 name = f"decompose-{Path(record['item']).stem}"
@@ -108,6 +108,8 @@ def queued_work(scanned: dict, ready: dict) -> list:
                     options.append((rank, functools.partial(
                         tasks.create, "decompose", project, name, record.get("report", record["brief"]), rank,
                         item=record["item"], record_hash=record["hash"])))
+                continue
+            if ready[project["name"]][record["item"]] != "ready":
                 continue
             known = L["tasks"].get(f"{project['name']}:{record['item']}")
             if record["status"] != "queued" or (known and (tasks.active(known) or known["record_hash"] == record["hash"])):
