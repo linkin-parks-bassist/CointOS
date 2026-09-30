@@ -22,8 +22,8 @@ or even having the daemon replaced underneath them.
   with bounded retries instead of loops.
 - **Stays inside a memory budget.** On unified-memory machines, a guard sheds cache, then
   background agents, then the work model before the desktop suffers.
-- **Thinks in knowledge trees.** CointOS is built on
-  [knowledgetrees](https://github.com/linkin-parks-bassist/knowledgetrees): every project, the
+- **Deeply integrated with [knowledgetrees](https://github.com/linkin-parks-bassist/knowledgetrees).**
+  Every project, the
   CointOS source and the installed runtime each keep a tree of short, current answers (orientation,
   spec, plan, what is broken). Agents orient from them, managers keep the plan's frontier honest in
   them, integrators update them as work lands, the runtime publishes its live queues into one, and
