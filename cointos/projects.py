@@ -41,8 +41,10 @@ def normalize(project: dict) -> dict:
     return result
 
 
-def write(config: dict, path: Path = PROJECTS) -> None:
-    ordered = sorted(config["projects"], key=lambda p: (p.get("priority", 100), p["name"].lower()))
+def write(config: dict, path: Path = PROJECTS, *, entries: list[dict] | None = None) -> None:
+    """Commit the proposed registry before changing its shared in-memory projection."""
+    ordered = sorted(config["projects"] if entries is None else entries,
+                     key=lambda p: (p.get("priority", 100), p["name"].lower()))
     write_json(path, {"version": 1, "projects": ordered})
     config["projects"][:] = ordered
 
@@ -55,8 +57,7 @@ def add(config: dict, project: dict, path: Path = PROJECTS) -> dict:
         raise ValueError(f"project {candidate['name']!r} is already registered")
     if any(Path(p["path"]).resolve() == Path(candidate["path"]) for p in config["projects"]):
         raise ValueError(f"repository {candidate['path']} is already registered")
-    config["projects"].append(candidate)
-    write(config, path)
+    write(config, path, entries=[*config["projects"], candidate])
     return candidate
 
 
@@ -95,9 +96,7 @@ def update(config: dict, name: str, changes: dict, path: Path = PROJECTS) -> dic
     if unknown:
         raise ValueError("unsupported project settings: " + ", ".join(sorted(unknown)))
     candidate = normalize({**project, **changes})
-    project.clear()
-    project.update(candidate)
-    write(config, path)
+    write(config, path, entries=[candidate if p is project else p for p in config["projects"]])
     return candidate
 
 
@@ -105,6 +104,5 @@ def remove(config: dict, name: str, path: Path = PROJECTS) -> dict:
     project = next((p for p in config["projects"] if p["name"].lower() == name.lower()), None)
     if project is None:
         raise ValueError(f"unknown project {name!r}")
-    config["projects"].remove(project)
-    write(config, path)
+    write(config, path, entries=[p for p in config["projects"] if p is not project])
     return project

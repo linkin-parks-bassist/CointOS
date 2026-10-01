@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T07:47:43+10:00"
+revised_at: "2026-10-02T00:37:33+10:00"
 ---
 
 CointOS is David's autonomous, local-first agent ecosystem. This repository is its source, and `master` is its one canonical branch (configured as the CointOS tree's `main_branch`). `scripts/install` copies the runtime to `~/.CointOS`; `cointosd.service` and `cointos-coin.service` run there, and `~/.local/bin/cointos` points to its CLI. The installed runtime owns a separate globally readable knowledge tree explaining operation and publishing daemon-owned queues; its orientation and `what/is/cointos.md` are generated from this repository's `runtime/` sources during installation.
@@ -9,7 +9,7 @@ Python implementation is in `cointos/`; operational configuration is in `config/
 
 The source is structured around one receipt-driven lifecycle, a data-driven task vocabulary, a pre-emptive GPU scheduler and bounded construction pipelines. The current runtime preserves agent units and sessions across compatible daemon replacement, supports daemon-policy configuration changes through live installation, and mechanically caps uninterrupted reasoning at 256/384/1,024 tokens for low/medium/xhigh. OpenCode 1.18.33 is installed. Full live acceptance remains open; the exact proven boundary belongs to `what/is/the/live/acceptance/evidence/for/cointos.md`.
 
-Read `what/is/cointos.md` for purpose, `how/to/keep/cointos/simple.md` for governing rules, `what/is/the/architecture/of/cointos.md` for design, `what/is/the/agent/completion/model.md` for how runs end, and `what/is/the/shape/of/cointos/work.md` plus `what/are/the/cointos/roles.md` for bounded work and ownership. `what/is/the/spec.md` owns requirements; `what/is/the/plan.md` contains only the remaining frontier; `what/is/broken.md` lists unresolved defects. `how/to/install/cointos.md`, `how/to/restart/cointos.md`, `how/to/change/the/cointos/gpu/time/slice.md`, and `how/to/launch/opencode/for/a/cointos/agent.md` own their operating procedures.
+Read `what/is/cointos.md` for purpose, `how/to/keep/cointos/simple.md` for governing rules, `what/is/the/architecture/of/cointos.md` for design, `what/is/the/agent/completion/model.md` for how runs end, and `what/is/the/shape/of/cointos/work.md` plus `what/are/the/cointos/roles.md` for bounded work and ownership. `what/is/the/spec.md` owns requirements; `what/is/the/plan.md` contains only the remaining frontier; `what/is/broken.md` lists unresolved defects. `how/to/install/cointos.md`, `how/to/restart/cointos.md`, `how/to/change/the/cointos/gpu/time/slice.md`, and `how/to/launch/opencode/for/a/cointos/agent.md` own their operating procedures. `how/to/manage/the/cointos/project/registry.md` owns project enrollment and registry mutation.
 
 `what/` owns purpose, requirements, architecture, lifecycle, roles, machine/model facts, current defects and acceptance evidence. `how/` owns operating and development procedures, including Lemonade, Telegram, dashboard, manager dependency work, installation and inspection. `where/` owns this orientation and reusable-part locations. The canonical `why/`, `does/`, and `is/` branches currently have no direct answers; question phrases such as `how/does` and `how/is` are intentionally stored under the `how/` owner.
 

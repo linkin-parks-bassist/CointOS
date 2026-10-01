@@ -1,8 +1,10 @@
+import copy
 import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from cointos import config, projects
 
@@ -45,6 +47,27 @@ class ProjectRegistry(unittest.TestCase):
             projects.add(self.config, {"name": "ONE", "path": str(self.repo("other"))}, self.registry)
         with self.assertRaisesRegex(ValueError, "already registered"):
             projects.add(self.config, {"name": "alias", "path": str(path)}, self.registry)
+
+    def test_failed_persistence_leaves_both_registry_projections_unchanged(self):
+        projects.add(self.config, {"name": "one", "path": str(self.repo("one"))}, self.registry)
+        initial = copy.deepcopy(self.config)
+        saved = self.registry.read_bytes()
+        other = self.repo("other")
+        operations = {
+            "add": lambda: projects.add(self.config, {"name": "other", "path": str(other)}, self.registry),
+            "update": lambda: projects.update(self.config, "one", {"priority": 1, "enabled": False}, self.registry),
+            "remove": lambda: projects.remove(self.config, "one", self.registry),
+        }
+        for name, operation in operations.items():
+            with self.subTest(operation=name):
+                self.config = copy.deepcopy(initial)
+                shared = self.config["projects"]
+                with patch.object(projects, "write_json", side_effect=OSError("disk full")):
+                    with self.assertRaisesRegex(OSError, "disk full"):
+                        operation()
+                self.assertEqual(self.config, initial)
+                self.assertIs(self.config["projects"], shared)
+                self.assertEqual(self.registry.read_bytes(), saved)
 
     def test_operational_config_reads_the_separate_registry(self):
         repo = self.repo("registered")

@@ -85,6 +85,8 @@ cointos task PROJECT:ITEM           # exact metadata, dependencies and receipts
 Lower priority numbers run first within a class. Each project owns its orientation, spec,
 plan and broken leaves. The installed runtime publishes a globally readable knowledge tree
 describing operation and the daemon-owned queues.
+Project changes are saved before they take effect in the daemon; a failed registry write
+leaves enrollment unchanged.
 
 Coin (Telegram) exposes the same project operations and can launch a bounded ad-hoc operator
 (`run_agent`; CLI `cointos agent run NAME BRIEF [--project P] [--reasoning-effort E]
