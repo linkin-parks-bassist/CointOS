@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T22:36:32+10:00"
+revised_at: "2026-10-01T23:10:40+10:00"
 ---
 
 Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env`:
@@ -16,6 +16,8 @@ Coin long-polls `getUpdates`, accepts allow-listed text and sends replies with `
 - Every other message first receives a short front-model reply through the gateway at Coin priority on its reserved lane. A deterministic formatter removes a trailing engagement question from a multi-sentence fast reply; it preserves a single-question reply.
 - Every non-status message then enters the serial work-model deep-turn queue. The deep turn may send a useful follow-up or finish silently.
 - Daemon alerts are forwarded separately to allowed users. A self-check sends one alert per incident; only 30 seconds of sustained recovery rearms that check. The daemon persists notification incident state across replacement, while the dashboard retains current details.
+
+Coin model requests explicitly carry the configured default reasoning effort (currently low) unless that call overrides it. The gateway therefore applies the same uninterrupted reasoning cap (256 tokens at low) as it does for managed tasks; deep control turns cannot silently fall back to uncapped model-default reasoning. The front reply still disables thinking.
 
 Coin's JSON model requests are request-owned: the gateway detects peer EOF while waiting, cancels disconnected callers and releases an in-flight thought at its step boundary. Coin thoughts are included in the 60-second no-progress check. Backend token steps preserve UTF-8 fragments without allowing text-parser errors or truncated replies to become a lane replay loop.
 

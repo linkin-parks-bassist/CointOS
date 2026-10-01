@@ -5,6 +5,7 @@ happens only if it fits in the headroom, and snapshots give way first.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 GB = 1e9
@@ -69,8 +70,18 @@ def to_forget(snapshots: dict[str, dict], need_gb: float, headroom: float) -> li
 
 
 def snapshot_gb(snapshots: dict[str, dict], model: str, tokens: int) -> float:
-    """A context's expected snapshot size, from the bytes per token of that model's snapshots."""
+    """Estimate from a same-model sample without shrinking its fixed state overhead.
+
+    Use the nearest measured context at least this large; beyond the measured range,
+    scale the largest context upward. Never predict less than a smaller measured file.
+    This is an admission estimate; the actual save is still measured and reconciled.
+    """
     known = [s for s in snapshots.values() if s["model"] == model and s["tokens"]]
     if not known:
         return 0.0  # no evidence yet; the first save of a model is measured
-    return round(tokens * sum(s["bytes"] for s in known) / sum(s["tokens"] for s in known) / GB, 2)
+    larger = [s for s in known if s["tokens"] >= tokens]
+    anchor_tokens = min(s["tokens"] for s in larger) if larger else max(s["tokens"] for s in known)
+    anchor_bytes = max(s["bytes"] for s in known if s["tokens"] == anchor_tokens)
+    estimate = max(anchor_bytes * max(1, tokens / anchor_tokens),
+                   max((s["bytes"] for s in known if s["tokens"] <= tokens), default=0))
+    return math.ceil(estimate / GB * 100) / 100

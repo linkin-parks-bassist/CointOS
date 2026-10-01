@@ -128,6 +128,8 @@ Reasoning effort is `low`, `medium` or `xhigh`, capped per uninterrupted reasoni
 or tool call. Defaults: low globally; medium for test-contract workers and managers. Effort is
 pinned when a task is created; `cointos reasoning PROJECT:TASK EFFORT` changes an existing task
 from its next reply, and explicit overrides always win.
+Coin also sends the configured default effort on its model requests, so deep tool turns
+receive the same reasoning cap.
 
 Each run may spend 1,800 generation seconds or 36,000 generated tokens (reasoning included; lane
 wait, prefill and tools excluded). Override with `--generation-seconds`/`--generation-tokens` on
@@ -156,6 +158,9 @@ background agents, then the work model under sustained pressure. Saved contexts 
 RAM budget (`memory.snapshots_gb`, 24 GB) and spill to a bounded disk tier; a cache miss only
 costs re-reading. `state/events.jsonl` plus one rotated file keep bounded diagnostic events
 (8 MiB each) without prompts.
+
+Snapshot admission uses measured sizes from the same model without scaling fixed state
+overhead downward for short contexts. Actual save sizes are measured and reconciled.
 
 ## Dashboard
 

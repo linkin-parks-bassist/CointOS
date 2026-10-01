@@ -37,6 +37,20 @@ class Memory(unittest.TestCase):
         self.assertEqual(memory.snapshot_gb(snapshots, "work", 30_000), 3.0)
         self.assertEqual(memory.snapshot_gb(snapshots, "unseen", 30_000), 0.0)
 
+    def test_short_snapshot_keeps_measured_hybrid_state_overhead(self):
+        # Measured b10723 Qwen3.8 disk saves: a fixed recurrent state dominates
+        # short contexts, so scaling a long file downward severely underestimates.
+        long = {"a": snap(.292743392, 1, tokens=2072)}
+        self.assertEqual(memory.snapshot_gb(long, "work", 88), .30)
+        long["b"] = snap(.162664416, 2, tokens=88)
+        self.assertEqual(memory.snapshot_gb(long, "work", 88), .17)
+        self.assertEqual(memory.snapshot_gb(long, "work", 1000), .30)
+        self.assertGreaterEqual(memory.snapshot_gb(long, "work", 3000), .292743392 * 3000 / 2072)
+
+    def test_estimate_does_not_undercut_a_larger_smaller_context_sample(self):
+        snapshots = {"a": snap(2, 1, tokens=1000), "b": snap(1, 1, tokens=2000)}
+        self.assertEqual(memory.snapshot_gb(snapshots, "work", 1500), 2)
+
     def test_distress_is_pressure_not_swap_in_use(self):
         self.assertEqual(memory.distressed(CONFIG, {"psi": 0.2, "swap_gb": 5}), [])
         self.assertEqual(len(memory.distressed(CONFIG, {"psi": 3.0, "swap_gb": 0})), 1)

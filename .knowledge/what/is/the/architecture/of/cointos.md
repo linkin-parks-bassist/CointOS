@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T22:52:34+10:00"
+revised_at: "2026-10-01T23:51:02+10:00"
 ---
 
 # CointOS architecture
@@ -45,11 +45,11 @@ At each boundary:
 3. A tool call yields the lane. A bounded grace may retain it for a quick follow-up within the same unexpired slice; grace never extends the slice.
 4. Placement prefers the agent's held lane, then a warm lane, then a free lane, then an eligible unreserved lane.
 
-The backend verifies retained prompt state before each generation step. Prompt preparation streams progress so a lost prefix can be refused before an unbounded reread; generation returns the complete bounded token vector without per-step text parsing. Complete token counts and cached-state lengths are checked. The backend returns the sole authoritative known retained prefix; speculative draft state beyond the returned token history is marked cold without rejecting a valid reply. UTF-8 fragments are valid token history and are assembled before outward text streaming. Missing terminal events, backend error events, incomplete vectors and nonterminal steps with no tokens cannot become known lane state: the thought fails and the lane becomes cold.
+The backend verifies retained prompt state before each generation step by extending its prepared prefix with the pending real token. This creates the hybrid-model checkpoint needed for the following buffered step; an equal-length check after disk restoration would discard the cache. Prompt preparation streams progress so a lost prefix can be refused before an unbounded reread; generation returns the complete bounded token vector without per-step text parsing. Complete token counts and cached-state lengths are checked. The backend returns the sole authoritative known retained prefix; speculative draft state beyond the returned token history is marked cold without rejecting a valid reply. UTF-8 fragments are valid token history and are assembled before outward text streaming. Missing terminal events, backend error events, incomplete vectors and nonterminal steps with no tokens cannot become known lane state: the thought fails and the lane becomes cold.
 
 Every thought belongs to its gateway request. The handler cancels it on every exit, including errors before response headers. It also polls for peer EOF while waiting for both JSON and streaming replies. A waiting thought is removed immediately; an in-flight step finishes before releasing its lane. HTTP callers timing out cannot leave detached high-priority work behind. During deployment quiescence, new requests wait at the admission gate without counting as active thoughts/requests. Disconnect drops them, cancellation admits them, and shutdown returns a retryable refusal. They do not repeatedly consume client retries while admitted work drains.
 
-Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`.
+Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`. Coin explicitly carries the configured default effort on taskless gateway requests; per-call overrides remain available.
 
 ## Context and snapshot ownership
 
@@ -58,6 +58,8 @@ Token identity, not owner name, determines reuse. A lane is warm when its known 
 A committed checkpoint is saved after context establishment and before generation. A suspended state may be saved when a thought yields mid-generation. Killing or losing a run abandons uncommitted thought output and resumes from durable conversation plus any compatible checkpoint.
 
 One conversation retains only useful prefix states; divergent task snapshots are forgotten. On a fresh managed launch, prompt construction identifies the task-independent role boundary while gateway rendering derives its exact token boundary from the model chat template. The lane saves that prefix under the shared owner even when no peer context is concurrently alive, so later sequential tasks of the same role can restore it through ordinary token-digest matching. Opportunistic comparison can still discover longer shared starts between live contexts. Coin/user shared ownership and task reachability are explicit lifetime queries.
+
+Save admission uses the nearest measured same-model context at least as large, without scaling its fixed state overhead downward. Above the measured range it scales the largest sample upward and never predicts less than a smaller measured file. Estimates round upward; actual saves are measured and reconciled. An unseen model's first save remains unestimated. This protects short hybrid contexts from the previous bytes-per-token underestimate, but does not establish all future file sizes.
 
 RAM snapshots are bounded by `memory.snapshots_gb` and spill to the bounded disk tier by reachability and recency. Transfers remain charged until completion. A cache miss or eviction causes rereading, never semantic loss. Full shutdown attempts context saving, RAM-to-disk spill and ledger saving independently.
 

@@ -91,7 +91,7 @@ def coin_key() -> str:
 
 def complete(model: str, messages: list[dict], timeout: float, **options) -> dict:
     """One completion through the gateway at Coin priority; the reply message."""
-    body = {"model": model, "messages": messages, **options}
+    body = {"model": model, "messages": messages, "reasoning_effort": CONFIG["reasoning"]["default"], **options}
     request = urllib.request.Request(configuration.api_url(CONFIG) + "/v1/chat/completions", json.dumps(body).encode(),
                                      {"Content-Type": "application/json", "Authorization": f"Bearer {coin_key()}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:

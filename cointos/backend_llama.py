@@ -8,8 +8,9 @@ Lemonade's load API and llama-server's token completions and slot snapshots
   token history is unknown state, even when the complete reply is valid;
 - prompt preparation streams progress so a lost prefix can be abandoned within a batch;
   generation returns a complete bounded token vector, without parsing per-step UTF-8 text;
-- the server can drop a lane's state between requests (seen after a restore, without any
-  warning). Its first progress report says how much it kept (`cache`), before it reads.
+- the server can invalidate retained state. Its first progress report says how much it
+  kept (`cache`), before it reads; checking a restored hybrid prefix must extend it by
+  the pending real token so that verification does not itself discard the cache.
 """
 
 from __future__ import annotations
@@ -201,8 +202,11 @@ def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max
     is cold, even though the complete reply itself is valid."""
     # Streamed text suppresses tokens inside incomplete UTF-8 characters. A bounded
     # token step needs the complete token vector, independent of text encoding.
-    # Verify the prepared prefix with prompt progress before the buffered generation.
-    prefill(config, model, lane, tokens[:-1], held)
+    # Extend the known prefix by the pending real token while checking prompt progress.
+    # Rechecking an equal-length restored prefix makes hybrid memory rewind without
+    # an internal checkpoint and discards the cache. This extension establishes the
+    # checkpoint the following buffered request needs to reevaluate its last token.
+    prefill(config, model, lane, tokens, held)
     started = time.monotonic()  # prefix preparation does not spend the agent's generation budget
     event = _server(model, "/completion", {**sampling, "prompt": tokens, "n_predict": max_new,
                     "id_slot": lane, "cache_prompt": True, "stream": False, "return_tokens": True,

@@ -48,7 +48,7 @@ class BoundedSteps(unittest.TestCase):
 
     def test_progress_placeholders_are_not_generated_tokens(self):
         FakeConnection.lines = events({"tokens": [0], "prompt_progress": {"total": 101, "cache": 100, "processed": 100}},
-                                      {"tokens": [], "stop": True, "stop_type": "limit", "tokens_cached": 100})
+                                      {"tokens": [], "stop": True, "stop_type": "limit", "tokens_cached": 101})
         seen = []
         terminal = {"tokens": [7, 8, 9], "tokens_predicted": 3, "tokens_cached": 103,
                     "stop": True, "stop_type": "limit"}
@@ -63,7 +63,7 @@ class BoundedSteps(unittest.TestCase):
         self.assertFalse(result["done"])
 
     def test_utf8_byte_tokens_come_from_the_complete_token_step(self):
-        FakeConnection.lines = events({'stop': True, 'stop_type': 'limit', 'tokens': [], 'tokens_cached': 1})
+        FakeConnection.lines = events({'stop': True, 'stop_type': 'limit', 'tokens': [], 'tokens_cached': 2})
         terminal = {'tokens': [9008], 'tokens_predicted': 1, 'tokens_cached': 2,
                     'stop': True, 'stop_type': 'limit'}
         seen = []
@@ -87,7 +87,7 @@ class BoundedSteps(unittest.TestCase):
                     backend.prefill(CONFIG, 'm', 0, [1, 2], 0)
 
     def test_missing_tokens_and_unknown_cached_state_fail_instead_of_replaying_the_step(self):
-        FakeConnection.lines = events({'stop': True, 'stop_type': 'limit', 'tokens': [], 'tokens_cached': 1})
+        FakeConnection.lines = events({'stop': True, 'stop_type': 'limit', 'tokens': [], 'tokens_cached': 2})
         valid = {'stop': True, 'stop_type': 'limit', 'tokens': [3], 'tokens_predicted': 1, 'tokens_cached': 2}
         for changes in ({'tokens': []}, {'tokens_cached': -1}, {'stop': False}, {'tokens': [], 'tokens_predicted': 0}):
             with self.subTest(changes=changes), patch.object(backend, '_server', return_value={**valid, **changes}):
@@ -95,7 +95,7 @@ class BoundedSteps(unittest.TestCase):
                     backend.think(CONFIG, 'm', 0, [1, 2], 1, 1, {}, lambda _: None)
 
     def test_speculative_tail_is_cold_without_discarding_the_valid_reply(self):
-        FakeConnection.lines = events({'stop': True, 'tokens_cached': 1})
+        FakeConnection.lines = events({'stop': True, 'tokens_cached': 2})
         terminal = {'tokens': [3, 4], 'tokens_predicted': 2, 'tokens_cached': 7,
                     'stop': True, 'stop_type': 'eos'}
         with patch.object(backend, '_server', return_value=terminal):
@@ -117,6 +117,26 @@ class BoundedSteps(unittest.TestCase):
              patch.object(backend.time, 'monotonic', side_effect=lambda: clock[0]):
             result = backend.think(CONFIG, 'm', 0, [1, 2], 1, 1, {}, lambda _: None)
         self.assertEqual(result['generation_seconds'], 2)
+
+    def test_cache_check_extends_a_restored_hybrid_prefix(self):
+        held = 2063
+        class RestoredConnection(FakeConnection):
+            def request(self, method, path, body, headers):
+                self.total = len(json.loads(body)['prompt'])
+
+            def __iter__(self):
+                # Restored recurrent state has no earlier in-memory checkpoint.
+                # An equal-length prompt must rewind and therefore loses its cache.
+                cache = held if self.total > held else 0
+                return iter(events({'prompt_progress': {'cache': cache}},
+                                   {'stop': True, 'tokens_cached': self.total}))
+
+        terminal = {'tokens': [7], 'tokens_predicted': 1, 'tokens_cached': held + 1,
+                    'stop': True, 'stop_type': 'limit'}
+        with patch.object(backend.http.client, 'HTTPConnection', RestoredConnection), \
+                patch.object(backend, '_server', return_value=terminal):
+            result = backend.think(CONFIG, 'm', 0, list(range(held + 1)), held, 1, {}, lambda _: None)
+        self.assertEqual(result['tokens'], [7])
 
     def test_stepping_back_less_than_a_read_chunk_is_allowed(self):
         held = 5000

@@ -1,5 +1,7 @@
 """Coin's deeper-turn tool protocol."""
 import copy
+import io
+import json
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +9,19 @@ from cointos import coin
 
 
 class DeepTurn(unittest.TestCase):
+    def test_coin_requests_carry_the_configured_reasoning_cap(self):
+        reply = {"choices": [{"message": {"role": "assistant", "content": "ready"}}]}
+        captured = []
+        def respond(request, **kwargs):
+            captured.append(json.loads(request.data))
+            return io.BytesIO(json.dumps(reply).encode())
+        with patch.object(coin, "coin_key", return_value="test-key"), \
+                patch.object(coin.urllib.request, "urlopen", side_effect=respond):
+            coin.complete(coin.CONFIG["work_model"], [], timeout=1)
+            coin.complete(coin.CONFIG["work_model"], [], timeout=1, reasoning_effort="medium")
+        self.assertEqual(captured[0]["reasoning_effort"], coin.CONFIG["reasoning"]["default"])
+        self.assertEqual(captured[1]["reasoning_effort"], "medium")
+
     def test_restart_uses_the_draining_control_and_reports_refusals(self):
         self.assertIn("restart", {t["function"]["name"] for t in coin.TOOLS})
         with patch.object(coin.cli, "restart", return_value="daemon restarted") as restart:
