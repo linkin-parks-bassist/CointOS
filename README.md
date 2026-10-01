@@ -64,6 +64,9 @@ Installed `config/projects.json` is user-managed and preserved across upgrades.
 - **Live settings:** GPU time slice and generation step (`scheduler.slice_seconds`,
   `scheduler.chunk_tokens`) change from the dashboard or `POST /api/scheduler` and apply
   at the next GPU step. Other settings need a live install.
+- **Coin changes:** copied Coin code and startup settings take effect after a quiet
+  Coin-only restart; live installation preserves its running process. Confirm no pending
+  conversation work before restarting `cointos-coin.service`.
 - **Dashboard-only changes:** the daemon reads `web/dashboard.html` on every request, so
   copying that file into `~/.CointOS/web/` is enough.
 

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T00:04:55+10:00"
+revised_at: "2026-10-02T04:48:44+10:00"
 ---
 
 Use the least disruptive level that can apply the change:
@@ -22,7 +22,7 @@ The replacement daemon adopts a run only when its persisted key/task identity an
 
 `scripts/install --live` uses stronger deployment quiescence: admitted thoughts finish and new model requests wait at the gateway admission gate, outside the active-request count. Cancellation admits them; disconnect removes them; shutdown returns a retryable refusal. This avoids repeated 503 responses spending the finite retries and increasing delays in [OpenCode 1.18.33's retry policy](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.33/packages/opencode/src/session/retry.ts). Before contact it compares the candidate with the installed gateway/backend/model process-identity projection. Daemon-policy changes such as reasoning, recovery, scheduling and spawning are compatible; endpoint, backend and loaded-model topology changes are refused.
 
-At the quiet boundary it stops only cointosd, copies/upgrades the installed runtime, reloads units and starts cointosd to adopt survivors. Coin, agents and models keep running. The default wait is 60 seconds, bounded by the daemon command timeout; `--wait-seconds` changes it. Timeout cancels quiescence before copying or stopping anything. If a later step fails after cointosd stops, process-exit cleanup restarts it.
+At the quiet boundary it stops only cointosd, copies/upgrades the installed runtime, reloads units and starts cointosd to adopt survivors. Coin, agents and models keep running. Coin retains its imported code and startup settings; changes to those require the separate quiet Coin refresh owned by `how/to/install/cointos.md`. The default wait is 60 seconds, bounded by the daemon command timeout; `--wait-seconds` changes it. Timeout cancels quiescence before copying or stopping anything. If a later step fails after cointosd stops, process-exit cleanup restarts it.
 
 Live evidence establishes exact agent/session adoption without relaunch or new continuation turns. The timeout/cancellation path also leaves processes untouched. `what/is/the/live/acceptance/evidence/for/cointos.md` owns that boundary.
 

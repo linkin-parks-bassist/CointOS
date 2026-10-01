@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-02T03:59:16+10:00"
+revised_at: "2026-10-02T04:32:40+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
 
-1. **Prove automatic managerial recovery live:** integrator-confirmed worker blockers and exhausted worker retries must dispatch one manager pass without manual queueing or magic report wording; verify brief revision preserves unfinished work and an unresolved manager escalates without a loop. Observe the automatically admitted `decompose-publish-guide` manager through useful correction and checked landing of its revised/replacement work. Do not manually queue its manager or repair the probe assignment. Once its frontier settles, remove its temporary enrollment/repository/tree registration and verify the real project entries were preserved.
+1. **Close remaining managerial recovery paths:** verify integrator-confirmed worker blockers dispatch one manager pass without manual queueing or magic report wording; prove brief revision preserves unfinished artifacts and an unresolved manager escalates without a loop.
 2. **Submit the neutral-worded repository for review before publication.** Before publishing, the owner chooses between rewriting Git history and publishing a fresh squashed repository, since past commits retain personal wording. No publication or history rewrite is authorized by this plan.
 3. **At the next explicitly authorized reboot, prove the second-pass recovery fixes.** Verify complete-prefix warm disk reuse and that dead agent units return tasks to waiting without charging attempts. Do not reboot merely to test; the second-pass fixes are unit-covered.
 4. **When the user authorizes the disruptive shape change, restore intended ambient capacity:** `max_agents=4`, two work-model lanes, `ctx_size=262144`, and intended gardening.

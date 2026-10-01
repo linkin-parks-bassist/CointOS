@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T03:58:49+10:00"
+revised_at: "2026-10-02T04:48:45+10:00"
 ---
 
 # CointOS architecture
@@ -112,7 +112,7 @@ Adoption requires both persisted identity and an active systemd unit. Unknown un
 - `gateway.py`, `backend_llama.py`, `opencode.py`, `prompts.py`, `client.py`, `kt.py`, `kt_mcp.py`, `viewers.py`: external representation fingertips.
 - `api.py`, `cli.py`, `coin.py`, `settings.py`, `projects.py`, `checks.py`, `journal.py`, `web/dashboard.html`: control, presentation and diagnostics.
 
-The source repository and installed runtime are distinct. `scripts/install` owns full/live deployment; isolated dashboard or Coin-only copies follow `how/to/install/cointos.md`; `scripts/upgrade-ledger` is the one-shot schema migration boundary. Installed project enrollment is preserved separately from source defaults. New repository creation commits orientation, spec, plan and known-defects leaves before enrollment, so every initial orientation route exists. It inherits the configured `project_defaults.test_policy` unless explicitly overridden; the shipped convention protects tests/harnesses, permits knowledge/Markdown work and still requires accepted coverage for production changes. Imported repositories require a profile before worker landing. Missing optional policy lists mean empty, including older registry records. Registry mutation writes its sorted candidate before replacing the shared in-memory list; a persistence failure leaves both unchanged. `how/to/manage/the/cointos/project/registry.md` owns enrollment and its control boundaries. Runtime queue leaves are daemon projections and are never edited by agents.
+The source repository and installed runtime are distinct. `scripts/install` owns full/live deployment; isolated dashboard or Coin-only copies follow `how/to/install/cointos.md`; `scripts/upgrade-ledger` is the one-shot schema migration boundary. Installed project enrollment is preserved separately from source defaults. Coin's imported code and startup settings survive a live installation; when changed they require a separate quiet Coin-only refresh, owned by `how/to/install/cointos.md`. New repository creation commits orientation, spec, plan and known-defects leaves before enrollment, so every initial orientation route exists. It inherits the configured `project_defaults.test_policy` unless explicitly overridden; the shipped convention protects tests/harnesses, permits knowledge/Markdown work and still requires accepted coverage for production changes. Imported repositories require a profile before worker landing. Missing optional policy lists mean empty, including older registry records. Registry mutation writes its sorted candidate before replacing the shared in-memory list; a persistence failure leaves both unchanged. `how/to/manage/the/cointos/project/registry.md` owns enrollment and its control boundaries. Runtime queue leaves are daemon projections and are never edited by agents.
 
 ## Observability and current boundary
 

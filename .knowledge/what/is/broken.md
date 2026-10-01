@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-02T03:45:03+10:00"
+revised_at: "2026-10-02T04:32:40+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **Automatic managerial recovery lacks complete live proof.** Failed worker items route through one bounded manager pass using lifecycle state and assignment/receipt evidence. The live journal establishes automatic dispatch after worker exhaustion and escalation after bounded manager exhaustion. It also exposed worker-budget inheritance: a one-second worker record left the recovery manager unable to act. The corrected constructor gives recovery managers their own default budget and configured reasoning; unit coverage checks this separation, blockers, exhausted retries, brief correction, invalid prerequisite readiness and unresolved-manager escalation. Useful post-fix managerial completion remains unproved; manually queued product corrections do not establish it.
+- **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers, artifact-preserving brief correction and bounded unresolved-manager escalation still need focused current evidence. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
 - **Oversized read-heavy work can consume every fresh retry without an artifact.** Bounded recovery and manager supersession now fail honestly, but useful completion after an artifact-preserving fresh recovery remains unproved.
 - **Warm reboot recovery after the second-pass repairs is unproved.** Complete normalized system/developer-prefix pinning and active-unit-only run adoption are installed and unit-covered. A later explicitly authorized reboot must prove warm disk-tier reuse and that dead units return tasks to waiting without charging an attempt.
 - **Message-free continuation remains unverified on the current CLI.** OpenCode 1.18.33 had no verified message-free noninteractive session continuation: empty `run --session` exited with “You must provide a message or a command.” CointOS therefore sends the real user turn `Continue.` for gaps under three hours and one concise reorientation after longer gaps. Zero-message continuation would require another verified OpenCode interface; it does not block current work.

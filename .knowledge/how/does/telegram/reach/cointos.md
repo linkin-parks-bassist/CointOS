@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T00:19:51+10:00"
+revised_at: "2026-10-02T04:07:48+10:00"
 ---
 
 Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env`:
@@ -16,6 +16,10 @@ Coin long-polls `getUpdates`, accepts allow-listed text and sends replies with `
 - Every other message shares `coin.reply_seconds` (currently 12 seconds) between its control-state lookup and front-model call. The lookup is capped by the lesser of that budget and the API timeout; the model gets only the remaining time. If none remains, Coin acknowledges without starting inference. It first sends a short front-model reply through the gateway at Coin priority on its reserved lane. A deterministic formatter removes a trailing engagement question from a multi-sentence fast reply; it preserves a single-question reply.
 - Every non-status message then enters the serial work-model deep-turn queue. The deep turn may send a useful follow-up or finish silently.
 - Daemon alerts are forwarded separately to allowed users. A self-check sends one alert per incident; only 30 seconds of sustained recovery rearms that check. The daemon persists notification incident state across replacement, while the dashboard retains current details.
+
+## Alert delivery frontier
+
+Inspect pending alert forwarding by comparing the ledger's retained alert IDs with the integer cursor in `state/coin/alerts-seen.json`. The alert records themselves have no per-event acknowledgement field; retained old events are not an unread backlog. `alert_forwarder` selects IDs greater than its cursor and advances the saved cursor after forwarding the batch to the configured users. With no saved cursor, startup begins after the retained events rather than replaying them. This cursor is forwarding state, not exactly-once delivery evidence; partial delivery followed by a failure can cause a retry.
 
 Coin model requests explicitly carry the configured default reasoning effort (currently low) unless that call overrides it. The gateway therefore applies the same uninterrupted reasoning cap (256 tokens at low) as it does for managed tasks; deep control turns cannot silently fall back to uncapped model-default reasoning. The front reply still disables thinking.
 
