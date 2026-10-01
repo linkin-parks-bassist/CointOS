@@ -12,6 +12,8 @@ import hashlib
 import queue
 import re
 import secrets
+import select
+import socket
 import threading
 import time
 import traceback
@@ -255,6 +257,12 @@ class Handler(BaseHTTPRequestHandler):
             thought = lanes.begin(agent, klass, conversation, model, rendered, sampling, max_new)
             L["thoughts"][thought]["reasoning_effort"] = template.get("reasoning_effort")
             lifecycle.engaged(agent)
+        try:
+            return self.answer_thought(body, agent, model, rendered, thought)
+        finally:
+            lanes.cancel(thought)  # request ownership ends on every return or handler failure
+
+    def answer_thought(self, body: dict, agent: str, model: str, rendered: dict, thought: str):
         run = lanes.RUNS[thought]
         stream = bool(body.get("stream"))
         reply_id = "chatcmpl-" + secrets.token_hex(8)
@@ -266,6 +274,10 @@ class Handler(BaseHTTPRequestHandler):
         generated, sent, end = [], {"reasoning": "", "content": ""}, None
         try:
             while end is None:
+                # HTTP/1.0 carries one request per connection. A readable socket
+                # returning EOF means its caller left, even before a JSON reply.
+                if select.select([self.connection], [], [], 0)[0] and not self.connection.recv(1, socket.MSG_PEEK):
+                    return
                 try:
                     item = run["queue"].get(timeout=CONFIG["keepalive_seconds"])
                 except queue.Empty:
@@ -282,9 +294,8 @@ class Handler(BaseHTTPRequestHandler):
                 if stream:
                     self.send_new(reply_id, model, current, sent)
         except OSError:
-            lanes.cancel(thought)  # the asker is gone
             return
-        if end == "failed":
+        if end in ("failed", "cancelled"):
             error = {"error": {"message": "the thought failed on the model server; try again"}}
             return self.wfile.write(b"data: " + json.dumps(error).encode() + b"\n\n") if stream else self.reply(502, error)
         final = BACKEND.read(CONFIG, model, rendered["reader"], generated, True)

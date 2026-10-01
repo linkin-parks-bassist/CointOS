@@ -74,6 +74,8 @@
     "preempt_seconds": 15,
     "starve_seconds": 120,
     "agent_silent_seconds": 30,
+    "thought_stalled_seconds": 60,
+    "alert_recovery_seconds": 30,
     "max_identical_thoughts": 3,
     "exit_grace_seconds": 30
   },

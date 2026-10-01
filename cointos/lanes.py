@@ -71,7 +71,8 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
     with LOCK:
         L["thoughts"][thought_id] = {"id": thought_id, "agent": agent, "class": klass, "owner": owner, "model": model,
                                      "lane": None, "since": None, "waiting_since": now(), "warm": [], "reading": True, "opens_turn": False,
-                                     "started_at": now(), "generated": 0, "prompt": len(rendered["tokens"])}
+                                     "started_at": now(), "generated": 0, "prompt": len(rendered["tokens"]),
+                                     "read": 0, "progress_at": now()}
         RUNS[thought_id] = {"prompt": rendered["tokens"], "reader": rendered["reader"], "sampling": sampling,
                             "max": max_new, "generated": [], "queue": queue.Queue(), "cancelled": False,
                             "shared": rendered.get("shared", 0)}
@@ -169,7 +170,8 @@ def schedule() -> None:
             returning = scheduler.held_for(lane, now()) == thought["agent"] and lane.get("turn_agent") == thought["agent"]
             lane.update(turn_agent=thought["agent"], turn_since=lane["turn_since"] if returning else now(),
                         held_for=None, held_until=0)
-            thought.update(lane=position, since=lane["turn_since"], waiting_since=None, opens_turn=not returning)
+            thought.update(lane=position, since=lane["turn_since"], waiting_since=None, opens_turn=not returning,
+                           progress_at=now())
     LOCK.notify_all()
 
 
@@ -216,6 +218,7 @@ def arrived(thought: dict, run: dict, new: list[int]) -> None:
     run["queue"].put(new)
     with LOCK:
         thought["generated"] += len(new)  # live display; committed token history advances at the step boundary
+        thought["progress_at"] = now()
         agent = L["agents"].get(thought["agent"])
         if agent is not None:
             agent["generated"] += len(new)
@@ -289,7 +292,9 @@ def worker(position: int) -> None:
                 generation_started = time.monotonic()
                 result = BACKEND.think(CONFIG, model, index, tokens, held, min(chunk, run["max"] - len(run["generated"])),
                                        run["sampling"], lambda new: arrived(thought, run, new))
-                holds = tokens + result["tokens"][:-1] if result["tokens"] else tokens
+                if not result["tokens"] and not result["done"]:
+                    raise RuntimeError("generation step neither advanced nor ended the thought")
+                holds = result["held"]
             failure = None
         except BACKEND.Lost as error:  # the server dropped the lane's state: it holds nothing known
             result, holds, failure = {"tokens": [], "done": False}, [], None
@@ -305,10 +310,16 @@ def worker(position: int) -> None:
             run["generated"] += result["tokens"]
             thought["generated"] = len(run["generated"])
             HELD[position] = holds
+            read = min(len(holds), thought["prompt"])
+            if read > thought["read"] or (not generating and holds):
+                # A lost or displaced cache must be prepared again. Successful
+                # bounded rereading is work, even below an earlier read frontier.
+                thought.update(read=max(read, thought["read"]), progress_at=now())
             L["lanes"][position]["resident"] = thought["owner"]
             agent = L["agents"].get(thought["agent"])
             if agent is not None and generating:
-                agent["generation_seconds"] = agent.get("generation_seconds", 0) + time.monotonic() - generation_started
+                agent["generation_seconds"] = agent.get("generation_seconds", 0) + result.get(
+                    "generation_seconds", time.monotonic() - generation_started)
                 agent["generation_tokens"] = agent.get("generation_tokens", 0) + len(result["tokens"])
             if agent is not None and result.get("rate"):
                 agent["rate"] = round(result["rate"], 1)  # the model's own speed on its last full step

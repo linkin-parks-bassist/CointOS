@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T10:31:18+10:00"
+revised_at: "2026-10-01T21:55:39+10:00"
 ---
 
 Use the least disruptive level that can apply the change:
@@ -25,6 +25,10 @@ The replacement daemon adopts a run only when its persisted key/task identity an
 At the quiet boundary it stops only cointosd, copies/upgrades the installed runtime, reloads units and starts cointosd to adopt survivors. Coin, agents and models keep running. The default wait is 60 seconds, bounded by the daemon command timeout; `--wait-seconds` changes it. Timeout cancels quiescence before copying or stopping anything. If a later step fails after cointosd stops, process-exit cleanup restarts it.
 
 Live evidence establishes exact agent/session adoption without relaunch or new continuation turns. The timeout/cancellation path also leaves processes untouched. `what/is/the/live/acceptance/evidence/for/cointos.md` owns that boundary.
+
+## Emergency containment
+
+For a Telegram alert flood or an abandoned thought that prevents drain, stop Coin first (`systemctl --user stop cointos-coin.service`), pause and requeue agents with `cointos stop`, then stop `cointosd.service` if the detached request remains. This clears in-memory gateway requests without unloading the shared models. It is an emergency shutdown, not a substitute for the ordinary drain handshake. Repair and verify the gateway while paused before starting Coin or releasing autonomous work.
 
 ## Full shutdown and reboot
 

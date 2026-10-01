@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T10:25:48+10:00"
+revised_at: "2026-10-01T22:14:52+10:00"
 ---
 
 Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared by CointOS and other local clients. Its control API is `http://127.0.0.1:13305`; logs are in `journalctl -u lemond`. CointOS is a client, not its owner, and must tolerate another client reloading a model onto a different backend URL.
@@ -19,12 +19,14 @@ Lemonade and its llama-server children run in `inference.slice`. Snapshot files 
 The backend uses these model-server operations:
 
 - `/apply-template`, `/tokenize` and `/detokenize` translate between structured conversation and tokens.
-- Streaming `/completion` extends a specified slot with `cache_prompt`, explicit token input, bounded `n_predict` and prompt-progress reports.
+- `/completion` prepares explicit token prefixes with streamed prompt-progress reports, then generates a bounded complete token vector with `cache_prompt` and `n_predict`.
 - `/slots/N?action=save|restore|erase` moves a slot state to or from the configured snapshot directory.
 
-A completion request is a bounded GPU step. Closing its HTTP connection is not a reliable instantaneous interrupt because llama-server may notice only when it next writes; CointOS therefore bounds reads and generation and switches between completed steps. The first prompt-progress report reveals how much state the server actually retained. If it retained materially less than CointOS recorded, the backend raises `Lost`, clears that lane's assumed state and resumes through ordinary bounded reads.
+A completion request is a bounded GPU step. `backend_llama.prefill` streams prompt progress, rejects an error or missing terminal event, and verifies the final cached token count. The first progress report reveals how much state the server retained; materially lost state raises `Lost` before an unbounded reread. `think` verifies the prepared prefix, then requests a non-streaming, token-only bounded completion and checks terminal status, complete token count and cached-state length. Both calls use the configured server timeout. The generation duration is measured after prefix preparation and returned separately, so this extra cache verification does not spend an agent's generation budget.
 
-The configured Qwen models are hybrid recurrent/attention models. A saved state is reusable only when its tokens are a prefix of the next prompt. To generate without rereading the whole prompt, a prepared state stops one token short; after bounded generation the state holds the submitted context plus generated tokens except the last returned token. A connection cut mid-generation can leave an unseen token in server state, so an abandoned in-flight thought resumes from its committed checkpoint rather than assuming the cut state is exact.
+The installed llama-server build is `b10723-010be9683`. Its text stream suppresses tokens inside incomplete UTF-8 characters, and even native completions pass isolated output through a chat parser that rejects leading continuation bytes. Token steps therefore supply a no-op epsilon `chat_parser` and restrict response fields to token/state metadata. This is a raw-token boundary: Qwen message/tool interpretation remains in `backend_llama.read` over the whole thought. Trailing detokenizer replacement characters are withheld during outward streaming until the character is complete. A real work-model test split 🦦 into `[9008, 99, 99]` and preserved all three IDs across one-token steps. A zero-token, nonterminal generation result is rejected; the lane clears unknown state and ends that thought rather than replaying it.
+
+The configured Qwen models are hybrid recurrent/attention models. A saved state is reusable only when its tokens are a prefix of the next prompt. To generate without rereading the whole prompt, a prepared state stops one token short. After generation, the backend derives the exact known retained prefix from `tokens_cached` and the complete prompt/output token vector; the lane never fabricates this prefix from output count. MTP may retain draft tokens beyond a finished reply: an unreturned tail is marked cold while the valid complete reply is delivered. A connection cut mid-generation can leave an unseen token in server state, so an abandoned in-flight thought resumes from its committed checkpoint rather than assuming the cut state is exact.
 
 ## Active model policy
 

@@ -18,6 +18,29 @@ def silent_agents(config: dict, ledger: dict, now: float) -> list[str]:
             and now - agent["last_activity"] > config["checks"]["agent_silent_seconds"]]
 
 
+def stalled_thoughts(config: dict, ledger: dict, now: float) -> list[dict]:
+    """A held thought must prepare context or generate, regardless of caller."""
+    return [t for t in ledger["thoughts"].values() if t["lane"] is not None
+            and now - t["progress_at"] > config["checks"]["thought_stalled_seconds"]]
+
+
+def notifications(config: dict, incidents: dict, results: list[dict], now: float) -> list[str]:
+    """One notification per incident; only sustained recovery rearms it."""
+    messages = []
+    for check in results:
+        name = check["name"]
+        if not check["ok"]:
+            if name not in incidents:
+                messages.append(f"Self-check failed: {name}: {check['detail']}")
+            incidents[name] = None
+        elif name in incidents:
+            if incidents[name] is None:
+                incidents[name] = now
+            elif now - incidents[name] >= config["checks"]["alert_recovery_seconds"]:
+                del incidents[name]
+    return messages
+
+
 def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[int]],
              blocked: frozenset = frozenset()) -> list[dict]:
     """`processes` maps agent id to the live pids found carrying that id."""
@@ -64,6 +87,9 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
     check("no looping agent", [
         f"{agent_id} repeated one thought {agent['repeats']} times"
         for agent_id, agent in ledger["agents"].items() if agent["repeats"] > limits["max_identical_thoughts"]])
+
+    check("no stalled thought", [f"{t['agent']} thought {t['id']} made no progress for {now - t['progress_at']:.0f}s"
+                                for t in stalled_thoughts(config, ledger, now)])
 
     # The run observer owns exit detection and reports it to the lifecycle reducer. A process can
     # exit normally before that observer releases its run; absence is not an invariant violation.

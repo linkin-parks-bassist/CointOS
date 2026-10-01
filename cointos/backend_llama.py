@@ -4,11 +4,10 @@ The core speaks in models, lanes, contexts and snapshots; this module turns thos
 Lemonade's load API and llama-server's token completions and slot snapshots
 (`how/does/lemonade/serve/models.md`). Facts it relies on:
 - a completion with `n_predict: 0` leaves the lane holding exactly the tokens sent;
-- one stopped at `n_predict` leaves it holding every token sent but the last received, so
-  continuing with all tokens received reads just one token;
-- llama-server notices a closed connection only when it next writes. Completions here stream
-  prompt progress, which it writes at every batch, so a read abandoned at its first report
-  stops within one batch; otherwise every call runs to its own end;
+- a step reports its retained token count; a speculative tail beyond the returned
+  token history is unknown state, even when the complete reply is valid;
+- prompt preparation streams progress so a lost prefix can be abandoned within a batch;
+  generation returns a complete bounded token vector, without parsing per-step UTF-8 text;
 - the server can drop a lane's state between requests (seen after a restore, without any
   warning). Its first progress report says how much it kept (`cache`), before it reads.
 """
@@ -21,6 +20,7 @@ import os
 import re
 import shlex
 import shutil
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +32,12 @@ class Lost(Exception):
 
 
 _urls: dict[str, str] = {}  # model -> its llama-server, as last reported by Lemonade
+
+# Native token steps have no chat message to parse. In b10723, even /completion
+# otherwise runs the UTF-8 chat parser on each isolated step's text; a continuation
+# byte at a step boundary is valid token history but invalid standalone text.
+TOKEN_PARSER = json.dumps({"parsers": [{"type": "epsilon"}], "rules": {}, "root": 0})
+TOKEN_FIELDS = ["tokens", "stop", "stop_type", "tokens_predicted", "tokens_cached", "timings"]
 
 
 def _call(url: str, body: dict | None, timeout: float):
@@ -151,15 +157,17 @@ def render(config: dict, model: str, conversation: dict) -> dict:
     return {"tokens": tokens, "reader": reader}
 
 
-def _complete(config: dict, model: str, lane: int, body: dict, held: int, on_tokens=None) -> dict:
-    """One streamed completion on a lane known to hold the first `held` tokens of its prompt.
-    Raises `Lost` if the server kept less than that, bar one read chunk (a hybrid model may
-    step back to a checkpoint), instead of reading the rest without bound."""
+def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> None:
+    """Read a bounded prefix, checking both initial cache retention and final state.
+
+    Prompt progress can abandon a lost prefix before an unbounded reread. The
+    sampled token from an n_predict=0 request is discarded; only its prompt is held.
+    """
     target = urllib.parse.urlparse(_urls[model])
-    connection = http.client.HTTPConnection(target.hostname, target.port, timeout=None)
-    body = {**body, "stream": True, "return_progress": True, "id_slot": lane, "cache_prompt": True,
-            "return_tokens": True}
-    result = {"tokens": [], "done": False, "rate": None}
+    connection = http.client.HTTPConnection(target.hostname, target.port, timeout=config["timeouts"]["server_seconds"])
+    body = {"prompt": tokens, "n_predict": 0, "stream": True, "return_progress": True,
+            "id_slot": lane, "cache_prompt": True, "return_tokens": True,
+            "chat_parser": TOKEN_PARSER, "response_fields": TOKEN_FIELDS}
     try:
         connection.request("POST", "/completion", json.dumps(body), {"Content-Type": "application/json"})
         response = connection.getresponse()
@@ -169,41 +177,53 @@ def _complete(config: dict, model: str, lane: int, body: dict, held: int, on_tok
             if not line.startswith(b"data: "):
                 continue
             event = json.loads(line[6:])
+            if "error" in event:
+                raise RuntimeError(f"{model} lane {lane}: {event['error']}")
             progress = event.get("prompt_progress")
-            if progress is not None:  # its "tokens" are placeholders, not generated tokens
+            if progress is not None:
                 if progress["cache"] < held - config["scheduler"]["read_chunk_tokens"]:
                     raise Lost(f"{model} lane {lane} kept {progress['cache']} of {held} tokens")
-                continue
-            new = event.get("tokens") or []
-            if new:
-                result["tokens"] += new
-                if on_tokens:
-                    on_tokens(new)
-            if event.get("stop"):
-                result["done"] = event.get("stop_type") != "limit"
-                timings = event.get("timings") or {}
-                if timings.get("predicted_n", 0) >= 16 and timings.get("predicted_ms"):
-                    result["rate"] = timings["predicted_n"] * 1000 / timings["predicted_ms"]
-                break
+            elif event.get("stop"):
+                if event.get("tokens_cached") != len(tokens):
+                    raise RuntimeError(f"{model} lane {lane}: prefill retained an unknown prefix {event}")
+                return
+        raise RuntimeError(f"{model} lane {lane}: completion stream ended without a stop event")
     finally:
         connection.close()
-    return result
-
-
-def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> None:
-    """Make the lane, known to hold `tokens[:held]`, hold exactly `tokens`, reading only what it
-    does not hold yet. The caller keeps each call short by growing `tokens` a piece at a time."""
-    _complete(config, model, lane, {"prompt": tokens, "n_predict": 0}, held)
 
 
 def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max_new: int, sampling: dict,
           on_tokens) -> dict:
     """Extend a context on a lane known to hold `tokens[:held]` by up to `max_new` tokens, calling
     `on_tokens(new)` as they come. Returns {"tokens": the new tokens, "done": the thought ended,
-    "rate": the model's own generation speed for this call in tokens per second, or None if too
-    short to tell}. Afterwards the lane holds every token sent and received except the last one
-    received."""
-    return _complete(config, model, lane, {**sampling, "prompt": tokens, "n_predict": max_new}, held, on_tokens)
+    "rate": the model's own generation speed, "held": the exact known retained prefix}.
+    Speculative decoding can retain draft tokens beyond a terminal reply; such state
+    is cold, even though the complete reply itself is valid."""
+    # Streamed text suppresses tokens inside incomplete UTF-8 characters. A bounded
+    # token step needs the complete token vector, independent of text encoding.
+    # Verify the prepared prefix with prompt progress before the buffered generation.
+    prefill(config, model, lane, tokens[:-1], held)
+    started = time.monotonic()  # prefix preparation does not spend the agent's generation budget
+    event = _server(model, "/completion", {**sampling, "prompt": tokens, "n_predict": max_new,
+                    "id_slot": lane, "cache_prompt": True, "stream": False, "return_tokens": True,
+                    "chat_parser": TOKEN_PARSER,
+                    "response_fields": TOKEN_FIELDS},
+                    config["timeouts"]["server_seconds"])
+    new = event.get("tokens") or []
+    cached = event.get("tokens_cached")
+    if (not event.get("stop") or event.get("tokens_predicted") != len(new)
+            or (not new and event.get("stop_type") == "limit")
+            or not isinstance(cached, int) or cached < 0):
+        raise RuntimeError(f"{model} lane {lane}: incomplete token step {event}")
+    if new:
+        on_tokens(new)
+    timings = event.get("timings") or {}
+    rate = (timings["predicted_n"] * 1000 / timings["predicted_ms"]
+            if timings.get("predicted_n", 0) >= 16 and timings.get("predicted_ms") else None)
+    known = tokens + new
+    return {"tokens": new, "done": event.get("stop_type") != "limit", "rate": rate,
+            "held": known[:cached] if cached <= len(known) else [],
+            "generation_seconds": time.monotonic() - started}
 
 
 def _snapshot(name: str) -> str:
@@ -279,6 +299,8 @@ def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool)
     The split mirrors how the Qwen template renders an assistant turn, so that the next render
     reproduces these tokens exactly and the lane state can be continued."""
     text = _server(model, "/detokenize", {"tokens": tokens}, config["timeouts"]["server_seconds"])["content"] if tokens else ""
+    if not final:
+        text = text.rstrip("\ufffd")  # a UTF-8 fragment must not be streamed as irreversible replacement text
     for end in END_OF_TURN:
         text = text.removesuffix(end)
     reasoning, rest = "", text

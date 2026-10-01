@@ -168,11 +168,10 @@ def tick(timers: dict) -> None:
             if now() - ended_at > CONFIG["checks"]["exit_grace_seconds"]:
                 del L["exiting"][agent_id]
         L["checks"] = checks.evaluate(CONFIG, L, now(), processes, lanes.blocked())
-        failing = [c["name"] for c in L["checks"] if not c["ok"]]
-        for check in L["checks"]:
-            if not check["ok"] and check["name"] not in L["failing"]:
-                alert(f"Self-check failed: {check['name']}: {check['detail']}")
-        L["failing"] = failing
+        for message in checks.notifications(CONFIG, L["check_incidents"], L["checks"], now()):
+            alert(message)
+        for thought in checks.stalled_thoughts(CONFIG, L, now()):
+            lanes.cancel(thought["id"])
     save()
     if queue_changed:
         queues.publish()

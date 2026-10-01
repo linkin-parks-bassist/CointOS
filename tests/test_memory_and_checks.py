@@ -8,6 +8,7 @@ CONFIG = {
     "memory": {"reserve_gb": 24, "max_psi": 1.0},
     "scheduler": {"slice_seconds": 30},
     "checks": {"idle_lane_seconds": 5, "preempt_seconds": 15, "starve_seconds": 120,
+               "thought_stalled_seconds": 60, "alert_recovery_seconds": 30,
                "agent_silent_seconds": config.load()["checks"]["agent_silent_seconds"],
                "max_identical_thoughts": 3},
 }
@@ -52,7 +53,7 @@ def lane(holder=None, free_since=0, model="work", index=0):
 
 def thought(id, klass, lane=None, waiting_since=None, agent=None, model="work", since=0, reading=False):
     return {"id": id, "agent": agent or id, "class": klass, "model": model, "lane": lane, "waiting_since": waiting_since,
-            "since": since, "reading": reading}
+            "since": since, "reading": reading, "progress_at": 1000}
 
 
 def ledger(lanes, thoughts, agents=None, exiting=None, headroom=10.0):
@@ -66,6 +67,25 @@ class Checks(unittest.TestCase):
 
     def test_green(self):
         self.assertEqual(self.failing(ledger([lane()], [])), set())
+
+    def test_stalled_coin_is_detected_even_while_it_claims_to_be_reading(self):
+        stuck = {**thought('c', 'coin', lane=0, reading=True), 'progress_at': 10}
+        state = ledger([lane(holder='c')], [stuck])
+        self.assertIn('no stalled thought', self.failing(state, now=71))
+        state['thoughts']['c']['lane'] = None
+        state['thoughts']['c']['waiting_since'] = 10
+        self.assertNotIn('no stalled thought', self.failing(state, now=1000))
+
+    def test_flapping_check_notifies_once_until_sustained_recovery(self):
+        incidents = {}
+        bad = [{'name': 'starves', 'ok': False, 'detail': 'waiting 150s'}]
+        good = [{'name': 'starves', 'ok': True, 'detail': ''}]
+        self.assertEqual(len(checks.notifications(CONFIG, incidents, bad, 0)), 1)
+        for at in range(1, 100):
+            self.assertEqual(checks.notifications(CONFIG, incidents, good if at % 2 else bad, at), [])
+        self.assertEqual(checks.notifications(CONFIG, incidents, good, 100), [])
+        self.assertEqual(checks.notifications(CONFIG, incidents, good, 131), [])
+        self.assertEqual(len(checks.notifications(CONFIG, incidents, bad, 132)), 1)
 
     def test_idle_lane_while_an_agent_waits(self):
         self.assertEqual(self.failing(ledger([lane()], [thought("a", "background", waiting_since=90)])),

@@ -68,7 +68,8 @@ def fresh(previous: dict) -> dict:
                                         for name, shape in CONFIG["models"].items()}, "guard": {"rung": 0, "rung_at": 0, "calm_since": None, "distress_since": None,
                                                         "killed": False, "blocked": False},
         "history": previous.get("history", []), "alerts": previous.get("alerts", []),
-        "next_alert": previous.get("next_alert", 0), "checks": [], "failing": [],
+        "next_alert": previous.get("next_alert", 0), "checks": [],
+        "check_incidents": previous.get("check_incidents", {}),
         "user_last_thought": 0, "cadence": previous.get("cadence", {}), "trees": {},
     }
 

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T18:07:11+10:00"
+revised_at: "2026-10-01T22:24:34+10:00"
 ---
 
 # CointOS architecture
@@ -45,7 +45,9 @@ At each boundary:
 3. A tool call yields the lane. A bounded grace may retain it for a quick follow-up within the same unexpired slice; grace never extends the slice.
 4. Placement prefers the agent's held lane, then a warm lane, then a free lane, then an eligible unreserved lane.
 
-The server reports retained prompt state at each step. If it retained materially less than CointOS recorded, the backend raises `Lost` and the lane becomes cold instead of pretending its cache survived.
+The backend verifies retained prompt state before each generation step. Prompt preparation streams progress so a lost prefix can be refused before an unbounded reread; generation returns the complete bounded token vector without per-step text parsing. Complete token counts and cached-state lengths are checked. The backend returns the sole authoritative known retained prefix; speculative draft state beyond the returned token history is marked cold without rejecting a valid reply. UTF-8 fragments are valid token history and are assembled before outward text streaming. Missing terminal events, backend error events, incomplete vectors and nonterminal steps with no tokens cannot become known lane state: the thought fails and the lane becomes cold.
+
+Every thought belongs to its gateway request. The handler cancels it on every exit, including errors before response headers. It also polls for peer EOF while waiting for both JSON and streaming replies. A waiting thought is removed immediately; an in-flight step finishes before releasing its lane. HTTP callers timing out cannot leave detached high-priority work behind.
 
 Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`.
 
@@ -83,7 +85,9 @@ The workstation's unified RAM is one pool. `memory.py` derives headroom from `Me
 
 Snapshots give way first. Sustained negative headroom stops background agents uncharged, then unloads the work model. Sustained PSI distress shortcuts to the protective top rung. Recovery descends only after configured calm time. Swap use is diagnostic, not itself a stop threshold.
 
-Self-check covers idle lanes with work waiting, priority pre-emption, starvation, agent silence, repeated thoughts, stray agent processes, dead dependencies, memory bounds and journal writability. Violations appear in CLI/dashboard and alert Coin.
+Self-check covers idle lanes with work waiting, priority pre-emption, starvation, agent silence, repeated thoughts, stalled thoughts, stray agent processes, dead dependencies, memory bounds and journal writability. A held thought must advance context preparation or generate within `checks.thought_stalled_seconds` (60); Coin and user thoughts share this rule with managed agents. Waiting for a lane does not count. Successful bounded rereading after displacement or cache loss refreshes progress even below an earlier read frontier; restoring a snapshot or recording a failed step does not. The daemon cancels stalled thoughts at the next safe step boundary.
+
+Checks are current observations; `check_incidents` owns notification lifetime. A new failing check produces one Coin alert. Brief green observations do not rearm it: it must remain clear for `checks.alert_recovery_seconds` (30). Incident state survives daemon replacement, while CLI/dashboard details continue updating each tick. This prevents changing wait durations and read/generate transitions from flooding Telegram.
 
 ## Replacement hierarchy
 

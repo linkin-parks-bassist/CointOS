@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T10:31:18+10:00"
+revised_at: "2026-10-01T21:55:07+10:00"
 ---
 
 Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env`:
@@ -15,7 +15,9 @@ Coin long-polls `getUpdates`, accepts allow-listed text and sends replies with `
 - `status` and `/status` use the control surface directly without inference.
 - Every other message first receives a short front-model reply through the gateway at Coin priority on its reserved lane. A deterministic formatter removes a trailing engagement question from a multi-sentence fast reply; it preserves a single-question reply.
 - Every non-status message then enters the serial work-model deep-turn queue. The deep turn may send a useful follow-up or finish silently.
-- Daemon alerts are forwarded separately to allowed users.
+- Daemon alerts are forwarded separately to allowed users. A self-check sends one alert per incident; only 30 seconds of sustained recovery rearms that check. The daemon persists notification incident state across replacement, while the dashboard retains current details.
+
+Coin's JSON model requests are request-owned: the gateway detects peer EOF while waiting, cancels disconnected callers and releases an in-flight thought at its step boundary. Coin thoughts are included in the 60-second no-progress check. Backend token steps preserve UTF-8 fragments without allowing text-parser errors or truncated replies to become a lane replay loop.
 
 The deep turn uses typed tools for status, agents, jobs, checks, queue/task controls, project registry, lifecycle controls, scoped operator launch and knowledge-tree access. Each model tool request is answered with a `tool` message carrying that exact request ID and tool name. Repeated identical calls reuse their result within the turn. The configured round budget is eight ordinary tool rounds plus up to three terminal finishing rounds.
 

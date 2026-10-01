@@ -31,7 +31,7 @@ class Turns(unittest.TestCase):
         state.L["thoughts"][agent] = {
             "id": agent, "agent": agent, "class": "background", "owner": agent, "model": WORK, "lane": None,
             "since": None, "waiting_since": state.now(), "warm": [], "reading": True, "opens_turn": False,
-            "started_at": state.now(), "generated": 0, "prompt": len(tokens)}
+            "started_at": state.now(), "generated": 0, "prompt": len(tokens), "read": 0, "progress_at": state.now()}
         lanes.RUNS[agent] = {"prompt": tokens, "generated": [], "queue": queue.Queue(), "cancelled": False}
 
     def read_done(self, agent):
@@ -142,7 +142,7 @@ class Turns(unittest.TestCase):
                 self.assertEqual(lanes.BUSY[0], 'a')
             else:
                 state.STOPPING.set()
-            return {'tokens': [7] * count, 'done': False}
+            return {'tokens': [7] * count, 'done': False, 'held': tokens + [7] * (count - 1)}
         with patch.object(lanes.BACKEND, 'think', side_effect=think):
             lanes.worker(0)
         self.assertEqual([c[0] for c in calls], [96, 16])
@@ -165,7 +165,7 @@ class Turns(unittest.TestCase):
             on_tokens(new)
             if len(calls) == 2:
                 state.STOPPING.set()
-            return {'tokens': new, 'done': len(calls) == 2}
+            return {'tokens': new, 'done': len(calls) == 2, 'held': tokens + new[:-1]}
         def prefill(config, model, index, tokens, held):
             reads.append((list(tokens), held))
         with patch.object(lanes.BACKEND, 'think', side_effect=think), \
@@ -203,6 +203,38 @@ class Turns(unittest.TestCase):
         self.thought("a", [1, 2, 3])
         lanes.finish("a", "failed")  # e.g. its model went away after a long thought
         self.assertLess(state.now() - state.L["agents"]["a"]["last_activity"], 1)
+
+    def test_a_generation_step_without_progress_cannot_replay_or_claim_the_whole_context(self):
+        self.addCleanup(state.STOPPING.clear)
+        self.thought('a', [1, 2, 3])
+        run = lanes.RUNS['a']
+        run.update(sampling={}, max=100)
+        lanes.schedule()
+        self.read_done('a')
+        def empty(*args):
+            state.STOPPING.set()
+            return {'tokens': [], 'done': False}
+        with patch.object(lanes.BACKEND, 'think', side_effect=empty), \
+             patch.object(lanes.traceback, 'print_exc'), patch.object(lanes, 'alert'):
+            lanes.worker(0)
+        self.assertFalse(state.L['thoughts'])
+        self.assertEqual(lanes.HELD[0], [])
+        self.assertEqual(run['queue'].get_nowait(), {'end': 'failed'})
+
+    def test_bounded_rereading_after_cache_loss_is_progress_below_an_old_frontier(self):
+        self.addCleanup(state.STOPPING.clear)
+        self.thought('a', [1, 2, 3, 4, 5, 6])
+        lanes.RUNS['a'].update(sampling={}, max=100)
+        lanes.schedule()
+        thought = state.L['thoughts']['a']
+        thought.update(read=5, progress_at=state.now() - 1000)
+        lanes.HELD[0] = [1, 2]
+        def prefill(*args):
+            state.STOPPING.set()
+        with patch.object(lanes.BACKEND, 'prefill', side_effect=prefill):
+            lanes.worker(0)
+        self.assertEqual(thought['read'], 5)
+        self.assertLess(state.now() - thought['progress_at'], 1)
 
 
 if __name__ == "__main__":
