@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T06:18:41+10:00"
+revised_at: "2026-10-02T06:22:17+10:00"
 ---
 
 Agents are OpenCode sessions whose only model provider is the CointOS gateway. The on-disk CLI is `~/.local/bin/opencode` 1.18.34; already-running servers may retain their launch version. `cointos/opencode.py` owns per-run configuration, transient units, server/client supervision and event following; `runs.py` owns launch/adoption; `prompts.py` owns the launch message.
@@ -18,7 +18,7 @@ Each run gets a mode-0600 `state/agents/<id>/opencode.json` containing its gatew
 - read, edit and external-directory denial for every directory listed in the machine-local, untracked `~/.config/cointos/private-paths` (one per line, `#` comments, `~` expanded; absent means none). No ability lifts it, and the source never names those directories;
 - edit-tool denial for protected test/harness paths on implementation work. Bash remains same-user capability; the landing gate, not OpenCode permission, enforces commit policy.
 
-Task reasoning effort is daemon metadata. The gateway pins it when rendering and enforces per-reply reasoning caps of 256/384/1,024 tokens for low/medium/xhigh, closing the think block on the same token history before answer/tool generation. Test-contract workers, integrations reviewing test-contract workers and managers default medium; other tasks use their role/default effort. Review defaults do not inherit the worker's explicit overrides, and existing tasks keep their pinned effort. A changed effort applies to the next reply, not an already rendered thought.
+Task reasoning effort is daemon metadata. The gateway pins it when rendering and enforces per-reply reasoning caps of 256/384/1,024 tokens for low/medium/xhigh, closing the think block on the same token history before answer/tool generation. Creation and integration review of test contracts use the configured test-contract effort (medium by default); managers also default medium. Other tasks use their role/default effort. Review defaults do not inherit the worker's explicit overrides, and existing tasks keep their pinned effort. A changed effort applies to the next reply, not an already rendered thought.
 
 ## Stable task prefix
 
