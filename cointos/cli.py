@@ -448,7 +448,7 @@ def parser() -> argparse.ArgumentParser:
     holding = sub.add_parser("hold", help="keep a queue item from starting while you decide about it")
     holding.add_argument("item", help="PROJECT:ITEM")
     holding.add_argument("--release", action="store_true", help="release your hold without revising")
-    revising = sub.add_parser("revise", help="change what a queue item asks for; its task restarts on the new brief")
+    revising = sub.add_parser("revise", help="replace a brief; omitted stage, reasoning and budget metadata is retained")
     revising.add_argument("item", help="PROJECT:ITEM")
     revising.add_argument("brief", help="the complete revised brief, including any Depends on: line")
     revising.add_argument("--reason", required=True, help="why the item changes")

@@ -82,6 +82,10 @@ on the new brief, keeping its branch. `cointos hold PROJECT:ITEM --release` lift
 revision; your holds also end when your own task settles. Accepted work cannot be revised; queue
 new work instead.
 
+Omitted stage, reasoning effort and budget limits retain their current values during revision.
+Provide metadata flags only when changing those values; named budget limits merge with the old
+limits. A wording correction must preserve the test-contract/skeleton stage and its permissions.
+
 Queue only through the daemon API, using `cointos queue`. `--kind urgent` places a
 task first, `--kind queued` submits ordinary work, and `--kind command` submits a
 general manager command. Include `Depends on: name, other-name` in the brief.

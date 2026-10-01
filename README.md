@@ -178,6 +178,10 @@ memory breakdown, self-checks), Recently and Projects on the right. **Clear task
 removes terminal records no unfinished work still references. It retains task evidence and
 sessions for transitive prerequisites, recovery work and workers of waiting integrators.
 
+Brief revisions retain omitted construction stage, reasoning effort and budget limits;
+explicit budget changes merge the named limits. Correcting wording must preserve the
+test-contract/implementation boundary.
+
 ## Development
 
 The repository's own knowledge tree (`.knowledge/`) is the design record: start with

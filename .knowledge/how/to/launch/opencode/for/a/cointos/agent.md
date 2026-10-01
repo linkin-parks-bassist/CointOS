@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-01T07:43:45+10:00"
+revised_at: "2026-10-02T01:40:58+10:00"
 ---
 
-Agents are OpenCode sessions whose only model provider is the CointOS gateway. The installed binary is `~/.local/bin/opencode` 1.18.33. `cointos/opencode.py` owns per-run configuration, transient units, server/client supervision and event following; `runs.py` owns launch/adoption; `prompts.py` owns the launch message.
+Agents are OpenCode sessions whose only model provider is the CointOS gateway. The on-disk CLI is `~/.local/bin/opencode` 1.18.34; already-running servers may retain their launch version. `cointos/opencode.py` owns per-run configuration, transient units, server/client supervision and event following; `runs.py` owns launch/adoption; `prompts.py` owns the launch message.
 
 ## Per-run configuration
 
@@ -32,7 +32,7 @@ A run is a transient `cointos-agent-<id>.service` with its own worktree, memory 
 
 The unit starts a private loopback `opencode serve`, then `opencode run --attach URL --dir WORKTREE --format json --auto --title TITLE --model cointos/MODEL`. New runs receive the complete role/assignment/budget message on stdin. Resumed tasks add `--session SESSION_ID`.
 
-OpenCode rejects an empty noninteractive resumed invocation. For an interruption under three hours CointOS supplies the real user turn `Continue.`; after a longer gap it supplies one concise reorientation plus budget notice. OpenCode persists `Continue.` in session context; agents normally treat it as a seamless imperative. Adoption of an already-running unit launches no client and injects no message.
+The verified 1.18.33 interface rejects an empty noninteractive resumed invocation; empty-resume behavior has not been rechecked on the current 1.18.34 CLI. For an interruption under three hours CointOS supplies the real user turn `Continue.`; after a longer gap it supplies one concise reorientation plus budget notice. OpenCode persists `Continue.` in session context; agents normally treat it as a seamless imperative. Adoption of an already-running unit launches no client and injects no message.
 
 A run becomes assignment-engaged only when its first thought is admitted. Exit before that point is a separately bounded launch failure and refunds the task attempt. After engagement, execution facts from `server.json`, `events.jsonl` and `exit.json` go to the lifecycle reducer; only a validated completion receipt decides task outcome.
 

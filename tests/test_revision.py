@@ -78,6 +78,22 @@ class Revision(unittest.TestCase):
 
     # ------------------------------------------------ revising
 
+    def test_brief_revision_preserves_construction_metadata_unless_explicitly_changed(self):
+        worker = support.queued(self.project, "contract", "Write tests", stage="test-contract",
+                                reasoning_effort="xhigh", budget={"generation_seconds": 123, "generation_tokens": 456})
+        self.as_manager("revise", item=worker["id"], brief="Correct the test brief", reason="false premise")
+        record = state.L["queue"][worker["id"]]
+        self.assertEqual((record["stage"], worker["stage"]), ("test-contract", "test-contract"))
+        self.assertEqual((record["reasoning_effort"], worker["reasoning_effort"]), ("xhigh", "xhigh"))
+        self.assertEqual(record["budget"], {"generation_seconds": 123, "generation_tokens": 456})
+        self.assertEqual(worker["budget"], record["budget"])
+        self.as_manager("revise", item=worker["id"], brief="Implement the tested behavior", reason="new stage",
+                        stage="implementation", reasoning_effort="low", budget={"generation_tokens": 789})
+        self.assertEqual((record["stage"], worker["stage"]), ("implementation", "implementation"))
+        self.assertEqual(worker["reasoning_effort"], "low")
+        self.assertEqual(record["budget"], {"generation_seconds": 123, "generation_tokens": 789})
+        self.assertEqual(worker["budget"], record["budget"])
+
     def test_revising_an_undispatched_item_replaces_its_brief_and_dependencies(self):
         queues.add(self.project, "queued", "iface", "Extend the interface")
         queues.add(self.project, "queued", "impl", "Implement it")

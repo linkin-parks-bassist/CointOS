@@ -148,7 +148,7 @@ def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=No
     if budget is not None:
         schema.budget(CONFIG, budget)
     fields = {"brief": brief.strip(), "depends": depends(brief),
-              "stage": schema.stage(stage or "implementation") if kind == "queued" else None,
+              "stage": schema.stage("implementation" if stage is None else stage) if kind == "queued" else None,
               "reasoning_effort": schema.effort(reasoning_effort),
               "hash": hashlib.sha256(brief.strip().encode()).hexdigest()[:16]}
     if budget is not None:
@@ -158,8 +158,16 @@ def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=No
 
 def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=None) -> None:
     """Replace what a record asks for. It queues again: an earlier blocker or decomposition request
-    described the previous brief."""
-    revised = contents(record["kind"], brief, stage, reasoning_effort, budget)
+    described the previous brief. Omitted metadata is retained; supplied budget fields merge."""
+    if budget is not None:
+        schema.budget(CONFIG, budget)
+        budget = {**record.get("budget", {}), **budget}
+    else:
+        budget = record.get("budget")
+    revised = contents(record["kind"], brief,
+                       record["stage"] if stage is None else stage,
+                       record["reasoning_effort"] if reasoning_effort is None else reasoning_effort,
+                       budget)
     record.pop("budget", None)
     record.pop("report", None)
     record.update(status="queued", decompose=False, held_by=None, **revised)

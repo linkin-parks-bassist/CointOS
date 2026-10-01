@@ -182,7 +182,7 @@ TOOLS = [
          ["project", "kind", "name", "brief"]),
     tool("hold_item", "Keep a queue item (PROJECT:ITEM) from starting while the user decides; release=true lifts the hold.", {
              "item": {"type": "string"}, "release": {"type": "boolean"}}, ["item"]),
-    tool("revise_item", "Change what a queue item (PROJECT:ITEM) asks for; its task restarts on the new brief.", {
+    tool("revise_item", "Change a queue item's brief while retaining its stage, reasoning and budget; its task restarts on the new brief.", {
              "item": {"type": "string"}, "brief": {"type": "string", "description": "the complete revised brief"},
              "reason": {"type": "string"}}, ["item", "brief", "reason"]),
     tool("projects", "List projects registered with CointOS, including priority and enabled state."),
