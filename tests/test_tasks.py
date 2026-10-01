@@ -46,6 +46,25 @@ class Metadata(unittest.TestCase):
         self.assertEqual(gateway.template_options(body, "a"), {"reasoning_effort": "low", "preserve_thinking": True})
         self.assertEqual(gateway.template_options(body, "user")["reasoning_effort"], "medium")
 
+    def test_contract_review_uses_contract_default_without_inheriting_worker_overrides(self):
+        queues.add(self.project, "queued", "contract", "Tests", "test-contract", "xhigh",
+                   budget={"generation_tokens": 100})
+        worker = tasks.create("item", self.project, "contract", "Tests", [4], item="contract")
+        review = tasks.create("integrate", self.project, "review", "Review", [2], worker=worker["id"])
+        self.assertEqual((review["stage"], review["reasoning_effort"]), (None, "medium"))
+        state.L["agents"]["review-run"] = {"task": review["id"]}
+        self.assertEqual(gateway.template_options({}, "review-run")["reasoning_effort"], "medium")
+        self.assertEqual(review["budget"]["generation_tokens"], state.CONFIG["recovery"]["generation_tokens"])
+        override = tasks.create("integrate", self.project, "review", "Review", [2],
+                                worker=worker["id"], reasoning_effort="low")
+        self.assertEqual(override["reasoning_effort"], "low")
+        restored = state.fresh(json.loads(json.dumps(state.L)))
+        with patch.dict(state.CONFIG["reasoning"], {"test-contract": "xhigh"}):
+            self.assertEqual(restored["tasks"][review["id"]]["reasoning_effort"], "medium")
+        worker["stage"] = "implementation"
+        ordinary = tasks.create("integrate", self.project, "review", "Review", [2], worker=worker["id"])
+        self.assertEqual(ordinary["reasoning_effort"], state.CONFIG["reasoning"]["default"])
+
     def test_a_reasoning_change_applies_from_the_next_reply(self):
         queues.add(self.project, "queued", "t", "Do it", reasoning_effort="xhigh")
         task = tasks.create("item", self.project, "t", "Do it", [4], item="t")

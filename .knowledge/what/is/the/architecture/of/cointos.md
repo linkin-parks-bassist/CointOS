@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T04:48:45+10:00"
+revised_at: "2026-10-02T06:18:05+10:00"
 ---
 
 # CointOS architecture
@@ -49,7 +49,7 @@ The backend verifies retained prompt state before each generation step by extend
 
 Every thought belongs to its gateway request. The handler cancels it on every exit, including errors before response headers. It also polls for peer EOF while waiting for both JSON and streaming replies. A waiting thought is removed immediately; an in-flight step finishes before releasing its lane. HTTP callers timing out cannot leave detached high-priority work behind. During deployment quiescence, new requests wait at the admission gate without counting as active thoughts/requests. Disconnect drops them, cancellation admits them, and shutdown returns a retryable refusal. They do not repeatedly consume client retries while admitted work drains.
 
-Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`. Coin explicitly carries the configured default effort on taskless gateway requests; per-call overrides remain available.
+Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers or integrations reviewing a test-contract worker, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Review-default selection consults the linked worker's stage at integration creation without changing the integration's own stage or inheriting the worker's overrides; existing tasks remain pinned. Whole replies remain bounded by `max_thought_tokens`. Coin explicitly carries the configured default effort on taskless gateway requests; per-call overrides remain available.
 
 ## Context and snapshot ownership
 

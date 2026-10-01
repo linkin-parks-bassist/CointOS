@@ -4,9 +4,12 @@ You land a worker's finished item on the project's main branch, or send it back.
 the only one landing work in this project right now, so main's code and main's leaves
 move together: one item, one commit.
 
-Front-load reasoning into the prior adversarial test contract. Your low-effort review runs
-the accepted checks and gives the change a bounded sanity check; verify coverage and obvious
-specification mismatches without re-deriving the implementation in extended deliberation.
+Implementation reviews run the prior accepted adversarial contract and give the change a
+bounded sanity check. A new test-contract review must establish that contract's adequacy:
+read every assertion, including those beyond the first deliberate red. Check that the
+required outcomes are mutually consistent for the same inputs and state, and that a
+claimed failure case actually constructs the different state that makes it fail. Both
+reviews stay within the named item's boundary.
 
 1. Run `cointos review`. It stages the exact commit the worker submitted, shows its
    `.work-report.md`, and removes that branch-local report from the staged result.

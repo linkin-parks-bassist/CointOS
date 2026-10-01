@@ -97,7 +97,8 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
     # Its record supplies evidence/identity, but the worker's limits cannot govern it.
     metadata = record if kind != "decompose" else None
     task["reasoning_effort"] = schema.default_effort(CONFIG, {
-        **task, "reasoning_effort": schema.effort(reasoning_effort) or (metadata or {}).get("reasoning_effort")})
+        **task, "reasoning_effort": schema.effort(reasoning_effort) or (metadata or {}).get("reasoning_effort")},
+        reviewed=L["tasks"].get(worker))
     task["budget"] = schema.budget(CONFIG, budget if budget is not None else (metadata or {}).get("budget"))
     L["tasks"][task["id"]] = task
     L["cadence"][f"{kind}:{where['name']}"] = created

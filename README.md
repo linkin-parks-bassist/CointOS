@@ -138,7 +138,7 @@ marks a queue item done.
 
 Reasoning effort is `low`, `medium` or `xhigh`, capped per uninterrupted reasoning block at
 256 / 384 / 1,024 tokens (`reasoning.budgets`), after which the reply continues into its answer
-or tool call. Defaults: low globally; medium for test-contract workers and managers. Effort is
+or tool call. Defaults: low globally; medium for test-contract creation/review and managers. Effort is
 pinned when a task is created; `cointos reasoning PROJECT:TASK EFFORT` changes an existing task
 from its next reply, and explicit overrides always win.
 Coin also sends the configured default effort on its model requests, so deep tool turns
