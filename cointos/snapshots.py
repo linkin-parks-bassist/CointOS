@@ -29,8 +29,12 @@ def size_gb(snapshot: dict) -> float:
     return snapshot["bytes"] / memory.GB
 
 
-def drop(name: str) -> None:
-    """Forget a snapshot: its ledger entry and its file."""
+def drop(name: str, *, transfer_done: bool = False) -> None:
+    """Forget a snapshot, deferring an in-flight transfer's file cleanup and accounting."""
+    snapshot = L["snapshots"].get(name)
+    if snapshot and snapshot.get("tier") == "moving" and not transfer_done:
+        snapshot["discard"] = True
+        return
     L["snapshots"].pop(name, None)
     BACKEND.forget(CONFIG, name)
 
@@ -125,15 +129,16 @@ def spill(name: str) -> None:
         BACKEND.spill(CONFIG, name)
     except OSError as error:
         with LOCK:
-            drop(name)
+            drop(name, transfer_done=True)
             log("spill failed", snapshot=name, error=str(error))
         return
     with LOCK:
-        if name in L["snapshots"]:
-            L["snapshots"][name]["tier"] = "disk"
-            log("snapshot spilled", snapshot=name, owner=L["snapshots"][name]["owner"], bytes=L["snapshots"][name]["bytes"])
+        snapshot = L["snapshots"].get(name)
+        if snapshot and not snapshot.get("discard") and live(snapshot["owner"]):
+            snapshot["tier"] = "disk"
+            log("snapshot spilled", snapshot=name, owner=snapshot["owner"], bytes=snapshot["bytes"])
         else:
-            BACKEND.forget(CONFIG, name)  # its owner retired while the copy was in flight
+            drop(name, transfer_done=True)
 
 
 def bring_back(name: str) -> bool:
@@ -148,8 +153,18 @@ def bring_back(name: str) -> bool:
         if not (room(size_gb(snapshot), name) and make_room(size_gb(snapshot))):
             return False
         snapshot["tier"] = "moving"
-    BACKEND.unspill(CONFIG, name)
+    try:
+        BACKEND.unspill(CONFIG, name)
+    except OSError as error:
+        with LOCK:
+            drop(name, transfer_done=True)
+            log("unspill failed", snapshot=name, error=str(error))
+        return False
     with LOCK:
+        snapshot = L["snapshots"].get(name)
+        if snapshot is None or snapshot.get("discard") or not live(snapshot["owner"]):
+            drop(name, transfer_done=True)
+            return False
         snapshot["tier"] = "memory"
     return True
 
@@ -241,8 +256,16 @@ def forget_owner(owner: str) -> None:
 
 
 def forget_orphans() -> None:
-    """Forget snapshots whose owner is neither untasked nor a task in the ledger: left by a task
-    forgotten while one of its saves was in flight."""
-    for owner in {s["owner"] for s in L["snapshots"].values()} - UNTASKED - set(L["tasks"]):
+    """Reconcile saved states against conversation reachability, not task-record presence."""
+    for owner in {s["owner"] for s in L["snapshots"].values() if not s.get("discard")}:
+        if live(owner):
+            continue
         forget_owner(owner)
         log("snapshot forgotten", owner=owner, reason="its conversation is over")
+
+
+def forget_transfers() -> None:
+    """At daemon startup, discard interrupted copies: no transfer thread survived it."""
+    for name in [n for n, s in L["snapshots"].items() if s["tier"] == "moving"]:
+        drop(name, transfer_done=True)
+        log("snapshot forgotten", snapshot=name, reason="its transfer was interrupted")

@@ -2,7 +2,7 @@ import copy
 import unittest
 from unittest import mock
 
-from cointos import lanes, snapshots, state
+from cointos import lanes, lifecycle, snapshots, state
 
 WORK = state.CONFIG["work_model"]
 
@@ -62,6 +62,60 @@ class Snapshots(unittest.TestCase):
         snapshots.forget_orphans()
         self.assertEqual(sorted(state.L["snapshots"]), ["b", "c", "d", "e"])
         self.assertEqual(self.forgotten, ["a"])
+
+    def test_reconciliation_forgets_terminal_owners_but_preserves_surviving_runs(self):
+        for name, status in (("accepted", "done"), ("failed", "failed"), ("finishing", "done"), ("review", "review")):
+            state.L["tasks"][name] = {"id": name, "status": status, "branch": None, "record": None}
+            state.L["snapshots"][name] = {"owner": name, "tier": "disk"}
+        state.L["agents"]["finishing-run"] = {"task": "finishing"}
+        state.L["tasks"]["t"].update(branch=None, record=None)
+        lifecycle.reconcile()
+        self.assertEqual(set(state.L["snapshots"]), {"finishing", "review"})
+        self.assertEqual(set(self.forgotten), {"accepted", "failed"})
+
+    def test_owner_retirement_during_spill_defers_cleanup_until_copy_finishes(self):
+        state.L["snapshots"]["moving"] = {"owner": "t", "tier": "moving", "bytes": 123}
+        def transfer(config, name):
+            state.L["tasks"]["t"]["status"] = "done"
+            snapshots.forget_orphans()
+            self.assertEqual(self.forgotten, [])
+            self.assertEqual(state.L["snapshots"][name]["bytes"], 123)
+            self.assertTrue(state.L["snapshots"][name]["discard"])
+        with mock.patch.object(snapshots.BACKEND, "spill", side_effect=transfer):
+            snapshots.spill("moving")
+        self.assertEqual(state.L["snapshots"], {})
+        self.assertEqual(self.forgotten, ["moving"])
+
+    def test_unspill_does_not_restore_a_retired_owner_or_a_discarded_live_prefix(self):
+        for retire in (True, False):
+            with self.subTest(retire=retire):
+                state.L["tasks"]["t"]["status"] = "running"
+                state.L["snapshots"]["disk"] = {"owner": "t", "tier": "disk", "bytes": 123}
+                self.forgotten.clear()
+                def transfer(config, name):
+                    if retire:
+                        state.L["tasks"]["t"]["status"] = "done"
+                    snapshots.forget_owner("t")
+                    self.assertEqual(self.forgotten, [])
+                    self.assertEqual(state.L["snapshots"][name]["tier"], "moving")
+                with mock.patch.object(snapshots.BACKEND, "unspill", side_effect=transfer):
+                    self.assertFalse(snapshots.bring_back("disk"))
+                self.assertEqual(state.L["snapshots"], {})
+                self.assertEqual(self.forgotten, ["disk"])
+
+    def test_unspill_error_is_a_cache_miss_and_cleans_the_failed_transfer(self):
+        state.L["snapshots"]["disk"] = {"owner": "t", "tier": "disk", "bytes": 123}
+        with mock.patch.object(snapshots.BACKEND, "unspill", side_effect=OSError("missing cache file")):
+            self.assertFalse(snapshots.bring_back("disk"))
+        self.assertEqual(state.L["snapshots"], {})
+        self.assertEqual(self.forgotten, ["disk"])
+
+    def test_startup_discards_interrupted_transfers_but_keeps_committed_tiers(self):
+        for name, tier in (("copy", "moving"), ("ram", "memory"), ("disk", "disk")):
+            state.L["snapshots"][name] = {"owner": "t", "tier": tier}
+        snapshots.forget_transfers()
+        self.assertEqual(set(state.L["snapshots"]), {"ram", "disk"})
+        self.assertEqual(self.forgotten, ["copy"])
 
     def test_a_task_does_not_save_the_state_its_next_thought_has_left_behind(self):
         # The lane holds the end of t's last thought, which the conversation, as rendered

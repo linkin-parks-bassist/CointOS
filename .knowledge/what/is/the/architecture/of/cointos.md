@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T23:51:02+10:00"
+revised_at: "2026-10-02T00:04:55+10:00"
 ---
 
 # CointOS architecture
@@ -57,11 +57,11 @@ Token identity, not owner name, determines reuse. A lane is warm when its known 
 
 A committed checkpoint is saved after context establishment and before generation. A suspended state may be saved when a thought yields mid-generation. Killing or losing a run abandons uncommitted thought output and resumes from durable conversation plus any compatible checkpoint.
 
-One conversation retains only useful prefix states; divergent task snapshots are forgotten. On a fresh managed launch, prompt construction identifies the task-independent role boundary while gateway rendering derives its exact token boundary from the model chat template. The lane saves that prefix under the shared owner even when no peer context is concurrently alive, so later sequential tasks of the same role can restore it through ordinary token-digest matching. Opportunistic comparison can still discover longer shared starts between live contexts. Coin/user shared ownership and task reachability are explicit lifetime queries.
+One conversation retains only useful prefix states; divergent task snapshots are forgotten. On a fresh managed launch, prompt construction identifies the task-independent role boundary while gateway rendering derives its exact token boundary from the model chat template. The lane saves that prefix under the shared owner even when no peer context is concurrently alive, so later sequential tasks of the same role can restore it through ordinary token-digest matching. Opportunistic comparison can still discover longer shared starts between live contexts. Coin/user shared ownership and task reachability are explicit lifetime queries. Startup and each lifecycle reconciliation discard caches of unreachable conversations, including workers accepted after their own run has ended. A terminal task with a surviving run still retains its cache until that run releases.
 
 Save admission uses the nearest measured same-model context at least as large, without scaling its fixed state overhead downward. Above the measured range it scales the largest sample upward and never predicts less than a smaller measured file. Estimates round upward; actual saves are measured and reconciled. An unseen model's first save remains unestimated. This protects short hybrid contexts from the previous bytes-per-token underestimate, but does not establish all future file sizes.
 
-RAM snapshots are bounded by `memory.snapshots_gb` and spill to the bounded disk tier by reachability and recency. Transfers remain charged until completion. A cache miss or eviction causes rereading, never semantic loss. Full shutdown attempts context saving, RAM-to-disk spill and ledger saving independently.
+RAM snapshots are bounded by `memory.snapshots_gb` and spill to the bounded disk tier by reachability and recency. Transfers remain charged until completion. Forgetting a moving snapshot marks it for discard; the transfer finishes before its files and charge are removed. Spill/unspill completion checks discard intent and owner reachability, and an unspill file error is a cache miss. At daemon startup, interrupted moving copies are discarded because their transfer threads no longer exist; completed RAM/disk states remain eligible for reuse. A cache miss or eviction causes rereading, never semantic loss. Full shutdown attempts context saving, RAM-to-disk spill and ledger saving independently.
 
 ## Task and receipt lifecycle
 

@@ -213,6 +213,7 @@ def main() -> None:
     keys.load()
     with LOCK:
         runs.adopt(previous)
+        snapshots.forget_transfers()
         snapshots.forget_orphans()
         log("daemon started")
     save()

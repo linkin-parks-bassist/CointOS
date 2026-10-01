@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T22:52:34+10:00"
+revised_at: "2026-10-02T00:04:55+10:00"
 ---
 
 Use the least disruptive level that can apply the change:
@@ -33,6 +33,8 @@ For a Telegram alert flood or an abandoned thought that prevents drain, stop Coi
 ## Full shutdown and reboot
 
 Full machine shutdown orders cointosd before transient agent units. cointosd independently attempts lane-context saving, RAM-snapshot spill to the disk tier and final ledger saving, so one failed obligation does not suppress the others. Persistent services carry explicit runtime, user-local and system PATH.
+
+At startup, caches whose conversations are unreachable are removed after run adoption. Interrupted transfer copies are discarded because their copying threads did not survive; completed disk/RAM states remain reusable. This can cause cold rereading, never loss of the durable conversation or branch.
 
 A reboot destroys RAM snapshots and agent units. Startup may restore compatible disk snapshots and requeue dead runs, but warm reuse and uncharged dead-unit recovery after the current second-pass fixes still require the next explicitly authorized reboot. Never reboot merely to run that check.
 

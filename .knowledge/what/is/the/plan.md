@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T23:50:09+10:00"
+revised_at: "2026-10-02T00:10:50+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
@@ -12,7 +12,7 @@ The remaining frontier is ordered by expected reliability or throughput gained p
 5. **Close focused receipt/recovery paths live:** silence/loop handling, remaining exhaustion cases and halt/up.
 6. **Exercise the control surface end to end:** project registry, Coin/dashboard controls through a real Telegram conversation, history clearing and bounded-operator launch through Coin.
 7. **Validate concurrent landing:** exact receipts, stale-ref rejection, contract coverage, separate integrator edits and send-back/recovery.
-8. **Run durability tests under churn:** disk restores, snapshot save-size behavior, owner retirement, the reported `app.slice` OOM victim and a guarded midnight crossing.
+8. **Run durability tests under churn:** disk restores, snapshot save-size behavior and transfer interruption under load, the reported `app.slice` OOM victim and a guarded midnight crossing.
 9. **Finish long-running acceptance:** bounded gardener/tree-auditor/test-auditor behavior, then the two-hour four-agent/two-lane soak with Coin latency, workstation priority and autonomous pipeline quality.
 
 Use Pigen as an expendable complexity quarry; do not block CointOS development on slow product-agent evidence. Do not manually decompose or implement product work for agents. OpenCode V2 remains deferred, Sole Survivor remains off the roadmap, and ambient/focused operation, mutable task priorities, weighted lane sharing, an MCP control surface and memory reshaping/forking remain unapproved future designs.

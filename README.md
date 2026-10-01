@@ -161,6 +161,9 @@ costs re-reading. `state/events.jsonl` plus one rotated file keep bounded diagno
 
 Snapshot admission uses measured sizes from the same model without scaling fixed state
 overhead downward for short contexts. Actual save sizes are measured and reconciled.
+Caches of terminal tasks are released once no run can resume that conversation, including
+workers accepted after their own run ended. Copying finishes before discarded caches are
+removed; interrupted copies become cold after daemon replacement.
 
 ## Dashboard
 

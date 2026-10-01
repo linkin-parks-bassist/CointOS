@@ -455,7 +455,8 @@ def project(task: dict) -> bool:
 
 
 def reconcile() -> bool:
-    """Re-project every settled task, healing records an interrupted publication left behind."""
+    """Re-project settled tasks and retire caches whose conversations have ended."""
+    snapshots.forget_orphans()
     changed = False
     for task in L["tasks"].values():
         if project(task):
