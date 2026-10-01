@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T06:22:16+10:00"
+revised_at: "2026-10-02T06:36:38+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
@@ -11,7 +11,7 @@ The remaining frontier is ordered by expected reliability or throughput gained p
 4. **When the user authorizes the disruptive shape change, restore intended ambient capacity:** `max_agents=4`, two work-model lanes, `ctx_size=262144`, and intended gardening.
 5. **Close focused receipt/recovery paths live:** silence/loop handling, remaining exhaustion cases and halt/up.
 6. **Exercise the control surface end to end:** Coin/dashboard controls through a real Telegram conversation, history cleanup through the live dashboard.
-7. **Validate autonomous integration quality:** concurrent model-run review, accepted-test adequacy and send-back/recovery under real agent work. Verify the new test-contract review default and whole-assertion guidance through actual review/correction; the known contradictory product candidate is not quality evidence.
+7. **Validate autonomous integration quality:** concurrent unassisted model review, accepted-test adequacy and corrected-worker acceptance after send-back. Verify the new test-contract review default and whole-assertion guidance through actual review/correction, and model-driven conflict resolution through the same landing command.
 8. **Run durability tests under churn:** disk restores, snapshot save-size behavior and transfer interruption under load and a guarded midnight crossing.
 9. **Finish long-running acceptance:** bounded gardener/tree-auditor/test-auditor behavior, then the two-hour four-agent/two-lane soak with Coin latency, workstation priority and autonomous pipeline quality.
 
