@@ -13,9 +13,12 @@ state, and queue records are a projection of what they settle. Callers hold LOCK
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 from cointos import git, keys, lanes, opencode, queues, schema, snapshots, tasks, trees
 from cointos.state import CONFIG, LOCK, L, alert, log, now, save
+
+RETIRE_PER_TICK = 4  # settled tasks whose worktrees one reconcile pass retires (git runs under LOCK)
 
 
 def owns(task: dict | None, agent_id: str | None) -> bool:
@@ -339,16 +342,44 @@ def release(agent_id: str, reason: str) -> None:
 
 
 def clean_up(task: dict) -> None:
-    """Remove a finished task's landed worktree, and an accepted worker's (landed squashed).
-    Unlanded branches stay for inspection."""
-    if task["branch"] is None:
-        return
-    where = tasks.place(task)
-    if task["kind"] == "integrate" and L["tasks"][task["worker"]]["status"] == "done":
-        worker = L["tasks"][task["worker"]]
-        git.discard_worktree(where["path"], worker["worktree"], worker["branch"])
-    if not git.remove_landed_worktree(where["path"], task["worktree"], task["branch"], where["main_branch"]):
-        log("worktree kept: branch not merged", task=task["id"])
+    """Retire a settled task's worktree and branch (see `retire`), and an accepted worker's with its
+    integrator's."""
+    retire(task)
+    if task["kind"] == "integrate" and task["status"] == "done":
+        retire(L["tasks"][task["worker"]])
+
+
+def revivable(task: dict) -> bool:
+    """Whether `cointos revise` could still restart this task on its branch: a failed item whose
+    queue record is live, unaccepted and not superseded."""
+    record = queues.records().get(task["record"]) if task["record"] else None
+    return (task["status"] == "failed" and record is not None and record["status"] != "done"
+            and not record.get("replaced_by") and not task.get("replaced_by"))
+
+
+def retire(task: dict) -> bool:
+    """Leave nothing behind for a settled task with no run: remove its checkout, delete its branch
+    once main contains it, and archive a dead unlanded branch under `git.ARCHIVE`. A revivable
+    task keeps its branch; a checkout with uncommitted work is kept for inspection.
+    Returns whether the task was considered (it is then marked `retired`)."""
+    if (task["branch"] is None or task["status"] not in ("done", "failed") or task.get("retired")
+            or any(agent["task"] == task["id"] for agent in L["agents"].values())):
+        return False
+    try:
+        where = tasks.place(task)
+    except StopIteration:  # its project is no longer configured: nothing safe to act on
+        task["retired"] = "kept: place no longer configured"
+        return True
+    if Path(task["worktree"]).is_dir():
+        if not git.clean(task["worktree"]):
+            task["retired"] = "kept: uncommitted work"
+            log("worktree kept: uncommitted work", task=task["id"])
+            return True
+        git.remove_worktree(where["path"], task["worktree"])
+    outcome = git.retire_branch(where["path"], task["branch"], where["main_branch"], keep=revivable(task))
+    task["retired"] = outcome
+    log("task retired", task=task["id"], branch=outcome)
+    return True
 
 
 # ---------------------------------------------------------------- settlement and its projection
@@ -356,6 +387,7 @@ def clean_up(task: dict) -> None:
 def _settle(task: dict, status: str, note: str, **fields) -> None:
     """The one task-status write. Settlement does not end a run or its conversation."""
     task.update(status=status, agent=None, note=note, updated_at=now(), **fields)
+    task.pop("retired", None)  # a task that settles again is retired again
     if status in ("done", "failed"):
         for record in queues.records().values():  # a settled task no longer decides about anything it held
             if record["held_by"] == task["id"]:
@@ -429,4 +461,13 @@ def reconcile() -> bool:
         if project(task):
             log("queue record reconciled", task=task["id"])
             changed = True
+    swept = 0
+    for task in list(L["tasks"].values()):  # retire settled work a bounded few at a time under LOCK
+        if swept >= RETIRE_PER_TICK:
+            break
+        try:
+            swept += retire(task)
+        except ValueError as error:
+            task["retired"] = f"failed: {error}"
+            log("retire failed", task=task["id"], error=str(error))
     return changed

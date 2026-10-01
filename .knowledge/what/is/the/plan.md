@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T07:47:43+10:00"
+revised_at: "2026-10-01T19:18:22+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
@@ -14,6 +14,7 @@ The remaining frontier is ordered by expected reliability or throughput gained p
 7. **Validate concurrent landing:** exact receipts, stale-ref rejection, contract coverage, separate integrator edits and send-back/recovery.
 8. **Run durability tests under churn:** disk restores, snapshot save-size behavior, owner retirement, the reported `app.slice` OOM victim and a guarded midnight crossing.
 9. **Finish long-running acceptance:** bounded gardener/tree-auditor/test-auditor behavior, then the two-hour four-agent/two-lane soak with Coin latency, workstation priority and autonomous pipeline quality.
-10. **Let David decide whether to remove the disabled Todo CLI project's 12 clean dead worktrees and `work/*` branches.** This is housekeeping, not a runtime blocker.
+10. **Install the steward stalled-frontier rule** (`roles/steward.md`) and confirm the next scout queues one manager command for pigen's unqueued Task 6.
+11. **Install and live-verify autonomous worktree retirement** (`lifecycle.retire`, unit-covered in `tests/test_retirement.py`): after installation, confirm the existing leftovers drain over reconcile passes (Pigen's settled Task 5 worktrees, the disabled Todo CLI project's 12), dead branches land under `refs/cointos/archive/`, and only revivable or dirty checkouts remain. This is housekeeping, not a runtime blocker.
 
 Use Pigen as an expendable complexity quarry; do not block CointOS development on slow product-agent evidence. Do not manually decompose or implement product work for agents. OpenCode V2 remains deferred, Sole Survivor remains off the roadmap, and ambient/focused operation, mutable task priorities, weighted lane sharing, an MCP control surface and memory reshaping/forking remain unapproved future designs.

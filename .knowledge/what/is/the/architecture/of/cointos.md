@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T06:43:04+10:00"
+revised_at: "2026-10-01T18:07:11+10:00"
 ---
 
 # CointOS architecture
@@ -12,6 +12,7 @@ The governing constraints are `how/to/keep/cointos/simple.md`; bounded work cons
 ## Runtime representations
 
 - **Task:** durable assignment state: identity, place, kind/role, branch/worktree, queue relation, dependencies, budget, reasoning effort, status, current run, session, receipt and retry/recovery metadata.
+- **Retirement:** once a task settles (done or failed) and no run of it remains, `lifecycle.retire` removes its checkout and settles its branch: deleted when main contains it, archived under `refs/cointos/archive/<branch>` (commits stay reachable) when it is dead, and kept only while `cointos revise` could still restart it (a failed item whose queue record is live, unaccepted and not superseded; `git.add_worktree` recreates the checkout from it). A checkout with uncommitted work, or of a project no longer configured, is kept for inspection. An integrator's release retires its accepted worker at once; each `reconcile` pass retires up to `RETIRE_PER_TICK` (4) other settled tasks, so leftovers drain without intervention. The outcome is recorded on the task as `retired`.
 - **Run/agent:** one transient attempt to execute a task, represented by a systemd unit, OpenCode server/client, gateway identity and observed activity. A run never owns task outcome.
 - **Conversation:** OpenCode's durable session messages. It survives ordinary run replacement.
 - **Thought:** one model reply from rendered conversation to answer/tool calls. It may be suspended between bounded GPU steps.

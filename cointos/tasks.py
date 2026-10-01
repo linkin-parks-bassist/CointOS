@@ -24,6 +24,7 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     admission_hold                       David's durable kill hold; explicit resume releases it
     interrupted_at                      when an existing session last lost its run
     launch_failures                     consecutive runs that never reached the model
+    retired                             how its worktree and branch were retired once settled
 """
 from __future__ import annotations
 

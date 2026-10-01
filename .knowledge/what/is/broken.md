@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T07:52:36+10:00"
+revised_at: "2026-10-01T19:18:07+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
@@ -14,7 +14,9 @@ The unresolved defects and unproved boundaries are:
 - **Full acceptance is incomplete:** Coin visible-reply latency under load, workstation responsiveness and user priority, multi-agent integration/send-back, two-lane/four-agent sustained soak, and ordinary-intake pipeline quality still need live evidence.
 - **Snapshot durability needs churn evidence:** disk restores, save-size estimation, owner retirement, the reported `app.slice` OOM victim and a guarded midnight crossing remain unresolved.
 - **Manager parallelism and local-agent output quality need observation**, but CointOS development must not wait on slow Pigen output for primary evidence.
-- **The disabled Todo CLI project retains 12 clean registered worktrees and `work/*` branches** pending David's deletion decision.
+- **Settled tasks' worktrees and `work/*` branches accumulate in the installed runtime**, which predates `lifecycle.retire`: it removed only landed `done` work, so failed, superseded and returned work stayed forever (Pigen holds 14 such worktrees, the disabled Todo CLI project 12). The source retires them automatically; the fix is not yet installed.
+- **Installed stewards do not restart a stalled project frontier reliably.** With pigen's plan naming Task 6 and nothing queued, loose-ends-9 declined to queue a command ("a manager/planning decision … not a broken/dangling item a steward should manufacture"), while loose-ends-5 queued one for the same stall shape; loose-ends-8 spent its single loose end on a plan-leaf edit. The source `roles/steward.md` now defines a stalled approved frontier as a loose end owed one manager command, and says knowledge edits do not use up the loose end; it is not yet installed.
+- **Interactive sessions are invisible to agents.** A Claude Code session David runs in a project does not appear in `cointos agents`, and there is no channel to message a running agent. On 2026-10-01 the steward (system:loose-ends-8) spent its pass investigating that session's edits as an unknown concurrent writer, and an explanatory commit body did not reach it (it read commits with `--format='%s'`, subjects only). An unapproved remedy: a presence record for interactive sessions, registered through Claude Code hooks.
 - **OpenCode V2 migration is deferred.** The installed runtime is 1.18.33; V1 remains authoritative until an isolated compatibility exercise proves process ownership, permissions, MCP, event parsing, retries and session resume.
 
 `what/is/the/live/acceptance/evidence/for/cointos.md` owns the proven boundary. `what/is/the/plan.md` owns only the ordered remaining work.

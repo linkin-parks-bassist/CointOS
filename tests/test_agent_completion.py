@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import api, checks, lifecycle, opencode, queues, runs, snapshots, spawner, state, tasks, trees
+from cointos import api, checks, git, lifecycle, opencode, queues, runs, snapshots, spawner, state, tasks, trees
 from tests import support
 
 
@@ -255,10 +255,13 @@ class Completion(unittest.TestCase):
         self.assertEqual((worker["status"], integration["status"]), ("done", "done"))
         self.assertEqual(integration["receipt"]["evidence"]["commit"], "main")
         (Path(integration["worktree"]) / "note.md").write_text("an edit that never landed\n")
-        support.commit(integration["worktree"])
+        unlanded = support.commit(integration["worktree"])
         lifecycle.release("integrator-1", "run ended")
-        self.assertFalse(Path(worker["worktree"]).exists(), "an accepted worker's branch is discarded")
-        self.assertTrue(Path(integration["worktree"]).exists(), "an unlanded integration branch stays")
+        self.assertFalse(Path(worker["worktree"]).exists(), "an accepted worker's checkout is retired")
+        self.assertFalse(Path(integration["worktree"]).exists(), "a settled integration's checkout is retired")
+        repo = tasks.place(integration)["path"]
+        self.assertEqual(git.head(repo, git.ARCHIVE + integration["branch"]), unlanded,
+                         "an unlanded integration commit stays reachable in the archive")
 
     def test_a_landing_from_another_run_is_refused(self):
         integration, worker = self.integration()

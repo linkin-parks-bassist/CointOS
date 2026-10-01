@@ -67,16 +67,25 @@ def add_worktree(repo, worktree: str, branch: str, base: str) -> None:
         run(repo, "worktree", "add", "-b", branch, worktree, base)
 
 
-def remove_landed_worktree(repo, worktree: str, branch: str, main: str) -> bool:
-    """Remove a worktree and its branch once main contains the branch; never unlanded work."""
-    if not contains(repo, branch, main):
-        return False
-    result(repo, "worktree", "remove", "--force", worktree)
-    result(repo, "branch", "-d", branch)
-    return True
+ARCHIVE = "refs/cointos/archive/"
 
 
-def discard_worktree(repo, worktree: str, branch: str) -> None:
-    """Remove a worktree and branch whose work landed squashed, so main never contains the branch."""
+def remove_worktree(repo, worktree: str) -> None:
+    """Remove a task's checkout; its branch keeps the commits and `add_worktree` can recreate it."""
     result(repo, "worktree", "remove", "--force", worktree)
-    result(repo, "branch", "-D", branch)
+    result(repo, "worktree", "prune")
+
+
+def retire_branch(repo, branch: str, main: str, keep: bool) -> str:
+    """Settle a finished task's branch: deleted once main contains it, else archived under
+    ARCHIVE (commits stay reachable) unless `keep`. Returns what happened."""
+    if not ok(repo, "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"):
+        return "absent"
+    if contains(repo, branch, main):
+        run(repo, "branch", "-D", branch)
+        return "landed"
+    if keep:
+        return "kept"
+    run(repo, "update-ref", ARCHIVE + branch, f"refs/heads/{branch}")
+    run(repo, "branch", "-D", branch)
+    return "archived"
