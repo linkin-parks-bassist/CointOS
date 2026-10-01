@@ -262,6 +262,40 @@ class Commands(Project):
         self.act_as(task)
         return task
 
+    def test_land_conflict_resumes_through_land_and_preserves_both_sides(self):
+        self.worker["stage"] = "implementation"
+        state.L["queue"][self.worker["record"]]["stage"] = "implementation"
+        self.implement()
+        submitted = self.submit()
+        integration = self.integrate()
+        self.act_as(integration)
+        self.run_command(cli.review)
+        (self.review / "plan.md").write_text("reviewed worker boundary\n")
+        (self.repo / "plan.md").write_text("concurrent main frontier\n")
+        current_main = support.commit(self.repo)
+        with self.assertRaises(SystemExit) as refused:
+            self.run_command(cli.land, "Add a")
+        self.assertIn('cointos land "<same summary>"', str(refused.exception.code))
+        self.assertNotIn('cointos merge', str(refused.exception.code))
+        self.assertEqual(self.main(), current_main)
+        self.assertEqual((self.worker["status"], integration["status"]), ("review", "running"))
+        with self.assertRaises(SystemExit):
+            self.run_command(cli.land, "Add a")  # unresolved conflicts still refuse
+        (self.review / "plan.md").write_text("concurrent main frontier\nreviewed worker boundary\n")
+        git.run(self.review, "add", "plan.md")
+        self.run_command(cli.land, "Add a")  # no manual commit or alternate command
+        self.assertEqual(contracts.verify.call_args.args[2],
+                         [["python3", "-m", "unittest", "tests.test_code.A"]])
+        accepted = self.worker["acceptance"]
+        self.assertEqual((accepted["commit"], accepted["worker_commit"]), (self.main(), submitted))
+        self.assertEqual((self.worker["status"], integration["status"]), ("done", "done"))
+        self.assertEqual((self.repo / "plan.md").read_text(),
+                         "concurrent main frontier\nreviewed worker boundary\n")
+        self.assertNotIn(queues.REPORT, git.run(self.repo, "ls-files").split())
+        self.assertIn("A implemented.", git.run(self.repo, "log", "-1", "--format=%B"))
+        self.run_command(cli.land, "Add a")
+        self.assertEqual(self.main(), accepted["commit"])
+
     def test_merge_brings_a_branch_behind_main_up_to_date_and_lands_it(self):
         task = self.manager()
         (Path(task["worktree"]) / "plan.md").write_text("plan\n")

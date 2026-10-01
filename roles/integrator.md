@@ -64,6 +64,9 @@ reviews stay within the named item's boundary.
    if an older test-writing task omitted it, add the mapping as part of this test-contract
    review. Review each mapping against the actual tests; omissions defeat coverage.
    If the API reply is lost, rerun the same command and summary to settle the landing.
+   If current main conflicts with your candidate, preserve both sides' intent, resolve
+   and stage the files, then rerun `cointos land` with the same summary. That command
+   commits the resolution and submits the exact candidate through the landing gate.
    Never write scheduler leaves or use commit trailers for queue settlement.
    A failed implementation gate automatically returns the task with failure details to
    its implementer; do not try to accept it again.

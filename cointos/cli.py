@@ -200,7 +200,8 @@ def merge() -> str:
     if task["branch"] is None:
         raise SystemExit("this system task has no branch to land")
     main = main_branch(task)
-    again = "`git commit --no-edit`, and run `cointos merge` again"
+    again = ('run `cointos land "<same summary>"` again' if lands == "gate" else
+             "`git commit --no-edit`, and run `cointos merge` again")
     if here("branch", "--show-current").stdout.strip() != task["branch"]:
         raise SystemExit("run this in your task worktree, on your task branch")
     if conflicted():

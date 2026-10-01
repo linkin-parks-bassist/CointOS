@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T06:18:05+10:00"
+revised_at: "2026-10-02T06:29:05+10:00"
 ---
 
 # CointOS architecture
@@ -81,7 +81,7 @@ History cleanup is a reachability operation over the same task/queue relations. 
 
 Managers advance a small frontier and queue explicit dependency edges. Workers execute one skeleton, test-contract, implementation or integration stage. Integrators own review, current project knowledge and the exact landing boundary. Gardeners and tree auditors maintain bounded knowledge scope; stewards/test auditors inspect system-wide evidence and may propose at most one managerial correction.
 
-Implementation candidates cannot alter protected tests/harnesses. `contracts.py` selects accepted checks from the owning manifest, including same-file Python dependency propagation, and `landing.py` runs them on the exact clean candidate in a transient memory-capped unit before main moves. Run ownership, worker receipt commit and refs are checked again at mutation time. A failed gate returns the item; an interrupted post-fast-forward landing is settled only from its persisted landing record. `incorporate` handles already-present implementation only with pinned main/worker commits and the same structural/contract checks.
+Implementation candidates cannot alter protected tests/harnesses. `contracts.py` selects accepted checks from the owning manifest, including same-file Python dependency propagation, and `landing.py` runs them on the exact clean candidate in a transient memory-capped unit before main moves. Run ownership, worker receipt commit and refs are checked again at mutation time. The CLI keeps conflict recovery in the owning landing operation: an integrator resolves/stages concurrent-main conflicts and repeats `cointos land` with the same summary, which commits the resolution and submits the exact candidate through the gate. Other merged planning/maintenance work keeps `cointos merge` and its explicit commit step. A failed gate returns the item; an interrupted post-fast-forward landing is settled only from its persisted landing record. `incorporate` handles already-present implementation only with pinned main/worker commits and the same structural/contract checks.
 
 ## Memory and recovery
 
