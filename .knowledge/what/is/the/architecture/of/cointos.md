@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T03:45:41+10:00"
+revised_at: "2026-10-02T03:58:49+10:00"
 ---
 
 # CointOS architecture
@@ -65,7 +65,7 @@ RAM snapshots are bounded by `memory.snapshots_gb` and spill to the bounded disk
 
 ## Task and receipt lifecycle
 
-`tasks.create` is the sole constructor. `schema.KINDS` describes each kind's role, rank, scope, queue relation, allowed receipt and landing behavior. `lifecycle.py` alone writes task status, run ownership, receipts, acceptance, retry state and agent removal.
+`tasks.create` is the sole constructor. `schema.KINDS` describes each kind's role, rank, scope, queue relation, allowed receipt and landing behavior. `lifecycle.py` alone writes task status, run ownership, receipts, acceptance, retry state and agent removal. The spawner admits runnable waiting tasks before creating new work, ordering those retained assignments by rank and creation time. Only when none are waiting does it compare new queue, integration, tree-maintenance and periodic candidates by rank. Project priority therefore does not let a new recovery manager displace a retained waiting worker; running-task admission is separate from GPU thought pre-emption.
 
 A run becomes assignment-engaged on its first admitted gateway thought. Exit before engagement is an infrastructure launch failure: the attempt is refunded, consecutive launch failures are separately bounded, and repeated failure places a durable admission hold plus an alert. After engagement, an unreceipted exit follows bounded assignment recovery.
 
