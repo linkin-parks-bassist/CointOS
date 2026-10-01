@@ -250,7 +250,7 @@ def restore(config: dict, model: str, lane: int, name: str) -> bool:
 
 def spill(config: dict, name: str) -> None:
     """Move a snapshot from memory to disk. (llama-server cannot read the disk directory,
-    which is under David's home, so `unspill` brings it back before a restore.)"""
+    which is under the user's home, so `unspill` brings it back before a restore.)"""
     disk = Path(config["disk_snapshots"]).expanduser()
     disk.mkdir(parents=True, exist_ok=True)
     shutil.move(Path(config["snapshots"]) / _snapshot(name), disk / _snapshot(name))

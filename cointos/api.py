@@ -134,7 +134,7 @@ def queue(body):
 
 
 def decider(body) -> tuple[str, str]:
-    """The queue item a hold or revision is about, and who decides about it: David, or the
+    """The queue item a hold or revision is about, and who decides about it: the user, or the
     running manager of the item's own project."""
     key = body.get("item", "")
     record = queues.records().get(key)
@@ -142,9 +142,9 @@ def decider(body) -> tuple[str, str]:
         raise ApiError(f"unknown queue item {key!r}; name it PROJECT:ITEM")
     by = proposer(body)
     if by is None:
-        return key, "David"
+        return key, "user"
     if by["role"] != "manager" or by["place"] != record["project"]:
-        raise ApiError("only the owning project's running manager, or David, holds or revises queued work")
+        raise ApiError("only the owning project's running manager, or the user, holds or revises queued work")
     return key, by["id"]
 
 
@@ -172,11 +172,11 @@ def attention(body):
         raise ApiError("attention may only be sent by a running scout or test auditor")
     if not message:
         raise ApiError("attention message is required")
-    alert(f"{by['role']} needs David: {message}")
+    alert(f"{by['role']} needs the user: {message}")
     return {"ok": True}
 
 
-# ---------------------------------------------------------------- David's controls
+# ---------------------------------------------------------------- the user's controls
 
 def stop_agents(reason: str, project: str | None = None) -> None:
     for agent_id, agent in list(L["agents"].items()):
@@ -186,7 +186,7 @@ def stop_agents(reason: str, project: str | None = None) -> None:
 
 def pause(body):
     L["paused"] = True
-    stop_agents("stopped by David")
+    stop_agents("stopped by the user")
     log("paused")
     return {"ok": True, "paused": True}
 

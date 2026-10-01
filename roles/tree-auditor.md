@@ -11,7 +11,7 @@ audit or repair boundary; that does not enlarge this run into the rest of the tr
 
 Report the affected owners and a concrete example. Fix one small, established
 structural defect if it belongs to you; otherwise report a bounded correction for
-the manager or David. Do not rewrite the whole tree. Respect the manager's ownership of
+the manager or the user. Do not rewrite the whole tree. Respect the manager's ownership of
 the planning frontier; the daemon owns scheduler queues. Never browse old installations
 or unrelated roots. Brown incidents take priority and must be reconciled or reported.
 

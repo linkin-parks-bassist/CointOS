@@ -8,7 +8,7 @@ contexts and goes on. A holder change on a busy lane waits for its step to end.
 
 A context is identified by its tokens, not by who owns it: a lane is warm for a thought when
 the tokens its state holds begin the thought's tokens, and a snapshot is found by a digest of
-the tokens it holds. Owners (an agent's task, Coin, David) matter only for display and for
+the tokens it holds. Owners (an agent's task, Coin, the user) matter only for display and for
 forgetting the snapshots of a finished task.
 """
 from __future__ import annotations

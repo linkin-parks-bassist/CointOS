@@ -39,7 +39,7 @@ KINDS = {
                  "receipts": ("complete", "blocked"), "lands": "merge"},
 }
 
-# The queue kinds agents and David submit, and the task kind that carries each.
+# The queue kinds agents and the user submit, and the task kind that carries each.
 QUEUE_KINDS = {"queued": "item", "urgent": "item", "command": "breakdown"}
 
 STAGES = ("skeleton", "test-contract", "implementation", "integration")

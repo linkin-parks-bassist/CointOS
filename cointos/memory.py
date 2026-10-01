@@ -1,4 +1,4 @@
-"""Memory: the one pool shared by David's desktop, the models and CointOS.
+"""Memory: the one pool shared by the user's desktop, the models and CointOS.
 
 One rule governs it (`what/is/the/architecture/of/cointos.md`, *Memory*): an allocation
 happens only if it fits in the headroom, and snapshots give way first.
@@ -42,7 +42,7 @@ def measure() -> dict:
 
 def headroom_gb(config: dict, measured: dict, server: dict | None) -> float:
     """What CointOS may still allocate: the tighter of the machine's available memory beyond
-    the reserve kept for David, and what is left of the model server's own allowance."""
+    the reserve kept for the user, and what is left of the model server's own allowance."""
     room = measured["available_gb"] - config["memory"]["reserve_gb"]
     if server is not None:
         room = min(room, server["limit_gb"] - server["used_gb"])

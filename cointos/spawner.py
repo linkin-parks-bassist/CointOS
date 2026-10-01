@@ -84,7 +84,7 @@ def queue_rank(kind: str, project: dict, position: int) -> list:
 
 
 def reorder(scanned: dict) -> None:
-    """Waiting queue tasks take their record's current position: David and managers reorder."""
+    """Waiting queue tasks take their record's current position: the user and managers reorder."""
     for project in tasks.enabled_projects():
         for record in scanned[project["name"]]:
             task = L["tasks"].get(f"{project['name']}:{record['item']}")
@@ -189,7 +189,7 @@ def periodic() -> list:
 
 def tree_health(tree: dict) -> dict | None:
     """The tree's health, re-read every `garden.check_seconds`; None while it cannot be read
-    (David is told once per new reason)."""
+    (the user is told once per new reason)."""
     seen = L["trees"].get(tree["name"])
     if seen is None or now() - seen["checked_at"] >= CONFIG["garden"]["check_seconds"]:
         try:

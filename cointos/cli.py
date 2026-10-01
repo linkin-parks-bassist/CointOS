@@ -1,4 +1,4 @@
-"""`cointos`: David's and the agents' command line over the daemon.
+"""`cointos`: the user's and the agents' command line over the daemon.
 
 Reports (`status`, `agents`, `jobs`, `check`, `projects`) are formatted here as text, which
 Coin reuses. Agent commands (`finish`, `merge`, `review`, `land`, `return`, `replace`, `queue`,
@@ -435,7 +435,7 @@ def parser() -> argparse.ArgumentParser:
     incorporated.add_argument("task", help="project:task in review")
     incorporated.add_argument("--commit", required=True, help="exact current main commit SHA")
     incorporated.add_argument("--worker-commit", required=True, help="exact submitted worker commit SHA")
-    sub.add_parser("attention", help="scout/auditor: send a bounded issue to David through Coin").add_argument("message")
+    sub.add_parser("attention", help="scout/auditor: send a bounded issue to the user through Coin").add_argument("message")
 
     queue = sub.add_parser("queue", help="add an item to a project's queue")
     queue.add_argument("project")

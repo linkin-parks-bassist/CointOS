@@ -32,7 +32,7 @@ def stable_environment(messages: list[dict], agent: str) -> list[dict]:
 
     The task-start date and complete system/developer prefix are properties of the conversation,
     not of whichever OpenCode server happens to serve its next request. The normalized prefix is
-    stored once per digest in the ledger; tasks carry only its identity. Coin and David pass through.
+    stored once per digest in the ledger; tasks carry only its identity. Coin and the user pass through.
     """
     with LOCK:
         owner = L["agents"].get(agent)
@@ -95,7 +95,7 @@ SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequ
 
 def identity(key: str) -> tuple[str, str, str]:
     """(agent, class, conversation) for a gateway key. Agents' conversations are their tasks,
-    so a resumed task resumes its context; any key CointOS did not issue is David's."""
+    so a resumed task resumes its context; any key CointOS did not issue is the user's."""
     agent, klass = keys.owner(key)
     with LOCK:
         conversation = L["agents"][agent]["task"] if agent in L["agents"] else agent

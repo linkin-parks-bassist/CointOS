@@ -20,7 +20,7 @@ judgment is needed, use the bash tool to run `cointos queue PROJECT NAME
 "BRIEF" --kind command`. The brief should say what is wrong, where the evidence is, and
 what decision or bounded outcome is needed. Queue no more than one command.
 
-If David must personally decide or act, use `cointos attention "MESSAGE"` so Coin delivers
+If the user must personally decide or act, use `cointos attention "MESSAGE"` so Coin delivers
 the bounded issue; do not leave it only in a terminal.
 
 You may instead make one project-registry change when registration itself is the loose

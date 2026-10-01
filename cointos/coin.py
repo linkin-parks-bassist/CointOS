@@ -1,4 +1,4 @@
-"""Coin: David's Telegram remote control.
+"""Coin: the user's Telegram remote control.
 
 A fast reply from the front-desk model on its reserved lane, then, when the message
 needs tools or thought, a deeper turn on the work model at Coin priority that can use
@@ -180,7 +180,7 @@ TOOLS = [
              "name": {"type": "string", "description": "a short name, a few words"},
              "brief": {"type": "string", "description": "the outcome wanted, where it lives, how to tell it is done"}},
          ["project", "kind", "name", "brief"]),
-    tool("hold_item", "Keep a queue item (PROJECT:ITEM) from starting while David decides; release=true lifts the hold.", {
+    tool("hold_item", "Keep a queue item (PROJECT:ITEM) from starting while the user decides; release=true lifts the hold.", {
              "item": {"type": "string"}, "release": {"type": "boolean"}}, ["item"]),
     tool("revise_item", "Change what a queue item (PROJECT:ITEM) asks for; its task restarts on the new brief.", {
              "item": {"type": "string"}, "brief": {"type": "string", "description": "the complete revised brief"},
@@ -214,7 +214,7 @@ TOOLS = [
     tool("halt", "Halt CointOS: stop the daemon and all agents and unload the models. Coin stays up."),
     tool("start", "Start CointOS again after a halt (or if it is down)."),
     tool("restart", "Drain replies and restart only the daemon, preserving agents, sessions and loaded models."),
-    tool("reply", "Finish this turn by sending David a message with new information: a result, an action "
+    tool("reply", "Finish this turn by sending the user a message with new information: a result, an action "
          "taken, an answer or a warning.", {"message": {"type": "string"}}, ["message"]),
     tool("finish_silently", "Finish this turn without another message, because the first reply already covered it."),
 ]
@@ -280,7 +280,7 @@ def deep_turn(message: str, history: list[dict], first_reply: str, knowledge: di
                     "knowledge. Use them to answer from checked knowledge and to record corrections. Add work "
                     "to project queues with queue_item.\n" + knowledge["instructions"])
     system = (f"{ROLE}\n\nThis is Coin's deeper turn. The front desk already replied: {first_reply!r}. "
-              "Understand David's message, look up exact facts or act with the tools, then finish with exactly "
+              "Understand the user's message, look up exact facts or act with the tools, then finish with exactly "
               "one of `reply` (new information: results, actions actually taken, answers, warnings) or "
               "`finish_silently` (the first reply already covered it). Never repeat the first reply, and never "
               "claim an action a tool did not confirm." + guidance + f"\n\nLive state at the start:\n{live_summary()}")
@@ -349,7 +349,7 @@ def deep_worker(token: str, turns: queue.Queue) -> None:
 
 
 def alert_forwarder(token: str, allowed: set[int]) -> None:
-    """Send David new daemon alerts (starting after the ones already seen)."""
+    """Send the user new daemon alerts (starting after the ones already seen)."""
     seen_path = COIN_STATE / "alerts-seen.json"
     last = configuration.read_json(seen_path, None)
     while True:

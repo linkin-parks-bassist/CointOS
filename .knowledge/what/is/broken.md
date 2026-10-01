@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T00:10:49+10:00"
+revised_at: "2026-10-02T00:56:35+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
@@ -14,7 +14,7 @@ The unresolved defects and unproved boundaries are:
 - **Snapshot durability needs churn evidence:** repeated disk restores, save-size calibration and transfer interruption under load, the reported `app.slice` OOM victim and a guarded midnight crossing remain unresolved.
 - **Manager parallelism and local-agent output quality need observation**, but CointOS development must not wait on slow Pigen output for primary evidence.
 - **Automatic retirement is installed; remaining retained work needs observation.** `lifecycle.retire` now retires settled done/failed/superseded/returned tasks in bounded reconciliation batches, archives unlanded commits and keeps dirty or still-revisable work for inspection. Its pure mechanism is covered by tests; retained failed items may be legitimate recovery artifacts rather than leaks.
-- **Interactive sessions are invisible to agents.** A Claude Code session David runs in a project does not appear in `cointos agents`, and there is no channel to message a running agent. On 2026-10-01 the steward (system:loose-ends-8) spent its pass investigating that session's edits as an unknown concurrent writer, and an explanatory commit body did not reach it (it read commits with `--format='%s'`, subjects only). An unapproved remedy: a presence record for interactive sessions, registered through Claude Code hooks.
+- **Interactive sessions are invisible to agents.** A Claude Code session the user runs in a project does not appear in `cointos agents`, and there is no channel to message a running agent. On 2026-10-01 the steward (system:loose-ends-8) spent its pass investigating that session's edits as an unknown concurrent writer, and an explanatory commit body did not reach it (it read commits with `--format='%s'`, subjects only). An unapproved remedy: a presence record for interactive sessions, registered through Claude Code hooks.
 - **OpenCode V2 migration is deferred.** The installed runtime is 1.18.33; V1 remains authoritative until an isolated compatibility exercise proves process ownership, permissions, MCP, event parsing, retries and session resume.
 
 `what/is/the/live/acceptance/evidence/for/cointos.md` owns the proven boundary. `what/is/the/plan.md` owns only the ordered remaining work.

@@ -27,6 +27,21 @@ class Revision(unittest.TestCase):
 
     # ------------------------------------------------ holding
 
+    def test_human_holds_keep_their_authority_after_daemon_replacement(self):
+        queues.add(self.project, "queued", "impl", "Implement it")
+        queues.add(self.project, "queued", "managed", "Manager-owned item")
+        state.L["queue"]["p:impl"]["held_by"] = "previous_owner"
+        state.L["queue"]["p:managed"]["held_by"] = self.manager["id"]
+        replacement = state.fresh(state.L)
+        state.L.clear()
+        state.L.update(replacement)
+        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
+        self.assertEqual(state.L["queue"]["p:managed"]["held_by"], self.manager["id"])
+        api.dispatch("hold", {"item": "p:impl"})
+        api.dispatch("unhold", {"item": "p:impl"})
+        api.dispatch("unhold", {"item": "p:managed"})
+        self.assertTrue(all(r["held_by"] is None for r in state.L["queue"].values()))
+
     def test_a_held_item_does_not_start_until_released(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         self.as_manager("hold", item="p:impl")
@@ -50,13 +65,13 @@ class Revision(unittest.TestCase):
     def test_holds_end_when_their_holder_settles(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         self.as_manager("hold", item="p:impl")
-        lifecycle.submit(self.manager["id"], "manager-1", "blocked", "Needs David's call")
+        lifecycle.submit(self.manager["id"], "manager-1", "blocked", "Needs the user's call")
         self.assertIsNone(state.L["queue"]["p:impl"]["held_by"])
 
-    def test_one_holder_at_a_time_and_david_can_release_any(self):
+    def test_one_holder_at_a_time_and_user_can_release_any(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         api.dispatch("hold", {"item": "p:impl"})
-        with self.assertRaisesRegex(ValueError, "already held by David"):
+        with self.assertRaisesRegex(ValueError, "already held by user"):
             self.as_manager("hold", item="p:impl")
         self.as_manager("revise", item="p:impl", brief="Implement it differently", reason="interface changed")
         self.assertIsNone(state.L["queue"]["p:impl"]["held_by"], "a revision releases the hold")
@@ -131,7 +146,7 @@ class Revision(unittest.TestCase):
 
     # ------------------------------------------------ rights
 
-    def test_only_the_owning_projects_manager_or_david_decides(self):
+    def test_only_the_owning_projects_manager_or_user_decides(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         steward = support.running(tasks.create("steward", tasks.SYSTEM, "loose-ends", "", [6]), "steward-1", worktree=False)
         with self.assertRaisesRegex(ValueError, "owning project's running manager"):
@@ -144,8 +159,8 @@ class Revision(unittest.TestCase):
                                     "proposed_by": foreign["id"], "run": "manager-2"})
         with self.assertRaisesRegex(ValueError, "unknown queue item"):
             api.dispatch("hold", {"item": "impl"})
-        api.dispatch("hold", {"item": "p:impl"})  # David
-        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "David")
+        api.dispatch("hold", {"item": "p:impl"})  # the user
+        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
 
 
 if __name__ == "__main__":

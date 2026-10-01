@@ -138,10 +138,10 @@ class Completion(unittest.TestCase):
         self.assertNotIn("run-1", state.L["agents"])
 
     def test_a_directed_stop_after_the_receipt_does_not_requeue(self):
-        lifecycle.submit(self.task["id"], "run-1", "blocked", "David must choose the boundary")
-        lifecycle.stop("run-1", "stopped by David", requeue=True, charge=False)
+        lifecycle.submit(self.task["id"], "run-1", "blocked", "the user must choose the boundary")
+        lifecycle.stop("run-1", "stopped by the user", requeue=True, charge=False)
         self.assertEqual((self.task["status"], self.task["runs"], self.task["receipt"]["disposition"]), ("done", 1, "blocked"))
-        self.assertIn("David must choose the boundary", state.L["alerts"][-1]["text"])
+        self.assertIn("the user must choose the boundary", state.L["alerts"][-1]["text"])
 
     def test_a_directed_stop_before_the_receipt_is_uncharged(self):
         lifecycle.stop("run-1", "system halted", requeue=True, charge=False)
@@ -292,7 +292,7 @@ class Completion(unittest.TestCase):
         lifecycle.release("integrator-1", "run ended")
         record = queues.records()[worker["record"]]
         self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
-        self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt David")
+        self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt the user")
         manager = spawner.next_task()
         self.assertEqual((manager["role"], manager["item"]), ("manager", "parser"))
         self.assertIn("Contract mismatch", manager["brief"])
@@ -300,9 +300,9 @@ class Completion(unittest.TestCase):
         self.assertIn(worker["brief"], manager["brief"])
         self.assertIs(spawner.next_task(), manager, "reconciliation must not create a second manager")
         support.running(manager, "manager-1")
-        lifecycle.submit(manager["id"], "manager-1", "blocked", "David must choose the public contract")
+        lifecycle.submit(manager["id"], "manager-1", "blocked", "the user must choose the public contract")
         self.assertFalse(record["decompose"])
-        self.assertIn("David must choose", state.L["alerts"][-1]["text"])
+        self.assertIn("the user must choose", state.L["alerts"][-1]["text"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
 
     def test_exhausted_worker_routes_to_manager_but_exhausted_manager_does_not_loop(self):

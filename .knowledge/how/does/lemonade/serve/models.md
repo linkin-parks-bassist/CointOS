@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T23:46:26+10:00"
+revised_at: "2026-10-02T00:56:34+10:00"
 ---
 
 Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared by CointOS and other local clients. Its control API is `http://127.0.0.1:13305`; logs are in `journalctl -u lemond`. CointOS is a client, not its owner, and must tolerate another client reloading a model onto a different backend URL.
@@ -10,7 +10,7 @@ Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) 
 - `GET /api/v1/health` reports each model's loaded state, backend URL, effective launch command, recipe options, PID and pin state. CointOS refreshes this map during model checks.
 - `POST /v1/load` accepts the model name, context size, complete llama.cpp argument string, merge/save flags and pin state. CointOS uses `merge_args: false` and `save_options: false`, so its operational config determines the active shape without rewriting Lemonade's saved recipe.
 - `POST /v1/unload` unloads one named model; an absent model may answer 404.
-- Model files under `/var/lib/lemonade` are not readable by David's account, so models are started through Lemonade rather than directly.
+- Model files under `/var/lib/lemonade` are not readable by the user's account, so models are started through Lemonade rather than directly.
 
 Lemonade and its llama-server children run in `inference.slice`. Snapshot files live in the configured `/dev/shm` directory and must be writable by the `lemonade` user. The backend checks both workstation headroom and the inference-slice allowance before admitting model or snapshot allocations.
 
@@ -32,7 +32,7 @@ The configured Qwen models are hybrid recurrent/attention models. A saved state 
 
 `config/cointos.json` is authoritative for model names, context, lanes, arguments and admission estimates. The current work model is Qwen3.8-27B with one 131,072-token lane and MTP speculative decoding; the front model is Qwen3.5-4B with two 32,768-token lanes, one reserved for Coin. Lane count and total context are load-time model shape: changing either requires a model reload and is incompatible with live daemon-only installation.
 
-CointOS retains Qwen3.8-27B as the minimum work model unless David chooses a different quality point. Published alternative quantizations and runtimes are leads, not evidence of equal agent quality or a drop-in speedup. Any comparison must hold weights/quality target, sampling, occupied context and task success constant, then verify the exact installed runtime. No alternative currently has that evidence.
+CointOS retains Qwen3.8-27B as the minimum work model unless the user chooses a different quality point. Published alternative quantizations and runtimes are leads, not evidence of equal agent quality or a drop-in speedup. Any comparison must hold weights/quality target, sampling, occupied context and task success constant, then verify the exact installed runtime. No alternative currently has that evidence.
 
 ## Reasoning and output
 

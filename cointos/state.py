@@ -37,7 +37,7 @@ def log(event: str, **fields) -> None:
 
 
 def alert(text: str) -> None:
-    """Tell David (through Coin, the dashboard and the history). Caller holds LOCK."""
+    """Tell the user (through Coin, the dashboard and the history). Caller holds LOCK."""
     L["next_alert"] += 1
     L["alerts"].append({"id": L["next_alert"], "at": now(), "text": text})
     del L["alerts"][:-CONFIG["alerts_kept"]]
@@ -48,6 +48,10 @@ def fresh(previous: dict) -> dict:
     """A ledger for a starting daemon, keeping what outlives it: tasks, snapshots, history."""
     for task in previous.get("tasks", {}).values():
         task.pop("validating", None)  # no landing validation survives the daemon that ran it
+    for record in previous.get("queue", {}).values():
+        holder = record.get("held_by")
+        if holder and ":" not in holder:
+            record["held_by"] = "user"  # human labels become one stable identity; task ids are scoped
     lanes = [{"model": name, "index": index, "up": False, "holder": None, "resident": None, "free_since": now(),
               "held_for": None, "held_class": None, "held_until": 0, "turn_agent": None, "turn_since": 0}
              for name, shape in CONFIG["models"].items() for index in range(shape["lanes"])]

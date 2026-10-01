@@ -66,4 +66,4 @@ specification mismatches without re-deriving the implementation in extended deli
 6. A verified landing or incorporation, or a return, is your completion receipt and ends this
    managed run automatically. If you can do neither, `cointos finish --blocked "SPECIFIC BLOCKER"`
    fails the item and automatically routes its evidence to one manager pass. Only an
-   unresolved manager blocker needs David's attention. Your final message never completes the task.
+   unresolved manager blocker needs the user's attention. Your final message never completes the task.

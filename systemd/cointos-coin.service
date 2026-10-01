@@ -1,5 +1,5 @@
 [Unit]
-Description=CointOS Coin: David's Telegram remote control
+Description=CointOS Coin: the user's Telegram remote control
 After=network-online.target cointosd.service
 
 [Service]

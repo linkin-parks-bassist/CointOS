@@ -65,7 +65,7 @@ def evidence(task: dict, disposition: str) -> dict:
 
 
 def garden_health(task: dict) -> dict:
-    """A finished batch's tree as main now has it; still-unresolved selected leaves alert David
+    """A finished batch's tree as main now has it; still-unresolved selected leaves alert the user
     instead of repeating the batch."""
     where = tasks.place(task)
     health = trees.health(where, CONFIG["timeouts"]["command_seconds"])
@@ -179,7 +179,7 @@ def hold(key: str, by: str) -> None:
 
 def unhold(key: str, by: str) -> None:
     record = queues.records()[key]
-    if record["held_by"] not in (None, by) and by != "David":
+    if record["held_by"] not in (None, by) and by != "user":
         raise ValueError(f"{key} is held by {record['held_by']}")
     record["held_by"] = None
     log("item released", item=key, by=by)
@@ -258,11 +258,11 @@ def ended(agent_id: str, facts: dict) -> None:
 
 
 def kill(agent_id: str) -> dict:
-    """David ends a run and withholds further admission until explicitly released."""
+    """the user ends a run and withholds further admission until explicitly released."""
     task = L["tasks"][L["agents"][agent_id]["task"]]
     if owns(task, agent_id):
-        task["admission_hold"] = "killed by David"
-    stop(agent_id, "run killed by David", requeue=True, charge=False)
+        task["admission_hold"] = "killed by the user"
+    stop(agent_id, "run killed by the user", requeue=True, charge=False)
     return task
 
 
@@ -279,7 +279,7 @@ def resume_task(task_id: str) -> dict:
 
 def stop(agent_id: str, reason: str, requeue: bool, charge: bool = True) -> None:
     """End a run now. An unreceipted task waits again, or fails once its runs are exhausted; an
-    uncharged stop (David, the guard, a halt) does not count against them."""
+    uncharged stop (the user, the guard, a halt) does not count against them."""
     agent = L["agents"].get(agent_id)
     if agent is None:
         return

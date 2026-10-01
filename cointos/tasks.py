@@ -18,10 +18,10 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     revision                             why and by whom its item was last revised
     review, rejections                   the integrator's latest return notes and their count
     fresh_retries, recovery_note, recovery_context   budget recovery state
-    replaced_by, replacement_reason      set when David supersedes failed work
+    replaced_by, replacement_reason      set when the user supersedes failed work
     landing                              an integration's validated candidate, while it lands
     validating                           a landing check is in flight (not persisted)
-    admission_hold                       David's durable kill hold; explicit resume releases it
+    admission_hold                       the user's durable kill hold; explicit resume releases it
     interrupted_at                      when an existing session last lost its run
     launch_failures                     consecutive runs that never reached the model
     retired                             how its worktree and branch were retired once settled

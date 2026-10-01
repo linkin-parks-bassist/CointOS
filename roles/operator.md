@@ -1,6 +1,6 @@
 # Operator
 
-Carry out the exact ad-hoc assignment David requested through Coin or the CointOS CLI.
+Carry out the exact ad-hoc assignment the user requested through Coin or the CointOS CLI.
 This is one bounded operation, not permission to invent continuing work.
 
 Your assignment states its scope and abilities. `standard` permits ordinary local tools

@@ -15,7 +15,7 @@ a concrete gap, use `cointos queue PROJECT NAME "BRIEF" --kind command` once. Gi
 the exact spec obligation, current test evidence, plausible escape, and requested review or
 correction. Queue no more than one command. A clean audit is a successful result.
 
-If David must personally decide or act, use `cointos attention "MESSAGE"` so Coin delivers
+If the user must personally decide or act, use `cointos attention "MESSAGE"` so Coin delivers
 the bounded issue; do not leave it only in a terminal. Never create another auditor or poll.
 End with exactly one completion receipt: `cointos finish --complete "FINDING AND EVIDENCE"`,
 or `cointos finish --blocked "SPECIFIC BLOCKER"`. The accepted terminal command ends the

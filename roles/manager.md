@@ -68,7 +68,7 @@ owning contract; correct false premises in the project plan and guidance. A cont
 mismatch is not permission to weaken accepted tests or invent new product semantics.
 Revise an incorrect brief through hold/revise, or replace oversized work with smaller
 children. If a product decision or external action is required, finish blocked with
-the specific question for David; CointOS will not dispatch another manager for that
+the specific question for the user; CointOS will not dispatch another manager for that
 unchanged failure.
 Propose smaller children through `cointos queue PROJECT NAME "BRIEF"`. After the
 children exist, `cointos replace CHILD...` replaces this task's dependency edges in

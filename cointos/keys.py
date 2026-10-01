@@ -1,5 +1,5 @@
 """Gateway keys: who is thinking. Coin has a fixed key, each agent run its own, and any other
-key is David. Agent keys persist so that runs outliving a daemon replacement are still known."""
+key is the user. Agent keys persist so that runs outliving a daemon replacement are still known."""
 from __future__ import annotations
 
 import secrets
@@ -42,7 +42,7 @@ def revoke(agent_id: str) -> None:
 
 
 def owner(key: str) -> tuple[str, str]:
-    """(agent id, class) for a key; any key CointOS did not issue is David's."""
+    """(agent id, class) for a key; any key CointOS did not issue is the user's."""
     return OWNERS.get(key, ("user", "user"))
 
 

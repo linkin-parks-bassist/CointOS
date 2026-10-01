@@ -41,7 +41,7 @@ class Snapshots(unittest.TestCase):
         self.assertFalse(snapshots.keep(0, [1, 2, 3], "t", "suspended"))
         self.assertEqual(state.L["snapshots"], {})
 
-    def test_coin_david_and_shared_starts_are_kept_without_tasks(self):
+    def test_coin_user_and_shared_starts_are_kept_without_tasks(self):
         for tokens, owner in enumerate(("coin", "user", "shared")):
             self.assertTrue(snapshots.keep(0, [tokens], owner, "checkpoint"))
         self.assertEqual(sorted(s["owner"] for s in state.L["snapshots"].values()), ["coin", "shared", "user"])

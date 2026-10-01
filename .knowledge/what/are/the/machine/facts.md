@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-09-28T09:26:37+10:00"
+revised_at: "2026-10-02T00:57:52+10:00"
 ---
 
-The workstation is `DDRiver`, an AMD Ryzen AI MAX+ 395 with Radeon 8060S (Strix Halo), 128 GiB unified physical memory and a GNOME desktop. Live inspection on 2026-09-27 reports Ubuntu 24.04.5 LTS and kernel 7.0.0-31-generic. David's desktop and personal work outrank autonomous agents.
+The workstation is `DDRiver`, an AMD Ryzen AI MAX+ 395 with Radeon 8060S (Strix Halo), 128 GiB unified physical memory and a GNOME desktop. Live inspection on 2026-09-27 reports Ubuntu 24.04.5 LTS and kernel 7.0.0-31-generic. The user's desktop and personal work outrank autonomous agents.
 
 **Memory is one pool.** GPU and ordinary host allocations share RAM. `memory.physical_bytes()` totals online memory blocks (137.4 decimal GB, approximately 128 GiB); `MemTotal` excludes boot reservations. The ledger and CLI use decimal GB. The dashboard retains its five-part donut and uses the ordinary RAM convention: configured weights and KV capacity stay as authored, byte counters are divided by 2³⁰, and all values are labelled GB. Model and snapshot categories are not scaled. MemAvailable includes reclaimable model-weight pages, so the dashboard uses it to calculate non-reclaimable use rather than labelling it Free; Operating System is that use minus KV and snapshots, and Free is the remaining physical partition.
 

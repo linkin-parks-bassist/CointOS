@@ -1,10 +1,10 @@
-"""Viewers: terminal windows on David's desktop, each showing one live agent.
+"""Viewers: terminal windows on the user's desktop, each showing one live agent.
 
 A viewer is a window running `cointos view N`, which attaches OpenCode's live view to
 whichever agent holds slot N in the ledger's `viewers`, and shows "idle" between agents.
 The daemon gives each agent that has started a viewer: an idle open window if there is one
-(so idle monitors are captured by new agents), else, while David has asked for viewers
-(`cointos view --all`), a new window, up to `max_viewers`. A window David closes frees its slot.
+(so idle monitors are captured by new agents), else, while the user has asked for viewers
+(`cointos view --all`), a new window, up to `max_viewers`. A window the user closes frees its slot.
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def look_after(windows: set[int]) -> None:
             del opening[slot]
     for slot, agent in list(viewers.items()):
         if agent not in L["agents"] or (int(slot) not in windows and slot not in opening):
-            del viewers[slot]  # its agent ended, or David closed its window
+            del viewers[slot]  # its agent ended, or the user closed its window
     shown = set(viewers.values())
     for agent_id, agent in L["agents"].items():
         if agent_id in shown or not agent.get("url") or not agent.get("session"):

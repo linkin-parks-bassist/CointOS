@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-09-30T13:07:37+10:00"
+revised_at: "2026-10-02T00:57:53+10:00"
 ---
 
 How CointOS is built and changed:
@@ -11,7 +11,7 @@ How CointOS is built and changed:
 4. **Recovery is simple.** When an agent run dies or stalls, it is killed, logged, and its task goes back in the queue to be resumed. Ordinary interruption retains its session. Exhausting a run's generation budget permits only the configured number of fresh-session retries with artifacts preserved; exhausted worker items receive one bounded manager pass with their assignment and receipt evidence. An unresolved or exhausted manager escalates for intervention. Recovery preserves bounded verified leads from outward text, tool results and Git state, never hidden reasoning. Worker items that reach the earlier artifact checkpoint without a branch artifact recover instead of funding further analysis.
 5. **Done means working live.** A change is done when `cointos check` stays green through its scenario on the real machine. Unit tests cover pure functions.
 6. **Changes go to the owning concept.** A fix belongs where the concept it concerns is defined. Deleting code is as good a fix as adding it.
-7. **No patches.** Every bug fix starts by asking what in the current design allowed the bug: two sources of truth, a missing bound, a proxy measured instead of the real thing, a concept without an owner. The fix changes that design, and the architecture leaf with it. A new state, flag, special case or retry that only covers a symptom is not a fix. (David: "No patches... This will not become a swamp again.")
+7. **No patches.** Every bug fix starts by asking what in the current design allowed the bug: two sources of truth, a missing bound, a proxy measured instead of the real thing, a concept without an owner. The fix changes that design, and the architecture leaf with it. A new state, flag, special case or retry that only covers a symptom is not a fix. (User requirement: "No patches... This will not become a swamp again.")
 8. **Small core.** Daemon, gateway, scheduler, spawner, guard and self-check together stay around 3,000 lines or fewer.
 9. **Functions over data.** Plain data and plain functions (`global:how/to/approach/architecture-design.md`).
 10. **Leaves state current truth.** Each fact lives in its owning leaf and is updated in place. Code and leaves agree.

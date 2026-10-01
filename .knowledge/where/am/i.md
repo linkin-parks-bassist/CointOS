@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-02T00:37:33+10:00"
+revised_at: "2026-10-02T00:56:38+10:00"
 ---
 
-CointOS is David's autonomous, local-first agent ecosystem. This repository is its source, and `master` is its one canonical branch (configured as the CointOS tree's `main_branch`). `scripts/install` copies the runtime to `~/.CointOS`; `cointosd.service` and `cointos-coin.service` run there, and `~/.local/bin/cointos` points to its CLI. The installed runtime owns a separate globally readable knowledge tree explaining operation and publishing daemon-owned queues; its orientation and `what/is/cointos.md` are generated from this repository's `runtime/` sources during installation.
+CointOS is an autonomous, local-first agent ecosystem. This repository is its source, and `master` is its one canonical branch (configured as the CointOS tree's `main_branch`). `scripts/install` copies the runtime to `~/.CointOS`; `cointosd.service` and `cointos-coin.service` run there, and `~/.local/bin/cointos` points to its CLI. The installed runtime owns a separate globally readable knowledge tree explaining operation and publishing daemon-owned queues; its orientation and `what/is/cointos.md` are generated from this repository's `runtime/` sources during installation.
 
 Python implementation is in `cointos/`; operational configuration is in `config/cointos.json`, while installed `config/projects.json` is the user-managed project registry that upgrades preserve. Prompts live in `roles/`, the dashboard in `web/`, unit templates in `systemd/`, installation and ledger migration in `scripts/`, runtime-tree source answers in `runtime/`, and checks in `tests/`. Managed projects are independent repositories under `~/Projects` with their own orientation, spec, plan and broken leaves; worktrees live under `~/Projects/.worktrees/<project>/<task>`. The live registry currently enables Pigen as the complexity quarry and keeps Todo CLI disabled.
 

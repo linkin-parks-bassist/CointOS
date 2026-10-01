@@ -1,10 +1,10 @@
 ---
 status: green
-revised_at: "2026-09-30T10:31:19+10:00"
+revised_at: "2026-10-02T00:57:52+10:00"
 ---
 
 **Qwen3.8-27B-GGUF: the work model.**
-- David: this is the minimum competent model for agent work. 4B- and 8B-class models are not used for agent work.
+- User policy: this is the minimum competent model for agent work. 4B- and 8B-class models are not used for agent work.
 - Weights about 17.5 GB.
 - Current work shape: `ctx_size` 131,072 with `--parallel 1` (one lane of 131,072 tokens). Normal two-lane shape is 262,144 total; the per-agent context allowance is preserved.
 - Launch arguments: `--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0` (MTP speculative decoding), plus `--slot-save-path` from the backend for context snapshots. No `--reasoning-budget`. Two-lane calibration was about 38.5 GB; the 4B about 6.6 GB. The one-lane shape has not been separately memory-benchmarked; its configured 39 GB admission estimate remains conservative.
@@ -17,7 +17,7 @@ revised_at: "2026-09-30T10:31:19+10:00"
 - Shape: `ctx_size` 65,536 with `--parallel 2` (2 lanes of 32,768 tokens).
 - Fast first replies for Coin. Its configured arguments also include `--cache-ram 0`; the server's extra RAM prompt cache is disabled for both models, while CointOS retains its own slot snapshots.
 
-**Size provenance.** The configured whole-model admission sizes (`memory_gb`: 39 for Qwen3.8 and 7 for Qwen3.5) round up live loaded-memory observations of about 38.5 GB and 6.6 GB recorded during the 2026-09-26 scheduler rebuild. The configured weight estimates (17.5 and 2.9) originated in this model-facts leaf when the fresh CointOS base was created, then were copied into config by the later dashboard commit. No underlying file-size measurement or external source was retained for those weight figures, and the Lemonade-owned GGUF paths are not stat-readable by David's user. Treat them as inherited estimates until measured through Lemonade or another authorized interface.
+**Size provenance.** The configured whole-model admission sizes (`memory_gb`: 39 for Qwen3.8 and 7 for Qwen3.5) round up live loaded-memory observations of about 38.5 GB and 6.6 GB recorded during the 2026-09-26 scheduler rebuild. The configured weight estimates (17.5 and 2.9) originated in this model-facts leaf when the fresh CointOS base was created, then were copied into config by the later dashboard commit. No underlying file-size measurement or external source was retained for those weight figures, and the Lemonade-owned GGUF paths are not stat-readable by the current account. Treat them as inherited estimates until measured through Lemonade or another authorized interface.
 
 **Lanes are set at load.** `--parallel` is a llama-server start option and the KV buffer is allocated at load, so the lane count is part of how a model is loaded.
 
