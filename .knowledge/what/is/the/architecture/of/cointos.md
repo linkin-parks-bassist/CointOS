@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T22:24:34+10:00"
+revised_at: "2026-10-01T22:52:34+10:00"
 ---
 
 # CointOS architecture
@@ -47,7 +47,7 @@ At each boundary:
 
 The backend verifies retained prompt state before each generation step. Prompt preparation streams progress so a lost prefix can be refused before an unbounded reread; generation returns the complete bounded token vector without per-step text parsing. Complete token counts and cached-state lengths are checked. The backend returns the sole authoritative known retained prefix; speculative draft state beyond the returned token history is marked cold without rejecting a valid reply. UTF-8 fragments are valid token history and are assembled before outward text streaming. Missing terminal events, backend error events, incomplete vectors and nonterminal steps with no tokens cannot become known lane state: the thought fails and the lane becomes cold.
 
-Every thought belongs to its gateway request. The handler cancels it on every exit, including errors before response headers. It also polls for peer EOF while waiting for both JSON and streaming replies. A waiting thought is removed immediately; an in-flight step finishes before releasing its lane. HTTP callers timing out cannot leave detached high-priority work behind.
+Every thought belongs to its gateway request. The handler cancels it on every exit, including errors before response headers. It also polls for peer EOF while waiting for both JSON and streaming replies. A waiting thought is removed immediately; an in-flight step finishes before releasing its lane. HTTP callers timing out cannot leave detached high-priority work behind. During deployment quiescence, new requests wait at the admission gate without counting as active thoughts/requests. Disconnect drops them, cancellation admits them, and shutdown returns a retryable refusal. They do not repeatedly consume client retries while admitted work drains.
 
 Task reasoning effort is low, medium or xhigh, pinned on the task at creation by `schema.default_effort`: an explicit override, else the test-contract entry for test-contract workers, else the task role's entry in `reasoning` config (managers are medium), else the low default. The gateway caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens and continues the same reply into answer/tool generation. Whole replies remain bounded by `max_thought_tokens`.
 
@@ -71,7 +71,7 @@ Receipts are run-owned and idempotent. `cointos finish` handles ordinary roles; 
 
 Ordinary death retains the OpenCode session. Directed `cointos kill` stops only the run, refunds its attempt and adds a durable task hold; only `cointos resume` releases it. Budget exhaustion may create a bounded fresh session with branch/files and a compact evidence packet, then fails the assignment. A failed worker item automatically receives one bounded manager pass; an unresolved or exhausted manager escalates for intervention. Hidden reasoning is never copied.
 
-Queue state is derived from accepted/failed task state on every reconciliation. Failed worker items carry the assignment, worker receipt evidence and final failure into one manager recovery pass through the existing decomposition route. Report words do not control admission. Recovery managers may correct the brief or replace the work; their own blocked or exhausted outcome disables further automatic recovery for that unchanged failure. Manager admission does not depend on the failed assignment's prerequisite readiness, but explicit holds and project enablement still apply. Completing a manager revision does not accept the failed work or settle its revised queue record. A queue item cannot be made done by deleting a leaf, moving a branch or ending a process.
+Queue state is derived from accepted/failed task state on every reconciliation. Failed worker items carry the assignment, worker receipt evidence and final failure into one manager recovery pass through the existing decomposition route. Report words do not control admission. Recovery managers receive their own configured reasoning and default generation limits rather than inheriting worker record overrides; explicit recovery-task overrides still win. They may correct the brief or replace the work; their own blocked or exhausted outcome disables further automatic recovery for that unchanged failure. Manager admission does not depend on the failed assignment's prerequisite readiness, but explicit holds and project enablement still apply. Completing a manager revision does not accept the failed work or settle its revised queue record. A queue item cannot be made done by deleting a leaf, moving a branch or ending a process.
 
 ## Work construction and landing
 
@@ -93,7 +93,7 @@ Checks are current observations; `check_incidents` owns notification lifetime. A
 
 1. `scheduler.slice_seconds` and `scheduler.chunk_tokens` reload live.
 2. `cointos restart` drains spawn admission while existing conversations/receipts finish, then replaces only cointosd and adopts still-active agent units.
-3. `scripts/install --live` uses deployment quiescence: admitted work reaches a request boundary, new thoughts are retryably blocked, compatible source/config is copied, and cointosd is replaced around surviving processes.
+3. `scripts/install --live` uses deployment quiescence: admitted work reaches a request boundary, new requests wait outside admission and the active-request count until cancellation or shutdown, compatible source/config is copied, and cointosd is replaced around surviving processes.
 4. Full paused installation, halt/up or reboot is reserved for gateway/model-process identity, model shape or other incompatible changes.
 
 Adoption requires both persisted identity and an active systemd unit. Unknown units are stopped; missing units return their tasks to waiting uncharged. A resumed session receives the smallest OpenCode-supported handoff; adoption injects nothing.
@@ -108,7 +108,7 @@ Adoption requires both persisted identity and an active systemd unit. Unknown un
 - `gateway.py`, `backend_llama.py`, `opencode.py`, `prompts.py`, `client.py`, `kt.py`, `kt_mcp.py`, `viewers.py`: external representation fingertips.
 - `api.py`, `cli.py`, `coin.py`, `settings.py`, `projects.py`, `checks.py`, `journal.py`, `web/dashboard.html`: control, presentation and diagnostics.
 
-The source repository and installed runtime are distinct. `scripts/install` is their only deployment route; `scripts/upgrade-ledger` is the one-shot schema migration boundary. Installed project enrollment is preserved separately from source defaults. Runtime queue leaves are daemon projections and are never edited by agents.
+The source repository and installed runtime are distinct. `scripts/install` owns full/live deployment; isolated dashboard or Coin-only copies follow `how/to/install/cointos.md`; `scripts/upgrade-ledger` is the one-shot schema migration boundary. Installed project enrollment is preserved separately from source defaults. Runtime queue leaves are daemon projections and are never edited by agents.
 
 ## Observability and current boundary
 

@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import api, checks, git, lifecycle, opencode, queues, runs, snapshots, spawner, state, tasks, trees
+from cointos import api, checks, git, lifecycle, opencode, queues, runs, schema, snapshots, spawner, state, tasks, trees
 from tests import support
 
 
@@ -313,6 +313,19 @@ class Completion(unittest.TestCase):
         lifecycle.fail(manager, "manager retries exhausted")
         self.assertFalse(queues.records()[worker["record"]]["decompose"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
+
+    def test_recovery_manager_does_not_inherit_the_failed_workers_limits(self):
+        queues.add(self.project, "queued", "tiny", "Build one bounded concern", reasoning_effort="low",
+                   budget={"generation_seconds": 1, "generation_tokens": 200})
+        worker = tasks.create("item", self.project, "tiny", "Build one bounded concern", [4], item="tiny",
+                              record_hash=queues.records()["p:tiny"]["hash"])
+        lifecycle.fail(worker, "fresh retries exhausted")
+        with patch.dict(state.CONFIG["reasoning"], manager="medium"):
+            manager = spawner.next_task()
+        self.assertEqual(manager["kind"], "decompose")
+        self.assertEqual(manager["budget"], schema.budget(state.CONFIG))
+        self.assertEqual(manager["reasoning_effort"], "medium")
+        self.assertEqual(worker["budget"], {"generation_seconds": 1, "generation_tokens": 200})
 
     def test_manager_can_correct_a_brief_without_accepting_the_failed_work(self):
         worker = support.queued(self.project, "wrong", "Impossible contract")

@@ -1,15 +1,15 @@
 ---
 status: green
-revised_at: "2026-10-01T22:19:10+10:00"
+revised_at: "2026-10-01T22:44:30+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **Automatic managerial recovery lacks live proof.** Failed worker items now route through one bounded manager pass using lifecycle state and assignment/receipt evidence, without magic report phrases. Unit coverage checks confirmed blockers, exhausted retries, brief correction, invalid prerequisite readiness and unresolved-manager escalation. Live automatic handoff and manager completion remain unproved; a manually queued Pigen correction does not establish this boundary.
+- **Automatic managerial recovery lacks complete live proof.** Failed worker items route through one bounded manager pass using lifecycle state and assignment/receipt evidence. The live journal establishes automatic dispatch after worker exhaustion and escalation after bounded manager exhaustion. It also exposed worker-budget inheritance: a one-second worker record left the recovery manager unable to act. The corrected constructor gives recovery managers their own default budget and configured reasoning; unit coverage checks this separation, blockers, exhausted retries, brief correction, invalid prerequisite readiness and unresolved-manager escalation. Useful post-fix managerial completion remains unproved; manually queued product corrections do not establish it.
 - **Oversized read-heavy work can consume every fresh retry without an artifact.** Bounded recovery and manager supersession now fail honestly, but useful completion after an artifact-preserving fresh recovery remains unproved.
 - **Warm reboot recovery after the second-pass repairs is unproved.** Complete normalized system/developer-prefix pinning and active-unit-only run adoption are installed and unit-covered. A later explicitly authorized reboot must prove warm disk-tier reuse and that dead units return tasks to waiting without charging an attempt.
 - **OpenCode 1.18.33 has no verified message-free noninteractive session continuation.** Empty `run --session` exits with “You must provide a message or a command.” CointOS therefore sends the real user turn `Continue.` for gaps under three hours and one concise reorientation after longer gaps. Zero-message continuation would require another verified OpenCode interface; it does not block current work.
-- **Several receipt/recovery paths lack focused live proof:** stale-run refusal against a newer active run, ordinary process-death auto-resume, loop handling, remaining budget-exhaustion cases and halt/up. CLI-launched system-operator completion and proactive sequential same-role prefix reuse are proved.
+- **Several receipt/recovery paths lack focused live proof:** loop handling, remaining budget-exhaustion cases and halt/up. CLI-launched system-operator completion and proactive sequential same-role prefix reuse are proved.
 - **Full acceptance is incomplete:** Coin visible-reply latency under load, workstation responsiveness and user priority, multi-agent integration/send-back, two-lane/four-agent sustained soak, and ordinary-intake pipeline quality still need live evidence.
 - **Snapshot durability needs churn evidence:** disk restores, save-size estimation, owner retirement, the reported `app.slice` OOM victim and a guarded midnight crossing remain unresolved.
 - **Manager parallelism and local-agent output quality need observation**, but CointOS development must not wait on slow Pigen output for primary evidence.

@@ -225,7 +225,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def think(self, body: dict):
         with LOCK:
-            if STOPPING.is_set() or L["quiescing"]:
+            # Keep new callers at the admission gate during deployment. Repeated 503s
+            # consume OpenCode's finite retries and leave it in exponential backoff
+            # after replacement, where it can be mistaken for a silent agent.
+            while L["quiescing"] and not STOPPING.is_set():
+                if self.peer_closed():
+                    return
+                LOCK.wait(timeout=CONFIG["tick_seconds"])
+            if STOPPING.is_set():
                 return self.reply(503, {"error": {"message": "daemon restarting; retry shortly"}})
             ACTIVE["chats"] += 1
         try:
@@ -234,6 +241,13 @@ class Handler(BaseHTTPRequestHandler):
             with LOCK:
                 ACTIVE["chats"] -= 1
                 LOCK.notify_all()
+
+    def peer_closed(self) -> bool:
+        """Whether the request's socket has reached EOF without consuming its bytes."""
+        try:
+            return bool(select.select([self.connection], [], [], 0)[0]) and not self.connection.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return True
 
     def stream_thought(self, body: dict):
         key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
@@ -276,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
             while end is None:
                 # HTTP/1.0 carries one request per connection. A readable socket
                 # returning EOF means its caller left, even before a JSON reply.
-                if select.select([self.connection], [], [], 0)[0] and not self.connection.recv(1, socket.MSG_PEEK):
+                if self.peer_closed():
                     return
                 try:
                     item = run["queue"].get(timeout=CONFIG["keepalive_seconds"])

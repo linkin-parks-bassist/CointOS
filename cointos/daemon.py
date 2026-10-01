@@ -131,7 +131,7 @@ def look_after_agents() -> None:
             agent["state"] = ("reading" if any(t["reading"] for t in holding) else "thinking" if holding
                               else "waiting" if mine else "running")
             if mine or L["quiescing"]:
-                # Deployment quiescence refuses new thoughts; waiting on it is the daemon's
+                # Deployment quiescence defers new thoughts; waiting on it is the daemon's
                 # silence, not the agent's.
                 agent["last_activity"] = now()
         if agent["repeats"] > limits["max_identical_thoughts"]:

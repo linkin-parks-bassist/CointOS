@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T21:55:39+10:00"
+revised_at: "2026-10-01T22:52:34+10:00"
 ---
 
 Use the least disruptive level that can apply the change:
@@ -20,7 +20,7 @@ The replacement daemon adopts a run only when its persisted key/task identity an
 
 ## Live installation
 
-`scripts/install --live` uses stronger deployment quiescence: admitted thoughts finish and new thoughts are retryably blocked at the gateway. Before contact it compares the candidate with the installed gateway/backend/model process-identity projection. Daemon-policy changes such as reasoning, recovery, scheduling and spawning are compatible; endpoint, backend and loaded-model topology changes are refused.
+`scripts/install --live` uses stronger deployment quiescence: admitted thoughts finish and new model requests wait at the gateway admission gate, outside the active-request count. Cancellation admits them; disconnect removes them; shutdown returns a retryable refusal. This avoids repeated 503 responses spending the finite retries and increasing delays in [OpenCode 1.18.33's retry policy](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.33/packages/opencode/src/session/retry.ts). Before contact it compares the candidate with the installed gateway/backend/model process-identity projection. Daemon-policy changes such as reasoning, recovery, scheduling and spawning are compatible; endpoint, backend and loaded-model topology changes are refused.
 
 At the quiet boundary it stops only cointosd, copies/upgrades the installed runtime, reloads units and starts cointosd to adopt survivors. Coin, agents and models keep running. The default wait is 60 seconds, bounded by the daemon command timeout; `--wait-seconds` changes it. Timeout cancels quiescence before copying or stopping anything. If a later step fails after cointosd stops, process-exit cleanup restarts it.
 

@@ -7,6 +7,15 @@ from cointos import coin
 
 
 class DeepTurn(unittest.TestCase):
+    def test_restart_uses_the_draining_control_and_reports_refusals(self):
+        self.assertIn("restart", {t["function"]["name"] for t in coin.TOOLS})
+        with patch.object(coin.cli, "restart", return_value="daemon restarted") as restart:
+            self.assertEqual(coin.execute("restart", {}), {"ok": True, "output": "daemon restarted"})
+            restart.assert_called_once_with()
+        with patch.object(coin.cli, "restart", side_effect=SystemExit("restart cancelled: replies did not drain")):
+            self.assertEqual(coin.execute("restart", {}),
+                             {"ok": False, "error": "restart cancelled: replies did not drain"})
+
     def test_tool_results_answer_the_exact_model_call(self):
         replies = iter([
             {"role": "assistant", "content": None, "tool_calls": [{

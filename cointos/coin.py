@@ -198,6 +198,7 @@ TOOLS = [
     tool("resume_task", "Release a killed task for scheduling.", {"task": {"type": "string"}}, ["task"]),
     tool("halt", "Halt CointOS: stop the daemon and all agents and unload the models. Coin stays up."),
     tool("start", "Start CointOS again after a halt (or if it is down)."),
+    tool("restart", "Drain replies and restart only the daemon, preserving agents, sessions and loaded models."),
     tool("reply", "Finish this turn by sending David a message with new information: a result, an action "
          "taken, an answer or a warning.", {"message": {"type": "string"}}, ["message"]),
     tool("finish_silently", "Finish this turn without another message, because the first reply already covered it."),
@@ -242,13 +243,18 @@ EXECUTE = {
     "resume_task": lambda arguments: call("resume-task", arguments),
     "halt": lambda arguments: output(cli.halt(keep_coin=True)),
     "start": lambda arguments: output(cli.up()),
+    "restart": lambda arguments: output(cli.restart()),
 }
 
 
 def execute(name: str, arguments: dict) -> dict:
     if name not in EXECUTE:
         return {"ok": False, "error": f"unknown tool {name}"}
-    return EXECUTE[name](arguments)
+    try:
+        return EXECUTE[name](arguments)
+    except SystemExit as error:
+        # CLI control refusals are tool results, not a reason to kill Coin's worker.
+        return {"ok": False, "error": str(error)}
 
 
 def deep_turn(message: str, history: list[dict], first_reply: str, knowledge: dict | None) -> str | None:

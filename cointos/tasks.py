@@ -93,9 +93,12 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
         "prompt_date": time.strftime("%a %b %d %Y", time.localtime(created)),
         **fields,
     }
+    # Recovery is a new managerial assignment, not another run of the failed worker.
+    # Its record supplies evidence/identity, but the worker's limits cannot govern it.
+    metadata = record if kind != "decompose" else None
     task["reasoning_effort"] = schema.default_effort(CONFIG, {
-        **task, "reasoning_effort": schema.effort(reasoning_effort) or (record or {}).get("reasoning_effort")})
-    task["budget"] = schema.budget(CONFIG, budget if budget is not None else (record or {}).get("budget"))
+        **task, "reasoning_effort": schema.effort(reasoning_effort) or (metadata or {}).get("reasoning_effort")})
+    task["budget"] = schema.budget(CONFIG, budget if budget is not None else (metadata or {}).get("budget"))
     L["tasks"][task["id"]] = task
     L["cadence"][f"{kind}:{where['name']}"] = created
     log("task created", task=task["id"])

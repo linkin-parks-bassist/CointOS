@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T21:55:07+10:00"
+revised_at: "2026-10-01T22:36:32+10:00"
 ---
 
 Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env`:
@@ -19,7 +19,7 @@ Coin long-polls `getUpdates`, accepts allow-listed text and sends replies with `
 
 Coin's JSON model requests are request-owned: the gateway detects peer EOF while waiting, cancels disconnected callers and releases an in-flight thought at its step boundary. Coin thoughts are included in the 60-second no-progress check. Backend token steps preserve UTF-8 fragments without allowing text-parser errors or truncated replies to become a lane replay loop.
 
-The deep turn uses typed tools for status, agents, jobs, checks, queue/task controls, project registry, lifecycle controls, scoped operator launch and knowledge-tree access. Each model tool request is answered with a `tool` message carrying that exact request ID and tool name. Repeated identical calls reuse their result within the turn. The configured round budget is eight ordinary tool rounds plus up to three terminal finishing rounds.
+The deep turn uses typed tools for status, agents, jobs, checks, queue/task controls, project registry, lifecycle controls, scoped operator launch and knowledge-tree access. Its `restart` tool uses the CLI's reply-draining daemon replacement, preserving agent sessions and loaded models; CLI refusals are returned as tool errors rather than terminating Coin's deep worker. Each model tool request is answered with a `tool` message carrying that exact request ID and tool name. Repeated identical calls reuse their result within the turn. The configured round budget is eight ordinary tool rounds plus up to three terminal finishing rounds.
 
 Killing an agent through Coin is run-only control: unfinished work is held uncharged with artifacts preserved until explicit task resume. Coin does not infer task completion from processes or text.
 

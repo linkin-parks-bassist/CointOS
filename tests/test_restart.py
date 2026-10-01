@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 import unittest
 import urllib.error
@@ -80,17 +81,34 @@ class LiveRestart(unittest.TestCase):
             self.assertEqual(reply.call_args.args[0], 503)
             stream.assert_not_called()
 
-    def test_quiesce_rejects_new_thoughts_without_changing_ordinary_drain(self):
-        handler = object.__new__(gateway.Handler)
-        with patch.object(handler, 'reply') as reply, patch.object(handler, 'stream_thought') as stream:
-            api.dispatch('prepare-restart', {'quiesce': True})
-            handler.think({})
+    def test_quiesce_gates_new_requests_without_spending_client_retries(self):
+        entered = threading.Event()
+        def response(handler, body):
+            entered.set()
+            handler.reply(200, {'finished': True})
+        self.enterContext(patch.object(gateway.Handler, 'stream_thought', response))
+        server = ThreadingHTTPServer(('127.0.0.1', 0), gateway.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        api.dispatch('prepare-restart', {'quiesce': True})
+        result = []
+        def request():
+            with urllib.request.urlopen(f'http://127.0.0.1:{server.server_port}/v1/chat/completions',
+                                        data=b'{}', timeout=3) as r:
+                result.append(json.load(r))
+        client = threading.Thread(target=request)
+        client.start()
+        self.assertFalse(entered.wait(.1))
         self.assertTrue(state.L['restarting'])
         self.assertTrue(state.L['quiescing'])
-        self.assertEqual(reply.call_args.args[0], 503)
-        stream.assert_not_called()
+        self.assertTrue(api.dispatch('prepare-restart', {})['ready'])
+        self.assertEqual(state.ACTIVE['chats'], 0, 'a gated request is not admitted')
         api.dispatch('cancel-restart', {})
+        client.join(3)
         self.assertFalse(state.L['quiescing'])
+        self.assertFalse(client.is_alive())
+        self.assertEqual(result, [{'finished': True}])
 
     def test_cancel_restores_silence_grace_without_changing_pause(self):
         state.L['agents']['a'] = {'last_activity': 0}
@@ -100,6 +118,45 @@ class LiveRestart(unittest.TestCase):
         self.assertFalse(state.L['restarting'])
         self.assertFalse(state.L['paused'])
         self.assertGreater(state.L['agents']['a']['last_activity'], state.now() - 1)
+
+    def test_disconnected_gated_request_is_not_admitted(self):
+        handler = object.__new__(gateway.Handler)
+        handler.connection, peer = socket.socketpair()
+        self.addCleanup(handler.connection.close)
+        peer.close()
+        api.dispatch('prepare-restart', {'quiesce': True})
+        with patch.object(handler, 'reply') as reply, patch.object(handler, 'stream_thought') as stream:
+            handler.think({})
+        reply.assert_not_called()
+        stream.assert_not_called()
+        self.assertEqual(state.ACTIVE['chats'], 0)
+        api.dispatch('cancel-restart', {})
+
+    def test_shutdown_wakes_a_gated_request_with_one_retryable_refusal(self):
+        stopping, gated = threading.Event(), threading.Event()
+        self.enterContext(patch.object(gateway, 'STOPPING', stopping))
+        handler = object.__new__(gateway.Handler)
+        def connected():
+            gated.set()
+            return False
+        api.dispatch('prepare-restart', {'quiesce': True})
+        with patch.object(handler, 'peer_closed', connected), patch.object(handler, 'reply') as reply, \
+                patch.object(handler, 'stream_thought') as stream:
+            client = threading.Thread(target=handler.think, args=({},))
+            client.start()
+            try:
+                self.assertTrue(gated.wait(1))
+                stopping.set()
+                with state.LOCK:
+                    state.LOCK.notify_all()
+            finally:
+                stopping.set()
+                client.join(2)
+            self.assertFalse(client.is_alive())
+        self.assertEqual(reply.call_args.args[0], 503)
+        stream.assert_not_called()
+        self.assertEqual(state.ACTIVE['chats'], 0)
+        api.dispatch('cancel-restart', {})
 
     def test_cli_restarts_only_after_drain(self):
         with patch.object(cli, 'call', side_effect=[{'ready': False}, {'ready': True}]) as call, \

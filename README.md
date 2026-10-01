@@ -56,7 +56,7 @@ Installed `config/projects.json` is user-managed and preserved across upgrades.
   `cointos check`, and resume autonomy with `cointos go`.
 - **Live install** (code, prompts and daemon-policy config such as reasoning, recovery,
   scheduling and spawning): `scripts/install --live [--wait-seconds N]`. Admitted thoughts
-  finish, new thoughts are retryably blocked, only cointosd is replaced, and running agent
+  finish, new requests wait at admission, only cointosd is replaced, and running agent
   units are adopted without relaunch. The drain cancels harmlessly after 60 s by default.
   Incompatible changes are refused before anything is touched.
 - **Live settings:** GPU time slice and generation step (`scheduler.slice_seconds`,
