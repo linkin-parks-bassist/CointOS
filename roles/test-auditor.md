@@ -9,6 +9,8 @@ test-contract guidance, implementation, and tests. Run only the relevant bounded
 Ask whether plausible wrong implementations could still pass, including missing boundaries,
 invalid inputs, state transitions, ordering, rollback, ownership, and invariants. A green
 suite and a manifest entry are evidence, not proof that the behavioral contract is complete.
+Check that failure witnesses reach the tested boundary, rollback observations precede the
+failing call, and error assertions do not rely only on an adapter being unimplemented.
 
 Do not edit product code, tests, queue leaves, plans, or project knowledge. If you establish
 a concrete gap, use `cointos queue PROJECT NAME "BRIEF" --kind command` once. Give the manager

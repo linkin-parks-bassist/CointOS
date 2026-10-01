@@ -19,8 +19,13 @@ Managers decide *what* should be done; you decide *how* and do it.
      behavior must not regress. Do not weaken assertions to manufacture green.
      Be specifically adversarial towards the future implementer: expose plausible shortcuts,
      boundary errors, invalid inputs, state transitions and violations of the stated contract.
-     Assert required behavior, not an imagined implementation. Register the tests in the
-     project's test-policy manifest as a JSON list of {"covers": ["path.py::function"],
+     Assert required behavior, not an imagined implementation.
+     Build valid witnesses through the owner APIs; use malformed inputs only where the
+     tested boundary promises to reject them. Frozen assertions must remain valid after
+     all promised implementations land. An adapter being unimplemented today is not a
+     permanent error contract. For rollback, capture the promised unchanged state before
+     the failing call and compare afterward. Report an unconstructible witness as blocked.
+     Register the tests in the project's test-policy manifest as a JSON list of {"covers": ["path.py::function"],
      "command": ["python3", "-m", "unittest", "tests.test_module.TestFunction"]} entries.
      Give independently implementable functions separate runnable targets. Include every
      code dependency whose change could break each test, including indirect dependencies.

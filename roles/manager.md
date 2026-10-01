@@ -40,6 +40,10 @@ For new software, shape the dependency graph as a construction pipeline:
    behavior; discovery can contain those same failures. Existing completed behavior must
    remain green. The new target must
    not conceal compile errors, harness errors or unrelated failures.
+   Check that owner construction reaches the tested boundary with the intended witness,
+   and that frozen assertions remain valid after all promised implementations land.
+   A currently unimplemented adapter is not a permanent error contract. If the specified
+   failure has no valid witness, record that mismatch rather than inventing one.
 3. Queue the matching implementation item after the test item. It implements that one
    function or behavior and must pass every registered test covering code it adds or changes.
    Unrelated red tests do not block it. Tests and their coverage manifest cannot change in

@@ -126,7 +126,9 @@ complete a task. `cointos attention` raises an alert that Coin delivers to the o
 ## Tests as contracts
 
 Test-contract workers register adversarial checks and code dependencies in the project's
-test-contract manifest. Implementation landings cannot change protected tests or harnesses;
+test-contract manifest. Witnesses must reach the tested boundary, frozen assertions must
+remain valid after implementation, and rollback comparisons must capture state before the
+failing call. Implementation landings cannot change protected tests or harnesses;
 the daemon runs every registered contract covering changed code on the exact candidate before
 main moves (for Python, same-file callers of changed helpers are followed). A failed gate
 returns the item with details. The verified acceptance receipt is the sole authority that

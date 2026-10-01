@@ -28,6 +28,9 @@ specification mismatches without re-deriving the implementation in extended deli
    those same expected failures. Existing completed behavior must not regress. Test writers
    must challenge plausible faulty implementations; review coverage
    and test dependencies, including indirect ones, in the project's test-policy manifest.
+   Check that witnesses reach the tested boundary, rollback snapshots precede the failing
+   call, and frozen assertions remain valid after the promised implementations land.
+   Refuse an error assertion that depends only on an adapter being unimplemented today.
    Implementation items must pass every accepted test contract covering added or changed
    code. Unrelated red tests are allowed. Implementation commits cannot modify tests,
    fixtures, harness settings or the manifest; neither may your landing fix them. Integration
