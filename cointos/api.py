@@ -296,8 +296,13 @@ def forget_task(body):
 def clear_task_history(body):
     """Remove finished task records and terminal queue history that live work no longer needs."""
     protected = {agent["task"] for agent in L["agents"].values()}
-    protected |= {L["tasks"][tid]["worker"] for tid in list(protected) if L["tasks"][tid]["worker"]}
-    removed = [tid for tid, task in L["tasks"].items() if task["status"] in ("done", "failed") and tid not in protected]
+    protected |= {tid for tid, task in L["tasks"].items() if tasks.active(task)}
+    protected |= {task["worker"] for tid, task in L["tasks"].items() if tid in protected and task["worker"]}
+    protected |= {task["record"] for tid, task in L["tasks"].items() if tid in protected and task["record"]}
+    frontier = queues.history_frontier(protected)
+    removed = [tid for tid, task in L["tasks"].items()
+               if task["status"] in ("done", "failed") and tid not in protected
+               and tid not in frontier and task["record"] not in frontier]
     for task_id in removed:
         forget(task_id)
     queue_removed = queues.clear_history(protected)

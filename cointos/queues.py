@@ -192,8 +192,8 @@ def report(task: dict) -> str:
         return ""
 
 
-def clear_history(active_tasks: set[str]) -> list[str]:
-    """Remove terminal queue history that no live frontier still references. Caller holds LOCK."""
+def history_frontier(active_tasks: set[str]) -> set[str]:
+    """Queue identities still needed by unfinished work, including transitive prerequisites."""
     current = records()
     protected = {key for key, record in current.items()
                  if record["status"] == "queued" or (record["status"] == "blocked" and record.get("decompose"))
@@ -215,6 +215,14 @@ def clear_history(active_tasks: set[str]) -> list[str]:
             if key is not None and key not in protected:
                 protected.add(key)
                 pending.append(key)
+
+    return protected
+
+
+def clear_history(active_tasks: set[str]) -> list[str]:
+    """Remove terminal queue history that no live frontier still references. Caller holds LOCK."""
+    current = records()
+    protected = history_frontier(active_tasks)
 
     removed = [key for key, record in current.items()
                if key not in protected and record["status"] in ("done", "blocked")]

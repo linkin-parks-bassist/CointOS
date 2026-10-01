@@ -175,7 +175,8 @@ removed; interrupted copies become cold after daemon replacement.
 self-checks) sits above two columns: live agent cards and Work (in progress, queue, waiting for
 the integrator, then folded **Done** and **Gave up**) on the left; Machine (GPU controls, lanes,
 memory breakdown, self-checks), Recently and Projects on the right. **Clear task history**
-removes terminal records no live work still references.
+removes terminal records no unfinished work still references. It retains task evidence and
+sessions for transitive prerequisites, recovery work and workers of waiting integrators.
 
 ## Development
 

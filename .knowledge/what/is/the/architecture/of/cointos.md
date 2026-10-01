@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T00:37:34+10:00"
+revised_at: "2026-10-02T01:14:05+10:00"
 ---
 
 # CointOS architecture
@@ -74,6 +74,8 @@ Receipts are run-owned and idempotent. `cointos finish` handles ordinary roles; 
 Ordinary death retains the OpenCode session. Directed `cointos kill` stops only the run, refunds its attempt and adds a durable task hold; only `cointos resume` releases it. Budget exhaustion may create a bounded fresh session with branch/files and a compact evidence packet, then fails the assignment. A failed worker item automatically receives one bounded manager pass; an unresolved or exhausted manager escalates for intervention. Hidden reasoning is never copied.
 
 Queue state is derived from accepted/failed task state on every reconciliation. Failed worker items carry the assignment, worker receipt evidence and final failure into one manager recovery pass through the existing decomposition route. Report words do not control admission. Recovery managers receive their own configured reasoning and default generation limits rather than inheriting worker record overrides; explicit recovery-task overrides still win. They may correct the brief or replace the work; their own blocked or exhausted outcome disables further automatic recovery for that unchanged failure. Manager admission does not depend on the failed assignment's prerequisite readiness, but explicit holds and project enablement still apply. Completing a manager revision does not accept the failed work or settle its revised queue record. A queue item cannot be made done by deleting a leaf, moving a branch or ending a process.
+
+History cleanup is a reachability operation over the same task/queue relations. `queues.history_frontier` retains unfinished queue work and its transitive prerequisites/replacements. The API protects all active tasks and their worker/record relations, even without live runs, then retains terminal tasks associated with that queue frontier. Queue and task cleanup therefore preserve the same dependency evidence, sessions and branch metadata. Only unreferenced terminal records and their disposable cache ownership are forgotten. `how/to/clear/cointos/task/history.md` owns the operator-facing procedure.
 
 ## Work construction and landing
 

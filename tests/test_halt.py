@@ -2,7 +2,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from cointos import api, snapshots, spawner, state, tasks
+from cointos import api, queues, snapshots, spawner, state, tasks
 from tests import support
 
 
@@ -83,6 +83,43 @@ class Halt(unittest.TestCase):
         self.assertEqual(set(state.L["tasks"]), {by_status["waiting"]["id"], worker["id"], integration["id"]})
         self.assertIsNone(state.L["lanes"][0]["resident"])
         self.assertEqual({c.args[0] for c in forget.call_args_list}, {by_status["done"]["id"], by_status["failed"]["id"]})
+
+    def test_clear_history_keeps_transitive_prerequisite_tasks_and_recovery_artifacts(self):
+        where = support.project(self, support.repository(self))
+        first = support.queued(where, "first")
+        second = support.queued(where, "second", "Depends on: first\nSecond")
+        for task in (first, second):
+            task.update(status="done", session="retained-session", receipt={"evidence": "accepted"})
+            queues.update("p", task["item"], "done")
+        queues.add(where, "queued", "next", "Depends on: second\nNext")
+        failed = support.queued(where, "failed")
+        failed.update(status="failed", session="unfinished-session")
+        queues.update("p", "failed", "blocked", "Needs a manager", decompose=True)
+        forgotten = support.queued(where, "old")
+        forgotten.update(status="done")
+        queues.update("p", "old", "done")
+        with patch.object(snapshots, "forget_owner") as forget:
+            api.dispatch("clear-task-history", {})
+        self.assertNotIn(forgotten["id"], state.L["tasks"])
+        self.assertNotIn("p:old", state.L["queue"])
+        for task in (first, second, failed):
+            self.assertIs(state.L["tasks"][task["id"]], task)
+        self.assertEqual(first["receipt"], {"evidence": "accepted"})
+        self.assertEqual(failed["session"], "unfinished-session")
+        forget.assert_called_once_with(forgotten["id"])
+
+    def test_clear_history_preserves_worker_of_an_inactive_waiting_integrator(self):
+        where = support.project(self, support.repository(self))
+        worker = support.queued(where, "item")
+        worker.update(status="failed", session="worker-session")
+        integration = tasks.create("integrate", where, "integrate-item-1", "", [2],
+                                   item="item", worker=worker["id"])
+        self.assertEqual(integration["status"], "waiting")
+        with patch.object(snapshots, "forget_owner") as forget:
+            api.dispatch("clear-task-history", {})
+        self.assertIs(state.L["tasks"][worker["id"]], worker)
+        self.assertEqual(worker["session"], "worker-session")
+        forget.assert_not_called()
 
 
 if __name__ == "__main__":
