@@ -177,6 +177,9 @@ overhead downward for short contexts. Actual save sizes are measured and reconci
 Caches of terminal tasks are released once no run can resume that conversation, including
 workers accepted after their own run ended. Copying finishes before discarded caches are
 removed; interrupted copies become cold after daemon replacement.
+Startup and periodic file reconciliation remove abandoned snapshot files and copies left in
+the wrong tier after an interrupted save or transfer. Tracked caches, transfers and unpublished
+saves retain their files; conversation history and branch artifacts are unaffected.
 
 ## Dashboard
 

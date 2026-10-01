@@ -1,8 +1,11 @@
 import copy
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from cointos import lanes, lifecycle, memory, snapshots, state
+from cointos import backend_llama, lanes, lifecycle, memory, snapshots, state
 
 WORK = state.CONFIG["work_model"]
 
@@ -20,6 +23,7 @@ class Snapshots(unittest.TestCase):
         state.L["lanes"] = [lane for lane in state.L["lanes"] if lane["model"] == WORK][:1]
         state.L["tasks"]["t"] = {"id": "t", "status": "running"}
         self.forgotten = []
+        self.backend_save = snapshots.BACKEND.save
         self.enterContext(mock.patch.object(snapshots.BACKEND, "save", self.save))
         self.enterContext(mock.patch.object(snapshots.BACKEND, "forget", lambda config, name: self.forgotten.append(name)))
         self.enterContext(mock.patch.object(snapshots.BACKEND, "restore", lambda config, model, index, name: True))
@@ -146,6 +150,78 @@ class Snapshots(unittest.TestCase):
                 self.assertEqual(self.forgotten, ["disk"])
                 self.assertEqual(state.L["snapshots"]["b"]["tier"],
                                  "disk" if "b" in expected else "memory")
+
+    def test_save_process_death_does_not_leave_unaccounted_cache_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ram, disk = Path(folder) / "ram", Path(folder) / "disk"
+            ram.mkdir(); disk.mkdir()
+            with mock.patch.dict(state.CONFIG, snapshots=str(ram), disk_snapshots=str(disk)):
+                pid = os.fork()
+                if pid == 0:
+                    def interrupted(model, path, body, timeout):
+                        (ram / body["filename"]).write_bytes(b"x" * 1048576)
+                        os._exit(137)  # before save returns or the ledger can publish it
+                    with mock.patch.object(snapshots.BACKEND, "save", self.backend_save), \
+                            mock.patch.object(backend_llama, "_server", side_effect=interrupted):
+                        snapshots.keep(0, [1, 2, 3], "user", "checkpoint")
+                    os._exit(1)
+                _, status = os.waitpid(pid, 0)
+                self.assertEqual(os.waitstatus_to_exitcode(status), 137)
+                self.assertEqual(state.L["snapshots"], {})
+                orphan = next(ram.iterdir())
+                (disk / orphan.name).write_bytes(b"partial copy")
+                snapshots.forget_transfers()
+                snapshots.forget_orphans()
+                state.L["snapshots"]["tracked"] = {"owner": "user", "tier": "memory"}
+                state.L["snapshots"]["on-disk"] = {"owner": "user", "tier": "disk"}
+                state.L["snapshots"]["moving"] = {"owner": "user", "tier": "moving"}
+                for directory in (ram, disk):
+                    (directory / "tracked.bin").write_bytes(b"known")
+                    (directory / "on-disk.bin").write_bytes(b"known")
+                    (directory / "moving.bin").write_bytes(b"transferring")
+                    (directory / "saving.bin").write_bytes(b"in flight")
+                    (directory / "note.txt").write_text("not a snapshot")
+                with mock.patch.dict(snapshots.RESERVED, {"saving": 1}, clear=True):
+                    with state.LOCK:
+                        snapshots.forget_untracked()
+                self.assertEqual({p.name for p in ram.iterdir()},
+                                 {"tracked.bin", "saving.bin", "moving.bin", "note.txt"})
+                self.assertEqual({p.name for p in disk.iterdir()},
+                                 {"on-disk.bin", "moving.bin", "note.txt"})
+
+    def test_file_reconciliation_preserves_a_real_save_before_ledger_publication(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ram, disk = Path(folder) / "ram", Path(folder) / "disk"
+            ram.mkdir(); disk.mkdir()
+            with mock.patch.dict(state.CONFIG, snapshots=str(ram), disk_snapshots=str(disk)):
+                def saved(model, path, body, timeout):
+                    file = ram / body["filename"]
+                    file.write_bytes(b"saved")
+                    self.assertEqual(state.L["snapshots"], {})
+                    with state.LOCK:
+                        snapshots.forget_untracked()
+                    self.assertTrue(file.exists(), "the save reservation owns the unpublished file")
+                    return {"n_saved": 3}
+                with mock.patch.object(snapshots.BACKEND, "save", self.backend_save), \
+                        mock.patch.object(backend_llama, "_server", side_effect=saved):
+                    self.assertTrue(snapshots.keep(0, [1, 2, 3], "user", "checkpoint"))
+                self.assertEqual(len(state.L["snapshots"]), 1)
+                snapshots.forget_untracked()
+                self.assertEqual(len(list(ram.iterdir())), 1)
+
+    def test_file_cleanup_error_is_observable_without_repeated_notifications(self):
+        with mock.patch.object(snapshots.BACKEND, "forget_untracked",
+                               side_effect=PermissionError("cache permission")) as cleanup:
+            snapshots.forget_untracked()
+            snapshots.forget_untracked()
+            self.assertEqual(state.L["snapshot_cleanup_error"], "cache permission")
+            self.assertEqual(sum(e["event"] == "snapshot file cleanup failed"
+                                 for e in state.L["history"]), 1)
+            self.assertEqual(state.L["alerts"], [])
+            cleanup.side_effect = None
+            cleanup.return_value = []
+            snapshots.forget_untracked()
+            self.assertNotIn("snapshot_cleanup_error", state.L)
 
     def test_a_task_does_not_save_the_state_its_next_thought_has_left_behind(self):
         # The lane holds the end of t's last thought, which the conversation, as rendered

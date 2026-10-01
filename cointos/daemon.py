@@ -154,6 +154,7 @@ def tick(timers: dict) -> None:
         look_after_agents()
         recovery.enforce()
         _, _, queue_changed = spawner.refresh()
+        snapshots.forget_untracked()
         L["incidents"] = recovery.incidents()
         if CONFIG["viewers"]["max_viewers"]:
             viewers.look_after(windows)
@@ -215,6 +216,7 @@ def main() -> None:
         runs.adopt(previous)
         snapshots.forget_transfers()
         snapshots.forget_orphans()
+        snapshots.forget_untracked()
         log("daemon started")
     save()
     queues.publish()

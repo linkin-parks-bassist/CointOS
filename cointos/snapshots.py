@@ -272,3 +272,24 @@ def forget_transfers() -> None:
     for name in [n for n, s in L["snapshots"].items() if s["tier"] == "moving"]:
         drop(name, transfer_done=True)
         log("snapshot forgotten", snapshot=name, reason="its transfer was interrupted")
+
+
+def forget_untracked() -> None:
+    """Reconcile cache files after interrupted saves, protecting saves still in flight.
+
+    Caller holds LOCK. A backend save writes outside LOCK before its ledger entry exists;
+    RESERVED owns that file until publication. A dead daemon loses only that reservation.
+    """
+    try:
+        memory_names = {name for name, s in L["snapshots"].items() if s["tier"] in ("memory", "moving")}
+        disk_names = {name for name, s in L["snapshots"].items() if s["tier"] in ("disk", "moving")}
+        removed = BACKEND.forget_untracked(CONFIG, memory_names | set(RESERVED), disk_names)
+    except OSError as error:
+        problem = str(error)
+        if L.get("snapshot_cleanup_error") != problem:
+            log("snapshot file cleanup failed", error=problem)
+        L["snapshot_cleanup_error"] = problem
+        return
+    L.pop("snapshot_cleanup_error", None)
+    if removed:
+        log("untracked snapshot files removed", count=len(removed))

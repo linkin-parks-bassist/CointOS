@@ -271,6 +271,23 @@ def forget(config: dict, name: str) -> None:
             pass
 
 
+def forget_untracked(config: dict, memory_names: set[str], disk_names: set[str]) -> list[str]:
+    """Remove abandoned cache files from CointOS's two dedicated cache directories."""
+    removed = []
+    for place, names in ((Path(config["snapshots"]), memory_names),
+                         (Path(config["disk_snapshots"]).expanduser(), disk_names)):
+        kept = {_snapshot(name) for name in names}
+        for path in place.glob("*.bin"):
+            if path.name in kept or not path.is_file():
+                continue
+            try:
+                path.unlink()
+                removed.append(str(path))
+            except FileNotFoundError:
+                pass
+    return removed
+
+
 # ---------------------------------------------------------------- reading a thought
 
 MARKERS = ("</think>", "<tool_call>")

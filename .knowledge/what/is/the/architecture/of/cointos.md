@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T06:58:29+10:00"
+revised_at: "2026-10-02T07:31:41+10:00"
 ---
 
 # CointOS architecture
@@ -61,7 +61,7 @@ One conversation retains only useful prefix states; divergent task snapshots are
 
 Save admission uses the nearest measured same-model context at least as large, without scaling its fixed state overhead downward. Above the measured range it scales the largest sample upward and never predicts less than a smaller measured file. Estimates round upward; actual saves are measured and reconciled. An unseen model's first save remains unestimated. This protects short hybrid contexts from the previous bytes-per-token underestimate, but does not establish all future file sizes.
 
-RAM snapshots are bounded by `memory.snapshots_gb` and spill to the bounded disk tier by reachability and recency. Transfers remain charged until completion. Forgetting a moving snapshot marks it for discard; the transfer finishes before its files and charge are removed. Spill/unspill completion checks discard intent and owner reachability, and an unspill file error is a cache miss. At daemon startup, interrupted moving copies are discarded because their transfer threads no longer exist; completed RAM/disk states remain eligible for reuse. A cache miss or eviction causes rereading, never semantic loss. Full shutdown attempts context saving, RAM-to-disk spill and ledger saving independently. Shutdown spill admission traverses a stable snapshot list and reserves each accepted copy as moving before admitting the next, so disk evictions cannot invalidate iteration and every earlier admitted copy counts against the combined disk limit. A snapshot that cannot fit remains in RAM.
+RAM snapshots are bounded by `memory.snapshots_gb` and spill to the bounded disk tier by reachability and recency. Transfers remain charged until completion. Forgetting a moving snapshot marks it for discard; the transfer finishes before its files and charge are removed. Spill/unspill completion checks discard intent and owner reachability, and an unspill file error is a cache miss. At daemon startup, interrupted moving copies are discarded because their transfer threads no longer exist; completed RAM/disk states remain eligible for reuse. The ledger owns each tier's files; an in-flight save is protected by its RESERVED entry before ledger publication, and a moving transfer may own both copies. Startup and each daemon tick reconcile the dedicated cache directories against these owners, removing abandoned `.bin` files and copies left in the wrong tier after a save/transfer interruption. Cleanup errors remain observable in `snapshot_cleanup_error` and are logged only when the error changes, without repeated notifications. A cache miss or eviction causes rereading, never semantic loss. Full shutdown attempts context saving, RAM-to-disk spill and ledger saving independently. Shutdown spill admission traverses a stable snapshot list and reserves each accepted copy as moving before admitting the next, so disk evictions cannot invalidate iteration and every earlier admitted copy counts against the combined disk limit. A snapshot that cannot fit remains in RAM.
 
 ## Task and receipt lifecycle
 
