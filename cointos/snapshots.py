@@ -174,10 +174,13 @@ def persist() -> None:
     wipes) to the disk tier, so agents resume warm after it. Nothing else loses them: a daemon
     restart, a model killed or Lemonade killed all leave /dev/shm as it is. Runs outside LOCK."""
     with LOCK:
-        leaving = [name for name, s in L["snapshots"].items()
-                   if s["tier"] == "memory" and disk_room(size_gb(s), keep=name)]
-        for name in leaving:
-            L["snapshots"][name]["tier"] = "moving"
+        leaving = []
+        # Disk admission may evict entries. Reserve each accepted transfer before
+        # checking the next, so their combined size counts against the disk limit.
+        for name, snapshot in list(L["snapshots"].items()):
+            if snapshot["tier"] == "memory" and disk_room(size_gb(snapshot), keep=name):
+                snapshot["tier"] = "moving"
+                leaving.append(name)
     for name in leaving:
         spill(name)
     with LOCK:

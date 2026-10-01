@@ -2,7 +2,7 @@ import copy
 import unittest
 from unittest import mock
 
-from cointos import lanes, lifecycle, snapshots, state
+from cointos import lanes, lifecycle, memory, snapshots, state
 
 WORK = state.CONFIG["work_model"]
 
@@ -116,6 +116,36 @@ class Snapshots(unittest.TestCase):
         snapshots.forget_transfers()
         self.assertEqual(set(state.L["snapshots"]), {"ram", "disk"})
         self.assertEqual(self.forgotten, ["copy"])
+
+    def test_shutdown_reserves_each_spill_before_admitting_the_next(self):
+        for disk_gb, pending_gb, expected in ((6, 0, ["a", "b"]),
+                                               (9, 0, ["a", "b"]),
+                                               (6, 4, ["a"])):
+            with self.subTest(disk_gb=disk_gb, pending_gb=pending_gb):
+                state.L["snapshots"].clear()
+                self.forgotten.clear()
+                spilled = []
+                for name, tier, size in (("disk", "disk", disk_gb),
+                                         ("pending", "moving", pending_gb),
+                                         ("a", "memory", 4), ("b", "memory", 4)):
+                    if size:
+                        state.L["snapshots"][name] = {
+                            "owner": "shared", "tier": tier,
+                            "bytes": size * memory.GB, "last_run": 0}
+
+                def transfer(config, name):
+                    occupied = sum(s["bytes"] for s in state.L["snapshots"].values()
+                                   if s["tier"] in ("disk", "moving"))
+                    self.assertLessEqual(occupied, 10 * memory.GB)
+                    spilled.append(name)
+
+                with mock.patch.dict(state.CONFIG["memory"], disk_snapshots_gb=10), \
+                        mock.patch.object(snapshots.BACKEND, "spill", side_effect=transfer):
+                    snapshots.persist()
+                self.assertEqual(spilled, expected)
+                self.assertEqual(self.forgotten, ["disk"])
+                self.assertEqual(state.L["snapshots"]["b"]["tier"],
+                                 "disk" if "b" in expected else "memory")
 
     def test_a_task_does_not_save_the_state_its_next_thought_has_left_behind(self):
         # The lane holds the end of t's last thought, which the conversation, as rendered
