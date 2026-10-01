@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-02T04:32:40+10:00"
+revised_at: "2026-10-02T05:27:05+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers, artifact-preserving brief correction and bounded unresolved-manager escalation still need focused current evidence. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
+- **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers and unresolved-manager escalation still need native model-run evidence. Isolated installed HTTP fixtures establish artifact-preserving brief correction, durable receipt replay and bounded escalation without proving autonomous judgment. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
 - **Oversized read-heavy work can consume every fresh retry without an artifact.** Bounded recovery and manager supersession now fail honestly, but useful completion after an artifact-preserving fresh recovery remains unproved.
 - **Warm reboot recovery after the second-pass repairs is unproved.** Complete normalized system/developer-prefix pinning and active-unit-only run adoption are installed and unit-covered. A later explicitly authorized reboot must prove warm disk-tier reuse and that dead units return tasks to waiting without charging an attempt.
 - **Message-free continuation remains unverified on the current CLI.** OpenCode 1.18.33 had no verified message-free noninteractive session continuation: empty `run --session` exited with “You must provide a message or a command.” CointOS therefore sends the real user turn `Continue.` for gaps under three hours and one concise reorientation after longer gaps. Zero-message continuation would require another verified OpenCode interface; it does not block current work.
