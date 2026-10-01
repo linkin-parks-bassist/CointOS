@@ -85,6 +85,8 @@ new work instead.
 Omitted stage, reasoning effort and budget limits retain their current values during revision.
 Provide metadata flags only when changing those values; named budget limits merge with the old
 limits. A wording correction must preserve the test-contract/skeleton stage and its permissions.
+An existing waiting integrator waits for the worker's new review; a changed brief refreshes that
+integrator's assignment and conversation while keeping its branch/files and explicit run hold.
 
 Queue only through the daemon API, using `cointos queue`. `--kind urgent` places a
 task first, `--kind queued` submits ordinary work, and `--kind command` submits a

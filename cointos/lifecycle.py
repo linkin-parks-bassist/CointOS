@@ -211,6 +211,12 @@ def revise(key: str, by: str, reason: str, brief: str, stage=None, reasoning_eff
                     recovery_note=None, recovery_context=None, revision=f"Revised by {by}: {reason.strip()}")
         _settle(task, "waiting", f"revised by {by}", receipt=None, review=None)
         snapshots.forget_owner(task["id"])  # a new conversation on a new brief
+        for integration in L["tasks"].values():
+            if (integration["kind"] == "integrate" and integration["worker"] == key
+                    and integration["status"] == "waiting" and integration["brief"] != record["brief"]):
+                integration.update(brief=record["brief"], session=None, runs=0, fresh_retries=0,
+                                   recovery_note=None, recovery_context=None, revision=task["revision"])
+                snapshots.forget_owner(integration["id"])
     log("item revised", item=key, by=by, reason=reason.strip())
 
 

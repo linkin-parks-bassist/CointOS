@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-02T01:54:15+10:00"
+revised_at: "2026-10-02T02:05:37+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
 
-1. **Finish restored-stage revalidation:** wait for the existing Task 6 skeleton worker's fresh checked review, then release its original held integrator; verify correct skeleton landing policy and preserve the existing branch/session. Do not resume integration before worker review is ready.
+1. **Finish restored-stage revalidation:** verify the automatically resumed original Task 6 integrator's correct skeleton landing policy and checked acceptance. Preserve its existing branch/session; worker revalidation and automatic continuation are established.
 2. **Prove automatic managerial recovery live:** integrator-confirmed worker blockers and exhausted worker retries must dispatch one manager pass without manual queueing or magic report wording; verify brief revision preserves unfinished work and an unresolved manager escalates without a loop.
 3. **Submit the neutral-worded repository for review before publication.** Before publishing, the owner chooses between rewriting Git history and publishing a fresh squashed repository, since past commits retain personal wording. No publication or history rewrite is authorized by this plan.
 4. **At the next explicitly authorized reboot, prove the second-pass recovery fixes.** Verify complete-prefix warm disk reuse and that dead agent units return tasks to waiting without charging attempts. Do not reboot merely to test; the second-pass fixes are unit-covered.

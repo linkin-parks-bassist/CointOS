@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-02T01:55:48+10:00"
+revised_at: "2026-10-02T02:05:37+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **Restored-stage work needs revalidation.** The installed queue revision fix preserves omitted construction metadata. Four Task 6 items have their original stage/effort restored from the manager's actual commands. The existing skeleton worker is reviewing its retained branch afresh; its original integrator is deliberately held until the new worker review is ready. Then release that integrator and verify skeleton landing policy. The acceptance leaf owns the completed repair evidence.
+- **Restored-stage landing needs verification.** The installed queue revision fix preserves omitted construction metadata. Four Task 6 items have their original stage/effort restored from the manager's actual commands. The skeleton worker revalidated its retained commit through a fresh checked review. Its original integrator resumed automatically three seconds later with the same session/branch/worktree after the installed readiness gate waited for review. Correct skeleton landing policy and checked acceptance remain unverified. The acceptance leaf owns the completed repair evidence.
 - **Automatic managerial recovery lacks complete live proof.** Failed worker items route through one bounded manager pass using lifecycle state and assignment/receipt evidence. The live journal establishes automatic dispatch after worker exhaustion and escalation after bounded manager exhaustion. It also exposed worker-budget inheritance: a one-second worker record left the recovery manager unable to act. The corrected constructor gives recovery managers their own default budget and configured reasoning; unit coverage checks this separation, blockers, exhausted retries, brief correction, invalid prerequisite readiness and unresolved-manager escalation. Useful post-fix managerial completion remains unproved; manually queued product corrections do not establish it.
 - **Oversized read-heavy work can consume every fresh retry without an artifact.** Bounded recovery and manager supersession now fail honestly, but useful completion after an artifact-preserving fresh recovery remains unproved.
 - **Warm reboot recovery after the second-pass repairs is unproved.** Complete normalized system/developer-prefix pinning and active-unit-only run adoption are installed and unit-covered. A later explicitly authorized reboot must prove warm disk-tier reuse and that dead units return tasks to waiting without charging an attempt.

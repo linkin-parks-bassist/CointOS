@@ -76,6 +76,9 @@ def runnable(task: dict, ready: dict) -> bool:
             return False
     if task["kind"] in ("item", "breakdown"):
         return ready.get(task["place"], {}).get(task["item"]) == "ready"
+    if task["kind"] == "integrate":
+        worker = L["tasks"].get(task["worker"])
+        return bool(worker and worker["status"] == "review" and not held(worker))
     return True
 
 

@@ -181,6 +181,8 @@ sessions for transitive prerequisites, recovery work and workers of waiting inte
 Brief revisions retain omitted construction stage, reasoning effort and budget limits;
 explicit budget changes merge the named limits. Correcting wording must preserve the
 test-contract/implementation boundary.
+An existing waiting integrator waits for its worker's fresh review and receives the revised
+assignment before resuming.
 
 ## Development
 

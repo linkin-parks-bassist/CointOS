@@ -133,6 +133,28 @@ class Revision(unittest.TestCase):
             self.as_manager("revise", item="p:impl", brief="Something else", reason="changed")
         self.assertEqual(worker["status"], "review")
 
+    def test_existing_integration_waits_for_revised_worker_and_uses_the_new_brief(self):
+        worker = support.reviewed(self.worker(start=False), "worker-1")
+        integration = tasks.create("integrate", self.project, "integrate-impl", worker["brief"], [2],
+                                   item="impl", worker=worker["id"])
+        integration.update(session="old-review-session", runs=2)
+        branch = integration["branch"]
+        self.as_manager("hold", item=worker["id"])
+        self.assertFalse(spawner.runnable(integration, {}), "holding reviewed work also gates an existing integration")
+        self.as_manager("revise", item=worker["id"], brief="Implement the corrected contract", reason="false premise")
+        self.assertEqual(spawner.next_task()["id"], worker["id"])
+        self.assertEqual((integration["brief"], integration["session"], integration["runs"], integration["branch"]),
+                         (worker["brief"], None, 0, branch))
+        self.assertIn(worker["brief"], prompts.launch_text(integration, self.project))
+        self.assertFalse(spawner.runnable(integration, {}))
+        support.reviewed(worker, "worker-2")
+        self.assertEqual(spawner.next_task()["id"], integration["id"])
+        for status in ("waiting", "running", "failed", "done"):
+            worker["status"] = status
+            self.assertFalse(spawner.runnable(integration, {}), status)
+        del state.L["tasks"][worker["id"]]
+        self.assertFalse(spawner.runnable(integration, {}), "a missing worker cannot be integrated")
+
     def test_a_failed_item_can_be_revised_into_new_work(self):
         worker = self.worker()
         worker["runs"] = state.CONFIG["spawner"]["max_runs_per_task"]
