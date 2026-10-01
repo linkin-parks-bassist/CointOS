@@ -1,11 +1,12 @@
 """Validation and atomic mutation of CointOS's durable project registry."""
 from __future__ import annotations
 
+import copy
 import re
 import subprocess
 from pathlib import Path
 
-from cointos import git
+from cointos import git, kt
 from cointos.config import PROJECTS, write_json
 
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -37,7 +38,7 @@ def normalize(project: dict) -> dict:
         if not all(isinstance(policy.get(key, []), list) and all(isinstance(v, str) for v in policy.get(key, []))
                    for key in ("protected", "non_code")):
             raise ValueError("test_policy protected and non_code must be string lists")
-        result["test_policy"] = policy
+        result["test_policy"] = {**policy, **{key: list(policy.get(key, [])) for key in ("protected", "non_code")}}
     return result
 
 
@@ -62,6 +63,8 @@ def add(config: dict, project: dict, path: Path = PROJECTS) -> dict:
 
 
 def create(config: dict, project: dict, registry_path: Path = PROJECTS) -> dict:
+    if project.get("test_policy") is None:
+        project = {**project, "test_policy": copy.deepcopy(config["project_defaults"]["test_policy"])}
     name = str(project.get("name", "")).strip()
     if not NAME.fullmatch(name):
         raise ValueError("project name must use letters, numbers, dot, underscore or dash")
@@ -75,10 +78,12 @@ def create(config: dict, project: dict, registry_path: Path = PROJECTS) -> dict:
         raise ValueError(initialized.stderr.strip() or "git init failed")
     orientation = (f"{name} is a CointOS-managed project in {target}. "
                    "where/ owns orientation; what/is/the/spec.md owns requirements; "
-                   "what/is/the/plan.md owns the remaining frontier; what/is/broken.md owns known defects.")
+                   "what/is/the/plan.md owns the remaining frontier; what/is/broken.md owns known defects. "
+                   "what/ owns those project answers. how/, why/, does/ and is/ have no answers yet.")
     initialized = subprocess.run(["kt", "init", "--project", orientation], cwd=target, capture_output=True, text=True)
     if initialized.returncode:
         raise ValueError(initialized.stderr.strip() or "kt init --project failed")
+    kt.write(target, "what is broken", "No known defects have been established.")
     staged = git.result(target, "add", ".knowledge")
     committed = git.result(target, "commit", "-m", "Initialize project") if not staged.returncode else staged
     if committed.returncode:

@@ -87,6 +87,10 @@ plan and broken leaves. The installed runtime publishes a globally readable know
 describing operation and the daemon-owned queues.
 Project changes are saved before they take effect in the daemon; a failed registry write
 leaves enrollment unchanged.
+New repositories include the configured `project_defaults.test_policy`: by default,
+`tests/contracts.json`, protected `tests/**` and `Makefile`, and non-code `.knowledge/**`
+and Markdown files. Custom policy flags override it. Imported repositories need a configured
+test policy before workers can land; production changes require accepted coverage.
 
 Coin (Telegram) exposes the same project operations and can launch a bounded ad-hoc operator
 (`run_agent`; CLI `cointos agent run NAME BRIEF [--project P] [--reasoning-effort E]

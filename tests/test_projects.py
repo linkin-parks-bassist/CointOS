@@ -48,6 +48,61 @@ class ProjectRegistry(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already registered"):
             projects.add(self.config, {"name": "alias", "path": str(path)}, self.registry)
 
+    def test_new_project_commits_all_orientation_routes_before_enrollment(self):
+        real_run = subprocess.run
+
+        def initialize(args, **options):
+            if args[:3] != ["kt", "init", "--project"]:
+                return real_run(args, **options)
+            target = Path(options["cwd"])
+            real_run(["git", "config", "user.name", "Test"], cwd=target, check=True)
+            real_run(["git", "config", "user.email", "test@example.invalid"], cwd=target, check=True)
+            for path, body in {"where/am/i.md": args[3], "what/is/the/spec.md": "", "what/is/the/plan.md": ""}.items():
+                leaf = target / ".knowledge" / path
+                leaf.parent.mkdir(parents=True, exist_ok=True)
+                leaf.write_text(body)
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        def write_answer(target, question, body):
+            leaf = Path(target) / ".knowledge" / (question.replace(" ", "/") + ".md")
+            leaf.parent.mkdir(parents=True, exist_ok=True)
+            leaf.write_text(body)
+
+        for failing in (False, True):
+            with self.subTest(failed_tree_write=failing):
+                target = self.root / ("failed" if failing else "created")
+                candidate = {"name": target.name, "path": str(target), "enabled": False}
+                policy = {"manifest": "checks/contracts.json", "protected": ["checks/**"], "non_code": ["*.md"]}
+                self.config = {"projects": [], "project_defaults": {"test_policy": policy}}
+                if self.registry.exists():
+                    self.registry.unlink()
+                effect = RuntimeError("tree write failed") if failing else write_answer
+                with patch.object(projects.subprocess, "run", side_effect=initialize), \
+                        patch.object(projects.kt, "write", side_effect=effect):
+                    if failing:
+                        with self.assertRaisesRegex(RuntimeError, "tree write failed"):
+                            projects.create(self.config, candidate, self.registry)
+                        self.assertFalse(self.registry.exists())
+                        self.assertEqual(self.config["projects"], [])
+                        continue
+                    created = projects.create(self.config, candidate, self.registry)
+                self.assertFalse(created["enabled"])
+                self.assertEqual(created["test_policy"], policy)
+                self.assertIsNot(created["test_policy"], policy)
+                for path in ("where/am/i.md", "what/is/the/spec.md", "what/is/the/plan.md", "what/is/broken.md"):
+                    committed = real_run(["git", "show", "HEAD:.knowledge/" + path], cwd=target,
+                                         check=True, capture_output=True, text=True)
+                    if path == "what/is/broken.md":
+                        self.assertEqual(committed.stdout, "No known defects have been established.")
+                self.assertEqual(json.loads(self.registry.read_text())["projects"], [created])
+
+    def test_partial_test_policy_has_the_complete_landing_shape(self):
+        policy = {"manifest": "checks.json"}
+        created = projects.add(self.config, {"name": "partial", "path": str(self.repo("partial")),
+                                             "test_policy": policy}, self.registry)
+        self.assertEqual(created["test_policy"], {"manifest": "checks.json", "protected": [], "non_code": []})
+        self.assertEqual(policy, {"manifest": "checks.json"})
+
     def test_failed_persistence_leaves_both_registry_projections_unchanged(self):
         projects.add(self.config, {"name": "one", "path": str(self.repo("one"))}, self.registry)
         initial = copy.deepcopy(self.config)

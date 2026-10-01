@@ -67,7 +67,7 @@ def protected(task: dict, where: dict) -> list[str]:
     rules = where.get("test_policy")
     if task["kind"] != "item" or task["stage"] != "implementation" or not rules:
         return []
-    patterns = [rules["manifest"], *rules["protected"]]
+    patterns = [rules["manifest"], *rules.get("protected", [])]
     return patterns + [f"{task['worktree']}/{pattern}" for pattern in patterns]
 
 

@@ -5,6 +5,13 @@
   "disk_snapshots": "~/.cache/cointos/contexts",
   "server_cgroup": "/sys/fs/cgroup/inference.slice",
   "port": 4200,
+  "project_defaults": {
+    "test_policy": {
+      "manifest": "tests/contracts.json",
+      "protected": ["tests/**", "Makefile"],
+      "non_code": [".knowledge/**", "*.md"]
+    }
+  },
   "tick_seconds": 1,
   "model_check_seconds": 5,
   "keepalive_seconds": 10,

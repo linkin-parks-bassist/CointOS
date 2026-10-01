@@ -26,7 +26,7 @@ def matches(path: str, patterns: list[str]) -> bool:
 
 
 def protected(path: str, rules: dict) -> bool:
-    return path == rules["manifest"] or matches(path, rules["protected"])
+    return path == rules["manifest"] or matches(path, rules.get("protected", []))
 
 
 def check_test_diff(repo, before, after, rules):
@@ -62,7 +62,7 @@ def symbols(source: str) -> tuple[dict, dict, dict, str]:
 def affected(repo, before, after, rules, *, inherit_private=False) -> set[str]:
     targets = set()
     for path in git.changed(repo, before, after):
-        if protected(path, rules) or matches(path, rules["non_code"]):
+        if protected(path, rules) or matches(path, rules.get("non_code", [])):
             continue
         if not path.endswith(".py"):
             targets.add(path)

@@ -56,6 +56,19 @@ class Contracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "test command failed"):
             contracts.verify(self.repo, candidate, [["python3", "-m", "unittest", "discover"]], 5)
 
+    def test_legacy_manifest_only_policy_still_enforces_coverage(self):
+        self.rules = {"manifest": "tests/contracts.json"}
+        path = self.tree / "code.py"
+        path.write_text(path.read_text().replace("raise NotImplementedError", "return 42", 1))
+        candidate = self.commit(self.tree)
+        checks = self.checks(candidate)
+        self.assertEqual(checks, [["python3", "-m", "unittest", "tests.test_code.A"]])
+        contracts.verify(self.repo, candidate, checks, 5)
+        (self.tree / "extra.py").write_text("def uncovered(): return 1\n")
+        with self.assertRaisesRegex(ValueError, "no accepted test contract: extra.py::uncovered"):
+            self.checks(self.commit(self.tree))
+        self.assertTrue(contracts.protected("tests/contracts.json", self.rules))
+
     def test_imports_and_private_helper_select_only_callers(self):
         p = self.tree / "code.py"
         p.write_text("import json\nimport os\n"
