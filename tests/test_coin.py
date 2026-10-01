@@ -9,6 +9,35 @@ from cointos import coin
 
 
 class DeepTurn(unittest.TestCase):
+    def test_lookup_and_model_share_the_front_desk_budget(self):
+        clock = [100.0]
+        def summary(*, timeout):
+            self.assertEqual(timeout, min(coin.CONFIG['timeouts']['api_seconds'], coin.SETTINGS['reply_seconds']))
+            clock[0] += 10
+            return 'status lookup was slow'
+        with patch.object(coin.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(coin, 'live_summary', side_effect=summary), \
+                patch.object(coin, 'complete', return_value={'content': 'On it.'}) as complete:
+            self.assertEqual(coin.first_reply('Check the work queue.', []), 'On it.')
+        self.assertEqual(complete.call_args.kwargs['timeout'], coin.SETTINGS['reply_seconds'] - 10)
+
+    def test_expired_front_desk_budget_acknowledges_without_starting_inference(self):
+        with patch.object(coin.time, 'monotonic', side_effect=[100, 100 + coin.SETTINGS['reply_seconds']]), \
+                patch.object(coin, 'live_summary', return_value='slow'), \
+                patch.object(coin, 'complete') as complete:
+            self.assertEqual(coin.first_reply('Please check this.', []), 'On it; give me a moment.')
+        complete.assert_not_called()
+
+    def test_status_and_summary_use_the_bounded_control_lookup(self):
+        with patch.object(coin, 'ledger', side_effect=coin.Unreachable('lookup timed out')) as ledger, \
+                patch.object(coin, 'complete') as complete:
+            self.assertIn('lookup timed out', coin.first_reply('/status', []))
+            self.assertIn('not reachable', coin.live_summary(timeout=1.5))
+        self.assertEqual(ledger.call_args_list[0].kwargs['timeout'],
+                         min(coin.CONFIG['timeouts']['api_seconds'], coin.SETTINGS['reply_seconds']))
+        self.assertEqual(ledger.call_args_list[1].kwargs['timeout'], 1.5)
+        complete.assert_not_called()
+
     def test_coin_requests_carry_the_configured_reasoning_cap(self):
         reply = {"choices": [{"message": {"role": "assistant", "content": "ready"}}]}
         captured = []

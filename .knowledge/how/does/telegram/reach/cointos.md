@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-01T23:10:40+10:00"
+revised_at: "2026-10-02T00:19:51+10:00"
 ---
 
 Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env`:
@@ -13,7 +13,7 @@ Coin long-polls `getUpdates`, accepts allow-listed text and sends replies with `
 ## Routing
 
 - `status` and `/status` use the control surface directly without inference.
-- Every other message first receives a short front-model reply through the gateway at Coin priority on its reserved lane. A deterministic formatter removes a trailing engagement question from a multi-sentence fast reply; it preserves a single-question reply.
+- Every other message shares `coin.reply_seconds` (currently 12 seconds) between its control-state lookup and front-model call. The lookup is capped by the lesser of that budget and the API timeout; the model gets only the remaining time. If none remains, Coin acknowledges without starting inference. It first sends a short front-model reply through the gateway at Coin priority on its reserved lane. A deterministic formatter removes a trailing engagement question from a multi-sentence fast reply; it preserves a single-question reply.
 - Every non-status message then enters the serial work-model deep-turn queue. The deep turn may send a useful follow-up or finish silently.
 - Daemon alerts are forwarded separately to allowed users. A self-check sends one alert per incident; only 30 seconds of sustained recovery rearms that check. The daemon persists notification incident state across replacement, while the dashboard retains current details.
 
@@ -29,4 +29,4 @@ Recent per-user conversation history is stored under `state/coin/` and limited b
 
 ## Availability boundary
 
-The fast model call has a configured 12-second timeout and a fallback acknowledgement. Network calls and Telegram retries can still exceed the MVP's visible-reply target; an active service alone is not proof. The deep tool/result identity path is unit-covered and installed, but a real post-fix Telegram deep-tool exchange and ten-message under-load latency measurement remain unproved in `what/is/the/plan.md`.
+First-reply preparation has one configured 12-second budget for lookup plus inference, with a fallback acknowledgement. Status-only requests use the same capped control lookup. This removes the former sequential 10-second lookup plus 12-second model allowance. Network calls and Telegram retries can still exceed the MVP's visible-reply target; an active service alone is not proof. The deep tool/result identity path is unit-covered and installed, but a real post-fix Telegram deep-tool exchange and ten-message under-load latency measurement remain unproved in `what/is/the/plan.md`.

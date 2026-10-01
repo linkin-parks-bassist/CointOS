@@ -29,7 +29,9 @@ or even having the daemon replaced underneath them.
   them, integrators update them as work lands, the runtime publishes its live queues into one, and
   gardeners and tree auditors keep them verified.
 - **Tells you what is going on.** A live dashboard, a CLI, and a Telegram assistant ("Coin")
-  over the same control API.
+  over the same control API. Coin shares one 12-second preparation budget between status
+  lookup and its front-model reply, then acknowledges if that budget runs out. Telegram
+  delivery time is separate.
 
 ## Requirements
 

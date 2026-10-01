@@ -98,10 +98,10 @@ def complete(model: str, messages: list[dict], timeout: float, **options) -> dic
         return json.load(response)["choices"][0]["message"]
 
 
-def live_summary() -> str:
+def live_summary(*, timeout: float | None = None) -> str:
     try:
-        state = ledger()
-    except Unreachable:
+        state = ledger() if timeout is None else ledger(timeout=timeout)
+    except (Unreachable, ValueError):
         return "The CointOS daemon is not reachable right now (it may be halted or restarting)."
     agents = [f"{a['id']} {a['state']} on {a['place']}: {a['title']}" for a in state["agents"].values()]
     tasks = sorted(state["tasks"].values(), key=lambda t: t["updated_at"], reverse=True)[:8]
@@ -127,7 +127,7 @@ def trim_fast_reply(text: str) -> str:
     return text
 
 
-def fast_reply(message: str, history: list[dict], summary: str) -> str:
+def fast_reply(message: str, history: list[dict], summary: str, *, deadline: float | None = None) -> str:
     """The front desk's immediate, brief reply. It cannot act: a deeper turn with tools follows
     every message except a plain status request, and stays silent if this reply covered it."""
     system = (f"{ROLE}\n\nYou are Coin's front desk: reply at once, briefly. Live state now:\n{summary}\n\n"
@@ -136,15 +136,30 @@ def fast_reply(message: str, history: list[dict], summary: str) -> str:
               "careful thought or facts not shown above, only acknowledge in a few words (for example \"On it.\"): "
               "a deeper turn with tools follows and does the work. You cannot act: never say that anything was done, "
               "queued, stopped, halted or started.")
+    timeout = SETTINGS["reply_seconds"]
+    if deadline is not None:
+        timeout = min(timeout, deadline - time.monotonic())
+    if timeout <= 0:
+        return "On it; give me a moment."
     try:
         answer = complete(CONFIG["front_model"], [{"role": "system", "content": system}, *history,
-                                                  {"role": "user", "content": message}], timeout=SETTINGS["reply_seconds"],
+                                                  {"role": "user", "content": message}], timeout=timeout,
                           max_tokens=SETTINGS["reply_tokens"], temperature=0.4,
                           chat_template_kwargs={"enable_thinking": False})
     except (OSError, ValueError, KeyError, urllib.error.URLError):
         traceback.print_exc()
         return "On it; give me a moment."
     return trim_fast_reply(answer.get("content") or "") or "On it."
+
+
+def first_reply(message: str, history: list[dict]) -> str:
+    """Share the front-desk preparation budget between control lookup and inference."""
+    deadline = time.monotonic() + SETTINGS["reply_seconds"]
+    timeout = min(CONFIG["timeouts"]["api_seconds"], SETTINGS["reply_seconds"])
+    if message.strip().lower() in ("status", "/status"):
+        return status_text(timeout=timeout)
+    summary = live_summary(timeout=timeout)
+    return fast_reply(message, history, summary, deadline=deadline)
 
 
 # ---------------------------------------------------------------- deep turn
@@ -379,7 +394,7 @@ def main() -> None:
             history = recent(user)
             remember(user, "user", text)
             status_request = text.strip().lower() in ("/status", "status")
-            reply = status_text() if status_request else fast_reply(text, history, live_summary())
+            reply = first_reply(text, history)
             remember(user, "assistant", reply)
             try:
                 send(token, chat, reply)
@@ -389,9 +404,9 @@ def main() -> None:
                 turns.put((user, chat, text, history, reply))
 
 
-def status_text() -> str:
+def status_text(*, timeout: float | None = None) -> str:
     try:
-        return cli.status_text(ledger())
+        return cli.status_text(ledger() if timeout is None else ledger(timeout=timeout))
     except (Unreachable, ValueError) as error:
         return f"cointos status failed: {error}"
 

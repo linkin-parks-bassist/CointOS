@@ -19,8 +19,8 @@ def call(action: str, body: dict | None = None, timeout: float = CONFIG["timeout
     return _request(f"/api/{action}", json.dumps(body or {}).encode(), timeout)
 
 
-def ledger() -> dict:
-    return _request("/api/ledger", None, CONFIG["timeouts"]["api_seconds"])
+def ledger(*, timeout: float = CONFIG["timeouts"]["api_seconds"]) -> dict:
+    return _request("/api/ledger", None, timeout)
 
 
 def _request(path: str, data: bytes | None, timeout: float) -> dict:
