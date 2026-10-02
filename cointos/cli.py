@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from cointos import config as configuration, git, opencode, queues, schema
+from cointos import config as configuration, git, metrics, opencode, queues, schema
 from cointos.client import Unreachable, call, ledger
 
 CONFIG = configuration.load()
@@ -414,6 +414,8 @@ def parser() -> argparse.ArgumentParser:
     for name in ("status", "agents", "check", "go", "up", "restart", "merge", "review"):
         sub.add_parser(name)
     sub.add_parser("jobs").add_argument("--all", action="store_true")
+    sub.add_parser("metrics", help="pipeline effectiveness over a recent window, from the event journal").add_argument(
+        "--hours", type=float, default=24.0)
     sub.add_parser("task", help="show one exact task and queue record, including receipts and dependencies").add_argument("task")
     sub.add_parser("halt").add_argument("--keep-coin", action="store_true")
     sub.add_parser("stop", help="pause autonomous agents and return their unfinished work to waiting")
@@ -573,6 +575,7 @@ COMMANDS = {
     "agents": lambda args: agents_text(ledger()),
     "jobs": lambda args: jobs_text(ledger(), limit=10_000 if args.all else 30),
     "check": lambda args: show_check(),
+    "metrics": lambda args: metrics.report(args.hours),
     "task": lambda args: show_task(args.task),
     "go": lambda args: resume(),
     "stop": stop_command,

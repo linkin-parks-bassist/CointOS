@@ -8,9 +8,12 @@ on a fresh checkout of that exact commit.
 from __future__ import annotations
 
 import ast
+import contextlib
 import fnmatch
 import json
 import os
+import re
+import shlex
 from pathlib import Path
 import signal
 import secrets
@@ -19,6 +22,8 @@ import tempfile
 import time
 
 from cointos import git
+
+OUTPUT_LIMIT = 1 << 20  # output tail kept for red-check literals and failure details
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -226,38 +231,119 @@ def incorporated(repo, worker, commit, rules) -> list[list[str]]:
     return affected_checks(repo, base, head, commit, rules)
 
 
+def _run(checkout, commit, command, deadline, memory_gb=None) -> tuple[int, str]:
+    """One command on a checked-out candidate: (exit code, output tail). Timeout raises."""
+    remaining = max(0.01, deadline - time.monotonic())
+    unit = "cointos-test-" + secrets.token_hex(6) if memory_gb is not None else None
+    run = (["systemd-run", "--user", "--quiet", "--wait", "--pipe", "--collect", f"--unit={unit}",
+            f"--working-directory={checkout}", f"--property=MemoryMax={memory_gb}G",
+            "--property=MemorySwapMax=0", "--property=OOMPolicy=stop", "--property=KillMode=control-group",
+            f"--property=RuntimeMaxSec={remaining}", "--property=TimeoutStopSec=1", "--", *command]
+           if unit else command)
+    with tempfile.TemporaryFile() as output:
+        child = subprocess.Popen(run, cwd=checkout, stdout=output, stderr=output, start_new_session=True)
+        try:
+            code = child.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid, signal.SIGKILL)
+            child.wait()
+            raise ValueError(f"test command timed out: {command}")
+        finally:
+            if unit:
+                subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True,
+                               timeout=max(1.0, remaining), check=False)
+        output.seek(max(0, output.tell() - OUTPUT_LIMIT))
+        text = output.read().decode(errors="replace")
+    if git.run(checkout, "diff", "HEAD", "--name-only") or git.head(checkout) != commit:
+        raise ValueError("test command changed the checked-out candidate")
+    return code, text
+
+
+@contextlib.contextmanager
+def checkout(repo, commit: str):
+    """A fresh detached worktree of the exact commit, removed afterwards."""
+    with tempfile.TemporaryDirectory(prefix="cointos-check-") as temp:
+        path = Path(temp) / "candidate"
+        git.run(repo, "worktree", "add", "--detach", str(path), commit)
+        try:
+            yield path
+        finally:
+            git.run(repo, "worktree", "remove", "--force", str(path))
+
+
 def verify(repo, commit: str, commands: list[list[str]], timeout: float, memory_gb=None) -> None:
     """Run the accepted checks on a fresh detached checkout of the exact candidate."""
-    with tempfile.TemporaryDirectory(prefix="cointos-check-") as temp:
-        deadline = time.monotonic() + timeout
-        checkout = Path(temp) / "candidate"
-        git.run(repo, "worktree", "add", "--detach", str(checkout), commit)
-        try:
-            for command in commands:
-                remaining = max(0.01, deadline - time.monotonic())
-                unit = "cointos-test-" + secrets.token_hex(6) if memory_gb is not None else None
-                run = (["systemd-run", "--user", "--quiet", "--wait", "--pipe", "--collect", f"--unit={unit}",
-                        f"--working-directory={checkout}", f"--property=MemoryMax={memory_gb}G",
-                        "--property=MemorySwapMax=0", "--property=OOMPolicy=stop", "--property=KillMode=control-group",
-                        f"--property=RuntimeMaxSec={remaining}", "--property=TimeoutStopSec=1", "--", *command]
-                       if unit else command)
-                with tempfile.TemporaryFile() as output:
-                    child = subprocess.Popen(run, cwd=checkout, stdout=output, stderr=output,
-                                             start_new_session=True)
-                    try:
-                        code = child.wait(timeout=remaining)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(child.pid, signal.SIGKILL)
-                        child.wait()
-                        raise ValueError(f"test command timed out: {command}")
-                    finally:
-                        if unit:
-                            subprocess.run(["systemctl", "--user", "stop", unit], capture_output=True,
-                                           timeout=timeout, check=False)
-                    if code:
-                        output.seek(max(0, output.tell() - 8000))
-                        raise ValueError(f"test command failed ({code}): {command}\n" + output.read().decode(errors="replace"))
-                if git.run(checkout, "diff", "HEAD", "--name-only") or git.head(checkout) != commit:
-                    raise ValueError("test command changed the checked-out candidate")
-        finally:
-            git.run(repo, "worktree", "remove", "--force", str(checkout))
+    deadline = time.monotonic() + timeout
+    with checkout(repo, commit) as path:
+        for command in commands:
+            code, text = _run(path, commit, command, deadline, memory_gb)
+            if code:
+                raise ValueError(f"test command failed ({code}): {command}\n" + text[-8000:])
+
+
+EXPECTED_RED = re.compile(r"\**Expected red:\**\s*(.*)", re.IGNORECASE)
+
+
+def expected_reds(report: str) -> list[tuple[list[str], str]]:
+    """A test-contract report's declared red checks, `Expected red: COMMAND => OUTPUT LITERAL`
+    lines outside fenced code; `Expected red: none` declares that every new check is green."""
+    found, fence, declared = [], None, False
+    for line in report.splitlines():
+        stripped = line.strip().lstrip("-*").strip()
+        if stripped.startswith(("```", "~~~")):
+            marker = stripped[:3]
+            fence = None if fence == marker else marker if fence is None else fence
+            continue
+        match = EXPECTED_RED.fullmatch(stripped) if fence is None else None
+        if not match:
+            continue
+        declared = True
+        value = match.group(1).strip().strip("`").strip()
+        if value.lower() == "none":
+            continue
+        command, sep, literal = value.partition("=>")
+        command, literal = shlex.split(command.strip().strip("`")) if sep else [], literal.strip().strip("`").strip()
+        if not command or not literal:
+            raise ValueError(f"malformed expected red (want `Expected red: COMMAND => OUTPUT LITERAL`): {line.strip()}")
+        found.append((command, literal))
+    if not declared:
+        raise ValueError("test-contract report declares no `Expected red: COMMAND => OUTPUT LITERAL` "
+                         "line (or `Expected red: none`)")
+    return found
+
+
+def red_gate(repo, parent: str, commit: str, report: str, rules: dict, timeout: float, memory_gb=None) -> dict:
+    """Mechanically check a test-contract candidate's claims: every declared red check fails on
+    the candidate with its declared output, and no other contract green on main turns red.
+
+    Candidate results come first; main is only consulted for contracts red on the candidate,
+    so the common all-green case runs each command once."""
+    expected = expected_reds(report)
+    accepted = contracts(repo, parent, rules) if git.show(repo, parent, rules["manifest"]) else []
+    commands = list(dict.fromkeys(tuple(c["command"]) for c in accepted))
+    deadline = time.monotonic() + timeout
+    results: dict[tuple, tuple[int, str]] = {}
+    with checkout(repo, commit) as path:
+        for command in commands + [tuple(c) for c, _ in expected if tuple(c) not in commands]:
+            results[command] = _run(path, commit, list(command), deadline, memory_gb)
+    for command, literal in expected:
+        code, text = results[tuple(command)]
+        if not code:
+            raise ValueError(f"declared red check passes on the candidate: {command}")
+        if literal not in text:
+            raise ValueError(f"declared red check {command} failed ({code}) without its declared output "
+                             f"{literal!r}; actual output tail:\n" + text[-4000:])
+    # A declared red is checked by its literal; an accepted target may legitimately turn red
+    # when the new deliberate failure is appended to it.
+    declared = {tuple(c) for c, _ in expected}
+    red = [c for c in commands if results[c][0] and c not in declared]
+    regressed = []
+    if red:
+        with checkout(repo, parent) as path:
+            for command in red:
+                if not _run(path, parent, list(command), deadline, memory_gb)[0]:
+                    regressed.append(command)
+    if regressed:
+        details = "\n".join(f"{list(c)}:\n{results[c][1][-2000:]}" for c in regressed)
+        raise ValueError("test contract turns accepted green checks red: " + details)
+    return {"expected_red": len(expected), "contracts_run": len(commands), "red_on_main": len(red)}

@@ -13,10 +13,10 @@ class Metadata(unittest.TestCase):
         self.project = support.project(self, support.repository(self))
 
     def test_queue_metadata_is_pinned_on_the_task_and_survives_persistence(self):
-        queues.add(self.project, "queued", "tests", "Adversarial tests", "test-contract", "medium")
-        self.assertEqual(queues.add(self.project, "queued", "tests", "Adversarial tests", "test-contract", "medium"), "tests")
+        queues.add(self.project, "queued", "tests", "Adversarial tests\nRelies on: code.py::a", "test-contract", "medium")
+        self.assertEqual(queues.add(self.project, "queued", "tests", "Adversarial tests\nRelies on: code.py::a", "test-contract", "medium"), "tests")
         with self.assertRaisesRegex(ValueError, "already exists"):
-            queues.add(self.project, "queued", "tests", "Adversarial tests", "test-contract", "low")
+            queues.add(self.project, "queued", "tests", "Adversarial tests\nRelies on: code.py::a", "test-contract", "low")
         task = tasks.create("item", self.project, "tests", "Adversarial tests", [4], item="tests")
         restored = json.loads(json.dumps(state.L))["tasks"][task["id"]]
         self.assertEqual((restored["stage"], restored["reasoning_effort"], restored["record"]),
@@ -47,7 +47,7 @@ class Metadata(unittest.TestCase):
         self.assertEqual(gateway.template_options(body, "user")["reasoning_effort"], "medium")
 
     def test_contract_review_uses_contract_default_without_inheriting_worker_overrides(self):
-        queues.add(self.project, "queued", "contract", "Tests", "test-contract", "xhigh",
+        queues.add(self.project, "queued", "contract", "Tests\nRelies on: code.py", "test-contract", "xhigh",
                    budget={"generation_tokens": 100})
         worker = tasks.create("item", self.project, "contract", "Tests", [4], item="contract")
         review = tasks.create("integrate", self.project, "review", "Review", [2], worker=worker["id"])

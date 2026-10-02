@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T08:01:35+10:00"
+revised_at: "2026-10-02T18:53:11+10:00"
 ---
 
 The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
@@ -11,7 +11,7 @@ The remaining frontier is ordered by expected reliability or throughput gained p
 4. **When the user authorizes the disruptive shape change, restore intended ambient capacity:** `max_agents=4`, two work-model lanes, `ctx_size=262144`, and intended gardening.
 5. **Close focused receipt/recovery paths live:** silence/loop handling, remaining exhaustion cases and halt/up.
 6. **Exercise the control surface end to end:** Review the extended Coin conversation log from the night immediately preceding the user's 2 October 2026 feedback, assessing understanding, useful answers, actual actions and follow-through; that log has not been systematically reviewed and health/timing probes do not establish conversational usefulness. Then verify Coin/dashboard controls through a real Telegram conversation and history cleanup through the live dashboard.
-7. **Validate autonomous integration quality:** concurrent unassisted model review and accepted-test adequacy beyond the first deliberate red. Assess the test-contract review default and whole-assertion guidance across further contracts, and verify model-driven conflict resolution through the same landing command.
+7. **Validate autonomous integration quality:** concurrent unassisted model review and accepted-test adequacy beyond the first deliberate red. Assess the test-contract review default and whole-assertion guidance across further contracts, and verify model-driven conflict resolution through the same landing command. Around 2026-10-09, judge the installed `Relies on:` dispatch check and test-contract red gate against their baseline with `how/to/monitor/cointos/pipeline/gates.md`, then keep, tune or revert them.
 8. **Run durability tests under churn:** disk restores, snapshot save-size behavior, save/transfer interruption and resulting file accounting under load, and a guarded midnight crossing.
 9. **Finish long-running acceptance:** bounded gardener/tree-auditor/test-auditor behavior, then the two-hour four-agent/two-lane soak with Coin latency, workstation priority and autonomous pipeline quality.
 

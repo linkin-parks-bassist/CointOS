@@ -81,6 +81,31 @@ class Admission(unittest.TestCase):
         task["status"] = "running"
         self.assertIsNone(spawner.next_task())
 
+    def test_a_test_contract_brief_must_name_what_it_relies_on(self):
+        with self.assertRaisesRegex(ValueError, "Relies on"):
+            queues.add(self.project, "queued", "tests", "Test parse.", "test-contract")
+        self.assertEqual(queues.relies_on("Depends on: x\nRelies on: `src/a.h::pigen_a`, src/b.c\n"),
+                         ["src/a.h::pigen_a", "src/b.c"])
+
+    def test_a_brief_relying_on_absent_apis_goes_to_a_manager_without_a_worker(self):
+        (self.repo / "api.h").write_text("int pigen_present(void);\nint pigen_presently(void);\n")
+        support.commit(self.repo, "api")
+        queues.add(self.project, "queued", "bad", "Relies on: api.h::pigen_present, api.h::pigen_pres, nope.h\nTest.",
+                   "test-contract")
+        self.assertIsNone(spawner.next_task(), "no worker is created for it")
+        task = spawner.next_task()
+        self.assertEqual((task["kind"], task["item"]), ("decompose", "bad"))
+        record = state.L["queue"]["p:bad"]
+        self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
+        self.assertIn("api.h::pigen_pres, nope.h, absent on main", record["report"])
+        self.assertNotIn("p:bad", state.L["tasks"])
+
+    def test_a_brief_relying_on_present_apis_dispatches(self):
+        (self.repo / "api.h").write_text("int pigen_present(void);\n")
+        support.commit(self.repo, "api")
+        queues.add(self.project, "queued", "good", "Relies on: api.h::pigen_present, api.h\nTest.", "test-contract")
+        self.assertEqual(spawner.next_task()["id"], "p:good")
+
     def test_api_queue_is_durable_on_restart_and_never_writes_project(self):
         api.dispatch("queue", {"project": "p", "kind": "queued", "name": "core", "brief": "Build core"})
         api.dispatch("queue", {"project": "p", "kind": "queued", "name": "ui", "brief": "Depends on: core\nBuild UI"})

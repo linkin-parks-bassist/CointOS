@@ -134,6 +134,15 @@ main moves (for Python, same-file callers of changed helpers are followed). A fa
 returns the item with details. The verified acceptance receipt is the sole authority that
 marks a queue item done.
 
+Test-contract work is checked mechanically too. Its brief must name the existing owner APIs it
+relies on (`Relies on: path::symbol, ...`); once its dependencies land, the daemon checks each
+entry against main and sends an infeasible brief straight to a manager before any worker runs.
+Its report declares each deliberate red as `Expected red: COMMAND => OUTPUT LITERAL` (or
+`Expected red: none`). Landing runs those commands, which must fail and print the literal, and
+returns the item if any other accepted check that is green on main turns red.
+`cointos metrics [--hours N]` reports landings by stage, gate returns, infeasible briefs and
+manager recoveries from the event journal.
+
 ## Reasoning and budgets
 
 Reasoning effort is `low`, `medium` or `xhigh`, capped per uninterrupted reasoning block at

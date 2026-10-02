@@ -11,9 +11,9 @@ import functools
 import subprocess
 from pathlib import Path
 
-from cointos import lanes, lifecycle, queues, runs, schema, tasks, trees
+from cointos import git, lanes, lifecycle, queues, runs, schema, tasks, trees
 from cointos.config import managed_trees
-from cointos.state import CONFIG, STOPPING, L, alert, now
+from cointos.state import CONFIG, STOPPING, L, alert, log, now
 
 
 def refresh() -> tuple[dict, dict, bool]:
@@ -117,11 +117,40 @@ def queued_work(scanned: dict, ready: dict) -> list:
             known = L["tasks"].get(f"{project['name']}:{record['item']}")
             if record["status"] != "queued" or (known and (tasks.active(known) or known["record_hash"] == record["hash"])):
                 continue
+            if record.get("stage") == "test-contract" and not feasible(project, record):
+                continue
             kind = schema.QUEUE_KINDS[record["kind"]]
             rank = queue_rank(kind, project, record["position"])
             options.append((rank, functools.partial(tasks.create, kind, project, record["item"], record["brief"], rank,
                                                     item=record["item"], record_hash=record["hash"])))
     return options
+
+
+_FEASIBLE: set[tuple[str, str]] = set()
+
+
+def feasible(project: dict, record: dict) -> bool:
+    """Whether a test-contract brief's `Relies on:` APIs exist on main before any worker spends
+    generation on it. An infeasible brief goes straight to its one managerial recovery pass."""
+    key = f"{project['name']}:{record['item']}"
+    if (key, record["hash"]) in _FEASIBLE:
+        return True
+    names = queues.relies_on(record["brief"])
+    try:
+        head = git.head(project["path"], project.get("main_branch", "main"))
+        missing = queues.missing_reliances(project["path"], head, names) if names else []
+    except ValueError:
+        return True  # an unreadable repository is reported by the run itself, not guessed here
+    if not missing:
+        _FEASIBLE.add((key, record["hash"]))
+        return True
+    report = (f"Assignment: {key} (not dispatched)\n\n{record['brief']}\n\n"
+              f"Dispatch check: the brief relies on {', '.join(missing)}, absent on "
+              f"{project.get('main_branch', 'main')} at {head}. Correct the brief to the owner APIs that exist "
+              f"(hold/revise), or queue the prerequisite skeleton it needs first.")
+    queues.update(project["name"], record["item"], "blocked", report, decompose=True)
+    log("brief infeasible", task=key, missing=missing, commit=head)
+    return False
 
 
 def integrations() -> list:

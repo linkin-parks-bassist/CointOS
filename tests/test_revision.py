@@ -79,9 +79,9 @@ class Revision(unittest.TestCase):
     # ------------------------------------------------ revising
 
     def test_brief_revision_preserves_construction_metadata_unless_explicitly_changed(self):
-        worker = support.queued(self.project, "contract", "Write tests", stage="test-contract",
+        worker = support.queued(self.project, "contract", "Write tests\nRelies on: code.py", stage="test-contract",
                                 reasoning_effort="xhigh", budget={"generation_seconds": 123, "generation_tokens": 456})
-        self.as_manager("revise", item=worker["id"], brief="Correct the test brief", reason="false premise")
+        self.as_manager("revise", item=worker["id"], brief="Correct the test brief\nRelies on: code.py", reason="false premise")
         record = state.L["queue"][worker["id"]]
         self.assertEqual((record["stage"], worker["stage"]), ("test-contract", "test-contract"))
         self.assertEqual((record["reasoning_effort"], worker["reasoning_effort"]), ("xhigh", "xhigh"))

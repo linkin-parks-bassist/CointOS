@@ -22,6 +22,7 @@ class Project(unittest.TestCase):
     """A project with accepted contracts for `code.a` and `code.b`, and a running worker on item."""
 
     stage = "implementation"
+    brief = "Implement A"
 
     def setUp(self):
         support.fresh_ledger(self)
@@ -36,7 +37,7 @@ class Project(unittest.TestCase):
              for n in "AB"]))
         self.base = support.commit(self.repo)
         self.project = support.project(self, self.repo, test_policy=RULES)
-        self.worker = support.queued(self.project, "item", "Implement A", stage=self.stage)
+        self.worker = support.queued(self.project, "item", self.brief, stage=self.stage)
         support.running(self.worker, "worker-1")
         self.worker["base_commit"] = self.base
         self.tree = Path(self.worker["worktree"])
@@ -163,6 +164,84 @@ class IntegrationStage(Project):
         (self.review / "tests/test_code.py").write_text("# weakened\n")
         with self.assertRaisesRegex(ValueError, "existing protected tests"):
             landing.land(integration["id"], support.commit(self.review), "integrator-1")
+
+
+class TestContractStage(Project):
+    """A test-contract candidate's declared reds are run and no accepted green check may turn red."""
+
+    stage = "test-contract"
+    brief = "Test A\nRelies on: code.py::a"
+    RED = "Expected red: python3 -m unittest tests.test_d => NotImplementedError"
+
+    def setUp(self):
+        super().setUp()
+        (self.repo / "code.py").write_text(CODE + "\ndef c():\n    return 1\n")
+        (self.repo / "tests/test_c.py").write_text(
+            "import unittest\nimport code\nclass C(unittest.TestCase):\n    def test_c(self): self.assertEqual(code.c(), 1)\n")
+        manifest = json.loads((self.repo / "tests/contracts.json").read_text())
+        manifest.append({"covers": ["code.py::c"], "command": ["python3", "-m", "unittest", "tests.test_c.C"]})
+        (self.repo / "tests/contracts.json").write_text(json.dumps(manifest))
+        self.base = support.commit(self.repo, "accepted green c")
+        git.run(self.tree, "merge", "-q", "--ff-only", "main")
+        gate = contracts.red_gate
+        self.enterContext(patch.object(contracts, "red_gate", side_effect=lambda repo, parent, commit, report, rules,
+                                       timeout, memory: gate(repo, parent, commit, report, rules, timeout)))
+
+    def contract(self, report: str, tests: dict | None = None) -> tuple[dict, str]:
+        files = {"tests/test_d.py": "import unittest\nimport code\nclass D(unittest.TestCase):\n"
+                                    "    def test_a(self): self.assertEqual(code.a(), 42)\n"} if tests is None else tests
+        for path, text in files.items():
+            (self.tree / path).write_text(text)
+        (self.tree / queues.REPORT).write_text("Status: done\n\nTests for a.\n\n" + report + "\n")
+        support.commit(self.tree, "tests for a")
+        submitted = lifecycle.submit(self.worker["id"], "worker-1", "complete", "tests for a")["evidence"]["commit"]
+        lifecycle.release("worker-1", "run ended")
+        integration = self.integrate()
+        git.run(self.review, "merge", "--squash", submitted)
+        (self.review / queues.REPORT).unlink()
+        return integration, support.commit(self.review, "land tests")
+
+    def rejected(self, report: str, message: str, tests: dict | None = None) -> None:
+        integration, candidate = self.contract(report, tests)
+        with self.assertRaisesRegex(ValueError, message):
+            landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), self.base)
+        self.assertEqual(self.worker["status"], "waiting", "a failed test-contract gate returns to the worker")
+        self.assertIn(message.split("(")[0].strip(), self.worker["review"])
+
+    def test_a_declared_red_with_its_output_lands(self):
+        integration, candidate = self.contract(self.RED)
+        landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), candidate)
+
+    def test_a_red_appended_to_an_accepted_green_target_lands_when_declared(self):
+        staged = (self.repo / "tests/test_c.py").read_text() + "    def test_a(self): self.assertEqual(code.a(), 42)\n"
+        integration, candidate = self.contract(
+            "Expected red: `python3 -m unittest tests.test_c.C` => NotImplementedError", {"tests/test_c.py": staged})
+        landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), candidate)
+
+    def test_a_report_without_declared_reds_is_returned(self):
+        self.rejected("All good.", "declares no")
+
+    def test_a_red_failing_for_another_reason_is_returned(self):
+        self.rejected("Expected red: python3 -m unittest tests.test_d => AssertionError", "without its declared output")
+
+    def test_a_declared_red_that_passes_is_returned(self):
+        self.rejected("Expected red: python3 -m unittest tests.test_c.C => anything", "passes on the candidate")
+
+    def test_turning_an_accepted_green_check_red_is_returned(self):
+        broken = (self.repo / "tests/test_c.py").read_text().replace("code.c(), 1", "code.c(), 2")
+        self.rejected(self.RED, "turns accepted green checks red",
+                      {"tests/test_c.py": broken, "tests/test_d.py": "import unittest\nimport code\n"
+                       "class D(unittest.TestCase):\n    def test_a(self): self.assertEqual(code.a(), 42)\n"})
+
+    def test_expected_red_lines_parse_outside_fences_only(self):
+        self.assertEqual(contracts.expected_reds("- Expected red: `make t` => x.c:3\n```\nExpected red: no\n```\n"),
+                         [(["make", "t"], "x.c:3")])
+        self.assertEqual(contracts.expected_reds("Expected red: none\n"), [])
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            contracts.expected_reds("Expected red: make t\n")
 
 
 class Incorporation(Project):

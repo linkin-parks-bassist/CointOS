@@ -28,7 +28,9 @@ reviews stay within the named item's boundary.
    Apply the acceptance rule for the item's construction stage. Skeletons must expose
    only the promised shape. Test-contract items may land with the focused target failing
    solely at named assertions for deliberate unimplemented behavior; discovery may contain
-   those same expected failures. Existing completed behavior must not regress. Test writers
+   those same expected failures. Existing completed behavior must not regress. The
+   landing gate runs the worker report's `Expected red: COMMAND => OUTPUT` lines and every
+   accepted check; a missing, passing or mismatched red, or a regression, returns the item. Test writers
    must challenge plausible faulty implementations; review coverage
    and test dependencies, including indirect ones, in the project's test-policy manifest.
    Check that witnesses reach the tested boundary, rollback snapshots precede the failing

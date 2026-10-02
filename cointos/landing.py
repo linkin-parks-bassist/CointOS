@@ -83,6 +83,7 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
         submitted = worker["receipt"]["evidence"]["commit"]
         if git.head(repo, worker["branch"]) != submitted or not git.clean(worker["worktree"]):
             raise ValueError("worker branch is not the clean commit its completion receipt submitted")
+        red = None
         if parent == commit:  # main already has it: only a landing interrupted after its fast-forward
             if (integration.get("landing") or {}).get("commit") != commit:
                 raise ValueError("commit reached main without passing the landing gate")
@@ -91,13 +92,18 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
                 commands = checks(repo, worker, parent, commit, rules)
                 contracts.verify(repo, commit, commands, CONFIG["timeouts"]["command_seconds"],
                                  CONFIG["memory"]["agent_limit_gb"])
+                if worker["stage"] == "test-contract":
+                    red = contracts.red_gate(repo, parent, commit, git.show(repo, submitted, queues.REPORT), rules,
+                                             CONFIG["timeouts"]["command_seconds"], CONFIG["memory"]["agent_limit_gb"])
             except ValueError as error:
-                if worker["stage"] != "implementation":
+                if worker["stage"] not in ("implementation", "test-contract"):
                     raise
+                log("landing gate rejected", task=task_id, worker=worker["id"], stage=worker["stage"],
+                    commit=commit, reason=str(error)[:300])
                 with LOCK:
                     lifecycle.returned(L["tasks"][task_id], run, f"Landing {commit} failed validation: {error}")
                     save()
-                raise ValueError(f"implementation sent back; integrator should stop: {error}") from error
+                raise ValueError(f"{worker['stage']} sent back; integrator should stop: {error}") from error
         with LOCK:
             integration, worker = L["tasks"][task_id], L["tasks"][integration["worker"]]
             if (worker["status"] != "review" or git.head(tree) != commit or git.head(repo, main) != parent
@@ -111,7 +117,8 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
             lifecycle.landed(integration, run, worker, {"commit": commit, "worker_commit": submitted,
                                                         "via": "landing", "stage": worker["stage"]})
             save()
-            log("verified landing", task=task_id, commit=commit, stage=worker["stage"])
+            log("verified landing", task=task_id, commit=commit, stage=worker["stage"],
+                **({"red_gate": red} if red else {}))
     return {"ok": True, "commit": commit}
 
 

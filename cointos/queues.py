@@ -9,7 +9,7 @@ import json
 import copy
 import re
 from pathlib import Path
-from cointos import kt, schema
+from cointos import git, kt, schema
 from cointos.config import ROOT
 from cointos.state import CONFIG, L, log
 
@@ -51,6 +51,26 @@ def depends(text: str) -> list[str]:
         if found:
             return [name.strip(" `*") for name in found[1].split(",") if name.strip(" `*")]
     return []
+
+
+def relies_on(text: str) -> list[str]:
+    """The owner APIs on a brief's `Relies on:` line: `path` or `path::symbol`, comma-separated."""
+    for line in text.splitlines():
+        found = re.match(r"\**Relies on:\**\s*(.+)", line.strip(), re.IGNORECASE)
+        if found:
+            return [n.strip().strip("`") for n in found.group(1).split(",") if n.strip().strip("`")]
+    return []
+
+
+def missing_reliances(repo, commit: str, names: list[str]) -> list[str]:
+    """The `Relies on:` entries absent at a commit: a missing file, or a symbol not named in it."""
+    missing = []
+    for name in names:
+        path, _, symbol = name.partition("::")
+        text = git.show(repo, commit, path) if path and not path.startswith("/") and ".." not in path.split("/") else ""
+        if not text or (symbol and not re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text)):
+            missing.append(name)
+    return missing
 
 
 def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
@@ -147,8 +167,11 @@ def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=No
         raise ValueError("brief must not be empty")
     if budget is not None:
         schema.budget(CONFIG, budget)
-    fields = {"brief": brief.strip(), "depends": depends(brief),
-              "stage": schema.stage("implementation" if stage is None else stage) if kind == "queued" else None,
+    stage = schema.stage("implementation" if stage is None else stage) if kind == "queued" else None
+    if stage == "test-contract" and not relies_on(brief):
+        raise ValueError("a test-contract brief needs a `Relies on: path::symbol, ...` line naming the existing "
+                         "owner APIs its witnesses and assertions use; it is checked against main at dispatch")
+    fields = {"brief": brief.strip(), "depends": depends(brief), "stage": stage,
               "reasoning_effort": schema.effort(reasoning_effort),
               "hash": hashlib.sha256(brief.strip().encode()).hexdigest()[:16]}
     if budget is not None:

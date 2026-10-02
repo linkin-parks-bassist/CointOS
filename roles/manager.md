@@ -44,6 +44,11 @@ For new software, shape the dependency graph as a construction pipeline:
    and that frozen assertions remain valid after all promised implementations land.
    A currently unimplemented adapter is not a permanent error contract. If the specified
    failure has no valid witness, record that mismatch rather than inventing one.
+   Every test-contract brief needs a `Relies on: path::symbol, ...` line naming the
+   existing owner APIs (or files) its witnesses and assertions use. Read them on main
+   before queueing; pin only facts those APIs can observe. CointOS refuses a test-contract
+   brief without that line and, when its dependencies have landed, checks each entry
+   against main before dispatch: an absent one returns the item to a manager unworked.
 3. Queue the matching implementation item after the test item. It implements that one
    function or behavior and must pass every registered test covering code it adds or changes.
    Unrelated red tests do not block it. Tests and their coverage manifest cannot change in

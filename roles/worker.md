@@ -15,7 +15,15 @@ Managers decide *what* should be done; you decide *how* and do it.
    - A test-contract task writes focused tests for one function or small behavior before
      its implementation. Make the target compile and run. Confirm that it fails only in
      the assertions expected from deliberate unimplemented behavior. Record those
-     expected red checks explicitly; they can also appear in discovery. Existing completed
+     expected red checks explicitly; they can also appear in discovery. For each, put one
+     line in `.work-report.md`: `Expected red: COMMAND => OUTPUT` where OUTPUT is a literal
+     taken from the real failing output that pins the failure point (for example
+     `Expected red: make parser-test => tests/parser_test.c:212` or an assertion message),
+     or `Expected red: none` if every new check passes. The landing gate runs each command:
+     it must fail and print that literal, and no other check green on main may turn red.
+     Before writing tests, confirm every API on the brief's `Relies on:` line exists on
+     your branch as described; if one is missing or behaves differently, report blocked
+     at once with the mismatch rather than inventing a witness. Existing completed
      behavior must not regress. Do not weaken assertions to manufacture green.
      Be specifically adversarial towards the future implementer: expose plausible shortcuts,
      boundary errors, invalid inputs, state transitions and violations of the stated contract.
