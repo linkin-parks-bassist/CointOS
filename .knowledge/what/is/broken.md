@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-03T15:24:54+10:00"
+revised_at: "2026-10-03T18:48:36+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **The comparative implementation gate needs live evidence.** `contracts.implementation_gate` (mechanism in `what/is/the/shape/of/cointos/work.md`) replaced the rule that froze Pigen's Task 6 implementation chain on later items' staged reds. It passes on `impl-boundary` commit 617b933 offline; that item was revised to resubmit 617b933 through the live pipeline. Until a live landing succeeds, the pigen manager's blocked decision task `task-six-impl-gate-decision` and its pigen leaves (`why/does/the/task/six/implementation/chain/hit/the/landing/gate.md`, `what/is/broken.md`) still describe the old gate.
+- **Pigen's tree still carries agent-workflow narration.** Before the product-only tree rule (`what/are/the/cointos/roles.md`), Pigen's agents wrote item names, stages, landings and gate history into its task, broken, plan and orientation leaves. The pigen manager command `purge-agent-workflow-from-the-tree` is queued to restate them as product facts. Its stale blocked decision command `task-six-impl-gate-decision` concerns the replaced implementation gate (which landed `impl-boundary` live as pigen 1fc5408) and needs no action.
 - **Coin relays stale or invented state.** On 2026-10-03 Coin repeatedly presented an old resolved "steward needs David: list" alert as the open decision, claimed to instruct agents it cannot message, and did not surface the real pending decision (alert 166). Its alert selection and action claims need review (plan item 6).
 - **Gardener thoughts fail with lane `KeyError`.** Four alerts on 2026-10-03 report `Qwen3.8-27B-GGUF lane 0 failed a thought of gardener-71c173: KeyError: '<12 hex>'`; cause not yet diagnosed.
 - **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers and unresolved-manager escalation still need native model-run evidence. Isolated installed HTTP fixtures establish artifact-preserving brief correction, durable receipt replay and bounded escalation without proving autonomous judgment. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
