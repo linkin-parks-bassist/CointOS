@@ -199,7 +199,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .tchip { display: block; width: 100%; text-align: left; font: 700 12.5px/1.25 ui-sans-serif, system-ui, sans-serif; color: var(--ink);
   background: var(--bg); border: 1px solid var(--line-soft); border-left: 4px solid var(--line); padding: 4px 6px; cursor: pointer;
   overflow: hidden; }
-.tchip .t { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.tchip .t { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
 .tchip:hover { border-color: var(--accent); border-left-color: var(--accent); background: var(--accent-wash); }
 .tchip small { display: block; white-space: nowrap; font-weight: 500; font-size: 11px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; }
 .tchip.live { border-left-color: var(--accent-bright); } .tchip.live .t::before { content: "● "; color: var(--accent-bright); animation: pulse 1.6s infinite; }
@@ -227,6 +227,9 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .drawer .close { position: sticky; top: 0; float: right; font: 900 20px/1 ui-sans-serif, system-ui, sans-serif; background: var(--dark); color: var(--dark-text);
   border: 0; width: 34px; height: 34px; cursor: pointer; }
 .drawer h2 { font-size: 26px; margin: 4px 40px 6px 0; overflow-wrap: anywhere; }
+.agent .work small { display: block; font-size: 13px; font-weight: 700; letter-spacing: 0; color: var(--dark-soft); margin-top: 2px; }
+.row .who .ctx, .drawer .context { font-weight: 600; font-size: 13px; color: var(--ink-faint); letter-spacing: 0; }
+.drawer .context { font-size: 15px; margin-bottom: 4px; }
 .drawer .kicker { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; font-weight: 900; color: var(--accent); }
 .drawer .facts { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px; font-size: 13.5px; margin: 12px 0; }
 .drawer .facts dt { color: var(--ink-faint); } .drawer .facts dd { margin: 0; overflow-wrap: anywhere; }
@@ -245,8 +248,8 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
   <div class="alert" id="alert"></div>
   <div class="cols">
   <div class="col-main">
-  <section class="panel"><h2>Pipeline</h2><div class="flow" id="flow"></div><div class="flow-foot" id="flow-foot"></div></section>
   <div id="agents"></div>
+  <section class="panel"><h2>Pipeline</h2><div class="flow" id="flow"></div><div class="flow-foot" id="flow-foot"></div></section>
     <section class="panel"><div class="panel-heading"><h2>Work</h2>
       <div class="scout-control"><small id="scout-status" role="status" aria-live="polite"></small><button id="scout-now" type="button">Spawn scout</button></div>
     </div><div id="work"></div>
@@ -403,12 +406,13 @@ function renderAgents(S) {
     setText(rate, a.rate && a.state === "thinking" && kind === "thinking" && share === undefined ? `${a.rate.toFixed(1)} tok/s` : "idle");
     const task = S.tasks?.[a.task];
     setHTML(q(".role"), `${esc(a.role)} <em>${esc(ROLE_VERB[a.role] || "working")} · ${esc(a.place)}` +
-      `${(task?.stage || a.stage) ? ` · ${esc(task?.stage || a.stage)}` : ""}</em>`);
+      `${(task?.stage || a.stage) ? ` · ${esc(stageName(task?.stage || a.stage))}` : ""}</em>`);
     const step = FLOW?.items.get(a.role === "integrator" ? task?.worker : a.task)?.step;
     setHTML(q(".track"), trackHTML(step, a.role));
     const trackClass = step ? "track" : "track upkeep";
     if (q(".track").className !== trackClass) q(".track").className = trackClass;
-    setText(q(".work"), a.title.replace(/-/g, " "));
+    const n = named(a.title, a.place);
+    setHTML(q(".work"), `${esc(n.head)}${n.context ? `<small>${esc(n.context)}</small>` : ""}`);
     const effort = Object.values(S.thoughts).find(t => t.agent === a.id && t.reasoning_effort)?.reasoning_effort
       || task?.reasoning_effort || a.reasoning_effort;
     setText(q(".meta"), `${a.id}${effort ? ` · reasoning ${effort}` : ""}`);
@@ -435,6 +439,21 @@ const KIND_LABEL = {steward: "loose ends", garden: "garden", "tree-audit": "tree
   decompose: "decompose", breakdown: "breakdown", operator: "operator"};
 const stem = name => name.split("/").pop().replace(/\.[^.]+$/, "");
 const pretty = s => String(s || "").replace(/-/g, " ");
+// A work item's slug as a headline plus its context: "elastic-rtl-task-5-test-contract-fix-s6" in pigen
+// becomes "Test Contract Fix §6" with context "Pigen · Elastic RTL Task 5".
+const ACRONYMS = new Set(["rtl", "kv", "api", "cli", "gpu", "cpu", "io", "fsm", "fifo", "ci", "ui", "url", "kt", "os", "llm"]);
+const WORDS = {impl: "Implementation", param: "Parameter", params: "Parameters", deps: "Dependencies", init: "Initialisation"};
+const word = w => /^s\d+$/.test(w) ? "§" + w.slice(1) : ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase()
+  : WORDS[w.toLowerCase()] || w[0].toUpperCase() + w.slice(1);
+function named(slug, project) {
+  const parts = String(slug || "").split("-").filter(Boolean);
+  const i = parts.findIndex((w, j) => w === "task" && /^\d+$/.test(parts[j + 1] || ""));
+  const rest = i >= 0 ? parts.slice(i + 2) : parts, parent = i >= 0 && rest.length ? parts.slice(0, i + 2) : [];
+  return {head: (rest.length ? rest : parts).map(word).join(" "),
+          context: [project ? word(project) : "", parent.map(word).join(" ")].filter(Boolean).join(" · ")};
+}
+const KIND_NAME = {item: "Worker task", queued: "Worker task", integrate: "Integration review", command: "Command"};
+const stageName = s => s ? s.split("-").map(word).join(" ") : "";
 
 // The dependencies of a queue record that have not landed yet.
 function unmet(L, r) {
@@ -488,8 +507,8 @@ function renderFlow(L) {
   by.landed.sort((a, b) => b.updated - a.updated);
   for (const s of ["blocked", "ready"]) by[s].sort((a, b) => a.priority - b.priority);
   const LIMIT = 6;
-  const sub = (it, s) => [it.project, it.stage,
-    s === "blocked" && it.blockers.length ? `needs ${it.blockers.map(pretty).join(", ")}` : "",
+  const sub = (it, s) => [named(it.title, it.project).context, stageName(it.stage),
+    s === "blocked" && it.blockers.length ? `needs ${it.blockers.map(b => named(b).head).join(", ")}` : "",
     s === "building" && it.task?.agent ? it.task.agent : "",
     s === "integrating" ? it.integrator.agent : "",
     s === "landed" && it.updated ? `${ago(it.updated)} ago` : ""].filter(Boolean).join(" · ");
@@ -497,7 +516,7 @@ function renderFlow(L) {
     const list = by[s], shown = list.slice(0, LIMIT);
     const live = s === "building" || s === "integrating";
     const step = `<div class="step s-${s}${list.length ? "" : " empty-step"}"><header><span>${label}<small>${hint}</small></span><b>${list.length}</b></header>` +
-      `<div class="chips">${shown.map(it => chip(it.key, pretty(it.title), sub(it, s),
+      `<div class="chips">${shown.map(it => chip(it.key, named(it.title).head, sub(it, s),
         live ? "live" : s === "blocked" ? "held" : "")).join("")}` +
       `${list.length > LIMIT ? `<button type="button" class="tchip more" data-step="${s}">+${list.length - LIMIT} more</button>` : ""}</div></div>`;
     // Blocked feeds Ready; each arrow marches while the step after it holds live work.
@@ -508,7 +527,7 @@ function renderFlow(L) {
   const upkeep = FLOW.upkeep.map(t => chip(t.id, `${KIND_LABEL[t.kind] || t.kind}${t.place ? " · " + t.place : ""}`,
     `${t.role} · ${t.status === "running" ? "running" : "waiting"}`, t.status === "running" ? "live" : ""));
   const failed = by.failed.sort((a, b) => b.updated - a.updated)
-    .map(it => chip(it.key, pretty(it.title), `${it.project}${it.stage ? " · " + it.stage : ""}`, "held"));
+    .map(it => chip(it.key, named(it.title).head, [named(it.title, it.project).context, stageName(it.stage)].filter(Boolean).join(" · "), "held"));
   setHTML($("flow-foot"), (upkeep.length ? `<div class="group"><h3>Upkeep</h3>${upkeep.join("")}</div>` : "") +
     (failed.length ? `<div class="group"><h3>Gave up · ${failed.length}</h3>${failed.slice(0, 8).join("")}</div>` : ""));
 }
@@ -544,7 +563,7 @@ function renderDrawer(L) {
     const s = SELECTED.slice(5), label = FLOW_STEPS.find(([x]) => x === s)?.[1] || s;
     const list = [...FLOW.items.values()].filter(it => it.step === s);
     setHTML($("drawer-body"), `<div class="kicker">Pipeline step</div><h2>${esc(label)} · ${list.length}</h2>` +
-      `<div class="chips" style="display:grid;gap:4px">${list.map(it => chip(it.key, pretty(it.title), [it.project, it.stage].filter(Boolean).join(" · "))).join("")}</div>`);
+      `<div class="chips" style="display:grid;gap:4px">${list.map(it => chip(it.key, named(it.title).head, [named(it.title, it.project).context, stageName(it.stage)].filter(Boolean).join(" · "))).join("")}</div>`);
     return;
   }
   const t = L.tasks[SELECTED], it = FLOW.items.get(SELECTED) || FLOW.items.get(t?.worker), r = it?.record;
@@ -553,7 +572,7 @@ function renderDrawer(L) {
   const integrations = Object.values(L.tasks).filter(x => x.kind === "integrate" && x.worker === (it?.key || SELECTED));
   const facts = [
     ["Step", it ? (FLOW_STEPS.find(([s]) => s === it.step)?.[1] || it.step) : null],
-    ["Project", t?.place || it?.project], ["Kind", t?.kind || r?.kind], ["Stage", t?.stage || r?.stage],
+    ["Project", t?.place || it?.project], ["Kind", KIND_NAME[t?.kind || r?.kind] || KIND_LABEL[t?.kind] || t?.kind || r?.kind], ["Stage", stageName(t?.stage || r?.stage)],
     ["Role", t?.role], ["Task status", t?.status], ["Queue status", r?.status], ["Priority", r?.priority],
     ["Agent", agent ? `${agent.id} · ${agent.state}${agent.doing ? " · " + agent.doing : ""}` : t?.agent],
     ["Reasoning", t?.reasoning_effort || r?.reasoning_effort], ["Runs", t?.runs],
@@ -570,9 +589,11 @@ function renderDrawer(L) {
   ].filter(([, v]) => v !== null && v !== undefined && v !== "");
   const block = (title, text) => text ? `<div class="block"><h3>${title}</h3><pre>${esc(text)}</pre></div>` : "";
   const receipt = t?.receipt;
+  const DN = !t || t.kind === "item" || t.kind === "integrate" ? named(t?.title || it.title, t?.place || it?.project)
+    : {head: stageName(KIND_LABEL[t.kind] || t.kind), context: word(t.place || "")};
   setHTML($("drawer-body"),
-    `<div class="kicker">${esc(t?.role || "queued")} · ${esc(t?.place || it?.project)}</div>` +
-    `<h2>${esc(pretty(t?.kind === "item" || !t ? (t?.title || it.title) : (KIND_LABEL[t.kind] || t.kind) + (t.kind === "integrate" ? ": " + pretty(t.title) : "")))}</h2>` +
+    `<div class="kicker">${esc([KIND_NAME[t?.kind || r?.kind] || KIND_LABEL[t?.kind] || "Task", stageName(t?.stage || r?.stage)].filter(Boolean).join(" · "))}</div>` +
+    `<h2>${esc(DN.head)}</h2><div class="context">${esc(DN.context)}</div>` +
     `<dl class="facts">${facts.map(([k, v, raw]) => `<dt>${k}</dt><dd>${raw ? v : esc(v)}</dd>`).join("")}</dl>` +
     (receipt ? block(`Receipt · ${esc(receipt.disposition)}${receipt.run ? " · " + esc(receipt.run) : ""}${receipt.at ? " · " + ago(receipt.at) + " ago" : ""}`,
       receipt.summary + (receipt.evidence ? `\n\nevidence: ${JSON.stringify(receipt.evidence)}` : "")) : "") +
@@ -596,15 +617,17 @@ function renderWork(L) {
     const status = problem || (needed.length ? `blocked (depends on ${needed.join(", ")})`
       : r.status === "blocked" ? "blocked" : "waiting");
     return `<div class="row ${needed.length || r.status === "blocked" ? "failed" : "waiting"}" data-key="${esc(r.project + ":" + r.item)}"><div class="bar"></div>` +
-      `<div class="who">${esc(r.project)}: ${esc(r.item.replace(/-/g, " "))}</div>` +
+      `<div class="who">${esc(named(r.item).head)} <span class="ctx">${esc(named(r.item, r.project).context)}</span></div>` +
       `<div class="state">Status: ${esc(status)}</div>` +
       `<div class="meta clamp">${esc(r.kind === "command" ? "Command" : "Worker task")}${r.stage ? ` · ${esc(r.stage)}` : ""}` +
       `${r.depends?.length ? ` · Depends on: ${esc(r.depends.join(", "))}` : ""}` +
       `${r.report ? ` · ${esc(r.report)}` : ""}</div></div>`;
   }).join("");
-  const taskLabel = t => t.kind === "steward" ? "system: loose ends" : `${t.place}: ${t.title.replace(/-/g, " ")}`;
+  const taskLabel = t => t.kind === "steward" ? "System: loose ends" : t.kind === "item" || t.kind === "integrate"
+    ? `${named(t.title).head}${t.kind === "integrate" ? " (review)" : ""}` : `${stageName(KIND_LABEL[t.kind] || t.kind)}`;
+  const taskContext = t => named(t.title, t.place).context;
   const rows = (status, some) => some.map(t => `<div class="row ${status}" data-key="${esc(t.id)}"><div class="bar"></div>` +
-    `<div class="who">${esc(taskLabel(t))}</div>` +
+    `<div class="who">${esc(taskLabel(t))} <span class="ctx">${esc(taskContext(t))}</span></div>` +
     `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
     `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div>` +
     `${t.replaced_by ? `<div class="meta">Replaced by: ${esc(t.replaced_by.join(", "))} · ${esc(t.replacement_reason)}</div>` : ""}` +
