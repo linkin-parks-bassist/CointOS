@@ -225,7 +225,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); overflow: visible; } }
 /* Project cards on the home page; each opens that project's page. */
 .pcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
-.pcard { display: grid; gap: 8px; text-decoration: none; color: inherit; border: 2px solid var(--dark); background: var(--paper);
+.pcard { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; text-decoration: none; color: inherit; border: 2px solid var(--dark); background: var(--paper);
   box-shadow: 4px 4px 0 var(--shadow); padding: 13px 15px; min-width: 0; }
 .pcard:hover { box-shadow: 4px 4px 0 var(--accent-bright); }
 .pcard h4 { margin: 0; font-size: 22px; font-weight: 900; letter-spacing: -.05em; display: flex; justify-content: space-between; align-items: baseline; }
