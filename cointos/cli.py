@@ -458,6 +458,9 @@ def parser() -> argparse.ArgumentParser:
     revising.add_argument("--stage", choices=schema.STAGES)
     revising.add_argument("--reasoning-effort", choices=schema.EFFORTS)
     budget_options(revising)
+    moving = sub.add_parser("move", help="reorder a queue item within its project")
+    moving.add_argument("item", help="PROJECT:ITEM")
+    moving.add_argument("to", choices=("top", "up", "down", "bottom"))
     cancelling = sub.add_parser("cancel", help="withdraw unaccepted queue items for good: stop their runs, drop them and retire their branches")
     cancelling.add_argument("items", nargs="+", help="PROJECT:ITEM; dependents must be cancelled together")
     cancelling.add_argument("--reason", required=True)
@@ -607,6 +610,7 @@ COMMANDS = {
     "revise": lambda args: call("revise", proposal({
         "item": args.item, "brief": args.brief, "reason": args.reason, "stage": args.stage,
         "reasoning_effort": args.reasoning_effort, "budget": limits(args)}))["item"] + " revised",
+    "move": lambda args: json.dumps(call("move", {"item": args.item, "to": args.to})),
     "cancel": lambda args: json.dumps(call("cancel", proposal({"items": args.items, "reason": args.reason}))),
     "supersede": lambda args: json.dumps(call("supersede", {"task": args.task, "replacements": args.replacements,
                                                             "reason": args.reason})),

@@ -89,6 +89,19 @@ class Admission(unittest.TestCase):
         task["status"] = "running"
         self.assertIsNone(spawner.next_task())
 
+    def test_the_user_reorders_a_project_queue(self):
+        for name in ("a", "b", "c"):
+            queues.add(self.project, "queued", name, name.upper())
+        order = lambda: [r["item"] for r in sorted(state.L["queue"].values(), key=lambda r: r["priority"])]
+        self.assertEqual(api.dispatch("move", {"item": "p:c", "to": "up"})["position"], 1)
+        self.assertEqual(order(), ["a", "c", "b"])
+        api.dispatch("move", {"item": "p:b", "to": "top"})
+        self.assertEqual(order(), ["b", "a", "c"])
+        api.dispatch("move", {"item": "p:b", "to": "bottom"})
+        self.assertEqual(order(), ["a", "c", "b"])
+        with self.assertRaisesRegex(ValueError, "move must be"):
+            api.dispatch("move", {"item": "p:a", "to": "sideways"})
+
     def test_a_brief_carries_its_summary_and_agents_must_write_one(self):
         queues.add(self.project, "queued", "plain", "Do it.\nSummary: Explains the task in five words.")
         self.assertEqual(queues.records()["p:plain"]["summary"], "Explains the task in five words.")

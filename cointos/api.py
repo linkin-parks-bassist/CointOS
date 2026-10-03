@@ -179,6 +179,10 @@ def cancel(body):
                                                        body.get("reason", ""))}
 
 
+def move(body):
+    return {"ok": True, "position": queues.move(body.get("item", ""), body.get("to", ""))}
+
+
 def attention(body):
     by = proposer(body)
     message = body.get("message", "").strip()
@@ -381,11 +385,11 @@ ACTIONS = {
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,
-    "run-agent": run_agent, "scout": scout, "supersede": supersede, "cancel": cancel, "clear-review": clear_review,
+    "run-agent": run_agent, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
     "reasoning": reasoning, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
     "viewers": viewers, "scheduler": scheduler,
     "project-list": project_list, "project-new": project_new, "project-add": project_add,
     "project-set": project_set, "project-remove": project_remove,
 }
-PUBLISHES = {"finish", "return", "replace", "queue", "hold", "unhold", "revise", "supersede", "cancel", "reasoning", "budget",
+PUBLISHES = {"finish", "return", "replace", "queue", "hold", "unhold", "revise", "supersede", "cancel", "move", "reasoning", "budget",
              "clear-task-history"}

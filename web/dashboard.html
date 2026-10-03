@@ -249,6 +249,24 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .agent .sum { grid-column: 2; font-size: 13px; color: var(--dark-text); opacity: .85; line-height: 1.35; }
 .agent .sum:empty { display: none; }
 .drawer .lead { font-size: 16px; margin: 6px 0 0; }
+/* Controls: small square buttons that run CointOS commands; a toast reports each outcome. */
+.btn { font: 800 12.5px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent); background: var(--paper); border: 1px solid var(--accent);
+  padding: 6px 9px; cursor: pointer; box-shadow: 2px 2px 0 var(--pink-shadow); }
+.btn:hover:not(:disabled) { background: var(--accent-wash); } .btn:disabled { opacity: .45; cursor: default; }
+.btn.danger { color: var(--paper); background: var(--accent); } .btn.danger:hover:not(:disabled) { background: #85304a; }
+.agent .ctl { position: absolute; right: 20px; bottom: 12px; display: flex; gap: 6px; }
+.agent .ctl .btn { background: var(--dark-2); color: var(--dark-text); border-color: var(--dark-line); box-shadow: none; padding: 4px 8px; font-size: 11.5px; }
+.agent .ctl .btn:hover { border-color: var(--c); color: var(--c); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 4px; padding: 10px 0; border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft); }
+.actions select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.actions .sep { width: 1px; align-self: stretch; background: var(--line-soft); }
+.row .move { display: inline-flex; gap: 3px; margin-left: 8px; } .row .move .btn { padding: 2px 6px; box-shadow: none; }
+.lane-row .btn { padding: 2px 7px; box-shadow: none; font-size: 11.5px; }
+.global-ctl { display: flex; gap: 10px; align-items: baseline; }
+.toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--dark); color: var(--dark-text); padding: 10px 16px;
+  border-left: 5px solid var(--accent-bright); z-index: 20; font-size: 14px; max-width: min(640px, calc(100vw - 32px)); }
+.toast[hidden] { display: none; } .toast.bad { border-left-color: #ff4d5e; }
 /* The detail drawer: everything known about one task. */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 100vw); background: var(--paper); border-left: 3px solid var(--dark);
   box-shadow: -8px 0 0 var(--pink-shadow); z-index: 10; overflow: auto; padding: 20px 22px 40px; }
@@ -272,15 +290,23 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 </head>
 <body>
 <main>
-  <div class="topline"><h1 class="mark">Coint<em>OS</em></h1><span class="stamp" id="stamp">connecting…</span></div>
+  <div class="topline"><h1 class="mark">Coint<em>OS</em></h1><div class="global-ctl"><button class="btn" id="pause-all" type="button">Pause all</button><span class="stamp" id="stamp">connecting…</span></div></div>
   <div class="strip" id="strip"></div>
   <div class="alert" id="alert"></div>
   <div class="cols">
   <div class="col-main">
   <div id="agents"></div>
-  <section class="panel" id="home"><h2>Projects</h2><div class="pcards" id="pcards"></div><div class="flow-foot" id="home-foot"></div></section>
+  <section class="panel" id="home"><h2>Projects</h2><div class="pcards" id="pcards"></div><div class="flow-foot" id="home-foot"></div><div id="add-project"><details class="project-form"><summary>Add or create project</summary>
+        <div class="project-fields">
+          <label>Action<select id="project-action"><option value="add">Add existing</option><option value="new">Create new</option></select></label>
+          <label>Name <input id="project-name" placeholder="derived from folder for existing"></label>
+          <label>Path <input id="project-path" placeholder="~/Projects/name"></label>
+          <label>Priority <input id="project-priority" type="number" value="100"></label>
+          <button id="project-submit" type="button">Add project</button>
+        </div><small id="project-status" role="status" aria-live="polite"></small>
+      </details></div></section>
   <section class="panel" id="project-page" hidden><a class="back" href="#/">← All projects</a>
-    <div class="phead"><h2 id="pp-name"></h2><p id="pp-about"></p></div>
+    <div class="phead"><h2 id="pp-name"></h2><p id="pp-about"></p></div><div class="project-list" id="projects"></div>
     <h3>Pipeline</h3><div class="flow" id="flow"></div><div class="flow-foot" id="flow-foot"></div></section>
     <section class="panel"><div class="panel-heading"><h2>Work</h2>
       <div class="scout-control"><small id="scout-status" role="status" aria-live="polite"></small><button id="scout-now" type="button">Spawn scout</button></div>
@@ -310,20 +336,11 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
       </div><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
       <div id="checks"></div></section>
     <section class="panel"><h2>Recently</h2><div class="history" id="history"></div></section>
-    <section class="panel"><details class="fold"><summary><h2>Project settings</h2></summary><div class="project-list" id="projects"></div>
-      <details class="project-form"><summary>Add or create project</summary>
-        <div class="project-fields">
-          <label>Action<select id="project-action"><option value="add">Add existing</option><option value="new">Create new</option></select></label>
-          <label>Name <input id="project-name" placeholder="derived from folder for existing"></label>
-          <label>Path <input id="project-path" placeholder="~/Projects/name"></label>
-          <label>Priority <input id="project-priority" type="number" value="100"></label>
-          <button id="project-submit" type="button">Add project</button>
-        </div><small id="project-status" role="status" aria-live="polite"></small>
-      </details></details></section>
-  </aside>
+</aside>
   </div>
 </main>
 <div class="scrim" id="scrim" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Task details"><button class="close" id="drawer-close" type="button" aria-label="Close">×</button><div id="drawer-body"></div></aside>
 <script>
 const $ = id => document.getElementById(id);
@@ -349,15 +366,16 @@ async function removeProject(name) {
   try { await projectAction("remove", {project: name}); }
   catch (error) { $("project-status").textContent = error.message; }
 }
+// The open project's registry settings, on its page.
 function renderProjects(L) {
-  const projects = L.projects || [];
+  const projects = (L.projects || []).filter(p => p.name === ROUTE.project);
   setHTML($("projects"), projects.length ? projects.map(p => `<div class="project-row">` +
-    `<div><div class="project-name">${esc(p.name)}</div><span class="chip">${esc(p.main_branch)}</span></div>` +
+    `<div><span class="chip">${esc(p.main_branch)}</span></div>` +
     `<div class="project-path">${esc(p.path)}</div><div class="project-controls">` +
     `<label>Priority <input type="number" value="${esc(p.priority ?? 100)}" onchange='setProject(${JSON.stringify(p.name)}, {priority:Number(this.value)})'></label>` +
     `<label><input type="checkbox" ${p.enabled === false ? "" : "checked"} onchange='setProject(${JSON.stringify(p.name)}, {enabled:this.checked})'> enabled</label>` +
-    `<button type="button" onclick='removeProject(${JSON.stringify(p.name)})'>Remove</button></div></div>`).join("")
-    : `<p class="muted">No projects registered.</p>`);
+    `<button type="button" onclick='confirm("Remove ${esc(p.name)} from CointOS? Its repository is left alone.") && removeProject(${JSON.stringify(p.name)})'>Remove</button></div></div>`).join("")
+    : "");
 }
 
 $("project-action").addEventListener("change", event => {
@@ -422,10 +440,14 @@ function renderAgents(S) {
       card = document.createElement("article");
       card.dataset.id = a.id;
       card.innerHTML = `<div class="mark"></div><div class="role"></div><div class="stats"><b></b><span></span><span></span></div><div class="work"></div>` +
-        `<div class="sum"></div><div class="meta"></div><div class="track"></div><div class="live"><div></div></div><div class="now"></div><div class="progress"><span></span></div>`;
+        `<div class="sum"></div><div class="meta"></div><div class="track"></div><div class="live"><div></div></div><div class="now"></div><div class="ctl"><button type="button" class="btn" data-act="pause-agent">Pause</button>` +
+        `<button type="button" class="btn" data-act="cancel-item">Cancel task</button></div><div class="progress"><span></span></div>`;
     }
     if (card.className !== `agent r-${a.role}`) card.className = `agent r-${a.role}`;
     card.dataset.key = a.task;
+    card.dataset.agent = a.id;
+    const cancellable = !!S.queue?.[S.tasks?.[a.task]?.record || ""] || !!S.queue?.[S.tasks?.[S.tasks?.[a.task]?.worker]?.record || ""];
+    card.querySelector('[data-act="cancel-item"]').hidden = !cancellable;
     if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
     cards.delete(a.id);
     card.style.gridColumn = `span ${spans[index]}`;
@@ -505,7 +527,7 @@ function computeFlow(L) {
     items.set(key, {key, project: r.project, title: r.item, stage: r.stage, record: r});
   }
   for (const t of Object.values(L.tasks)) {
-    if (t.kind !== "item" || t.replaced_by) continue;
+    if (t.kind !== "item" || t.replaced_by || t.cancelled) continue;
     const it = items.get(t.id) || {key: t.id, project: t.place, title: t.title};
     items.set(t.id, {...it, stage: t.stage || it.stage, task: t});
   }
@@ -633,6 +655,24 @@ document.addEventListener("click", e => {
   if (hit && hit.dataset.key) openDetail(hit.dataset.key);
 });
 
+// What the user can do to this task right now, as buttons that call the daemon's control API.
+function actionsHTML(L, t, it, r) {
+  const b = (act, label, data = {}, cls = "") => `<button type="button" class="btn ${cls}" data-act="${act}" ` +
+    Object.entries(data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ") + `>${label}</button>`;
+  const key = r ? `${r.project}:${r.item}` : null, out = [];
+  if (t?.agent && L.agents[t.agent]) out.push(b("pause-agent", "Pause run", {agent: t.agent}));
+  if (t?.admission_hold && t.status === "waiting") out.push(b("resume-task", "Resume", {task: t.id}));
+  if (r && r.status !== "done") {
+    out.push(r.held_by ? b("unhold", "Release hold", {item: key}) : b("hold", "Hold", {item: key}));
+    out.push(`<span class="sep"></span>` + ["top", "up", "down", "bottom"].map(to =>
+      b("move", {top: "⇈ Top", up: "↑ Up", down: "↓ Down", bottom: "⇊ Bottom"}[to], {item: key, to})).join(""));
+    out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: key}, "danger"));
+  }
+  if (t && (t.status === "waiting" || t.status === "running")) out.push(`<span class="sep"></span><label>Reasoning <select data-act="reasoning" data-task="${esc(t.id)}">` +
+    ["low", "medium", "xhigh"].map(e => `<option${e === t.reasoning_effort ? " selected" : ""}>${e}</option>`).join("") + `</select></label>`);
+  return out.length ? `<div class="actions">${out.join("")}</div>` : "";
+}
+
 function renderDrawer(L) {
   if (!SELECTED || !L) return;
   const when = t => t ? `${new Date(t * 1000).toLocaleString()} (${ago(t)} ago)` : "";
@@ -673,6 +713,7 @@ function renderDrawer(L) {
     `<div class="kicker">${esc([KIND_NAME[t?.kind || r?.kind] || KIND_LABEL[t?.kind] || "Task", stageName(t?.stage || r?.stage)].filter(Boolean).join(" · "))}</div>` +
     `<h2>${esc(DN.head)}</h2><div class="context">${esc(DN.context)}</div>` +
     (summaryOf(L, SELECTED) || it?.record?.summary ? `<p class="lead">${esc(summaryOf(L, SELECTED) || it.record.summary)}</p>` : "") +
+    actionsHTML(L, t, it, r) +
     `<dl class="facts">${facts.map(([k, v, raw]) => `<dt>${k}</dt><dd>${raw ? v : esc(v)}</dd>`).join("")}</dl>` +
     (receipt ? block(`Receipt · ${esc(receipt.disposition)}${receipt.run ? " · " + esc(receipt.run) : ""}${receipt.at ? " · " + ago(receipt.at) + " ago" : ""}`,
       receipt.summary + (receipt.evidence ? `\n\nevidence: ${JSON.stringify(receipt.evidence)}` : "")) : "") +
@@ -698,7 +739,8 @@ function renderWork(L) {
       : r.status === "blocked" ? "blocked" : "waiting");
     return `<div class="row ${needed.length || r.status === "blocked" ? "failed" : "waiting"}" data-key="${esc(r.project + ":" + r.item)}"><div class="bar"></div>` +
       `<div class="who">${esc(named(r.item).head)} <span class="ctx">${esc(named(r.item, r.project).context)}</span></div>` +
-      `<div class="state">Status: ${esc(status)}</div>` +
+      `<div class="state">Status: ${esc(status)}<span class="move"><button type="button" class="btn" data-act="move" data-to="up" data-item="${esc(r.project + ":" + r.item)}" title="Move up">↑</button>` +
+      `<button type="button" class="btn" data-act="move" data-to="down" data-item="${esc(r.project + ":" + r.item)}" title="Move down">↓</button></span></div>` +
       `<div class="meta clamp">${esc(r.kind === "command" ? "Command" : "Worker task")}${r.stage ? ` · ${esc(r.stage)}` : ""}` +
       `${r.depends?.length ? ` · Depends on: ${esc(r.depends.join(", "))}` : ""}` +
       `${r.report ? ` · ${esc(r.report)}` : ""}</div></div>`;
@@ -719,7 +761,7 @@ function renderWork(L) {
     return queueSection + (some.length ? `<h3>${title}</h3>` + rows(status, some) : "");
   }).join(""));
   const done = tasks.filter(t => t.status === "done");
-  const failed = tasks.filter(t => t.status === "failed");
+  const failed = tasks.filter(t => t.status === "failed" && !t.cancelled);
   $("done").style.display = done.length ? "" : "none";
   setText($("done-count"), `· ${done.length}`);
   setHTML($("done-list"), rows("done", done));
@@ -731,6 +773,57 @@ function renderWork(L) {
   $("scout-now").disabled = scouting || L.paused || SCOUTING;
   if (!SCOUTING) $("scout-status").textContent = scouting ? "Scout scheduled" : L.paused ? "Paused" : "";
 }
+
+// The control layer: every button names an action; each runs one daemon API call and reports in a toast.
+let toastTimer;
+function toast(text, bad = false) {
+  const el = $("toast"); el.textContent = text; el.className = bad ? "toast bad" : "toast"; el.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.hidden = true, bad ? 7000 : 3500);
+}
+async function api(action, body) {
+  const response = await fetch(`/api/${action}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `${action} failed`);
+  return result;
+}
+const CONTROLS = {
+  "pause-agent": d => [`Pause ${d.agent}? Its task is held until you resume it.`, "kill-agent", {agent: d.agent}, `Paused ${d.agent}`],
+  "resume-task": d => [null, "resume-task", {task: d.task}, "Released; it will be scheduled again"],
+  "hold": d => [null, "hold", {item: d.item}, "Held"],
+  "unhold": d => [null, "unhold", {item: d.item}, "Hold released"],
+  "move": d => [null, "move", {item: d.item, to: d.to}, `Moved ${d.to}`],
+  "cancel-item": d => {
+    const reason = prompt(`Cancel ${d.item} for good? Its run stops and it leaves the queue.\nReason:`);
+    return reason === null ? null : [false, "cancel", {items: [d.item], reason: reason.trim() || "cancelled from the dashboard"}, "Cancelled"];
+  },
+};
+document.addEventListener("click", async e => {
+  const button = e.target.closest("button[data-act]");
+  if (!button) return;
+  e.stopPropagation(); e.preventDefault();
+  const card = button.closest(".agent"), data = {...button.dataset};
+  if (card) { data.agent ??= card.dataset.agent; data.item ??= (LAST.L.tasks[card.dataset.key]?.record || LAST.L.tasks[LAST.L.tasks[card.dataset.key]?.worker]?.record); }
+  const plan = CONTROLS[data.act]?.(data);
+  if (!plan) return;
+  const [question, action, body, done] = plan;
+  if (question && !confirm(question)) return;
+  button.disabled = true;
+  try { await api(action, body); toast(done); }
+  catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
+}, true);
+document.addEventListener("change", async e => {
+  const select = e.target.closest('select[data-act="reasoning"]');
+  if (!select) return;
+  try { await api("reasoning", {task: select.dataset.task, effort: select.value}); toast(`Reasoning ${select.value} from the next reply`); }
+  catch (error) { toast(error.message, true); }
+});
+$("pause-all").addEventListener("click", async () => {
+  const paused = LAST.paused;
+  if (!paused && !confirm("Pause all agents? Running work returns to waiting.")) return;
+  try { await api(paused ? "go" : "stop", {}); toast(paused ? "Resumed" : "Paused all agents"); }
+  catch (error) { toast(error.message, true); }
+});
 
 let SCOUTING = false;
 $("scout-now").addEventListener("click", async event => {
@@ -772,7 +865,7 @@ function renderMachine(L) {
   $("lanes").innerHTML = `<h3>Lanes</h3>` + Object.entries(L.models).map(([name, m]) =>
     L.lanes.filter(l => l.model === name).map(l => {
       const holder = L.thoughts[l.holder];
-      const who = holder ? `<span class="chip held">${esc(holder.agent)}</span>`
+      const who = holder ? `<span class="chip held">${esc(holder.agent)}</span> <button type="button" class="btn" data-act="pause-agent" data-agent="${esc(holder.agent)}" title="Pause this agent to free the lane">free</button>`
         : `<span class="muted">${m.up ? "free" : m.launching ? "launching" : "down"}</span>`;
       return `<div class="lane-row ${holder ? "held" : m.up ? "" : "down"}"><span class="sq"></span><span class="name">${esc(short(name))}</span>` +
         `<span class="muted">lane ${l.index}</span>${who}</div>`;
@@ -931,6 +1024,7 @@ function render(L) {
   tile("checks", "Self-checks", failing.length ? `${failing.length} red` : "✓", failing.length ? failing[0].name : `all ${L.checks.length} pass`, failing.length ? "bad" : "");
   $("alert").innerHTML = failing.map(c => esc(c.name + ": " + c.detail)).join("<br>");
   LAST = {paused: L.paused, guard: L.guard, tasks: L.tasks, L};
+  setText($("pause-all"), L.paused ? "Resume agents" : "Pause all");
   FLOW = computeFlow(L);
   $("home").hidden = !!ROUTE.project; $("project-page").hidden = !ROUTE.project;
   document.querySelector(".cols").classList.toggle("wide", !!ROUTE.project);

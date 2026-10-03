@@ -311,6 +311,33 @@ def clear_history(active_tasks: set[str]) -> list[str]:
     return removed
 
 
+MOVES = ("top", "up", "down", "bottom")
+
+
+def move(key: str, where: str) -> int:
+    """Move one live queue item among the project's live items; the spawner admits by this order.
+    Returns the item's new position. Caller holds LOCK."""
+    current = records()
+    record = current.get(key)
+    if record is None or record["status"] == "done":
+        raise ValueError(f"no live queue item {key!r}")
+    if where not in MOVES:
+        raise ValueError(f"move must be one of {', '.join(MOVES)}")
+    live = sorted((r for r in current.values() if r["project"] == record["project"] and r["status"] != "done"),
+                  key=lambda r: r["priority"])
+    index = live.index(record)
+    if where in ("top", "bottom"):
+        others = [r["priority"] for r in current.values() if r is not record]
+        record["priority"] = (min(others, default=0) - 1) if where == "top" else (max(others, default=0) + 1)
+    else:
+        neighbour = index - 1 if where == "up" else index + 1
+        if 0 <= neighbour < len(live):
+            record["priority"], live[neighbour]["priority"] = live[neighbour]["priority"], record["priority"]
+    log("queue item moved", item=key, to=where)
+    return sorted((r for r in current.values() if r["project"] == record["project"] and r["status"] != "done"),
+                  key=lambda r: r["priority"]).index(record)
+
+
 def supersede(task_id: str, replacements: list[str], reason: str) -> dict:
     """Replace failed/blocked prerequisites without declaring their work accepted. Caller holds LOCK."""
     records_now = records()
