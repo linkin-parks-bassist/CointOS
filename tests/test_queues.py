@@ -14,6 +14,14 @@ class Depends(unittest.TestCase):
         text = "---\nstatus: green\n---\nStatus: queued\n\nDepends on: `what/is/the/queued/core.md`, docs\n\nBrief."
         self.assertEqual(queues.depends(text), ["what/is/the/queued/core.md", "docs"])
 
+    def test_placeholders_and_sentence_punctuation_name_nothing(self):
+        self.assertEqual(queues.depends("Depends on: none."), [])
+        self.assertEqual(queues.depends("Depends on: `core`, docs."), ["core", "docs"])
+        record = {"depends": ["none.", "core.", "core"]}
+        self.assertTrue(queues.normalize_dependencies(record))
+        self.assertEqual(record["depends"], ["core"])
+        self.assertFalse(queues.normalize_dependencies(record))
+
     def test_no_line_no_dependencies(self):
         self.assertEqual(queues.depends("Status: queued\n\nIt depends on nothing in particular."), [])
 

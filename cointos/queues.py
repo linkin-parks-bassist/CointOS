@@ -49,8 +49,27 @@ def depends(text: str) -> list[str]:
     for line in answer(text).splitlines():
         found = re.match(r"\**Depends on:\**\s*(.+)", line.strip(), re.IGNORECASE)
         if found:
-            return [name.strip(" `*") for name in found[1].split(",") if name.strip(" `*")]
+            return [n for n in (dependency(name) for name in found[1].split(",")) if n]
     return []
+
+
+NO_DEPENDENCY = {"none", "nothing", "n/a", "-"}
+
+
+def dependency(name: str) -> str:
+    """One `Depends on:` entry as a queue name: markup and trailing sentence punctuation removed;
+    `none` and similar placeholders name nothing."""
+    name = name.strip().strip("`*").strip().rstrip(".;").strip("`*").strip()
+    return "" if name.lower() in NO_DEPENDENCY else name
+
+
+def normalize_dependencies(record: dict) -> bool:
+    """Clean a stored dependency list in place (records queued before `dependency` existed). True on change."""
+    cleaned = list(dict.fromkeys(n for n in (dependency(d) for d in record.get("depends", [])) if n))
+    if cleaned == record.get("depends", []):
+        return False
+    record["depends"] = cleaned
+    return True
 
 
 def relies_on(text: str) -> list[str]:

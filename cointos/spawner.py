@@ -20,6 +20,8 @@ def refresh() -> tuple[dict, dict, bool]:
     """Queue projection and dependency readiness, current even while admission is full or
     paused: ({project: its unfinished records}, {project: {item: readiness}}, queue changed)."""
     changed = lifecycle.reconcile()
+    for record in queues.records().values():
+        changed = queues.normalize_dependencies(record) or changed
     projects = tasks.enabled_projects()
     scanned = {p["name"]: queues.scan(p) for p in projects}
     ready = {p["name"]: queues.readiness(scanned[p["name"]], queues.landed(p)) for p in projects}
