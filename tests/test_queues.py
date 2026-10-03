@@ -98,20 +98,21 @@ class Admission(unittest.TestCase):
     def test_a_brief_relying_on_absent_apis_goes_to_a_manager_without_a_worker(self):
         (self.repo / "api.h").write_text("int pigen_present(void);\nint pigen_presently(void);\n")
         support.commit(self.repo, "api")
-        queues.add(self.project, "queued", "bad", "Relies on: api.h::pigen_present, api.h::pigen_pres, nope.h\nTest.",
+        queues.add(self.project, "queued", "bad", "Relies on: pigen_present, pigen_pres, other.h::pigen_presently, nope.h\nTest.",
                    "test-contract")
         self.assertIsNone(spawner.next_task(), "no worker is created for it")
         task = spawner.next_task()
         self.assertEqual((task["kind"], task["item"]), ("decompose", "bad"))
         record = state.L["queue"]["p:bad"]
         self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
-        self.assertIn("api.h::pigen_pres, nope.h, absent on main", record["report"])
+        self.assertIn("pigen_pres, nope.h, absent on main", record["report"])
         self.assertNotIn("p:bad", state.L["tasks"])
 
     def test_a_brief_relying_on_present_apis_dispatches(self):
         (self.repo / "api.h").write_text("int pigen_present(void);\n")
         support.commit(self.repo, "api")
-        queues.add(self.project, "queued", "good", "Relies on: api.h::pigen_present, api.h\nTest.", "test-contract")
+        queues.add(self.project, "queued", "good",
+                   "Relies on: pigen_present, wrong/file.c::pigen_present, api.h\nTest.", "test-contract")
         self.assertEqual(spawner.next_task()["id"], "p:good")
 
     def test_api_queue_is_durable_on_restart_and_never_writes_project(self):

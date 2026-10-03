@@ -73,7 +73,8 @@ def normalize_dependencies(record: dict) -> bool:
 
 
 def relies_on(text: str) -> list[str]:
-    """The owner APIs on a brief's `Relies on:` line: `path` or `path::symbol`, comma-separated."""
+    """The owner APIs on a brief's `Relies on:` line: function or type names (a `path::name`
+    citation or a file path is also accepted), comma-separated."""
     for line in text.splitlines():
         found = re.match(r"\**Relies on:\**\s*(.+)", line.strip(), re.IGNORECASE)
         if found:
@@ -81,13 +82,22 @@ def relies_on(text: str) -> list[str]:
     return []
 
 
+IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 def missing_reliances(repo, commit: str, names: list[str]) -> list[str]:
-    """The `Relies on:` entries absent at a commit: a missing file, or a symbol not named in it."""
+    """The `Relies on:` entries absent at a commit. A name is an identifier found anywhere in the
+    tracked tree; a `path::name` entry is checked the same way (the path is only a citation);
+    an entry naming a file (containing `/` or `.`) must exist."""
     missing = []
     for name in names:
-        path, _, symbol = name.partition("::")
-        text = git.show(repo, commit, path) if path and not path.startswith("/") and ".." not in path.split("/") else ""
-        if not text or (symbol and not re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text)):
+        symbol = name.partition("::")[2] if "::" in name else name
+        if IDENTIFIER.fullmatch(symbol):
+            found = git.ok(repo, "grep", "-q", "-w", "-F", "-e", symbol, commit, "--")
+        else:
+            found = (not symbol.startswith("/") and ".." not in symbol.split("/")
+                     and git.blob(repo, commit, symbol) is not None)
+        if not found:
             missing.append(name)
     return missing
 
@@ -188,8 +198,8 @@ def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=No
         schema.budget(CONFIG, budget)
     stage = schema.stage("implementation" if stage is None else stage) if kind == "queued" else None
     if stage == "test-contract" and not relies_on(brief):
-        raise ValueError("a test-contract brief needs a `Relies on: path::symbol, ...` line naming the existing "
-                         "owner APIs its witnesses and assertions use; it is checked against main at dispatch")
+        raise ValueError("a test-contract brief needs a `Relies on: name, ...` line naming the existing "
+                         "functions and types its witnesses and assertions use; they are checked against main at dispatch")
     fields = {"brief": brief.strip(), "depends": depends(brief), "stage": stage,
               "reasoning_effort": schema.effort(reasoning_effort),
               "hash": hashlib.sha256(brief.strip().encode()).hexdigest()[:16]}

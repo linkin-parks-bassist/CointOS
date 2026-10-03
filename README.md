@@ -138,8 +138,8 @@ A failed gate returns the item with details. The verified acceptance receipt is 
 marks a queue item done.
 
 Test-contract work is checked mechanically too. Its brief must name the existing owner APIs it
-relies on (`Relies on: path::symbol, ...`); once its dependencies land, the daemon checks each
-entry against main and sends an infeasible brief straight to a manager before any worker runs.
+relies on (`Relies on: name, ...`, function and type names only); once its dependencies land,
+the daemon checks that each name exists somewhere on main and sends an infeasible brief straight to a manager before any worker runs.
 Its report declares each deliberate red as `Expected red: COMMAND => OUTPUT LITERAL` (or
 `Expected red: none`). Landing runs those commands, which must fail and print the literal, and
 returns the item if any other accepted check that is green on main turns red.
