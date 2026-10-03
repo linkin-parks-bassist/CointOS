@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-03T18:48:36+10:00"
+revised_at: "2026-10-03T21:05:04+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **Pigen's tree still carries agent-workflow narration.** Before the product-only tree rule (`what/are/the/cointos/roles.md`), Pigen's agents wrote item names, stages, landings and gate history into its task, broken, plan and orientation leaves. The pigen manager command `purge-agent-workflow-from-the-tree` is queued to restate them as product facts. Its stale blocked decision command `task-six-impl-gate-decision` concerns the replaced implementation gate (which landed `impl-boundary` live as pigen 1fc5408) and needs no action.
+- **The implementation gate cannot see progress behind an earlier unrelated red.** `contracts.implementation_gate` requires an already-red covering check to lose a failure main reports. When an aborting test binary stops at an earlier item's red before reaching the implementation's own tests, main and candidate fail identically and a correct implementation is returned. Live case on 2026-10-03: Pigen's storage implementation (worker commit ed8630d) passes its sections 12–15 in isolation but `make rtl-lower-test` aborts first at section 10's unimplemented net/variable constant controls (`tests/rtl_lower_test.c:2188`), and no constant-controls item is queued. Ordering the implementation chain by test-file order avoids it; a mechanical remedy (for example running a candidate-declared subset) is unapproved.
 - **Coin relays stale or invented state.** On 2026-10-03 Coin repeatedly presented an old resolved "steward needs David: list" alert as the open decision, claimed to instruct agents it cannot message, and did not surface the real pending decision (alert 166). Its alert selection and action claims need review (plan item 6).
 - **Gardener thoughts fail with lane `KeyError`.** Four alerts on 2026-10-03 report `Qwen3.8-27B-GGUF lane 0 failed a thought of gardener-71c173: KeyError: '<12 hex>'`; cause not yet diagnosed.
 - **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers and unresolved-manager escalation still need native model-run evidence. Isolated installed HTTP fixtures establish artifact-preserving brief correction, durable receipt replay and bounded escalation without proving autonomous judgment. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
