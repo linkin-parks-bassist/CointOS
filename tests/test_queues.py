@@ -89,6 +89,15 @@ class Admission(unittest.TestCase):
         task["status"] = "running"
         self.assertIsNone(spawner.next_task())
 
+    def test_a_brief_carries_its_summary_and_agents_must_write_one(self):
+        queues.add(self.project, "queued", "plain", "Do it.\nSummary: Explains the task in five words.")
+        self.assertEqual(queues.records()["p:plain"]["summary"], "Explains the task in five words.")
+        queues.add(self.project, "command", "ask", "Decide something.")
+        self.assertIsNone(queues.records()["p:ask"]["summary"], "commands and user briefs may omit it")
+        for brief in ("Do it.", "Do it.\nSummary: Too short.", "Summary: " + "word " * 21):
+            with self.subTest(brief=brief), self.assertRaisesRegex(ValueError, "Summary"):
+                queues.require_summary(brief)
+
     def test_a_test_contract_brief_must_name_what_it_relies_on(self):
         with self.assertRaisesRegex(ValueError, "Relies on"):
             queues.add(self.project, "queued", "tests", "Test parse.", "test-contract")

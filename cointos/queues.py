@@ -82,6 +82,26 @@ def relies_on(text: str) -> list[str]:
     return []
 
 
+def summary(text: str) -> str | None:
+    """The plain-language explainer on a brief's `Summary:` line, shown on the dashboard."""
+    for line in text.splitlines():
+        found = re.match(r"\**Summary:\**\s*(.+)", line.strip(), re.IGNORECASE)
+        if found:
+            return found[1].strip()
+    return None
+
+
+SUMMARY_WORDS = (5, 20)
+
+
+def require_summary(brief: str) -> None:
+    """Agents' worker briefs must explain themselves to the dashboard in one short line."""
+    words = len((summary(brief) or "").split())
+    if not SUMMARY_WORDS[0] <= words <= SUMMARY_WORDS[1]:
+        raise ValueError(f"a worker brief needs a `Summary:` line of {SUMMARY_WORDS[0]}-{SUMMARY_WORDS[1]} plain words "
+                         f"saying what the task is for (it is shown on the dashboard){f'; this one has {words}' if words else ''}")
+
+
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
@@ -200,7 +220,7 @@ def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=No
     if stage == "test-contract" and not relies_on(brief):
         raise ValueError("a test-contract brief needs a `Relies on: name, ...` line naming the existing "
                          "functions and types its witnesses and assertions use; they are checked against main at dispatch")
-    fields = {"brief": brief.strip(), "depends": depends(brief), "stage": stage,
+    fields = {"brief": brief.strip(), "summary": summary(brief), "depends": depends(brief), "stage": stage,
               "reasoning_effort": schema.effort(reasoning_effort),
               "hash": hashlib.sha256(brief.strip().encode()).hexdigest()[:16]}
     if budget is not None:

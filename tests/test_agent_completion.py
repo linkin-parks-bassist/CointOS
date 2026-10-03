@@ -332,13 +332,13 @@ class Completion(unittest.TestCase):
         lifecycle.fail(worker, "contract mismatch")
         manager = support.running(spawner.next_task(), "manager-1")
         api.dispatch("hold", {"item": worker["id"], "proposed_by": manager["id"], "run": "manager-1"})
-        api.dispatch("revise", {"item": worker["id"], "brief": "Corrected contract", "reason": "Identity is shared",
+        api.dispatch("revise", {"item": worker["id"], "brief": "Corrected contract\nSummary: Fixes the contract so shared identity is allowed.", "reason": "Identity is shared",
                                 "proposed_by": manager["id"], "run": "manager-1"})
         lifecycle.submit(manager["id"], "manager-1", "complete", "Corrected the contract")
         self.assertEqual((worker["status"], queues.records()[worker["record"]]["status"]), ("waiting", "queued"))
         self.assertNotIn("wrong", queues.landed(self.project))
         lifecycle.reconcile()
-        self.assertEqual(queues.records()[worker["record"]]["brief"], "Corrected contract")
+        self.assertEqual(queues.records()[worker["record"]]["brief"], "Corrected contract\nSummary: Fixes the contract so shared identity is allowed.")
 
     def test_failed_assignment_dependencies_do_not_prevent_manager_repair(self):
         worker = support.queued(self.project, "wrong-edge", "Depends on: missing\nBuild core")

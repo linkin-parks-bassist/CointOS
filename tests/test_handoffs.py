@@ -21,7 +21,7 @@ class Handoffs(unittest.TestCase):
         return lifecycle.submit(self.task["id"], run, outcome, detail)
 
     def test_a_stage_completes_while_its_queued_children_continue(self):
-        api.dispatch("queue", {"project": "p", "kind": "queued", "name": "tests", "brief": "Write tests",
+        api.dispatch("queue", {"project": "p", "kind": "queued", "name": "tests", "brief": "Write tests\nSummary: Writes the tests this stage needs first.",
                                "proposed_by": self.task["id"], "run": "manager-1"})
         receipt = self.finish("complete", "Plan committed and tests queued")
         self.assertEqual((receipt["run"], receipt["disposition"]), ("manager-1", "complete"))

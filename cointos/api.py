@@ -125,6 +125,8 @@ def queue(body):
         if (kinds is not None and kind not in kinds) or (own_project and by["place"] != project["name"]):
             raise ApiError("queue proposer must be an unfinished same-project manager/integrator, "
                            "or a scout/auditor proposing a command")
+        if kind in ("queued", "urgent"):
+            queues.require_summary(body["brief"])
     item = queues.add(project, kind, body["name"], body["brief"], body.get("stage"),
                       body.get("reasoning_effort"), body.get("budget"))
     if by is not None:

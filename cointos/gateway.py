@@ -20,7 +20,7 @@ import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from cointos import api, journal, keys, lanes, lifecycle, memory, prompts
+from cointos import api, journal, keys, lanes, lifecycle, memory, projects, prompts
 from cointos.config import ROOT
 from cointos.state import ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, now
 
@@ -173,7 +173,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": name, "object": "model", "owned_by": "cointos"} for name in CONFIG["models"]]})
         if path == "/api/ledger":
             with LOCK:
-                return self.reply(200, L)
+                return self.reply(200, {**L, "project_about": {p["name"]: projects.about(p) for p in L["projects"]}})
         if path == "/api/live":
             return self.live()
         if path in ("/", "/index.html"):

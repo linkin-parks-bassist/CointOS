@@ -200,6 +200,8 @@ def revise(key: str, by: str, reason: str, brief: str, stage=None, reasoning_eff
     if task and task["status"] == "review" and any(
             t["kind"] == "integrate" and t["worker"] == key and t["status"] == "running" for t in L["tasks"].values()):
         raise ValueError(f"{key} is being integrated now; hold it and revise after the integration ends")
+    if by != "user" and record["kind"] == "queued":
+        queues.require_summary(brief)
     queues.revise(record, brief, stage, reasoning_effort, budget)
     if task and task["status"] in ("waiting", "running", "review", "failed"):
         if task["status"] == "running":

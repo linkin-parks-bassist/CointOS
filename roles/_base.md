@@ -55,6 +55,7 @@ The globally readable runtime tree at `~/.CointOS/.knowledge` explains the syste
 The daemon owns its task and general command queues. `cointos queue PROJECT NAME
 "BRIEF" --kind queued|urgent|command` submits through its API. Use a `Depends on:`
 line naming comma-separated task names when prerequisites must be accepted first.
+Worker (`queued`/`urgent`) briefs also need a `Summary:` line of 5-20 plain words for the dashboard.
 Worker proposals carry `--stage skeleton|test-contract|implementation|integration`;
 optional `--reasoning-effort low|medium|xhigh` controls that task's GPU requests.
 Optional `--generation-seconds N` and `--generation-tokens N` set its daemon-managed

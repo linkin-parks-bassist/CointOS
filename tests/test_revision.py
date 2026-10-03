@@ -6,6 +6,8 @@ import unittest
 from cointos import api, lifecycle, prompts, queues, spawner, state, tasks
 from tests import support
 
+SUMMARY = "\nSummary: Explains this revised task in a few plain words."
+
 
 class Revision(unittest.TestCase):
     def setUp(self):
@@ -17,6 +19,8 @@ class Revision(unittest.TestCase):
                                        "manager-1")
 
     def as_manager(self, action, **body):
+        if action == "revise" and body.get("brief", "").strip():
+            body["brief"] += SUMMARY  # a manager's worker brief explains itself to the dashboard
         return api.dispatch(action, {**body, "proposed_by": self.manager["id"], "run": "manager-1"})
 
     def worker(self, name="impl", brief="Implement it", start=True):
@@ -113,7 +117,7 @@ class Revision(unittest.TestCase):
         self.assertNotIn("worker-1", state.L["agents"])
         self.assertEqual((worker["status"], worker["session"], worker["runs"]), ("waiting", None, 0))
         self.assertEqual((worker["brief"], worker["record_hash"]),
-                         ("Implement the extended interface", state.L["queue"]["p:impl"]["hash"]))
+                         ("Implement the extended interface" + SUMMARY, state.L["queue"]["p:impl"]["hash"]))
         self.assertTrue((Path(worker["worktree"]) / "partial.c").exists(), "the branch keeps earlier work")
         text = prompts.launch_text(worker, self.project)
         self.assertIn(f"Revised by {self.manager['id']}: interface extended", text)

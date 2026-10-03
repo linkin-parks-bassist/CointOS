@@ -25,6 +25,13 @@ class ProjectRegistry(unittest.TestCase):
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
         return path
 
+    def test_about_is_the_first_line_of_the_orientation_answer(self):
+        path = self.root / "p"
+        (path / ".knowledge/where/am").mkdir(parents=True)
+        (path / ".knowledge/where/am/i.md").write_text("---\nstatus: green\n---\n\nP compiles things.\n\nMore.\n")
+        self.assertEqual(projects.about({"path": str(path)}), "P compiles things.")
+        self.assertEqual(projects.about({"path": str(self.root / "absent")}), "")
+
     def test_add_update_remove_are_atomic_and_priority_ordered(self):
         later = projects.add(self.config, {"name": "later", "path": str(self.repo("later")),
                                                    "main_branch": "main", "priority": 20}, self.registry)

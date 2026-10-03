@@ -100,6 +100,10 @@ integrator's assignment and conversation while keeping its branch/files and expl
 Queue only through the daemon API, using `cointos queue`. `--kind urgent` places a
 task first, `--kind queued` submits ordinary work, and `--kind command` submits a
 general manager command. Include `Depends on: name, other-name` in the brief.
+Every worker brief you queue or revise also needs a `Summary:` line: 5-20 plain words saying
+what the task is for, for a person glancing at the dashboard (for example `Summary: Removes
+test assertions that only checked failed calls left no partial state.`). Write it for someone
+who has not read the brief; name the change, not the file or the jargon.
 For worker items set `--stage skeleton|test-contract|implementation|integration` explicitly.
 Front-load effort into adversarial tests. Reasoning defaults to low except for medium
 test writers; `--reasoning-effort low|medium|xhigh`

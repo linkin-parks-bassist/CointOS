@@ -12,6 +12,17 @@ from cointos.config import PROJECTS, write_json
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
+def about(project: dict) -> str:
+    """The first line of the project's orientation answer: what the dashboard says the project is."""
+    try:
+        text = (Path(project["path"]) / project.get("tree", ".knowledge") / "where/am/i.md").read_text()
+    except OSError:
+        return ""
+    if text.startswith("---\n") and (end := text.find("\n---\n", 4)) != -1:
+        text = text[end + 5:]
+    return next((line.strip() for line in text.splitlines() if line.strip()), "")
+
+
 def normalize(project: dict) -> dict:
     name = str(project.get("name", "")).strip()
     if not NAME.fullmatch(name):

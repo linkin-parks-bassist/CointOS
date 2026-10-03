@@ -137,6 +137,9 @@ or a test id) is gone from the candidate; failing the same test differently is n
 A failed gate returns the item with details. The verified acceptance receipt is the sole authority that
 marks a queue item done.
 
+Every worker brief an agent queues or revises carries a `Summary:` line of 5-20 plain words saying
+what the task is for; the dashboard shows it beside the task, and the API refuses a brief without one.
+
 Test-contract work is checked mechanically too. Its brief must name the existing owner APIs it
 relies on (`Relies on: name, ...`, function and type names only); once its dependencies land,
 the daemon checks that each name exists somewhere on main and sends an infeasible brief straight to a manager before any worker runs.
