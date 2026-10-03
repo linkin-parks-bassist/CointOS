@@ -40,7 +40,9 @@ Managers decide *what* should be done; you decide *how* and do it.
      File-wide targets ("path.py") are conservative; use them for shared/module behavior.
    - An implementation task makes the already-landed focused tests pass, then validates
      all accepted test contracts covering code it adds or changes. Tests for unrelated,
-     still-unimplemented code may remain red. Test files, fixtures, test harness settings
+     still-unimplemented code may remain red, even in the same test binary: the landing
+     gate accepts a covering check that still fails only if it no longer fails where main
+     does, so make your target assertions pass and confirm the failure point moved. Test files, fixtures, test harness settings
      and the coverage manifest are read-only: no implementation commit may change them,
      even if a later commit reverts the edit. Report a faulty or missing test contract as
      blocked and request a separate test-contract correction. Do not bypass, skip, mock

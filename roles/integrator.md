@@ -37,7 +37,7 @@ reviews stay within the named item's boundary.
    call, and frozen assertions remain valid after the promised implementations land.
    Refuse an error assertion that depends only on an adapter being unimplemented today.
    Implementation items must pass every accepted test contract covering added or changed
-   code. Unrelated red tests are allowed. Implementation commits cannot modify tests,
+   code. Unrelated red tests are allowed; the gate requires an already-red covering check to lose a failure main reports. Implementation commits cannot modify tests,
    fixtures, harness settings or the manifest; neither may your landing fix them. Integration
    items must join only their named, already-tested dependencies.
    If this implementation is already present on main, verify rather than land it twice:

@@ -90,8 +90,13 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
         else:
             try:
                 commands = checks(repo, worker, parent, commit, rules)
-                contracts.verify(repo, commit, commands, CONFIG["timeouts"]["command_seconds"],
-                                 CONFIG["memory"]["agent_limit_gb"])
+                if worker["stage"] == "implementation":
+                    red = contracts.implementation_gate(repo, parent, commit, commands,
+                                                        CONFIG["timeouts"]["command_seconds"],
+                                                        CONFIG["memory"]["agent_limit_gb"])
+                else:
+                    contracts.verify(repo, commit, commands, CONFIG["timeouts"]["command_seconds"],
+                                     CONFIG["memory"]["agent_limit_gb"])
                 if worker["stage"] == "test-contract":
                     red = contracts.red_gate(repo, parent, commit, git.show(repo, submitted, queues.REPORT), rules,
                                              CONFIG["timeouts"]["command_seconds"], CONFIG["memory"]["agent_limit_gb"])
@@ -118,7 +123,7 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
                                                         "via": "landing", "stage": worker["stage"]})
             save()
             log("verified landing", task=task_id, commit=commit, stage=worker["stage"],
-                **({"red_gate": red} if red else {}))
+                **({"gate": red} if red else {}))
     return {"ok": True, "commit": commit}
 
 

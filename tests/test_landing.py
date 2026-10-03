@@ -44,6 +44,9 @@ class Project(unittest.TestCase):
         verify = contracts.verify  # unit tests need no user systemd session for the memory cap
         self.enterContext(patch.object(contracts, "verify", side_effect=lambda repo, commit, commands, timeout, memory:
                                        verify(repo, commit, commands, timeout)))
+        gate = contracts.implementation_gate
+        self.enterContext(patch.object(contracts, "implementation_gate", side_effect=lambda repo, parent, commit,
+                                       commands, timeout, memory: gate(repo, parent, commit, commands, timeout)))
 
     def implement(self) -> str:
         path = self.tree / "code.py"
@@ -117,7 +120,7 @@ class Gate(Project):
         def moved(*args):
             (self.tree / "extra.py").write_text("x = 1\n")
             support.commit(self.tree)
-        with patch.object(contracts, "verify", side_effect=moved):
+        with patch.object(contracts, "implementation_gate", side_effect=moved):
             with self.assertRaisesRegex(ValueError, "refs changed"):
                 landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
@@ -148,6 +151,44 @@ class Gate(Project):
         self.assertIn("test command failed", self.worker["review"])
         self.assertEqual((integration["status"], integration["receipt"]["disposition"]), ("done", "returned"))
         self.assertEqual(queues.landed(self.project), set())
+
+
+class ImplementationProgress(Project):
+    """An implementation is judged by what it changed: green checks stay green, and a check
+    already red on main must lose a failure main reports, not merely fail differently."""
+
+    SHARED = ("import unittest\nimport code\nclass A(unittest.TestCase):\n"
+              "    def test_a(self): self.assertEqual(code.a(), 42)\n"
+              "    def test_b(self): self.assertEqual(code.b(), 7)\n")
+
+    def shared(self):
+        """A and B share one red target on main, as a later item's red shares a test binary."""
+        (self.repo / "tests/test_code.py").write_text(self.SHARED)
+        self.base = support.commit(self.repo, "shared target")
+        git.run(self.tree, "merge", "-q", "--ff-only", "main")
+        self.worker["base_commit"] = self.base
+
+    def test_fixing_one_failure_lands_while_a_later_items_red_remains(self):
+        self.shared()
+        integration, candidate, _ = self.landing()
+        landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), candidate)
+
+    def test_failing_the_same_test_differently_is_not_progress(self):
+        self.shared()
+        integration, _, _ = self.landing()
+        path = self.review / "code.py"
+        path.write_text(path.read_text().replace("return 42", "return -1"))
+        with self.assertRaisesRegex(ValueError, "fixed none"):
+            landing.land(integration["id"], support.commit(self.review), "integrator-1")
+        self.assertEqual(self.main(), self.base)
+        self.assertEqual(self.worker["status"], "waiting")
+
+    def test_assertion_locations_identify_aborting_failures(self):
+        main = "t: tests/t.c:1362: main: Assertion `rc == 0' failed.\n"
+        self.assertEqual(contracts.failures(main), {"tests/t.c:1362"})
+        self.assertEqual(contracts.failures("ERROR: test_a (tests.x.A.test_a)\nFAILED (errors=1)\n"),
+                         {"test_a (tests.x.A.test_a)"})
 
 
 class IntegrationStage(Project):
@@ -363,7 +404,7 @@ class Commands(Project):
         (self.review / "plan.md").write_text("concurrent main frontier\nreviewed worker boundary\n")
         git.run(self.review, "add", "plan.md")
         self.run_command(cli.land, "Add a")  # no manual commit or alternate command
-        self.assertEqual(contracts.verify.call_args.args[2],
+        self.assertEqual(contracts.implementation_gate.call_args.args[3],
                          [["python3", "-m", "unittest", "tests.test_code.A"]])
         accepted = self.worker["acceptance"]
         self.assertEqual((accepted["commit"], accepted["worker_commit"]), (self.main(), submitted))

@@ -47,7 +47,7 @@ def summary(entries: list[dict], hours: float) -> str:
     infeasible = [e for e in entries if e["event"] == "brief infeasible"]
     created = Counter(kind(e.get("task", "")) for e in entries if e["event"] == "task created")
     receipts = Counter((kind(e.get("task", "")), e.get("disposition")) for e in entries if e["event"] == "receipt")
-    reds = [e["red_gate"] for e in entries if e["event"] == "verified landing" and e.get("red_gate")]
+    reds = [e.get("red_gate") or e["gate"] for e in entries if e["event"] == "verified landing" and (e.get("red_gate") or e.get("gate", {}).get("expected_red") is not None)]
     total = sum(landed.values())
     first = min((e["at"] for e in entries), default=None)
     covered = (time.time() - first) / 3600 if first else 0.0

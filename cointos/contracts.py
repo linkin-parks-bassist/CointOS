@@ -281,6 +281,46 @@ def verify(repo, commit: str, commands: list[list[str]], timeout: float, memory_
                 raise ValueError(f"test command failed ({code}): {command}\n" + text[-8000:])
 
 
+TEST_FAILURE = re.compile(r"^(?:FAIL|ERROR): (\S+ \([\w.]+\))|^FAILED (\S+::\S+)", re.MULTILINE)
+SOURCE_LOCATION = re.compile(r"[\w./-]+\.\w+:\d+")
+
+
+def failures(output: str) -> set[str]:
+    """Where a failing check failed: unittest/pytest test ids when it names them, else the
+    source locations (`file:line`) its output reports, as assertion aborts print them."""
+    tests = {a or b for a, b in TEST_FAILURE.findall(output)}
+    return tests or set(SOURCE_LOCATION.findall(output))
+
+
+def implementation_gate(repo, parent: str, commit: str, commands: list[list[str]], timeout: float,
+                        memory_gb=None) -> dict:
+    """Judge an implementation by what it changed, not by unrelated unfinished work.
+
+    Every covering check green on main must stay green. A check already red on main (a later
+    item's deliberate red sharing the binary) may stay red, but some failure main reports must be
+    gone from the candidate: the implementation demonstrably fixed what it was for."""
+    deadline = time.monotonic() + timeout
+    with checkout(repo, commit) as path:
+        results = {tuple(c): _run(path, commit, list(c), deadline, memory_gb) for c in commands}
+    red = [c for c, (code, _) in results.items() if code]
+    if not red:
+        return {"checks": len(results), "red_on_main": 0}
+    with checkout(repo, parent) as path:
+        before = {c: _run(path, parent, list(c), deadline, memory_gb) for c in results}
+    regressed = [c for c in red if not before[c][0]]
+    if regressed:
+        details = "\n".join(f"{list(c)}:\n{results[c][1][-4000:]}" for c in regressed)
+        raise ValueError("test command failed on the candidate but passes on main: " + details)
+    fixed = [c for c, (code, text) in before.items() if code and (
+        not results[c][0] or failures(text) - failures(results[c][1]))]
+    if not fixed:
+        details = "\n".join(f"{list(c)}: still fails at {sorted(failures(results[c][1])) or 'an unidentified point'}"
+                             f"\n{results[c][1][-4000:]}" for c in red)
+        raise ValueError("test command failed where it already fails on main; the implementation fixed none "
+                         "of its covering checks' failures: " + details)
+    return {"checks": len(results), "red_on_main": len(red), "fixed": len(fixed)}
+
+
 EXPECTED_RED = re.compile(r"\**Expected red:\**\s*(.*)", re.IGNORECASE)
 
 

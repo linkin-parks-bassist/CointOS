@@ -130,8 +130,11 @@ test-contract manifest. Witnesses must reach the tested boundary, frozen asserti
 remain valid after implementation, and rollback comparisons must capture state before the
 failing call. Implementation landings cannot change protected tests or harnesses;
 the daemon runs every registered contract covering changed code on the exact candidate before
-main moves (for Python, same-file callers of changed helpers are followed). A failed gate
-returns the item with details. The verified acceptance receipt is the sole authority that
+main moves (for Python, same-file callers of changed helpers are followed). Every check green
+on main must stay green. A check already red on main, because a later item's deliberate red
+shares its test binary, may stay red only if a failure main reports (a `file:line` assertion
+or a test id) is gone from the candidate; failing the same test differently is not progress.
+A failed gate returns the item with details. The verified acceptance receipt is the sole authority that
 marks a queue item done.
 
 Test-contract work is checked mechanically too. Its brief must name the existing owner APIs it
