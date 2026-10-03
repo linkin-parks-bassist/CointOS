@@ -12,7 +12,7 @@ import json
 import time
 from pathlib import Path
 
-from cointos import schema
+from cointos import queues, schema
 from cointos.config import ROOT
 from cointos.state import CONFIG
 
@@ -60,6 +60,12 @@ def assignment(task: dict, where: dict) -> str:
                      "Treat packet claims as leads until verified, then continue from the useful frontier. "
                      "\n\nRecovery packet:\n" + str(task.get("recovery_context") or "No transcript evidence was available.") +
                      "\n\nPrior review feedback: " + str(task.get("review") or "none"))
+    proposed = [r for r in queues.records().values() if r.get("proposed_by") == task["id"]]
+    if proposed:  # a fresh session has no memory of what earlier runs of this assignment queued
+        parts.append("Earlier runs of this assignment already queued the following. Do not queue this work again "
+                     "under any name; `cointos revise`, `cointos hold` or `cointos cancel` it instead:\n" +
+                     "\n".join(f"- {r['project']}:{r['item']} ({'landed' if r['status'] == 'done' else r['status']})"
+                               f"{': ' + r['summary'] if r.get('summary') else ''}" for r in proposed))
     parts.append(ending(task, where))
     return "\n\n".join(parts)
 

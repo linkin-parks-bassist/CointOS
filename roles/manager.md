@@ -90,6 +90,10 @@ and will not start while you decide. Then `cointos revise PROJECT:ITEM "COMPLETE
 on the new brief, keeping its branch. `cointos hold PROJECT:ITEM --release` lifts a hold without a
 revision; your holds also end when your own task settles. Accepted work cannot be revised; queue
 new work instead.
+Work that is redundant or no longer wanted is removed with `cointos cancel PROJECT:ITEM... --reason
+"why"`: it stops any run on it and drops it from the queue for good. Name its dependents in the same
+command, or revise their `Depends on:` first. Before queueing, check the project's queue for work
+that already covers the change; cancel a duplicate rather than queueing around it.
 
 Omitted stage, reasoning effort and budget limits retain their current values during revision.
 Provide metadata flags only when changing those values; named budget limits merge with the old

@@ -167,6 +167,18 @@ def revise(body):
     return {"ok": True, "item": key}
 
 
+def cancel(body):
+    items = body.get("items") or []
+    if not isinstance(items, list) or not items or not all(isinstance(i, str) for i in items):
+        raise ApiError("name the queue items to cancel as PROJECT:ITEM")
+    by = proposer(body)
+    if by is not None and (by["role"] != "manager" or any(
+            queues.records().get(i, {}).get("project") != by["place"] for i in items)):
+        raise ApiError("only the owning project's running manager, or the user, cancels queued work")
+    return {"ok": True, "cancelled": lifecycle.cancel(list(dict.fromkeys(items)), "user" if by is None else by["id"],
+                                                       body.get("reason", ""))}
+
+
 def attention(body):
     by = proposer(body)
     message = body.get("message", "").strip()
@@ -369,11 +381,11 @@ ACTIONS = {
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,
-    "run-agent": run_agent, "scout": scout, "supersede": supersede, "clear-review": clear_review,
+    "run-agent": run_agent, "scout": scout, "supersede": supersede, "cancel": cancel, "clear-review": clear_review,
     "reasoning": reasoning, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
     "viewers": viewers, "scheduler": scheduler,
     "project-list": project_list, "project-new": project_new, "project-add": project_add,
     "project-set": project_set, "project-remove": project_remove,
 }
-PUBLISHES = {"finish", "return", "replace", "queue", "hold", "unhold", "revise", "supersede", "reasoning", "budget",
+PUBLISHES = {"finish", "return", "replace", "queue", "hold", "unhold", "revise", "supersede", "cancel", "reasoning", "budget",
              "clear-task-history"}

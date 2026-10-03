@@ -265,6 +265,48 @@ def ended(agent_id: str, facts: dict) -> None:
     stop(agent_id, f"run ended without a completion receipt ({detail})", requeue=True)
 
 
+def cancel(items: list[str], by: str, reason: str) -> list[str]:
+    """Withdraw unaccepted queue items for good: end every run and task working on them (their
+    integrations and decompositions too), drop their records and retire their branches. Live
+    work that depends on an item must be cancelled with it or revised first."""
+    current = queues.records()
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("say why the work is cancelled")
+    for key in items:
+        if key not in current:
+            raise ValueError(f"unknown queue item {key!r}; name it PROJECT:ITEM")
+        if current[key]["status"] == "done":
+            raise ValueError(f"{key} is already accepted; it cannot be cancelled")
+    cancelled = {(current[k]["project"], current[k]["item"]) for k in items}
+    def named(record, name):
+        return (record["project"], name) in cancelled or (record["project"], Path(name).stem) in {
+            (p, Path(i).stem) for p, i in cancelled}
+    dependents = sorted(k for k, r in current.items() if k not in items and r["status"] != "done"
+                        and not r.get("replaced_by") and any(named(r, d) for d in r["depends"]))
+    if dependents:
+        raise ValueError(f"{', '.join(dependents)} still depend on it; cancel them too or revise their Depends on")
+    note = f"cancelled by {by}: {reason.strip()}"
+    for key in items:
+        affected = [t for t in L["tasks"].values() if t["status"] not in ("done", "failed")
+                    and (t["id"] == key or t.get("record") == key or (t["kind"] == "integrate" and t.get("worker") == key))]
+        for agent in [a for a in L["agents"].values() if a["task"] in {t["id"] for t in affected}]:
+            release(agent["id"], note)
+            threading.Thread(target=opencode.stop, args=(agent["id"],), daemon=True).start()
+        for task in affected:
+            task.pop("admission_hold", None)
+            snapshots.forget_owner(task["id"])
+            task.update(status="failed", agent=None, note=note, cancelled=reason.strip(), updated_at=now())
+            task.pop("retired", None)
+        if key in L["tasks"] and L["tasks"][key]["status"] == "failed":
+            L["tasks"][key]["cancelled"] = reason.strip()
+        del current[key]
+        log("queue item cancelled", item=key, by=by, reason=reason.strip())
+    for task in L["tasks"].values():
+        if task.get("cancelled") and task["status"] == "failed":
+            retire(task)
+    return list(items)
+
+
 def kill(agent_id: str) -> dict:
     """the user ends a run and withholds further admission until explicitly released."""
     task = L["tasks"][L["agents"][agent_id]["task"]]

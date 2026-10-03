@@ -137,6 +137,9 @@ or a test id) is gone from the candidate; failing the same test differently is n
 A failed gate returns the item with details. The verified acceptance receipt is the sole authority that
 marks a queue item done.
 
+`cointos cancel PROJECT:ITEM... --reason WHY` withdraws unaccepted work for good: it stops any run on
+it, drops the queue records and retires their branches. Live dependents must be cancelled with it.
+
 Every worker brief an agent queues or revises carries a `Summary:` line of 5-20 plain words saying
 what the task is for; the dashboard shows it beside the task, and the API refuses a brief without one.
 

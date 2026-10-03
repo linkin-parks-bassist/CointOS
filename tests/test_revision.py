@@ -29,6 +29,43 @@ class Revision(unittest.TestCase):
             support.running(worker, "worker-1")
         return worker
 
+    # ------------------------------------------------ cancelling
+
+    def test_cancelling_stops_the_run_and_drops_the_item_and_its_integration(self):
+        worker = self.worker()
+        integration = tasks.create("integrate", self.project, "integrate-impl", worker["brief"], [2], worker=worker["id"])
+        api.dispatch("cancel", {"items": ["p:impl"], "reason": "duplicate of other work"})
+        self.assertNotIn("p:impl", state.L["queue"])
+        self.assertNotIn("worker-1", state.L["agents"])
+        self.assertEqual((worker["status"], worker["cancelled"]), ("failed", "duplicate of other work"))
+        self.assertEqual(integration["status"], "failed")
+        self.assertIsNone(spawner.next_task(), "nothing of it is scheduled again")
+
+    def test_cancelling_refuses_while_live_work_depends_on_it(self):
+        queues.add(self.project, "queued", "base", "Base")
+        queues.add(self.project, "queued", "top", "Depends on: base\nTop")
+        with self.assertRaisesRegex(ValueError, "p:top still depend"):
+            api.dispatch("cancel", {"items": ["p:base"], "reason": "r"})
+        api.dispatch("cancel", {"items": ["p:base", "p:top"], "reason": "both redundant"})
+        self.assertFalse({"p:base", "p:top"} & set(state.L["queue"]))
+
+    def test_only_the_owning_manager_or_user_cancels_and_never_accepted_work(self):
+        queues.add(self.project, "queued", "impl", "Implement it")
+        with self.assertRaisesRegex(ValueError, "why"):
+            self.as_manager("cancel", items=["p:impl"], reason=" ")
+        self.as_manager("cancel", items=["p:impl"], reason="duplicate")
+        queues.add(self.project, "queued", "landed", "Landed")
+        state.L["queue"]["p:landed"]["status"] = "done"
+        with self.assertRaisesRegex(ValueError, "already accepted"):
+            api.dispatch("cancel", {"items": ["p:landed"], "reason": "r"})
+
+    def test_a_fresh_run_is_told_what_its_assignment_already_queued(self):
+        self.as_manager("queue", project="p", kind="queued", name="first-try",
+                        brief="Do it.\nSummary: Removes the old rollback checks from the tests.")
+        text = prompts.launch_text(self.manager, self.project)
+        self.assertIn("p:first-try (queued): Removes the old rollback checks from the tests.", text)
+        self.assertIn("Do not queue this work again", text)
+
     # ------------------------------------------------ holding
 
     def test_human_holds_keep_their_authority_after_daemon_replacement(self):
