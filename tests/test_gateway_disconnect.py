@@ -49,3 +49,19 @@ class Disconnect(unittest.TestCase):
                 peer.close()
                 self.wait_for(lambda: not state.L['thoughts'] and state.ACTIVE['chats'] == 0)
                 self.assertFalse(lanes.RUNS)
+
+
+class EndedRun(Disconnect):
+    def test_a_request_with_an_ended_runs_key_is_refused_not_served_as_the_users(self):
+        self.enterContext(patch.object(gateway.keys, "_persist"))
+        key = gateway.keys.issue("worker-1", "background")
+        gateway.keys.revoke("worker-1")
+        self.assertEqual(gateway.keys.owner(key), ("user", "user"), "an unknown key alone would be the user's")
+        import urllib.request, urllib.error
+        request = urllib.request.Request(f"http://127.0.0.1:{self.server.server_address[1]}/v1/chat/completions",
+                                         json.dumps({"model": state.CONFIG["work_model"]}).encode(),
+                                         {"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+        with self.assertRaises(urllib.error.HTTPError) as refused:
+            urllib.request.urlopen(request, timeout=2)
+        self.assertEqual(refused.exception.code, 410)
+        self.assertFalse(state.L["thoughts"], "no lane time was spent on it")

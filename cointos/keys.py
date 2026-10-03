@@ -8,6 +8,7 @@ from cointos.config import KEYS, read_json, write_json
 
 OWNERS: dict[str, tuple[str, str]] = {}  # key -> (agent id, class)
 ISSUED: dict[str, str] = {}  # agent id -> its key
+ENDED: set[str] = set()  # keys of runs that have ended: their late requests are refused, never the user's
 
 
 def load() -> None:
@@ -37,8 +38,17 @@ def adopt(agent_id: str, klass: str, key: str) -> None:
 
 
 def revoke(agent_id: str) -> None:
-    OWNERS.pop(ISSUED.pop(agent_id, ""), None)
+    key = ISSUED.pop(agent_id, "")
+    if OWNERS.pop(key, None):
+        ENDED.add(key)
     _persist(agent_id, None)
+
+
+def ended(key: str) -> bool:
+    """Whether a key belonged to a run that has ended. A stopping agent's process can still send a
+    request after its run is released; served as the user's, it would take the lane first and
+    re-read its whole conversation cold for a reply nobody reads."""
+    return key in ENDED
 
 
 def owner(key: str) -> tuple[str, str]:

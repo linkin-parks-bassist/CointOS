@@ -251,6 +251,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def stream_thought(self, body: dict):
         key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        if keys.ended(key):
+            return self.reply(410, {"error": {"message": "this agent run has ended"}})
         agent, klass, conversation = identity(key)
         model = {"work": CONFIG["work_model"], "front": CONFIG["front_model"]}.get(body.get("model"), body.get("model"))
         if model not in CONFIG["models"]:
