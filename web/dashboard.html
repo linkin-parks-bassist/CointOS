@@ -199,9 +199,9 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .tchip { display: block; width: 100%; text-align: left; font: 700 12.5px/1.25 ui-sans-serif, system-ui, sans-serif; color: var(--ink);
   background: var(--bg); border: 1px solid var(--line-soft); border-left: 4px solid var(--line); padding: 4px 6px; cursor: pointer;
   overflow: hidden; }
-.tchip .t { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
+.tchip .t { line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: break-word; hyphens: auto; }
 .tchip:hover { border-color: var(--accent); border-left-color: var(--accent); background: var(--accent-wash); }
-.tchip small { display: block; white-space: nowrap; font-weight: 500; font-size: 11px; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; }
+.tchip small { display: block; white-space: nowrap; font-weight: 500; font-size: 11px; line-height: 1.45; color: var(--ink-faint); overflow: hidden; text-overflow: ellipsis; }
 .tchip.live { border-left-color: var(--accent-bright); } .tchip.live .t::before { content: "● "; color: var(--accent-bright); animation: pulse 1.6s infinite; }
 .tchip.held { border-left-color: var(--accent); }
 .tchip.more { display: block; font-weight: 500; color: var(--ink-faint); border-style: dashed; text-align: center; }
@@ -245,7 +245,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .pnow div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; } .pnow .chip { margin-right: 5px; }
 .back { color: var(--accent); font-weight: 800; text-decoration: none; font-size: 14px; }
 .phead { margin: 6px 0 4px; } .phead h2 { font-size: 34px; margin: 0 0 4px; }
-.tchip .sum { display: block; font-weight: 500; font-size: 11.5px; color: var(--ink-soft); margin-top: 2px;
+.tchip .sum { display: block; font-weight: 500; font-size: 11.5px; line-height: 1.4; color: var(--ink-soft); margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .agent .sum { grid-column: 2; font-size: 13px; color: var(--dark-text); opacity: .85; line-height: 1.35; }
 .agent .sum:empty { display: none; }
