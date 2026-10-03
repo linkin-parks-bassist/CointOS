@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-03T15:15:05+10:00"
+revised_at: "2026-10-03T15:24:54+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
-- **Implementation landings cannot pass staged-red test binaries.** The implementation gate requires every accepted contract covering changed code to pass, but projects that stage deliberate reds through one test binary (Pigen's `make rtl-lower-test`) keep that binary aborting at a later item's red even after a correct implementation. Pigen's Task 6 chain is frozen behind `impl-boundary` (worker commit 617b933, alert 166; pigen leaf `why/does/the/task/six/implementation/chain/hit/the/landing/gate.md`). `Expected red:` accounting currently exists only for test-contract landings. Proposed fix awaiting the user's authorization: accept declared `Expected red:` lines in implementation reports, but only when the candidate's failure point differs from (advances past) main's.
+- **The comparative implementation gate needs live evidence.** `contracts.implementation_gate` (mechanism in `what/is/the/shape/of/cointos/work.md`) replaced the rule that froze Pigen's Task 6 implementation chain on later items' staged reds. It passes on `impl-boundary` commit 617b933 offline; that item was revised to resubmit 617b933 through the live pipeline. Until a live landing succeeds, the pigen manager's blocked decision task `task-six-impl-gate-decision` and its pigen leaves (`why/does/the/task/six/implementation/chain/hit/the/landing/gate.md`, `what/is/broken.md`) still describe the old gate.
 - **Coin relays stale or invented state.** On 2026-10-03 Coin repeatedly presented an old resolved "steward needs David: list" alert as the open decision, claimed to instruct agents it cannot message, and did not surface the real pending decision (alert 166). Its alert selection and action claims need review (plan item 6).
 - **Gardener thoughts fail with lane `KeyError`.** Four alerts on 2026-10-03 report `Qwen3.8-27B-GGUF lane 0 failed a thought of gardener-71c173: KeyError: '<12 hex>'`; cause not yet diagnosed.
 - **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers and unresolved-manager escalation still need native model-run evidence. Isolated installed HTTP fixtures establish artifact-preserving brief correction, durable receipt replay and bounded escalation without proving autonomous judgment. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
