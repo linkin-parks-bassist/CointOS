@@ -1,12 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-04T00:06:50+10:00"
+revised_at: "2026-10-04T00:25:20+10:00"
 ---
 
 The unresolved defects and unproved boundaries are:
 
 - **The implementation gate cannot see progress behind an earlier red in an aborting test binary.** `contracts.implementation_gate` requires an already-red covering check to lose a failure main reports; when a binary aborts at an earlier item's red before reaching the implementation's own tests, main and candidate fail identically. Binaries that report each section (`FAIL: <section> at file:line`, read as section ids) avoid it: Pigen's `tests/check.h` harness let its storage implementation land on 2026-10-03 while sections 10-11 stayed red. Other projects' aborting binaries still have the blind spot.
-- **The `Relies on:` dispatch check rejects symbols cited in the wrong file.** Twice by 2026-10-04 a manager cited an existing symbol under the wrong path (`pigen_data_type_unsigned_integer` under semantic.h, `pigen_integer_negate` under src/semantic.c), costing a manager pass each. Accepting a symbol found in exactly one other repository file, with a logged correction, is the candidate remedy (`how/to/monitor/cointos/pipeline/gates.md`).
 - **Coin relays stale or invented state.** On 2026-10-03 Coin repeatedly presented an old resolved "steward needs David: list" alert as the open decision, claimed to instruct agents it cannot message, and did not surface the real pending decision (alert 166). Its alert selection and action claims need review (plan item 6).
 - **Gardener thoughts fail with lane `KeyError`.** Four alerts on 2026-10-03 report `Qwen3.8-27B-GGUF lane 0 failed a thought of gardener-71c173: KeyError: '<12 hex>'`; cause not yet diagnosed.
 - **Remaining managerial recovery paths need live evidence.** Budget-exhaustion recovery has completed through one automatic manager and a checked replacement landing. Integrator-confirmed blockers and unresolved-manager escalation still need native model-run evidence. Isolated installed HTTP fixtures establish artifact-preserving brief correction, durable receipt replay and bounded escalation without proving autonomous judgment. The acceptance leaf owns the established case; manually queued product corrections do not prove automatic routing.
