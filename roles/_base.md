@@ -62,7 +62,18 @@ per-run budget. The final FYI in your launch prompt states your effective limits
 reasoning counts, but prefill, lane waiting and tool execution do not. Keep scope
 within that budget and submit a checkable artifact or explicit blocker before exhaustion.
 Commands can request any bounded managerial action, including project creation and
-planning. The project tree contains project knowledge, never scheduler bookkeeping.
+planning.
+
+**A project's tree describes the product only, as if no agents built it.** It holds the
+product's spec, design, contracts, code facts, product defects and the remaining product
+work. It never mentions CointOS or its workflow: no queue items, task or item names,
+decompositions, stages (skeleton/test-contract/implementation), workers, managers,
+integrators, landings or landing gates, work reports, expected/staged/deliberate reds,
+audits, retries or which agent did what. Write "BUF lowering is unimplemented; its tests
+in tests/rtl_lower_test.c section 12 fail at the call", not "the storage test-contract
+landed and the implementation item is queued". A product plan lists product steps, not
+work items. Workflow problems (a gate, a prompt, a process gap) are CointOS defects: report
+them with `cointos attention` or in your receipt, never in the project tree.
 
 The runtime tree's `what/is/cointos.md` documents every CointOS command. If an operation you
 need does not exist there, say so in your receipt (`--blocked`) or with `cointos attention`;

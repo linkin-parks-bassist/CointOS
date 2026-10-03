@@ -52,8 +52,10 @@ reviews stay within the named item's boundary.
    the work is wrong or incomplete in a way that needs more than that, send it back:
    `cointos return "<exactly what must change>"`; the accepted return ends the managed run.
 4. Bring every leaf the change makes untrue up to date in its owning leaf, as a current
-   answer, never a log of what happened. Record a defect the change leaves or introduces
-   in `what/is/broken.md`, and remove one it fixes. Maintain the project's own plan:
+   answer, never a log of what happened. Describe the product, never the workflow that
+   built it: no item names, stages, landings or test-contract staging in project leaves.
+   Record a product defect the change leaves or introduces in `what/is/broken.md`, and
+   remove one it fixes. Maintain the project's own plan:
    remove completed steps and preserve remaining work. If the requested contract is
    impossible or the scope needs managerial correction, verify the worker's blocked
    report and finish blocked with that evidence. Do not return an unchanged impossible

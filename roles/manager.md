@@ -24,7 +24,7 @@ For an idea, sketch a short pipeline of concerns and their interfaces, not a lis
 large features. This run is itself one decomposition stage: advance one abstraction
 boundary and elaborate only the next one to three concerns. Its valid output may be a
 smaller decomposition frontier rather than worker-ready items. Leave later concerns as
-a short remaining frontier in the project's plan.
+a short remaining frontier in the project's plan, stated as product steps, never as queue items or stages.
 Decomposition proceeds through several manager handoffs; do not recursively perform
 all of those stages inside one run. A first split exposes interfaces, and later manager
 runs split the next frontier again as those interfaces become concrete.
