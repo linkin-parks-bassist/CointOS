@@ -187,6 +187,8 @@ class ImplementationProgress(Project):
     def test_assertion_locations_identify_aborting_failures(self):
         main = "t: tests/t.c:1362: main: Assertion `rc == 0' failed.\n"
         self.assertEqual(contracts.failures(main), {"tests/t.c:1362"})
+        self.assertEqual(contracts.failures("PASS: a\nFAIL: t6-storage at tests/t.c:2730: rc == 0\n1 passed, 1 failed\n"),
+                         {"t6-storage"})
         self.assertEqual(contracts.failures("ERROR: test_a (tests.x.A.test_a)\nFAILED (errors=1)\n"),
                          {"test_a (tests.x.A.test_a)"})
 

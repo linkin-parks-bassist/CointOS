@@ -281,14 +281,16 @@ def verify(repo, commit: str, commands: list[list[str]], timeout: float, memory_
                 raise ValueError(f"test command failed ({code}): {command}\n" + text[-8000:])
 
 
-TEST_FAILURE = re.compile(r"^(?:FAIL|ERROR): (\S+ \([\w.]+\))|^FAILED (\S+::\S+)", re.MULTILINE)
+TEST_FAILURE = re.compile(r"^(?:FAIL|ERROR): (\S+ \([\w.]+\))|^FAILED (\S+::\S+)|^FAIL: (\S+) at \S+:\d+",
+                          re.MULTILINE)
 SOURCE_LOCATION = re.compile(r"[\w./-]+\.\w+:\d+")
 
 
 def failures(output: str) -> set[str]:
-    """Where a failing check failed: unittest/pytest test ids when it names them, else the
-    source locations (`file:line`) its output reports, as assertion aborts print them."""
-    tests = {a or b for a, b in TEST_FAILURE.findall(output)}
+    """Where a failing check failed: unittest/pytest test ids or named sections
+    (`FAIL: <section> at file:line`) when it names them, else the source locations
+    (`file:line`) its output reports, as assertion aborts print them."""
+    tests = {a or b or c for a, b, c in TEST_FAILURE.findall(output)}
     return tests or set(SOURCE_LOCATION.findall(output))
 
 
