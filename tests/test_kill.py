@@ -43,3 +43,14 @@ class Kill(unittest.TestCase):
         lifecycle.submit(task["id"], "run", "complete", "Done")
         self.assertFalse(api.kill_agent({"agent": "run"})["held"])
         self.assertEqual(task["status"], "done")
+
+    def test_killed_work_does_not_slow_the_steward(self):
+        task = support.running(tasks.create("garden", tasks.SYSTEM, "garden", "Work", [7]), "run", False)
+        api.kill_agent({"agent": "run"})
+        with patch.dict(spawner.CONFIG["spawner"], steward_every_seconds=100), \
+             patch.object(tasks, "enabled_projects", return_value=[self.project]), \
+             patch.object(tasks, "last_created", side_effect=lambda kind, place: 0 if kind == "steward" else 1e18), \
+             patch.object(spawner, "now", return_value=150):
+            self.assertTrue(spawner.periodic())
+            task.pop("admission_hold")
+            self.assertFalse(spawner.periodic())

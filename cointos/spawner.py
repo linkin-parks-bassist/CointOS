@@ -197,12 +197,13 @@ def tree_work() -> list:
 
 
 def periodic() -> list:
-    """The system-wide steward, inversely as frequent as the factory is busy, and a
-    retrospective test audit after new accepted work."""
+    """The system-wide steward, inversely as frequent as the factory is busy (work the user
+    killed is not busyness), and a retrospective test audit after new accepted work."""
     options = []
     projects = tasks.enabled_projects()
     spawner = CONFIG["spawner"]
-    concerns = {t["id"] for t in L["tasks"].values() if tasks.active(t) and t["kind"] != "steward"}
+    concerns = {t["id"] for t in L["tasks"].values()
+                if tasks.active(t) and t["kind"] != "steward" and not t.get("admission_hold")}
     concerns |= {key for key, record in queues.records().items() if record["status"] == "queued"
                  and not (key in L["tasks"] and L["tasks"][key]["record_hash"] == record["hash"]
                           and L["tasks"][key]["status"] in ("done", "failed"))}
