@@ -185,6 +185,18 @@ class Admission(unittest.TestCase):
         lifecycle.submit(task["id"], "manager-1", "complete", "Split into small")
         self.assertEqual(queues.landed(self.project), {"big"})
 
+    def test_a_child_naming_its_parent_inherits_the_parents_dependencies(self):
+        for name, brief in (("base", "Base"), ("big", "Depends on: base\nBig"), ("after", "Depends on: big\nAfter"),
+                            ("a", "Depends on: big\nA"), ("b", "Depends on: a\nB")):
+            queues.add(self.project, "queued", name, brief)
+        queues.update("p", "big", "blocked", "Split the scope", decompose=True)
+        task = next(t for t in iter(spawner.next_task, None) if t["item"] == "big")
+        support.running(task, "manager-1")
+        api.dispatch("replace", {"task": task["id"], "run": "manager-1", "children": ["a", "b"]})
+        self.assertEqual(state.L["queue"]["p:a"]["depends"], ["base"])
+        self.assertEqual(state.L["queue"]["p:b"]["depends"], ["a"])
+        self.assertEqual(state.L["queue"]["p:after"]["depends"], ["a", "b"])
+
     def test_clear_history_keeps_only_terminal_records_needed_by_live_work(self):
         self.queue(("old", "Old.", "done", ""), ("needed", "Needed.", "done", ""),
                    ("next", "Depends on: needed\n\nNext.", "queued", ""), ("dead", "No replacement.", "blocked", ""))

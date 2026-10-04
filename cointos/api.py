@@ -7,6 +7,8 @@ republish the readable queue projection.
 """
 from __future__ import annotations
 
+import copy
+
 from cointos import landing, lifecycle, projects, queues, settings, snapshots, tasks
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
 
@@ -91,10 +93,24 @@ def replace(body):
     records = queues.records()
     if any(child == task["item"] or f"{task['place']}:{child}" not in records for child in children):
         raise ApiError("replacement children must exist and exclude the parent")
-    for record in records.values():
+    # A child that names its parent inherits the parent's own dependencies instead; any other
+    # dependent waits for all the children.
+    parent = records.get(f"{task['place']}:{task['item']}", {}).get("depends", [])
+    revised = copy.deepcopy(records)
+    for record in revised.values():
         if record["project"] == task["place"] and task["item"] in record["depends"]:
+            instead = parent if record["item"] in children else children
             record["depends"] = list(dict.fromkeys(name for dep in record["depends"]
-                                                   for name in (children if dep == task["item"] else [dep])))
+                                                   for name in (instead if dep == task["item"] else [dep])))
+    def cycles(view):
+        mine = [r for r in view.values() if r["project"] == task["place"]]
+        return {n for n, s in queues.readiness([r for r in mine if r["status"] != "done"],
+                                               {r["item"] for r in mine if r["status"] == "done"}).items()
+                if "cycle" in s}
+    if cycles(revised) - cycles(records):
+        raise ApiError("replacement would leave a dependency cycle; no records changed")
+    for key, record in revised.items():
+        records[key].update(record)
     task["replacements"] = list(dict.fromkeys(children))
     log("item replaced", task=task["id"], children=task["replacements"])
     return {"ok": True}
