@@ -311,6 +311,11 @@ def _value(raw: str, schema: dict):
         return raw
 
 
+def text(config: dict, model: str, tokens: list[int]) -> str:
+    """The literal text of `tokens`."""
+    return _server(model, "/detokenize", {"tokens": tokens}, config["timeouts"]["server_seconds"])["content"] if tokens else ""
+
+
 def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool) -> dict:
     """What a thought says so far: {"reasoning", "content", "tool_calls", "phase"}, phase being
     "reasoning" while the model is still thinking, then "writing" (its message or tool calls).

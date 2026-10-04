@@ -38,14 +38,20 @@ def launch_text(task: dict, where: dict, at: float | None = None) -> str:
 
 
 def shared_launch_prefix(task: dict) -> str:
-    """The task-independent start of a fresh run's user message.
+    """The task-independent start of a fresh run's user message: shared role guidance ends
+    where this task's assignment begins."""
+    return shared_launch_tiers(task)[-1]
 
-    Rendering owns the exact token boundary because chat templates can tokenize a truncated
-    message differently. This function owns only the semantic boundary: shared role guidance
-    ends where this task's assignment begins.
+
+def shared_launch_tiers(task: dict) -> list[str]:
+    """Successively longer starts of a fresh run's user message, each shared by more tasks than
+    the next: nothing (every task of the project), the guidance all roles share, then this role's.
+
+    Rendering owns the exact token boundaries because chat templates can tokenize a truncated
+    message differently. This function owns only the semantic boundaries.
     """
-    role = (ROLES / "_base.md").read_text() + "\n\n" + (ROLES / f"{task['role']}.md").read_text()
-    return role + "\n\n# Your assignment\n\n"
+    base = (ROLES / "_base.md").read_text() + "\n\n"
+    return ["", base, base + (ROLES / f"{task['role']}.md").read_text() + "\n\n# Your assignment\n\n"]
 
 
 def assignment(task: dict, where: dict) -> str:
@@ -73,7 +79,8 @@ def assignment(task: dict, where: dict) -> str:
 def identity(task: dict) -> str:
     """Who the run is, stated so it never has to infer its role from the kind or the code."""
     return (f"Task: `{task['id']}`, a {task['kind']} task. Your role: {task['role']}. "
-            "The `cointos` commands you run act as this task with this role's permissions.")
+            "The `cointos` commands you run act as this task with this role's permissions.\n"
+            f"Task start date: {task['prompt_date']} (fixed; run `date` for the current date and time).")
 
 
 def location(task: dict, where: dict) -> str:

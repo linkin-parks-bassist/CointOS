@@ -25,33 +25,39 @@ from cointos.config import ROOT
 from cointos.state import ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, now
 
 KT_STARTUP = "Knowledge-tree startup:"
+# OpenCode environment lines that differ between tasks; the assignment states them instead.
+TASK_ENVIRONMENT = re.compile(r"[ \t]*(Working directory|Workspace root folder|Is directory a git repo|Today's date):")
+ENVIRONMENT_POINTER = "  Working directory, repository and task start date: stated in your assignment"
 
 
 def stable_environment(messages: list[dict], agent: str) -> list[dict]:
-    """Pin the parts of a managed task's system prefix that must survive later runs.
+    """Pin a managed task's system prefix and keep it identical across tasks.
 
-    The task-start date and complete system/developer prefix are properties of the conversation,
-    not of whichever OpenCode server happens to serve its next request. The normalized prefix is
-    stored once per digest in the ledger; tasks carry only its identity. Coin and the user pass through.
+    A fresh run's prompt is ordered from what varies least to what varies most, so the longest
+    possible start is a cached state other tasks can restore: OpenCode's instructions, tools and
+    skills (never), the knowledge-tree startup (per project), role guidance (per role), then the
+    assignment (per task). OpenCode's `<env>` block would break that order, since it names the
+    task's worktree, scope and date near the top; those lines are removed here and the assignment
+    states them instead. The normalized prefix is pinned per task and stored once per digest in
+    the ledger, so later runs of a conversation keep the prefix it started with.
+    Coin and the user pass through.
     """
     with LOCK:
         owner = L["agents"].get(agent)
         task = L["tasks"].get(owner["task"]) if owner else None
         if task is None:
             return messages
-        date = task["prompt_date"]
 
     def environment(match):
-        return re.sub(r"(?m)^([ \t]*)Today's date: [A-Za-z]{3} [A-Za-z]{3} \d{1,2} \d{4}$",
-                      lambda line: line[1] + f"Task start date: {date} (fixed; run date for the current date and time)",
-                      match[0])
+        kept = [line for line in match[1].split("\n") if not TASK_ENVIRONMENT.match(line)]
+        return "<env>\n" + "\n".join(kept + [ENVIRONMENT_POINTER]) + "\n</env>"
 
     with LOCK:
         normalized = []
         for message in messages:
             content = message.get("content")
             if message.get("role") in ("system", "developer") and isinstance(content, str):
-                content = re.sub(r"<env>\n.*?\n</env>", environment, content, flags=re.S)
+                content = re.sub(r"<env>\n(.*?)\n</env>", environment, content, flags=re.S)
                 message = {**message, "content": content}
             normalized.append(message)
 
@@ -117,11 +123,12 @@ def template_options(body: dict, agent: str) -> dict:
 
 
 def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
-    """Render a request and identify any reusable fresh-role prefix by exact tokens.
+    """Render a request and identify the reusable starts of a fresh run by exact tokens.
 
-    Prompt construction names the semantic boundary; the backend remains the authority on
-    literal chat-template tokens. Rendering the same conversation with the assignment removed
-    makes their common token prefix safe to share across sequential tasks of the same role.
+    Prompt construction names the semantic boundaries; the backend remains the authority on
+    literal chat-template tokens. Rendering the same conversation with the user message cut at
+    each boundary makes each common token prefix safe to share across sequential tasks: of the
+    project, of any role, and of the same role.
     """
     messages = stable_environment(body["messages"], agent)
     conversation = {"messages": messages, "tools": body.get("tools"), "template": template,
@@ -133,17 +140,23 @@ def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
         task = L["tasks"].get(owner["task"]) if owner else None
     if task is None or task.get("session") or task.get("review"):
         return rendered
-    prefix = prompts.shared_launch_prefix(task)
+    tiers = prompts.shared_launch_tiers(task)
     user = next((index for index in range(len(messages) - 1, -1, -1)
                  if messages[index].get("role") == "user"), None)
-    if user is None or not isinstance(messages[user].get("content"), str) or not messages[user]["content"].startswith(prefix):
+    if user is None or not isinstance(messages[user].get("content"), str) or not messages[user]["content"].startswith(tiers[-1]):
         return rendered
-    prefix_messages = list(messages)
-    prefix_messages[user] = {**messages[user], "content": prefix}
-    prefix_rendered = BACKEND.render(CONFIG, model, {**conversation, "messages": prefix_messages})
-    shared = lanes.common(rendered["tokens"], prefix_rendered["tokens"])
-    if CONFIG["scheduler"]["shared_prefix_tokens"] <= shared < len(rendered["tokens"]):
-        rendered["shared"] = shared
+    # One boundary per tier: hybrid-model state cannot be cut back, so a start is reusable by
+    # another task only if a snapshot ends exactly there.
+    boundaries = set()
+    for prefix in tiers:
+        prefix_messages = list(messages)
+        prefix_messages[user] = {**messages[user], "content": prefix}
+        prefix_rendered = BACKEND.render(CONFIG, model, {**conversation, "messages": prefix_messages})
+        shared = lanes.common(rendered["tokens"], prefix_rendered["tokens"])
+        if CONFIG["scheduler"]["shared_prefix_tokens"] <= shared < len(rendered["tokens"]):
+            boundaries.add(shared)
+    if boundaries:
+        rendered["shared"] = sorted(boundaries)
     return rendered
 
 

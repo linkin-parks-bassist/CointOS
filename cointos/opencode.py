@@ -123,6 +123,10 @@ def environment(directory: Path, spec: dict) -> dict:
     """The run's processes know their run (COINTOS_AGENT, from the unit) and task, so the CLI
     can submit receipts and proposals as them."""
     return {**os.environ, "OPENCODE_CONFIG": str(directory / "opencode.json"),
+            # Skills come from the one shared catalog. Claude Code's directory holds hard-linked
+            # duplicates OpenCode would list from either place run to run, plus synced skills
+            # that change on their own; either would break the system prefix tasks share.
+            "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS": "1",
             "COINTOS_TASK_ID": spec["task"]["id"],
             "PATH": f"{ROOT / 'bin'}:{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
 

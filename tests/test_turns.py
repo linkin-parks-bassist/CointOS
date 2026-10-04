@@ -184,7 +184,7 @@ class Turns(unittest.TestCase):
         self.addCleanup(state.STOPPING.clear)
         self.thought('a', [1, 2, 3, 4, 5])
         run = lanes.RUNS['a']
-        run.update(sampling={}, max=100, reader={}, shared=3)
+        run.update(sampling={}, max=100, reader={}, shared=[3])
         lanes.schedule()
         saved = []
 
@@ -196,6 +196,27 @@ class Turns(unittest.TestCase):
              patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens: saved.append(list(tokens))):
             lanes.worker(0)
         self.assertEqual(saved, [[1, 2, 3]])
+
+    def test_each_declared_shared_tier_is_saved_in_turn(self):
+        """A project-wide, an all-roles and a role start: each read stops at the next unsaved one."""
+        self.addCleanup(state.STOPPING.clear)
+        self.thought('a', list(range(1, 11)))
+        run = lanes.RUNS['a']
+        run.update(sampling={}, max=100, reader={}, shared=[2, 4, 6])
+        lanes.schedule()
+        saved, reads = [], []
+
+        def prefill(config, model, index, tokens, held):
+            reads.append((len(tokens), held))
+            if len(reads) == 3:
+                state.STOPPING.set()
+
+        with patch.object(lanes.BACKEND, 'prefill', side_effect=prefill), \
+             patch.object(lanes.snapshots, 'shared', side_effect=lambda model, tokens: len(tokens) == 4), \
+             patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens: saved.append(len(tokens))):
+            lanes.worker(0)
+        self.assertEqual(saved, [2, 6])  # 4 already exists, so it is read through, not saved again
+        self.assertEqual(reads[:2], [(2, 0), (6, 2)])
 
     def test_the_end_of_a_thought_restarts_the_silence_clock(self):
         state.L["agents"]["a"] = {"last_activity": state.now() - 2400, "repeats": 0, "last_thought": None,

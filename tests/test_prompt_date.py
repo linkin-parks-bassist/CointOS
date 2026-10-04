@@ -1,4 +1,5 @@
-"""A clock rollover must not rewrite an established agent system prefix."""
+"""An agent's system prefix is pinned per task and identical across tasks: no clock rollover,
+worktree, scope or skill location may change it."""
 import json
 import unittest
 from unittest.mock import patch
@@ -29,9 +30,33 @@ class PromptDate(unittest.TestCase):
         state.L.update(state.fresh(persisted))
         state.L["agents"]["agent"] = {"task": self.tid}  # daemon adoption
         self.assertEqual(gateway.stable_environment(after, "agent"), expected)
-        self.assertIn("Task start date: Sun Sep 27 2026", expected[0]["content"])
-        self.assertIn("run date for the current date and time", expected[0]["content"])
+        self.assertNotIn("Sep 2", expected[0]["content"])
+        self.assertIn("stated in your assignment", expected[0]["content"])
         self.assertIn("Today's date: Sun Sep 27 2026", before[0]["content"])
+        self.assertIn("Task start date: Sun Sep 27 2026", prompts.launch_text(state.L["tasks"][self.tid], tasks.SYSTEM))
+
+    def test_tasks_in_different_places_share_one_system_prefix(self):
+        """Everything before the assignment must match token for token, or no fresh task can
+        restore another's cached start."""
+        other = tasks.create("steward", tasks.SYSTEM, "scout", "Elsewhere", [6])["id"]
+        state.L["tasks"][other]["prompt_date"] = "Mon Sep 28 2026"
+        state.L["agents"]["other"] = {"task": other}
+
+        def environment(directory, git, date):
+            return [{"role": "system", "content": "Tools and instructions\n<env>\n"
+                     f"  Working directory: {directory}\n  Workspace root folder: {directory}\n"
+                     f"  Is directory a git repo: {git}\n  Platform: linux\n  Today's date: {date}\n</env>"},
+                    {"role": "user", "content": "Implement A"}]
+
+        first = gateway.stable_environment(environment("/w/a", "yes", "Sun Sep 27 2026"), "agent")
+        second = gateway.stable_environment(environment("/", "no", "Mon Sep 28 2026"), "other")
+        self.assertEqual(first[0], second[0])
+        self.assertIn("Platform: linux", first[0]["content"])
+
+    def test_agents_never_list_claude_code_skills(self):
+        from cointos import opencode
+        env = opencode.environment(opencode.ROOT, {"task": state.L["tasks"][self.tid]})
+        self.assertEqual(env["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"], "1")
 
     def test_other_clients_are_unchanged(self):
         messages = self.messages("Mon Sep 28 2026")
@@ -45,7 +70,7 @@ class PromptDate(unittest.TestCase):
         result = gateway.stable_environment(messages, "agent")
         self.assertEqual(result[1], messages[1])
         self.assertTrue(result[0]["content"].endswith("Today's date: Mon Sep 28 2026"))
-        self.assertIn("Working directory: /tmp/p", result[0]["content"])
+        self.assertNotIn("Working directory: /tmp/p", result[0]["content"])
 
     def test_task_date_comes_from_its_creation_timestamp(self):
         with patch.object(tasks, "now", return_value=1790500000), patch.object(
@@ -92,12 +117,13 @@ class PromptDate(unittest.TestCase):
 
         with patch.object(gateway.BACKEND, "render", side_effect=render) as renderer:
             rendered = gateway.render_request(body, "agent", state.CONFIG["work_model"], {})
-        prefix = prompts.shared_launch_prefix(task)
-        expected = len((body["messages"][0]["content"].replace(
-            "Today's date: Sun Sep 27 2026",
-            "Task start date: Sun Sep 27 2026 (fixed; run date for the current date and time)") + "|" + prefix).encode())
+        system = gateway.stable_environment(body["messages"], "agent")[0]["content"]
+        expected = [n for n in (len((system + "|" + prefix).encode()) for prefix in prompts.shared_launch_tiers(task))
+                    if n >= state.CONFIG["scheduler"]["shared_prefix_tokens"]]  # too-short starts are not worth a snapshot
+        self.assertEqual(len(expected), 2)
         self.assertEqual(rendered["shared"], expected)
-        self.assertEqual(renderer.call_count, 2)
+        self.assertEqual(rendered["shared"][-1], len((system + "|" + prompts.shared_launch_prefix(task)).encode()))
+        self.assertEqual(renderer.call_count, 4)
 
     def test_continuation_is_rendered_only_once(self):
         state.L["tasks"][self.tid]["session"] = "session"

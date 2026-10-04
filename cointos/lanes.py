@@ -75,7 +75,7 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
                                      "read": 0, "progress_at": now()}
         RUNS[thought_id] = {"prompt": rendered["tokens"], "reader": rendered["reader"], "sampling": sampling,
                             "max": max_new, "generated": [], "queue": queue.Queue(), "cancelled": False,
-                            "shared": rendered.get("shared", 0)}
+                            "shared": rendered.get("shared", [])}
         if klass == "user":
             L["user_last_thought"] = now()
         if owner in L["tasks"]:
@@ -185,8 +185,17 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
         held = HELD.get(position) or []
         # A task's conversation is one line: when the lane holds the same task's conversation
         # but not the start of where it goes on, that state has diverged and is of no use.
-        diverged = lane["resident"] == owner and owner in L["tasks"] and not begins(held, tokens)
+        diverged = bool(held) and lane["resident"] == owner and owner in L["tasks"] and not begins(held, tokens)
         worth = bool(held) and snapshots.live(lane["resident"]) and not diverged
+    if diverged:  # where the conversation stopped reproducing what the lane holds
+        at = common(held, tokens)
+        try:
+            text = {key: BACKEND.text(CONFIG, lane["model"], part) for key, part in
+                    (("before", held[max(0, at - 40):at]), ("held_after", held[at:at + 60]), ("next_after", tokens[at:at + 60]))}
+        except Exception as error:  # a diagnostic never stops the switch
+            text = {"text_unavailable": f"{type(error).__name__}: {error}"}
+        with LOCK:
+            log("divergence", owner=owner, held=len(held), next=len(tokens), common=at, **text)
     saved = worth and snapshots.keep(position, held, lane["resident"], "suspended")
     with LOCK:
         best = max(((s["tokens"], name) for name, s in L["snapshots"].items()
@@ -266,7 +275,7 @@ def worker(position: int) -> None:
             model, index, tokens = lane["model"], lane["index"], tokens_of(thought_id)
             warm = begins(HELD.get(position), tokens)
             discovered = shared_prefix(thought_id, model) if not warm or len(HELD[position]) < len(tokens) - 1 else 0
-            shared = max(run.get("shared", 0), discovered)
+            boundaries = sorted(set(run.get("shared", [])) | ({discovered} if discovered else set()))
         restored = None
         generating = False
         generation_started = None
@@ -279,7 +288,9 @@ def worker(position: int) -> None:
             # which it cannot do; it would read everything again.)
             if held < len(tokens) - 1:  # still reading its context: one more piece
                 end = min(len(tokens) - 1, held + read_chunk)
-                keep_shared = held < shared <= end and not snapshots.shared(model, tokens[:shared])
+                # The first unsaved shared start this piece reaches: read to it exactly and save it.
+                shared = next((b for b in boundaries if held < b <= end and not snapshots.shared(model, tokens[:b])), None)
+                keep_shared = shared is not None
                 upto = tokens[:shared if keep_shared else end]
                 BACKEND.prefill(CONFIG, model, index, upto, held)
                 if keep_shared:  # the start other contexts share: save it once, for all of them
