@@ -82,7 +82,14 @@
       "main_branch": "main"
     }
   ],
-  "trees": [],
+  "trees": [
+    {
+      "name": "CointOS",
+      "path": "~/Projects/CointOS",
+      "tree": ".knowledge",
+      "main_branch": "master"
+    }
+  ],
   "garden": {
     "check_seconds": 60,
     "every_seconds": 86400,
