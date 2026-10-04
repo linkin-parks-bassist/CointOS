@@ -198,7 +198,8 @@ def tree_work() -> list:
 
 def periodic() -> list:
     """The system-wide steward, inversely as frequent as the factory is busy (work the user
-    killed is not busyness), and a retrospective test audit after new accepted work."""
+    killed is not busyness) and once soon after project work stalls, and a retrospective
+    test audit after new accepted work."""
     options = []
     projects = tasks.enabled_projects()
     spawner = CONFIG["spawner"]
@@ -208,11 +209,17 @@ def periodic() -> list:
                  and not (key in L["tasks"] and L["tasks"][key]["record_hash"] == record["hash"]
                           and L["tasks"][key]["status"] in ("done", "failed"))}
     interval = spawner["steward_every_seconds"] * (1 + len(concerns))
-    if (projects and now() - tasks.last_created("steward", "system") > interval
+    names = {project["name"] for project in projects}
+    stewarded = tasks.last_created("steward", "system")
+    settled = max((t["updated_at"] for t in L["tasks"].values()
+                   if t["place"] in names and t["status"] in ("done", "failed")), default=0)
+    # Projects gone quiet since work last settled get one scout, not one per idle period.
+    stalled = (settled > stewarded and now() - settled > spawner["idle_steward_seconds"]
+               and not any(concern.split(":")[0] in names for concern in concerns))
+    if (projects and (stalled or now() - stewarded > interval)
             and not any(t["kind"] == "steward" and t["status"] in ("running", "waiting") for t in L["tasks"].values())):
         options.append(([schema.KINDS["steward"]["rank"]], lambda: tasks.request_steward()[0]))
     audited = tasks.last_created("test-audit", "system")
-    names = {project["name"] for project in projects}
     recent = sorted((t for t in L["tasks"].values() if t["place"] in names and t["kind"] in ("item", "integrate")
                      and t["status"] == "done" and t["updated_at"] > audited), key=lambda t: t["updated_at"])
     if (recent and now() - audited > spawner["test_auditor_every_seconds"]

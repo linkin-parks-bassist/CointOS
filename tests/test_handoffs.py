@@ -153,6 +153,21 @@ class PeriodicSteward(unittest.TestCase):
         with patch.dict(state.CONFIG, spawner={**state.CONFIG["spawner"], "steward_every_seconds": 10}):
             self.assertEqual(spawner.next_task()["id"], "p:work", "one concern doubles the interval to 20 seconds")
 
+    def test_stalled_projects_get_one_prompt_scout(self):
+        state.L["cadence"]["steward:system"] = state.L["cadence"]["test-audit:system"] = state.now() - 100
+        work = support.queued(self.projects[0], "item")
+        work.update(status="done", updated_at=state.now() - 50)
+        quick = {**state.CONFIG["spawner"], "steward_every_seconds": 10**6, "idle_steward_seconds": 30,
+                 "test_auditor_every_seconds": 10**6}  # the test auditor shares the steward's rank
+        with patch.dict(state.CONFIG, spawner=quick), patch.object(spawner, "integrations", return_value=[]):
+            with patch.object(spawner, "now", return_value=state.now() - 40):
+                self.assertFalse(any(o[0] == [schema.KINDS["steward"]["rank"]] for o in spawner.periodic()))
+            task = spawner.next_task()
+            self.assertEqual(task["kind"], "steward")
+            task["status"] = "done"
+            self.assertFalse(any(o[0] == [schema.KINDS["steward"]["rank"]] for o in spawner.periodic()),
+                             "no repeat until project work settles again")
+
     def test_a_failed_command_blocks_its_record_and_does_not_suppress_the_steward(self):
         state.L["cadence"]["steward:system"] = state.now() - 11
         dead = support.queued(self.projects[0], "dead", "Old", kind="command")

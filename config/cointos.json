@@ -92,6 +92,7 @@
     "max_runs_per_task": 5,
     "max_launch_failures": 2,
     "steward_every_seconds": 21600,
+    "idle_steward_seconds": 300,
     "test_auditor_every_seconds": 21600,
     "user_quiet_seconds": 120
   },
