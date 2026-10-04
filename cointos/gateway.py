@@ -1,5 +1,5 @@
-"""The gateway: the OpenAI-compatible endpoint through which every agent thinks, plus the
-loopback API and the dashboard.
+"""The gateway: the loopback HTTP server. It carries the OpenAI-compatible endpoint through which
+every agent thinks, the dashboard, and the control API (`cointos/api.py`).
 
 A chat request becomes a thought of its agent. The reply streams back as the thought
 advances, however often the scheduler suspends it; while it waits for a lane, the stream
@@ -8,28 +8,156 @@ carries keep-alive comments.
 from __future__ import annotations
 
 import json
+import hashlib
 import queue
+import re
 import secrets
+import select
+import socket
 import threading
 import time
 import traceback
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from cointos import lanes, memory, queues, work
+from cointos import api, journal, keys, lanes, lifecycle, memory, projects, prompts
 from cointos.config import ROOT
-from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, log, save
+from cointos.state import ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, now
+
+KT_STARTUP = "Knowledge-tree startup:"
+# OpenCode environment lines that differ between tasks; the assignment states them instead.
+TASK_ENVIRONMENT = re.compile(r"[ \t]*(Working directory|Workspace root folder|Is directory a git repo|Today's date):")
+ENVIRONMENT_POINTER = "  Working directory, repository and task start date: stated in your assignment"
+
+
+def stable_environment(messages: list[dict], agent: str) -> list[dict]:
+    """Pin a managed task's system prefix and keep it identical across tasks.
+
+    A fresh run's prompt is ordered from what varies least to what varies most, so the longest
+    possible start is a cached state other tasks can restore: OpenCode's instructions, tools and
+    skills (never), the knowledge-tree startup (per project), role guidance (per role), then the
+    assignment (per task). OpenCode's `<env>` block would break that order, since it names the
+    task's worktree, scope and date near the top; those lines are removed here and the assignment
+    states them instead. The normalized prefix is pinned per task and stored once per digest in
+    the ledger, so later runs of a conversation keep the prefix it started with.
+    Coin and the user pass through.
+    """
+    with LOCK:
+        owner = L["agents"].get(agent)
+        task = L["tasks"].get(owner["task"]) if owner else None
+        if task is None:
+            return messages
+
+    def environment(match):
+        kept = [line for line in match[1].split("\n") if not TASK_ENVIRONMENT.match(line)]
+        return "<env>\n" + "\n".join(kept + [ENVIRONMENT_POINTER]) + "\n</env>"
+
+    with LOCK:
+        normalized = []
+        for message in messages:
+            content = message.get("content")
+            if message.get("role") in ("system", "developer") and isinstance(content, str):
+                content = re.sub(r"<env>\n(.*?)\n</env>", environment, content, flags=re.S)
+                message = {**message, "content": content}
+            normalized.append(message)
+
+        system = [message for message in normalized if message.get("role") in ("system", "developer")]
+        encoded = json.dumps(system, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        pinned_digest = task.get("system_context")
+        pinned = L["system_contexts"].get(pinned_digest) if pinned_digest else None
+        if pinned is None:  # includes migration from the earlier KT-suffix-only representation
+            pinned_digest = hashlib.sha256(encoded.encode()).hexdigest()
+            pinned = L["system_contexts"].setdefault(pinned_digest, encoded)
+            task["system_context"] = pinned_digest
+            task.pop("prompt_context", None)
+        pinned_system = json.loads(pinned)
+        result, inserted = [], False
+        for message in normalized:
+            if message.get("role") in ("system", "developer"):
+                if not inserted:
+                    result.extend(pinned_system)
+                    inserted = True
+            else:
+                result.append(message)
+        if not inserted:
+            result = pinned_system + result
+        digest = hashlib.sha256(pinned.encode()).hexdigest()
+        try:
+            journal.write({"at": now(), "event": "system prompt", "agent": agent,
+                           "task": task["id"], "digest": digest,
+                           "components": [{"role": message.get("role"),
+                                           "digest": hashlib.sha256(json.dumps(message, sort_keys=True,
+                                                        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
+                                           "chars": len(str(message.get("content", "")))}
+                                          for message in pinned_system]}, CONFIG["journal"]["bytes"])
+            L.pop("journal_error", None)
+        except OSError as error:
+            L["journal_error"] = str(error)
+        return result
+
 
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
 
 
 def identity(key: str) -> tuple[str, str, str]:
     """(agent, class, conversation) for a gateway key. Agents' conversations are their tasks,
-    so a resumed task resumes its context; any key CointOS did not issue is David's."""
-    agent, klass = work.KEY_OWNERS.get(key, ("user", "user"))
+    so a resumed task resumes its context; any key CointOS did not issue is the user's."""
+    agent, klass = keys.owner(key)
     with LOCK:
         conversation = L["agents"][agent]["task"] if agent in L["agents"] else agent
     return agent, klass, conversation
+
+
+def template_options(body: dict, agent: str) -> dict:
+    options = dict(body.get("chat_template_kwargs") or {})
+    if body.get("reasoning_effort") is not None:
+        options["reasoning_effort"] = body["reasoning_effort"]
+    with LOCK:
+        owner = L["agents"].get(agent)
+        task = L["tasks"].get(owner["task"]) if owner else None
+        if task and task.get("reasoning_effort"):
+            options["reasoning_effort"] = task["reasoning_effort"]
+    if options.get("reasoning_effort") not in (None, "low", "medium", "xhigh"):
+        raise ValueError("reasoning_effort must be low, medium or xhigh")
+    return options
+
+
+def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
+    """Render a request and identify the reusable starts of a fresh run by exact tokens.
+
+    Prompt construction names the semantic boundaries; the backend remains the authority on
+    literal chat-template tokens. Rendering the same conversation with the user message cut at
+    each boundary makes each common token prefix safe to share across sequential tasks: of the
+    project, of any role, and of the same role.
+    """
+    messages = stable_environment(body["messages"], agent)
+    conversation = {"messages": messages, "tools": body.get("tools"), "template": template,
+                    "reasoning_budget": CONFIG.get("reasoning", {}).get("budgets", {}).get(
+                        template.get("reasoning_effort"))}
+    rendered = BACKEND.render(CONFIG, model, conversation)
+    with LOCK:
+        owner = L["agents"].get(agent)
+        task = L["tasks"].get(owner["task"]) if owner else None
+    if task is None or task.get("session") or task.get("review"):
+        return rendered
+    tiers = prompts.shared_launch_tiers(task)
+    user = next((index for index in range(len(messages) - 1, -1, -1)
+                 if messages[index].get("role") == "user"), None)
+    if user is None or not isinstance(messages[user].get("content"), str) or not messages[user]["content"].startswith(tiers[-1]):
+        return rendered
+    # One boundary per tier: hybrid-model state cannot be cut back, so a start is reusable by
+    # another task only if a snapshot ends exactly there.
+    boundaries = set()
+    for prefix in tiers:
+        prefix_messages = list(messages)
+        prefix_messages[user] = {**messages[user], "content": prefix}
+        prefix_rendered = BACKEND.render(CONFIG, model, {**conversation, "messages": prefix_messages})
+        shared = lanes.common(rendered["tokens"], prefix_rendered["tokens"])
+        if CONFIG["scheduler"]["shared_prefix_tokens"] <= shared < len(rendered["tokens"]):
+            boundaries.add(shared)
+    if boundaries:
+        rendered["shared"] = sorted(boundaries)
+    return rendered
 
 
 def chunk(reply_id: str, model: str, delta: dict, finish: str | None = None) -> bytes:
@@ -58,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": name, "object": "model", "owned_by": "cointos"} for name in CONFIG["models"]]})
         if path == "/api/ledger":
             with LOCK:
-                return self.reply(200, L)
+                return self.reply(200, {**L, "project_about": {p["name"]: projects.about(p) for p in L["projects"]}})
         if path == "/api/live":
             return self.live()
         if path in ("/", "/index.html"):
@@ -73,7 +201,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/v1/chat/completions":
                 return self.think(body)
             if path.startswith("/api/"):
-                return self.reply(200, api(path[5:], body))
+                return self.reply(200, api.dispatch(path[5:], body))
             self.reply(404, {"error": "not found"})
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -109,7 +237,35 @@ class Handler(BaseHTTPRequestHandler):
             return  # the page went away
 
     def think(self, body: dict):
+        with LOCK:
+            # Keep new callers at the admission gate during deployment. Repeated 503s
+            # consume OpenCode's finite retries and leave it in exponential backoff
+            # after replacement, where it can be mistaken for a silent agent.
+            while L["quiescing"] and not STOPPING.is_set():
+                if self.peer_closed():
+                    return
+                LOCK.wait(timeout=CONFIG["tick_seconds"])
+            if STOPPING.is_set():
+                return self.reply(503, {"error": {"message": "daemon restarting; retry shortly"}})
+            ACTIVE["chats"] += 1
+        try:
+            return self.stream_thought(body)
+        finally:
+            with LOCK:
+                ACTIVE["chats"] -= 1
+                LOCK.notify_all()
+
+    def peer_closed(self) -> bool:
+        """Whether the request's socket has reached EOF without consuming its bytes."""
+        try:
+            return bool(select.select([self.connection], [], [], 0)[0]) and not self.connection.recv(1, socket.MSG_PEEK)
+        except OSError:
+            return True
+
+    def stream_thought(self, body: dict):
         key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        if keys.ended(key):
+            return self.reply(410, {"error": {"message": "this agent run has ended"}})
         agent, klass, conversation = identity(key)
         model = {"work": CONFIG["work_model"], "front": CONFIG["front_model"]}.get(body.get("model"), body.get("model"))
         if model not in CONFIG["models"]:
@@ -120,13 +276,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(503, {"error": {"message": f"{model} is not running right now"}})
         cap = CONFIG["scheduler"]["max_thought_tokens"]
         max_new = min(int(body.get("max_tokens") or body.get("max_completion_tokens") or cap), cap)
+        template = template_options(body, agent)
         try:
-            rendered = BACKEND.render(CONFIG, model, {"messages": body["messages"], "tools": body.get("tools"),
-                                                      "template": body.get("chat_template_kwargs")})
+            rendered = render_request(body, agent, model, template)
         except OSError as error:
             return self.reply(503, {"error": {"message": f"{model} is not reachable: {error}"}})
         sampling = {name: body[name] for name in SAMPLING if body.get(name) is not None}
-        thought = lanes.begin(agent, klass, conversation, model, rendered, sampling, max_new)
+        with LOCK:
+            thought = lanes.begin(agent, klass, conversation, model, rendered, sampling, max_new)
+            L["thoughts"][thought]["reasoning_effort"] = template.get("reasoning_effort")
+            lifecycle.engaged(agent)
+        try:
+            return self.answer_thought(body, agent, model, rendered, thought)
+        finally:
+            lanes.cancel(thought)  # request ownership ends on every return or handler failure
+
+    def answer_thought(self, body: dict, agent: str, model: str, rendered: dict, thought: str):
         run = lanes.RUNS[thought]
         stream = bool(body.get("stream"))
         reply_id = "chatcmpl-" + secrets.token_hex(8)
@@ -138,6 +303,10 @@ class Handler(BaseHTTPRequestHandler):
         generated, sent, end = [], {"reasoning": "", "content": ""}, None
         try:
             while end is None:
+                # HTTP/1.0 carries one request per connection. A readable socket
+                # returning EOF means its caller left, even before a JSON reply.
+                if self.peer_closed():
+                    return
                 try:
                     item = run["queue"].get(timeout=CONFIG["keepalive_seconds"])
                 except queue.Empty:
@@ -154,9 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                 if stream:
                     self.send_new(reply_id, model, current, sent)
         except OSError:
-            lanes.cancel(thought)  # the asker is gone
             return
-        if end == "failed":
+        if end in ("failed", "cancelled"):
             error = {"error": {"message": "the thought failed on the model server; try again"}}
             return self.wfile.write(b"data: " + json.dumps(error).encode() + b"\n\n") if stream else self.reply(502, error)
         final = BACKEND.read(CONFIG, model, rendered["reader"], generated, True)
@@ -168,20 +336,21 @@ class Handler(BaseHTTPRequestHandler):
             message = {"role": "assistant", "content": final["content"], "reasoning_content": final["reasoning"]}
             if final["tool_calls"]:
                 message["tool_calls"] = final["tool_calls"]
-            return self.reply(200, {"id": reply_id, "object": "chat.completion", "created": int(time.time()),
-                                    "model": model, "usage": usage,
-                                    "choices": [{"index": 0, "message": message, "finish_reason": finish}]})
-        try:
-            self.send_new(reply_id, model, final, sent)
-            for index, call in enumerate(final["tool_calls"]):
-                self.wfile.write(chunk(reply_id, model, {"tool_calls": [{"index": index, **call}]}))
-            self.wfile.write(chunk(reply_id, model, {}, finish))
-            if (body.get("stream_options") or {}).get("include_usage"):
-                self.wfile.write(b"data: " + json.dumps({"id": reply_id, "object": "chat.completion.chunk",
-                                                         "model": model, "choices": [], "usage": usage}).encode() + b"\n\n")
-            self.wfile.write(b"data: [DONE]\n\n")
-        except OSError:
-            pass
+            self.reply(200, {"id": reply_id, "object": "chat.completion", "created": int(time.time()),
+                             "model": model, "usage": usage,
+                             "choices": [{"index": 0, "message": message, "finish_reason": finish}]})
+        else:
+            try:
+                self.send_new(reply_id, model, final, sent)
+                for index, call in enumerate(final["tool_calls"]):
+                    self.wfile.write(chunk(reply_id, model, {"tool_calls": [{"index": index, **call}]}))
+                self.wfile.write(chunk(reply_id, model, {}, finish))
+                if (body.get("stream_options") or {}).get("include_usage"):
+                    self.wfile.write(b"data: " + json.dumps({"id": reply_id, "object": "chat.completion.chunk",
+                                                             "model": model, "choices": [], "usage": usage}).encode() + b"\n\n")
+                self.wfile.write(b"data: [DONE]\n\n")
+            except OSError:
+                pass
 
     def send_new(self, reply_id: str, model: str, thought: dict, sent: dict) -> None:
         """Stream what the thought says beyond what was already sent."""
@@ -201,95 +370,6 @@ def show(agent: str, thought: dict) -> None:
         if agent in L["agents"]:
             L["agents"][agent]["live"] = {"reasoning": thought["reasoning"][-CONFIG["dashboard"]["live_chars"]:],
                                           "content": thought["content"][-CONFIG["dashboard"]["live_chars"]:], "phase": thought["phase"]}
-
-
-class ApiError(ValueError):
-    pass
-
-
-def api(action: str, body: dict):
-    """Control actions for the CLI, Coin and the dashboard."""
-    with LOCK:
-        if action == "halt":
-            STOPPING.set()
-            for agent_id in list(L["agents"]):
-                work.stop_agent(agent_id, "system halted", requeue=True, charge=False)
-            log("halt requested")
-            save()
-            LOCK.notify_all()
-            return {"ok": True}
-        if action == "stop":
-            L["paused"] = True
-            for agent_id in list(L["agents"]):
-                work.stop_agent(agent_id, "stopped by David", requeue=True, charge=False)
-            log("paused")
-            save()
-            return {"ok": True, "paused": True}
-        if action == "return":
-            work.send_back(L["tasks"][body["task"]], body["notes"])
-            save()
-            return {"ok": True}
-        if action in ("accept", "finish", "replace"):
-            task = L["tasks"][body["task"]]
-            if action == "accept":
-                work.accept(task, body["commit"])
-            elif action == "finish":
-                work.finish_manager(task)
-            else:
-                if task["kind"] != "decompose":
-                    raise ApiError("only a decomposition manager replaces tasks")
-                children = body["children"]
-                if not children or not isinstance(children, list):
-                    raise ApiError("children must list existing replacement item names")
-                records = queues.records()
-                for child in children:
-                    if child == task["item"] or f"{task['place']}:{child}" not in records:
-                        raise ApiError("replacement children must exist and exclude the parent")
-                for r in records.values():
-                    if r["project"] == task["place"] and task["item"] in r["depends"]:
-                        r["depends"] = list(dict.fromkeys(d for dep in r["depends"]
-                                                         for d in (children if dep == task["item"] else [dep])))
-                queues.update(task["place"], task["item"], "done")
-            save()
-            queues.publish()
-            return {"ok": True}
-        if action == "forget-task":
-            # Operator cleanup: the queue leaf and worktree must be removed separately.
-            # Keep the daemon the only ledger writer, including when discarding test work.
-            if not L["paused"] or L["agents"]:
-                raise ApiError("pause and stop all agents before forgetting work")
-            task_id = body["task"]
-            task = L["tasks"].get(task_id)
-            if task is not None:
-                lanes.forget_owner(task_id)
-                for lane in L["lanes"]:
-                    if lane["resident"] == task_id:
-                        lane["resident"] = None  # a later graceful stop must not save this owner again
-                del L["tasks"][task_id]
-                log("task forgotten", task=task_id)
-            save()
-            return {"ok": True}
-        if action == "go":
-            L["paused"] = False
-            log("resumed")
-            return {"ok": True, "paused": False}
-        if action == "stop-agent":
-            if body.get("agent") not in L["agents"]:
-                raise ApiError(f"no live agent {body.get('agent')!r}")
-            work.stop_agent(body["agent"], "stopped by David", requeue=body.get("requeue", False), charge=False)
-            return {"ok": True}
-        if action == "viewers":
-            L["viewers_showing"] = bool(body.get("show"))
-            log("viewers", showing=L["viewers_showing"])
-            return {"ok": True, "showing": L["viewers_showing"]}
-        if action == "queue":
-            project = work.project_named(body.get("project", ""))
-            item = queues.add(project, body.get("kind", "queued"), body["name"], body["brief"])
-            log("queued", project=project["name"], item=item)
-            save()
-            queues.publish()
-            return {"ok": True, "item": item}
-    raise ApiError(f"unknown action {action!r}")
 
 
 def serve() -> None:

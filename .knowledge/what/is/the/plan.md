@@ -1,24 +1,18 @@
 ---
 status: green
-revised_at: "2026-09-27T17:03:43+10:00"
+revised_at: "2026-10-02T18:53:11+10:00"
 ---
 
-The remaining frontier, in order. Installation and project migration are complete. Leave CointOS paused until David asks to resume; the runtime command queue contains Todo's continuation request.
+The remaining frontier is ordered by expected reliability or throughput gained per unit of work, with prerequisites first:
 
-1. **Observe the Todo CLI exercise after permission to resume.** Let the manager derive work, workers implement it, and the integrator review and land it. Do not coach the product brief or decompose or implement the product for agents. Check construction-order handoffs, bounded task sizes, decomposition rejection handling, and the brief's acceptance. Report failures honestly. The sizing calibration is in `what/is/the/shape/of/cointos/work.md`.
+1. **Close remaining managerial recovery paths:** verify integrator-confirmed worker blockers and unresolved-manager escalation through native model runs, without manual manager queueing or magic report wording. Require checked receipts and actual manager judgment in both cases. The isolated OpenCode blocker fixture is prepared at `/tmp/cointos-native-blocker-8hrirn0n` under controller `/tmp/cointos-native-blocker-probe.py`; its private API is on port 42483 and its controller process awaits the run gate. Before starting it, obtain explicit project-scope knowledge-tree access for `/tmp/cointos-native-blocker-8hrirn0n/project/.knowledge` (pending request `kt-access-7sqsbIfHQvl7eYzu`), reconcile its requirements and plan, and verify its private-state boundary. Session scope is unavailable in this harness. The fixture seeds a simulated blocked worker, then uses real OpenCode review/manager runs and taskless user-class inference with explicit medium effort; do not claim production run accounting or live Telegram coverage from it. After verification, stop its owned units/API, revoke the temporary tree access and remove its artifacts.
+2. **Submit the neutral-worded repository for review before publication.** Before publishing, the owner chooses between rewriting Git history and publishing a fresh squashed repository, since past commits retain personal wording. No publication or history rewrite is authorized by this plan.
+3. **At the next explicitly authorized reboot, prove the second-pass recovery fixes.** Verify combined shutdown spills remain within the disk limit, complete-prefix warm disk reuse and that dead agent units return tasks to waiting without charging attempts. Do not reboot merely to test; the second-pass fixes are unit-covered.
+4. **When the user authorizes the disruptive shape change, restore intended ambient capacity:** `max_agents=4`, two work-model lanes, `ctx_size=262144`, and intended gardening.
+5. **Close focused receipt/recovery paths live:** silence/loop handling, remaining exhaustion cases and halt/up.
+6. **Exercise the control surface end to end:** Review the extended Coin conversation log from the night immediately preceding the user's 2 October 2026 feedback, assessing understanding, useful answers, actual actions and follow-through; that log has not been systematically reviewed and health/timing probes do not establish conversational usefulness. Then verify Coin/dashboard controls through a real Telegram conversation and history cleanup through the live dashboard.
+7. **Validate autonomous integration quality:** concurrent unassisted model review and accepted-test adequacy beyond the first deliberate red. Assess the test-contract review default and whole-assertion guidance across further contracts, and verify model-driven conflict resolution through the same landing command. Around 2026-10-09, judge the installed `Relies on:` dispatch check and test-contract red gate against their baseline with `how/to/monitor/cointos/pipeline/gates.md`, then keep, tune or revert them.
+8. **Run durability tests under churn:** disk restores, snapshot save-size behavior, save/transfer interruption and resulting file accounting under load, and a guarded midnight crossing.
+9. **Finish long-running acceptance:** bounded gardener/tree-auditor/test-auditor behavior, then the two-hour four-agent/two-lane soak with Coin latency, workstation priority and autonomous pipeline quality.
 
-2. **Restore the ambient configuration once the exercise ends.** Restore `max_agents=4`, work-model `lanes=2`, and `ctx_size=262144`. Restore gardening for the intended source and project trees using the post-migration paths. A lane-shape change needs a controlled model reload.
-
-3. **Validate bounded gardening live.** Under ambient configuration, demonstrate a random 1–3-leaf pass, one non-green batch and a separate structural audit. Do not substitute an exhaustive repair for routine gardening.
-
-4. **Fix cold resume after reload.** Find the diverging prefix described in broken; do not claim warm restart until fixed.
-
-5. **Fix malformed OpenCode continuation** through robust interruption semantics at the gateway/OpenCode boundary.
-
-6. **Resolve steward admission.** David must choose whether to add CointOS to configured projects or retarget `maintenance_project`, because this widens autonomous scope.
-
-7. **Finish live acceptance.** Demonstrate kill recovery within 30 seconds, Coin replies under load, workstation responsiveness and user priority, multi-agent halt/up, reboot snapshot recovery, integrator send-back, and bounded manager/gardener/auditor quality. Coin timing needs David's messages or an explicitly authorized test. Each milestone requires a real-machine demonstration and green `cointos check`; test passes and completed ledger tasks do not establish live acceptance.
-
-8. **Deferred design:** ambient/focused operation; runtime project and task-kind priorities; weighted/counted lane sharing; separate reviewer scheduling; a CointOS MCP control surface; memory reshaping/forking; and network restrictions beyond prompt and OpenCode denials. Scheduling changes remain deferred. Task admission rank and GPU class priority are distinct.
-
-OpenCode remains at 1.18.32 by David's direction. Sole Survivor is off the roadmap; catastrophic recovery remains David's remote intervention.
+Use Pigen as an expendable complexity quarry; do not block CointOS development on slow product-agent evidence. Do not manually decompose or implement product work for agents. OpenCode V2 remains deferred, Sole Survivor remains off the roadmap, and ambient/focused operation, mutable task priorities, weighted lane sharing, an MCP control surface and memory reshaping/forking remain unapproved future designs.

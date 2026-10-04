@@ -15,7 +15,7 @@ from cointos.config import load as load_config
 SERVER = Path.home() / ".knowledge/.tools/kt-mcp"
 CLOSE_SECONDS = load_config()["timeouts"]["mcp_close_seconds"]
 PROTOCOL = "2025-06-18"
-# Knowledge-root access changes are David's decision at a terminal, not Coin's.
+# Knowledge-root access changes are the user's decision at a terminal, not Coin's.
 EXCLUDED = {"kt_access_request", "kt_access_confirm", "kt_access_revoke"}
 
 

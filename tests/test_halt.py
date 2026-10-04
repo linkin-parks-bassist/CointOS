@@ -1,91 +1,125 @@
-import copy
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-from cointos import gateway, state, work
+from cointos import api, queues, snapshots, spawner, state, tasks
+from tests import support
 
 
 class Halt(unittest.TestCase):
     def setUp(self):
-        self.previous = copy.deepcopy(state.L)
-        self.stopping = state.STOPPING.is_set()
-        state.STOPPING.clear()
-        state.L.clear()
-        state.L.update(state.fresh({"paused": False}))
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.ledger = Path(self.directory.name) / "ledger.json"
-        self.enterContext(patch.object(state.configuration, "LEDGER", self.ledger))
-        self.enterContext(patch.object(work, "keep_key"))
-        self.enterContext(patch.object(work.lanes, "cancel_agent"))
-        self.enterContext(patch.object(work.threading, "Thread"))
-
-    def tearDown(self):
-        state.L.clear()
-        state.L.update(self.previous)
-        state.STOPPING.set() if self.stopping else state.STOPPING.clear()
+        support.fresh_ledger(self, {"paused": False})
+        support.quiet(self)
 
     def interrupted_task(self):
-        task = {"id": "test", "status": "running", "agent": "worker-test", "runs": 5,
-                "session": "existing-session", "worktree": "/existing/worktree", "title": "test",
-                "project": "sandbox"}
-        state.L["tasks"]["test"] = task
-        state.L["agents"]["worker-test"] = {
-            "task": "test", "thoughts": 3, "started_at": 0}
-        state.L["snapshots"]["checkpoint"] = {"owner": "test"}
+        task = tasks.create("steward", tasks.SYSTEM, "scout", "Look around", [6])
+        support.running(task, "steward-1")
+        task.update(runs=5, session="existing-session")
+        state.L["snapshots"]["checkpoint"] = {"owner": task["id"]}
         return task
+
+    def saved(self):
+        from cointos.config import LEDGER
+        return json.loads(LEDGER.read_text())
 
     def test_halt_durably_requeues_without_consuming_last_attempt(self):
         task = self.interrupted_task()
-        self.assertEqual(gateway.api("halt", {}), {"ok": True})
-        saved = json.loads(self.ledger.read_text())
+        self.assertEqual(api.dispatch("halt", {}), {"ok": True})
+        saved = self.saved()
         self.assertTrue(state.STOPPING.is_set())
         self.assertEqual(saved["agents"], {})
-        self.assertEqual(saved["tasks"]["test"]["status"], "waiting")
-        self.assertEqual(saved["tasks"]["test"]["runs"], 4)
-        self.assertIsNone(task["agent"])
-        self.assertEqual(task["session"], "existing-session")
-        self.assertEqual(task["worktree"], "/existing/worktree")
+        self.assertEqual((saved["tasks"][task["id"]]["status"], saved["tasks"][task["id"]]["runs"]), ("waiting", 4))
+        self.assertEqual((task["agent"], task["session"]), (None, "existing-session"))
         self.assertIn("checkpoint", saved["snapshots"])
         self.assertFalse(saved["paused"])
-        # A repeated request cannot refund the same run twice.
-        gateway.api("halt", {})
+        api.dispatch("halt", {})  # a repeated request cannot refund the same run twice
         self.assertEqual(task["runs"], 4)
 
     def test_halt_preserves_an_existing_pause(self):
         state.L["paused"] = True
-        gateway.api("halt", {})
-        self.assertTrue(json.loads(self.ledger.read_text())["paused"])
+        api.dispatch("halt", {})
+        self.assertTrue(self.saved()["paused"])
 
     def test_halt_prevents_a_tick_from_admitting_more_work(self):
-        gateway.api("halt", {})
-        with patch.object(work, "next_task") as next_task:
-            work.spawn()
+        api.dispatch("halt", {})
+        with patch.object(spawner, "next_task") as next_task:
+            spawner.spawn()
         next_task.assert_not_called()
 
     def test_forget_requires_quiescence_and_persists_only_requested_removal(self):
-        state.L["tasks"].update(test={"id": "test"}, keep={"id": "keep"})
-        with self.assertRaises(gateway.ApiError):
-            gateway.api("forget-task", {"task": "test"})
+        forgotten = tasks.create("steward", tasks.SYSTEM, "old", "", [6])
+        kept = tasks.create("steward", tasks.SYSTEM, "keep", "", [6])
+        with self.assertRaises(api.ApiError):
+            api.dispatch("forget-task", {"task": forgotten["id"]})
         state.L["paused"] = True
         state.L["agents"]["live"] = {}
-        with self.assertRaises(gateway.ApiError):
-            gateway.api("forget-task", {"task": "test"})
+        with self.assertRaises(api.ApiError):
+            api.dispatch("forget-task", {"task": forgotten["id"]})
         state.L["agents"].clear()
-        state.L["lanes"][0]["resident"] = "test"
-        state.L["lanes"][1]["resident"] = "keep"
-        with patch.object(work.lanes, "forget_owner") as forget:
-            gateway.api("forget-task", {"task": "test"})
-            gateway.api("forget-task", {"task": "test"})
-            forget.assert_called_once_with("test")
-        saved = json.loads(self.ledger.read_text())
-        self.assertEqual(saved["tasks"], {"keep": {"id": "keep"}})
+        state.L["lanes"][0]["resident"] = forgotten["id"]
+        state.L["lanes"][1]["resident"] = kept["id"]
+        with patch.object(snapshots, "forget_owner") as forget:
+            api.dispatch("forget-task", {"task": forgotten["id"]})
+            api.dispatch("forget-task", {"task": forgotten["id"]})
+        forget.assert_called_once_with(forgotten["id"])
+        saved = self.saved()
+        self.assertEqual(set(saved["tasks"]), {kept["id"]})
         self.assertTrue(saved["paused"])
-        self.assertIsNone(saved["lanes"][0]["resident"])
-        self.assertEqual(saved["lanes"][1]["resident"], "keep")
+        self.assertEqual((saved["lanes"][0]["resident"], saved["lanes"][1]["resident"]), (None, kept["id"]))
+
+    def test_clear_history_removes_only_unreferenced_terminal_tasks(self):
+        where = support.project(self, support.repository(self))
+        by_status = {status: tasks.create("steward", tasks.SYSTEM, status, "", [6]) for status in ("done", "failed", "waiting")}
+        for status, task in by_status.items():
+            task["status"] = status
+        worker = support.queued(where, "item")
+        worker["status"] = "done"  # its integration is still running, so it stays
+        integration = tasks.create("integrate", where, "integrate-item-1", "", [2], item="item", worker=worker["id"])
+        support.running(integration, "integrator-1", worktree=False)
+        state.L["lanes"][0]["resident"] = by_status["failed"]["id"]
+        with patch.object(snapshots, "forget_owner") as forget:
+            result = api.dispatch("clear-task-history", {})
+        self.assertEqual(result, {"ok": True, "removed": 2, "task_records": 2, "queue_records": 0})
+        self.assertEqual(set(state.L["tasks"]), {by_status["waiting"]["id"], worker["id"], integration["id"]})
+        self.assertIsNone(state.L["lanes"][0]["resident"])
+        self.assertEqual({c.args[0] for c in forget.call_args_list}, {by_status["done"]["id"], by_status["failed"]["id"]})
+
+    def test_clear_history_keeps_transitive_prerequisite_tasks_and_recovery_artifacts(self):
+        where = support.project(self, support.repository(self))
+        first = support.queued(where, "first")
+        second = support.queued(where, "second", "Depends on: first\nSecond")
+        for task in (first, second):
+            task.update(status="done", session="retained-session", receipt={"evidence": "accepted"})
+            queues.update("p", task["item"], "done")
+        queues.add(where, "queued", "next", "Depends on: second\nNext")
+        failed = support.queued(where, "failed")
+        failed.update(status="failed", session="unfinished-session")
+        queues.update("p", "failed", "blocked", "Needs a manager", decompose=True)
+        forgotten = support.queued(where, "old")
+        forgotten.update(status="done")
+        queues.update("p", "old", "done")
+        with patch.object(snapshots, "forget_owner") as forget:
+            api.dispatch("clear-task-history", {})
+        self.assertNotIn(forgotten["id"], state.L["tasks"])
+        self.assertNotIn("p:old", state.L["queue"])
+        for task in (first, second, failed):
+            self.assertIs(state.L["tasks"][task["id"]], task)
+        self.assertEqual(first["receipt"], {"evidence": "accepted"})
+        self.assertEqual(failed["session"], "unfinished-session")
+        forget.assert_called_once_with(forgotten["id"])
+
+    def test_clear_history_preserves_worker_of_an_inactive_waiting_integrator(self):
+        where = support.project(self, support.repository(self))
+        worker = support.queued(where, "item")
+        worker.update(status="failed", session="worker-session")
+        integration = tasks.create("integrate", where, "integrate-item-1", "", [2],
+                                   item="item", worker=worker["id"])
+        self.assertEqual(integration["status"], "waiting")
+        with patch.object(snapshots, "forget_owner") as forget:
+            api.dispatch("clear-task-history", {})
+        self.assertIs(state.L["tasks"][worker["id"]], worker)
+        self.assertEqual(worker["session"], "worker-session")
+        forget.assert_not_called()
 
 
 if __name__ == "__main__":

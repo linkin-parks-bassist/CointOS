@@ -1,30 +1,45 @@
 ---
 status: green
-revised_at: "2026-09-27T00:27:35+10:00"
+revised_at: "2026-10-02T00:56:34+10:00"
 ---
 
-Checked service properties on 2026-09-27 match the description below; token-resume timings and performance are retained earlier observations, not tests repeated during the tree refresh.
+Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared by CointOS and other local clients. Its control API is `http://127.0.0.1:13305`; logs are in `journalctl -u lemond`. CointOS is a client, not its owner, and must tolerate another client reloading a model onto a different backend URL.
 
-Lemonade is the local model server, a system service (`lemond.service`, running as user `lemonade`, logs in `journalctl -u lemond`) independent of CointOS. Its API is at `http://127.0.0.1:13305`.
+## Control contract
 
-- `GET /api/v1/health` lists `all_models_loaded`. Each entry includes `model_name`, `loaded`, `backend_url`, `launch_command` (the effective llama-server argv), `recipe_options` (`ctx_size`, `llamacpp_args`), `pid` and `pinned`.
-- `POST /v1/load` takes `{"model_name", "ctx_size", "llamacpp_args", "merge_args", "pinned", "save_options"}`. Extra llama-server flags pass through `llamacpp_args`.
-- `POST /v1/unload` takes `{"model_name"}`, and answers 404 when that model is not loaded.
+- `GET /api/v1/health` reports each model's loaded state, backend URL, effective launch command, recipe options, PID and pin state. CointOS refreshes this map during model checks.
+- `POST /v1/load` accepts the model name, context size, complete llama.cpp argument string, merge/save flags and pin state. CointOS uses `merge_args: false` and `save_options: false`, so its operational config determines the active shape without rewriting Lemonade's saved recipe.
+- `POST /v1/unload` unloads one named model; an absent model may answer 404.
+- Model files under `/var/lib/lemonade` are not readable by the user's account, so models are started through Lemonade rather than directly.
 
-**Lemonade is shared.** Any client can unload or reload a model, and a reload may use another port, so clients must refresh backend URLs from health. CointOS refreshes its backend URL map during model checks; it does not resolve a URL afresh for every token call.
+Lemonade and its llama-server children run in `inference.slice`. Snapshot files live in the configured `/dev/shm` directory and must be writable by the `lemonade` user. The backend checks both workstation headroom and the inference-slice allowance before admitting model or snapshot allocations.
 
-**Files and sandbox.** Model files under `/var/lib/lemonade` are readable only by `lemonade`, so every llama-server must be started through Lemonade. The service has a private `/tmp` and `ProtectSystem=full`, but can write to `/dev/shm`; a snapshot directory there must be writable by `lemonade` (for example mode 0777).
+## llama-server contract
 
-**llama-server**, one per loaded model at its `backend_url`, offers what a pre-emptive scheduler needs (all checked on the Qwen3.5-4B and on Qwen3.8-27B with MTP speculation):
-- `POST /apply-template` with `messages` and `tools` returns the rendered prompt; `POST /tokenize` with `parse_special: true` turns it into tokens; `POST /detokenize` turns tokens back into text.
-- `POST /completion` with a token list as `prompt`, `id_slot`, `cache_prompt`, `n_predict`, `stream` and `return_tokens` extends a context on one slot and streams the new token ids.
-- Closing the connection does not reliably stop the slot: llama-server notices only when it next writes to the client, so a long read runs on for up to minutes (seen 2.7 s once, over 60 s another time), and a slot action (save, restore) sent meanwhile is never served. So nothing should be cut: bound each request instead (`n_predict: 0` for reading, a small `n_predict` for generating).
-- With `--slot-save-path DIR`, `POST /slots/N?action=save|restore` with `{"filename"}` saves or restores a slot's whole state. On the 27B, 12,288 tokens took 1.5 s to save (0.96 GB) and 0.16 s to restore. `action=erase` clears a slot.
-- **The Qwen models are hybrid (recurrent plus attention) and cannot roll back.** A slot state can be continued only by a token list that extends it by at least one token. If the state holds as many tokens as the next prompt, or more, the whole prompt is read again: to generate, the model must evaluate the prompt's last token, which a state already holding it cannot do. So a read must stop one token short of the context it prepares (seen 2026-09-26: a lane holding all 19,183 tokens of its prompt re-read them all before its first generated token).
-- **Where a context can be stopped and resumed exactly:**
-  - After a completion that stopped at `n_predict`, the state holds every token sent except the last. Continuing with prompt plus all tokens received reads 1 token.
-  - A connection cut during generation can leave a token in the state that was never sent, so it cannot be continued exactly.
-  - A cut while the prompt is still being read leaves a state holding a whole number of batches, which the full prompt then extends: seen 12,288 of 39,049 tokens reused.
-- Speeds on the 27B: reading about 170 tokens/s alone (about 95 when both slots read at once); writing 20–25 tokens/s alone with MTP.
+The backend uses these model-server operations:
 
-**Output format.** The Qwen templates put reasoning between `<think>` and `</think>`, and tool calls as `<tool_call><function=NAME><parameter=P>value</parameter>...</function></tool_call>`, with parameter values as raw text.
+- `/apply-template`, `/tokenize` and `/detokenize` translate between structured conversation and tokens.
+- `/completion` prepares explicit token prefixes with streamed prompt-progress reports, then generates a bounded complete token vector with `cache_prompt` and `n_predict`.
+- `/slots/N?action=save|restore|erase` moves a slot state to or from the configured snapshot directory.
+
+A completion request is a bounded GPU step. `backend_llama.prefill` streams prompt progress, rejects an error or missing terminal event, and verifies the final cached token count. The first progress report reveals how much state the server retained; materially lost state raises `Lost` before an unbounded reread. `think` verifies cache retention by extending the prepared prefix with its pending real token, then requests a non-streaming, token-only bounded completion and checks terminal status, complete token count and cached-state length. Both calls use the configured server timeout. The generation duration is measured after prefix preparation and returned separately, so this extra cache verification does not spend an agent's generation budget.
+
+The installed llama-server build is `b10723-010be9683`. Its text stream suppresses tokens inside incomplete UTF-8 characters, and even native completions pass isolated output through a chat parser that rejects leading continuation bytes. Token steps therefore supply a no-op epsilon `chat_parser` and restrict response fields to token/state metadata. This is a raw-token boundary: Qwen message/tool interpretation remains in `backend_llama.read` over the whole thought. Trailing detokenizer replacement characters are withheld during outward streaming until the character is complete. A real work-model test split 🦦 into `[9008, 99, 99]` and preserved all three IDs across one-token steps. A zero-token, nonterminal generation result is rejected; the lane clears unknown state and ends that thought rather than replaying it.
+
+The configured Qwen models are hybrid recurrent/attention models. A saved state is reusable only when its tokens are a prefix of the next prompt. Prompt preparation stops one token short. Cache verification then submits the full real prompt, extending the retained prefix by that pending token. An equal-length check after restoring recurrent state would require an unavailable earlier checkpoint and discard the cache; the strict extension creates the checkpoint needed for the following buffered generation to reevaluate its last token without a full reread. After generation, the backend derives the exact known retained prefix from `tokens_cached` and the complete prompt/output token vector; the lane never fabricates this prefix from output count. MTP may retain draft tokens beyond a finished reply: an unreturned tail is marked cold while the valid complete reply is delivered. A connection cut mid-generation can leave an unseen token in server state, so an abandoned in-flight thought resumes from its committed checkpoint rather than assuming the cut state is exact.
+
+## Active model policy
+
+`config/cointos.json` is authoritative for model names, context, lanes, arguments and admission estimates. The current work model is Qwen3.8-27B with one 131,072-token lane and MTP speculative decoding; the front model is Qwen3.5-4B with two 32,768-token lanes, one reserved for Coin. Lane count and total context are load-time model shape: changing either requires a model reload and is incompatible with live daemon-only installation.
+
+CointOS retains Qwen3.8-27B as the minimum work model unless the user chooses a different quality point. Published alternative quantizations and runtimes are leads, not evidence of equal agent quality or a drop-in speedup. Any comparison must hold weights/quality target, sampling, occupied context and task success constant, then verify the exact installed runtime. No alternative currently has that evidence.
+
+## Reasoning and output
+
+Qwen3.8 accepts low, medium and xhigh `reasoning_effort` through its chat template. CointOS pins task effort, maps it into template options, and mechanically caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens respectively. At the cap it appends the model's closing-think token on the same context and continues into answer or tool output. `max_thought_tokens` still bounds the complete reply. This is a per-reply bound, not a lifetime penalty, and does not establish semantic correctness.
+
+The template emits reasoning inside `<think>...</think>` and tool calls in its Qwen function-call markup; `backend_llama.read` is the sole decoder for that literal representation.
+
+## Remaining evidence
+
+Exact throughput varies with occupied context, simultaneous reads, model-server build and speculation acceptance. Current configuration has usable live performance, but no controlled local comparison proves the net benefit of MTP, a smaller maximum context, another quantization or another runtime. Those are performance experiments, not active operating claims; `what/is/the/plan.md` owns any future work that becomes approved.

@@ -26,8 +26,8 @@ class Ladder(unittest.TestCase):
                               lambda: {"physical_gb": 137.4, "available_gb": self.available, "swap_gb": 0, "psi": self.psi}),
             mock.patch.object(daemon.BACKEND, "budget", lambda config: None),
             mock.patch.object(daemon.BACKEND, "kill", lambda config, name: self.killed.append(name)),
-            mock.patch.object(daemon.lanes, "make_room", lambda need: False),
-            mock.patch.object(daemon.work, "stop_agent", lambda agent_id, *a, **k: self.stopped.append(agent_id)),
+            mock.patch.object(daemon.snapshots, "make_room", lambda need: False),
+            mock.patch.object(daemon.lifecycle, "stop", lambda agent_id, *a, **k: self.stopped.append(agent_id)),
             mock.patch.object(daemon.threading, "Thread", lambda target, args, daemon: mock.Mock(start=lambda: target(*args))),
         ]
         for patch in patches:

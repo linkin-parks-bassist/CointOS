@@ -1,16 +1,10 @@
 ---
 status: green
-revised_at: "2026-09-27T17:03:42+10:00"
+revised_at: "2026-10-05T00:07:15+11:00"
 ---
 
-These CointOS defects remain current. what/is/the/plan.md schedules their fixes.
+## Every finished reply re-reads its own tokens
 
-**Oversized worker runs.** In the abandoned JSON-parser exercise, scalar parsing and serialization each ran for about 100 minutes against the 8–15-minute useful-work sizing target. The cause remains undiagnosed: oversized assignments, lane sharing or looping. Their logs and sessions were erased with that exercise; watch the next exercise rather than claiming a diagnosis.
+The work model runs MTP speculative decoding. When a reply ends, the server has already evaluated draft tokens past end-of-turn (`tokens_cached` exceeds the known tokens), and hybrid state cannot be cut back, so `backend_llama.think` correctly reports the lane as holding nothing. The task's next request restores its prompt-end checkpoint and re-reads the reply plus the tool output. The server reads prompts at about 119 tokens/s and generates about 700k tokens a day, so re-reading replies costs at most about 1.6 GPU-hours a day (roughly 7%); the tool output read alongside it is necessary work. Before the labelling fix, `switch` events reported these empty-lane restores as `diverged`.
 
-**Cold resume after model reload.** A manager retained its session and worktree, but its checkpoint diverged from the resumed conversation and it reread 27,589 tokens. The differing prefix remains unknown. Persisting a session does not establish warm resume.
-
-**Malformed OpenCode continuation.** A partial continuation during a live restart produced a model-template HTTP 400. The cause remains unknown; daemon adoption alone does not establish that the in-flight reply survived.
-
-**Steward maintenance is not admitted.** maintenance_project is CointOS, while the only configured autonomous project is todo-cli. Adding autonomous source maintenance or choosing another target requires David's direction.
-
-The installation/layout and project-queue defects are resolved. Services run from the installed runtime; Todo is independent; queues are daemon-owned and integrations signal settlement. Unit and paused runtime checks pass, but the revised prompts and handoffs still require an autonomous live acceptance run after David authorizes resumption.
+The cost is accepted for now. The user has declined to patch llama.cpp (retaining no draft tokens beyond an end-of-generation token) at this time; disabling drafting would remove the cost only at a large generation-speed loss. A `divergence` event logs the exact split text whenever a lane that held state truly diverges.

@@ -14,7 +14,31 @@ def silent_agents(config: dict, ledger: dict, now: float) -> list[str]:
     thinking = {t["agent"] for t in ledger["thoughts"].values()}
     return [agent_id for agent_id, agent in ledger["agents"].items()
             if agent_id not in thinking
+            and not ledger.get("tasks", {}).get(agent.get("task"), {}).get("validating")
             and now - agent["last_activity"] > config["checks"]["agent_silent_seconds"]]
+
+
+def stalled_thoughts(config: dict, ledger: dict, now: float) -> list[dict]:
+    """A held thought must prepare context or generate, regardless of caller."""
+    return [t for t in ledger["thoughts"].values() if t["lane"] is not None
+            and now - t["progress_at"] > config["checks"]["thought_stalled_seconds"]]
+
+
+def notifications(config: dict, incidents: dict, results: list[dict], now: float) -> list[str]:
+    """One notification per incident; only sustained recovery rearms it."""
+    messages = []
+    for check in results:
+        name = check["name"]
+        if not check["ok"]:
+            if name not in incidents:
+                messages.append(f"Self-check failed: {name}: {check['detail']}")
+            incidents[name] = None
+        elif name in incidents:
+            if incidents[name] is None:
+                incidents[name] = now
+            elif now - incidents[name] >= config["checks"]["alert_recovery_seconds"]:
+                del incidents[name]
+    return messages
 
 
 def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[int]],
@@ -64,8 +88,11 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         f"{agent_id} repeated one thought {agent['repeats']} times"
         for agent_id, agent in ledger["agents"].items() if agent["repeats"] > limits["max_identical_thoughts"]])
 
-    # The run supervisor owns exit detection and task settlement. A process can exit normally
-    # before that observer settles its ledger entry; absence is not an invariant violation.
+    check("no stalled thought", [f"{t['agent']} thought {t['id']} made no progress for {now - t['progress_at']:.0f}s"
+                                for t in stalled_thoughts(config, ledger, now)])
+
+    # The run observer owns exit detection and reports it to the lifecycle reducer. A process can
+    # exit normally before that observer releases its run; absence is not an invariant violation.
     # Directed stops leave the ledger first, with a bounded grace for process cleanup.
     problems = [f"stray agent process {agent_id} (pids {pids})" for agent_id, pids in processes.items()
                 if agent_id not in ledger["agents"] and agent_id not in ledger["exiting"]]
@@ -73,6 +100,7 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
 
     check("no item waits on a dead dependency", [f"{item}: {problem}" for item, problem
                                                   in (ledger.get("dependency_problems") or {}).items()])
+    check("event journal writable", [ledger["journal_error"]] if ledger.get("journal_error") else [])
 
     measured = ledger.get("memory") or {}
     problems = memory.distressed(config, measured) if measured else []

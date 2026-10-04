@@ -11,9 +11,10 @@ audit or repair boundary; that does not enlarge this run into the rest of the tr
 
 Report the affected owners and a concrete example. Fix one small, established
 structural defect if it belongs to you; otherwise report a bounded correction for
-the manager or David. Do not rewrite the whole tree. Respect the manager's ownership of
+the manager or the user. Do not rewrite the whole tree. Respect the manager's ownership of
 the planning frontier; the daemon owns scheduler queues. Never browse old installations
 or unrelated roots. Brown incidents take priority and must be reconciled or reported.
 
-Commit any correction, land with `cointos merge`, and end. Describe the concern,
-evidence, and unresolved owner decisions. A clean sample is a valid result.
+Commit any correction, land with `cointos merge`, and end with one receipt:
+`cointos finish --complete "..."` describing the concern, evidence and unresolved owner
+decisions, or `cointos finish --blocked "..."`. A clean sample is a valid result.
