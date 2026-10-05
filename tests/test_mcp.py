@@ -94,6 +94,28 @@ class Tools(unittest.TestCase):
         self.assertIn("parser.c", output.split("changed:")[1])
         self.assertNotIn(self.manager["id"] + " (", output)
 
+    def test_the_gateway_delivers_a_message_on_the_next_request_and_keeps_it_in_place(self):
+        from cointos import gateway
+        worker = support.running(support.queued(self.project, "build"), "worker-1")
+        history = [{"role": "system", "content": "S"}, {"role": "user", "content": "Do it"},
+                   {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
+                   {"role": "tool", "tool_call_id": "1", "content": "ok"}]
+        self.assertEqual(gateway.with_messages(history, "worker-1"), history)
+        mcp.invoke("send", {"to": worker["id"], "text": "Use the memo API"}, "manager")
+        first = gateway.with_messages(history, "worker-1")
+        self.assertEqual(first[:4], history)
+        self.assertEqual(first[4]["role"], "user")
+        self.assertEqual(first[4]["content"], f'<message from="{self.manager["id"]}">\nUse the memo API\n</message>')
+        self.assertTrue(state.L["messages"][-1]["read"])
+        later = history + [{"role": "assistant", "content": "Noted."}, {"role": "user", "content": "x"}]
+        second = gateway.with_messages(later, "worker-1")
+        self.assertEqual(second[:5], first, "the delivered message stays where the agent first saw it")
+        self.assertEqual(len(second), len(later) + 1)
+        fresh = [{"role": "system", "content": "S"}, {"role": "user", "content": "Do it again"},
+                 {"role": "assistant", "content": "Reading."}, {"role": "tool", "content": "other"}, {"role": "user", "content": "y"}]
+        self.assertEqual(gateway.with_messages(fresh, "worker-1"), fresh,
+                         "a fresh session's different history never inherits an old insertion")
+
     def test_agents_get_the_cointos_server_in_their_config(self):
         server = opencode.settings(state.CONFIG, "key", {"id": "p:x", "abilities": ["standard"]}, [], "worker-9")["mcp"]["cointos"]
         self.assertEqual(server["command"][-2:], ["-m", "cointos.mcp"])
