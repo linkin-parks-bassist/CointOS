@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 from cointos import cli
 from cointos.client import Unreachable, call, ledger
@@ -170,7 +171,9 @@ MESSAGE_TOOLS = {
     "send": ("Send a short message to another active task (PROJECT:NAME, as `jobs` shows) or to the user ('user'). "
              "Use it to ask or tell, not to hand off work: queued work still goes through the queue.",
              {"to": text("PROJECT:NAME task id, or 'user'"), "text": text("the message")}, ["to", "text"]),
-    "inbox": ("Read this task's unread messages; reading marks them read.", {}, []),
+    "inbox": ("Read this task's unread messages; reading marks them read. wait=true blocks until a message "
+              "arrives (up to 5 minutes) instead of returning empty: use it to wait for a reply instead of sleeping.",
+              {"wait": {"type": "boolean", "description": "block until a message arrives"}}, []),
 }
 
 
@@ -186,6 +189,10 @@ def message_tool(name: str, arguments: dict) -> tuple[str, bool]:
             result = call("send", {**identity(), "to": arguments["to"], "text": arguments["text"]})
             return f"sent to {result['to']}", False
         messages = call("inbox", identity())["messages"]
+        deadline = time.monotonic() + 300
+        while arguments.get("wait") and not messages and time.monotonic() < deadline:
+            time.sleep(2)
+            messages = call("inbox", identity())["messages"]
         return ("\n\n".join(f"From {m['from']}:\n{m['text']}" for m in messages) or "no unread messages"), False
     except (Unreachable, ValueError, KeyError) as error:
         return str(error), True
