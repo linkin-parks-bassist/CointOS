@@ -73,7 +73,7 @@ def install(live=False, wait_seconds=60):
     if active and not live:
         raise SystemExit('Agent units are still running; installation refused.')
     if live:
-        drain(url, min(wait_seconds, config['timeouts']['command_seconds']))
+        drain(url, wait_seconds)
         run('systemctl', '--user', 'stop', 'cointosd.service')
         restart_needed = [True]
         def restore_daemon():

@@ -567,9 +567,7 @@ function computeFlow(L) {
     it.updated = Math.max(t?.updated_at || 0, t?.receipt?.at || 0);
     it.priority = r?.priority ?? 999;
   }
-  const upkeep = Object.values(L.tasks).filter(t => t.kind !== "item" && t.kind !== "integrate" &&
-    (t.status === "running" || t.status === "waiting"));
-  return {items, upkeep};
+  return {items};
 }
 
 // The manager's plain-language `Summary:` for a task, from its queue record (an integration uses its worker's).
@@ -607,12 +605,9 @@ function renderFlow(L) {
     const arrow = next ? `<div class="arrow${(next === "building" || next === "integrating") && by[next].length ? " moving" : ""}"></div>` : "";
     return step + arrow;
   }).join(""));
-  const upkeep = FLOW.upkeep.filter(t => t.place === ROUTE.project).map(t => chip(t.id, `${KIND_LABEL[t.kind] || t.kind}${t.place ? " · " + t.place : ""}`,
-    `${t.role} · ${t.status === "running" ? "running" : "waiting"}`, t.status === "running" ? "live" : ""));
   const failed = by.failed.sort((a, b) => b.updated - a.updated)
     .map(it => chip(it.key, named(it.title).head, [named(it.title, it.project).context, stageName(it.stage)].filter(Boolean).join(" · "), "held"));
-  setHTML($("flow-foot"), (upkeep.length ? `<div class="group"><h3>Upkeep</h3>${upkeep.join("")}</div>` : "") +
-    (failed.length ? `<div class="group"><h3>Gave up · ${failed.length}</h3>${failed.slice(0, 8).join("")}</div>` : ""));
+  setHTML($("flow-foot"), (failed.length ? `<div class="group"><h3>Gave up · ${failed.length}</h3>${failed.slice(0, 8).join("")}</div>` : ""));
 }
 
 // One card per registered project: what it is, how its work is spread along the pipeline, who is on it.
