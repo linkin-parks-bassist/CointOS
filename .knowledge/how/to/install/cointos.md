@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T04:48:44+10:00"
+revised_at: "2026-10-05T13:43:25+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -17,7 +17,7 @@ Use `scripts/install --live [--wait-seconds N]` when the current daemon is reach
 
 The installer checks that projection before contacting the daemon, so missing or incompatible installed configuration causes no network or systemd action and reports the exact changed paths. Daemon-policy changes such as reasoning, recovery, scheduling and spawning are compatible.
 
-A live install asks the current daemon to quiesce: admitted thoughts and landing validations finish, while new model requests wait at the admission gate without becoming active thoughts or counting against drain readiness. A disconnected gated caller leaves immediately; cancellation admits waiting requests; shutdown returns one retryable refusal. Holding admission avoids consuming the client's retry budget and leaving it in backoff after replacement. At a quiet request boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes. It does not relaunch agent conversations or inject continuation messages. Timeout or Ctrl-C cancels quiescence before copying or stopping anything. If a later installation step fails after cointosd stops, process-exit cleanup starts the daemon again.
+A live install asks the current daemon to quiesce: admitted thoughts and landing validations finish, while new model requests wait at the admission gate without becoming active thoughts or counting against drain readiness. A disconnected gated caller leaves immediately; cancellation admits waiting requests; shutdown returns one retryable refusal. Holding admission avoids consuming the client's retry budget and leaving it in backoff after replacement. At a quiet request boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes. It does not relaunch agent conversations or inject continuation messages. Timeout or Ctrl-C cancels quiescence before copying or stopping anything. If a later installation step fails after cointosd stops, process-exit cleanup starts the daemon again. Long agent context reads can delay a quiet boundary by tens of minutes; pass a generous `--wait-seconds`.
 
 A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below; copying the files alone leaves its resident tool catalog and settings unchanged.
 
@@ -31,6 +31,6 @@ Isolated copies avoid shipping unrelated uncommitted source changes that a full 
 
 ## Runtime knowledge and registry
 
-Each installation rewrites the installed tree's `where/am/i.md` and `what/is/cointos.md` from `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`; edit those source files, not their generated copies. Other runtime leaves and daemon-published queue answers remain. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
+Each installation replaces the installed tree's `where/am/i.md` and `what/is/cointos.md` with `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`, which removes and re-adds generated leaves (as the daemon does for its queue answers) so kt's growth reconsideration, meant for editors, never fails a copy. Edit the source files, not their generated copies. Other runtime leaves remain. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
 
 Worktrees live at `~/Projects/.worktrees/<project>/<task>` on `work/<task>` branches. Verify the installed unit `WorkingDirectory`, service state, exact adopted agent identities when live installing, and `cointos check` after every installation.
