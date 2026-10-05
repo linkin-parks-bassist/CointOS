@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T21:07:27+11:00"
+revised_at: "2026-10-05T21:15:27+11:00"
 ---
 
 Agents are OpenCode sessions whose only model provider is the CointOS gateway. The on-disk CLI is `~/.local/bin/opencode` 1.18.34; already-running servers may retain their launch version. `cointos/opencode.py` owns per-run configuration, transient units, server/client supervision and event following; `runs.py` owns launch/adoption; `prompts.py` owns the launch message.
@@ -22,7 +22,7 @@ Task reasoning effort is daemon metadata. The gateway pins it when rendering and
 
 ## Stable task prefix
 
-OpenCode regenerates volatile early system/developer content, and a relaunched session loads whatever tool schemas are installed now. Both render near the start of the prompt, so either change would make every saved state of the conversation useless. On a managed task's first gateway request, `gateway.stable_environment` normalizes and stores the complete system/developer sequence, and `gateway.stable_tools` the tool definitions, each once under its SHA-256 digest (`system_contexts`); the task stores only the digests (`system_context`, `tool_context`). Later requests substitute the pinned versions before template rendering, so a conversation keeps the prefix and tools it started with and new tools reach new tasks only. On 2026-10-05, before tools were pinned, agents relaunched after a tool-schema change discarded every saved context as diverged and reread 30k–80k tokens each. Coin and user clients are unchanged. The event journal retains digest/component metadata, never prompt text.
+OpenCode regenerates volatile early system/developer content, and a relaunched session loads whatever tool schemas are installed now. Both render near the start of the prompt, so either change would make every saved state of the conversation useless. On a managed task's first gateway request, `gateway.stable_environment` normalizes and stores the complete system/developer sequence, and `gateway.stable_tools` the tool definitions, each once under its SHA-256 digest (`system_contexts`, stored as sorted-key JSON); the task stores only the digests (`system_context`, `tool_context`). Later requests substitute the pinned versions before template rendering, so a conversation keeps the prefix and tools it started with and new tools reach new tasks only. Changing the stored encoding re-renders every pinned conversation differently: introducing tool pinning (whose sorted keys reordered the tools) discarded every live context once on 2026-10-05. Ordinary turns afterwards restored from cache; survival across a relaunch or a tool-schema change is not yet observed live. Coin and user clients are unchanged. The event journal retains digest/component metadata, never prompt text.
 
 For a fresh managed launch, `prompts.shared_launch_prefix` identifies the semantic end of task-independent role guidance. The gateway renders both the full request and that prefix-only variant through the same backend, takes their exact common token prefix, and gives that boundary to the lane. The lane saves it as a shared snapshot while reading even without a concurrent peer. Later sequential tasks of the same role reuse it only through the ordinary model-and-token-digest match.
 
