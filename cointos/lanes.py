@@ -57,6 +57,11 @@ def shared_prefix(thought_id: str, model: str) -> int:
     return longest if longest >= CONFIG["scheduler"]["shared_prefix_tokens"] else 0
 
 
+def started(thought: dict) -> bool:
+    """Whether a thought has begun its work: it holds a lane, or has read or generated."""
+    return thought["lane"] is not None or thought.get("read", 0) > 0 or thought.get("generated", 0) > 0
+
+
 def tokens_of(thought_id: str) -> list[int]:
     run = RUNS[thought_id]
     return run["prompt"] + run["generated"]
@@ -152,10 +157,10 @@ def schedule() -> None:
         thought["reading"] = reading
     contenders = list(L["thoughts"].values())
     if L["quiescing"]:
-        # A deployment is draining: replies already on a lane, reading or generating, finish; no
-        # queued one starts, or the lane would never go quiet. Queued ones are cut and retried
-        # after replacement; cutting a reader would throw away its read.
-        contenders = [t for t in contenders if t["lane"] is not None]
+        # A deployment is draining: every reply that has started, reading or generating, finishes,
+        # including one the time slice took off its lane; no untouched one starts, or the lane
+        # would never go quiet. Untouched ones are cut and retried after replacement.
+        contenders = [t for t in contenders if started(t)]
     wanted = scheduler.assign(CONFIG, L["lanes"], contenders, now(), blocked())
     for position, thought_id in wanted.items():
         lane = L["lanes"][position]

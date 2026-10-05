@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 
-from cointos import landing, lifecycle, projects, queues, settings, snapshots, tasks
+from cointos import landing, lanes, lifecycle, projects, queues, settings, snapshots, tasks
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
 
 
@@ -333,8 +333,8 @@ def prepare_restart(body):
         # A deployment waits for replies holding a lane (reading or generating) and for replies
         # producing output. Queued replies have produced nothing; when the daemon stops their
         # stream is cut and OpenCode retries them at once (verified against OpenCode 1.18.34).
-        on_lane = any(t["lane"] is not None for t in L["thoughts"].values())
-        ready = ACTIVE["landings"] == 0 and ACTIVE["speaking"] == 0 and not on_lane
+        begun = any(lanes.started(t) for t in L["thoughts"].values())
+        ready = ACTIVE["landings"] == 0 and ACTIVE["speaking"] == 0 and not begun
     else:
         ready = ACTIVE["chats"] == 0 and ACTIVE["landings"] == 0 and not L["thoughts"]
     return {"ok": True, "ready": ready, "active_requests": ACTIVE["chats"]}

@@ -267,3 +267,17 @@ class QuiesceScheduling(unittest.TestCase):
                 state.L["quiescing"] = True
                 lanes.schedule()
         self.assertEqual([t["lane"] for t in seen[0]], [0])
+
+    def test_a_draining_daemon_lets_a_sliced_off_reply_finish(self):
+        from cointos import lanes
+        seen = []
+        model = state.L["lanes"][0]["model"]
+        state.L["thoughts"] = {"sliced": {"lane": None, "reading": False, "model": model, "read": 40, "generated": 12},
+                               "queued": {"lane": None, "reading": True, "model": model, "read": 0, "generated": 0}}
+        with patch.dict(lanes.HELD, {}, clear=True), \
+             patch.object(lanes, "tokens_of", lambda thought: [1, 2, 3, 4, 5]), \
+             patch.object(lanes.scheduler, "assign", lambda config, l, contenders, *rest: seen.append(contenders) or {}):
+            with state.LOCK:
+                state.L["quiescing"] = True
+                lanes.schedule()
+        self.assertEqual([t["read"] for t in seen[0]], [40])
