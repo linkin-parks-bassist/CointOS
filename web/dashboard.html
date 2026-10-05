@@ -435,6 +435,11 @@ function agentRowSizes(count, capacity) {
   return Array.from({length: rows}, (_, i) => small + (i >= rows - larger ? 1 : 0));
 }
 
+// Gardens, audits, scouts and operators: live tasks no queue record owns, cancelled by task id.
+function upkeepTask(t) {
+  return !!t && !t.record && !["item", "integrate", "decompose"].includes(t.kind) && !["done", "failed"].includes(t.status);
+}
+
 function renderAgents(S) {
   // System agents (scouts, test auditors) work across projects, so every project page shows them.
   const agents = Object.values(S.agents).filter(a => !ROUTE.project || a.place === ROUTE.project || a.place === "system").sort((a, b) => a.started_at - b.started_at);
@@ -460,7 +465,8 @@ function renderAgents(S) {
     if (card.className !== `agent r-${a.role}`) card.className = `agent r-${a.role}`;
     card.dataset.key = a.task;
     card.dataset.agent = a.id;
-    const cancellable = !!S.queue?.[S.tasks?.[a.task]?.record || ""] || !!S.queue?.[S.tasks?.[S.tasks?.[a.task]?.worker]?.record || ""];
+    const own = S.tasks?.[a.task];
+    const cancellable = !!S.queue?.[own?.record || ""] || !!S.queue?.[S.tasks?.[own?.worker]?.record || ""] || upkeepTask(own);
     card.querySelector('[data-act="cancel-item"]').hidden = !cancellable;
     if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
     cards.delete(a.id);
@@ -679,6 +685,7 @@ function actionsHTML(L, t, it, r) {
       b("move", {top: "⇈ Top", up: "↑ Up", down: "↓ Down", bottom: "⇊ Bottom"}[to], {item: key, to})).join(""));
     out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: key}, "danger"));
   }
+  if (!r && upkeepTask(t)) out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: t.id}, "danger"));
   if (t && (t.status === "waiting" || t.status === "running")) out.push(`<span class="sep"></span><label>Reasoning <select data-act="reasoning" data-task="${esc(t.id)}">` +
     ["low", "medium", "xhigh"].map(e => `<option${e === t.reasoning_effort ? " selected" : ""}>${e}</option>`).join("") + `</select></label>`);
   return out.length ? `<div class="actions">${out.join("")}</div>` : "";
@@ -816,7 +823,8 @@ document.addEventListener("click", async e => {
   if (!button) return;
   e.stopPropagation(); e.preventDefault();
   const card = button.closest(".agent"), data = {...button.dataset};
-  if (card) { data.agent ??= card.dataset.agent; data.item ??= (LAST.L.tasks[card.dataset.key]?.record || LAST.L.tasks[LAST.L.tasks[card.dataset.key]?.worker]?.record); }
+  if (card) { const t = LAST.L.tasks[card.dataset.key]; data.agent ??= card.dataset.agent;
+    data.item ??= (t?.record || LAST.L.tasks[t?.worker]?.record || (upkeepTask(t) ? t.id : undefined)); }
   const plan = CONTROLS[data.act]?.(data);
   if (!plan) return;
   const [question, action, body, done] = plan;

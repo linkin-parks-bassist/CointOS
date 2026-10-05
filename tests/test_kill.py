@@ -54,3 +54,12 @@ class Kill(unittest.TestCase):
             self.assertTrue(spawner.periodic())
             task.pop("admission_hold")
             self.assertFalse(spawner.periodic())
+
+    def test_the_user_cancels_a_live_upkeep_task_for_good(self):
+        task = support.running(tasks.create("garden", tasks.SYSTEM, "garden", "Work", [7]), "gardener-1", False)
+        result = api.dispatch("cancel", {"items": [task["id"]], "reason": "not needed now"})
+        self.assertEqual(result["cancelled"], [task["id"]])
+        self.assertEqual((task["status"], task["agent"], task["cancelled"]), ("failed", None, "not needed now"))
+        self.assertNotIn("gardener-1", state.L["agents"])
+        with self.assertRaises(ValueError):
+            api.dispatch("cancel", {"items": [task["id"]], "reason": "again"})

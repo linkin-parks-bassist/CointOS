@@ -186,7 +186,7 @@ def revise(body):
 def cancel(body):
     items = body.get("items") or []
     if not isinstance(items, list) or not items or not all(isinstance(i, str) for i in items):
-        raise ApiError("name the queue items to cancel as PROJECT:ITEM")
+        raise ApiError("name the queue items or upkeep tasks to cancel as PROJECT:NAME")
     by = proposer(body)
     if by is not None and (by["role"] != "manager" or any(
             queues.records().get(i, {}).get("project") != by["place"] for i in items)):
