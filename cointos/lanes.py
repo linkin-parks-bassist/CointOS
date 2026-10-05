@@ -26,9 +26,6 @@ RUNS: dict[str, dict] = {}  # thought id -> its tokens and plumbing (kept out of
 BUSY: dict[int, str] = {}  # lane position -> the thought whose chunk is in flight there
 HELD: dict[int, list[int]] = {}  # lane position -> the tokens its state holds
 PROMPTS: dict[str, list[int]] = {}  # task -> the tokens of its last rendered prompt
-# A reply ends a prompt with the assistant's opening; how its first tokens merge with what the
-# reply generated may differ, so a prompt continues the last one if all but this tail agrees.
-OPENING_TOKENS = 8
 
 
 def begins(held: list[int] | None, tokens: list[int]) -> bool:
@@ -84,7 +81,9 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
             L["user_last_thought"] = now()
         if owner in L["tasks"]:
             previous, PROMPTS[owner] = PROMPTS.get(owner), rendered["tokens"]
-            if previous and not begins(previous[:-OPENING_TOKENS], rendered["tokens"]):
+            # The prompt-end checkpoint holds all but the last token; it is reusable only if the
+            # next prompt begins with it.
+            if previous and not begins(previous[:-1], rendered["tokens"]):
                 threading.Thread(target=report_rewrite, args=(owner, model, previous, rendered["tokens"]),
                                  daemon=True).start()
             snapshots.forget_diverged(owner, model, rendered["tokens"])

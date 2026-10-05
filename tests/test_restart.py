@@ -149,6 +149,7 @@ class PromptRewrites(unittest.TestCase):
         from cointos import lanes
         self.addCleanup(lanes.PROMPTS.clear)
         self.assertFalse(self.begin("t", list(range(100))).called)
-        self.assertFalse(self.begin("t", list(range(95)) + [7] * 20).called, "only the opening tail may differ")
+        self.assertFalse(self.begin("t", list(range(99)) + [7] * 20).called, "the last token is not in the checkpoint")
+        self.assertTrue(self.begin("t", list(range(97)) + [7] * 30).called)
         thread = self.begin("t", [1] * 50)
         self.assertEqual(thread.call_args.kwargs["target"], lanes.report_rewrite)
