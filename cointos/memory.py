@@ -57,11 +57,12 @@ def distressed(config: dict, measured: dict) -> list[str]:
 
 
 def to_forget(snapshots: dict[str, dict], need_gb: float, headroom: float) -> list[str] | None:
-    """The snapshots to forget, least recently run first, so that `need_gb` more fits in the
-    headroom; None if forgetting them all would not be enough. `snapshots` maps a context to
-    {"bytes", "last_run"}."""
+    """The snapshots to forget so that `need_gb` more fits in the headroom; None if forgetting
+    them all would not be enough. Shared launch starts go first, least recently run first: any
+    task rebuilds one with a single short read, while a conversation's own state costs its whole
+    history to read again. `snapshots` maps a context to {"bytes", "last_run", "owner"}."""
     chosen, free = [], headroom
-    for context, snapshot in sorted(snapshots.items(), key=lambda item: item[1]["last_run"]):
+    for context, snapshot in sorted(snapshots.items(), key=lambda item: (item[1].get("owner") != "shared", item[1]["last_run"])):
         if free >= need_gb:
             break
         chosen.append(context)

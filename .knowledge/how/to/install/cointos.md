@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T21:25:27+11:00"
+revised_at: "2026-10-05T21:53:12+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -17,13 +17,13 @@ Use `scripts/install --live [--wait-seconds N]` (default 60, honoured as given) 
 
 If nothing the daemon runs changed (`cointos/`, `config/` other than `projects.json`, `systemd/`), the installer copies `roles/`, `web/` and `bin/`, rewrites the runtime leaves and stops: prompts, the dashboard and the CLI are read fresh from disk, so the daemon keeps running untouched.
 
-Otherwise it asks the daemon to quiesce: new model requests wait at the admission gate, no queued reply is given a lane, and the drain is ready once no landing is validating and no reply holds a lane or is producing output. Replies still queued for a lane have produced nothing; when cointosd stops, their stream is cut and OpenCode retries them within about a second (verified against OpenCode 1.18.34). A reply already reading or generating on the lane finishes first, since cutting a reader throws its read away. At that boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes, without relaunching conversations. Timeout, Ctrl-C or an API failure during the drain cancels quiescence before anything is copied (a backgrounded installer ignores SIGINT; terminating it leaves quiescence on until `cancel-restart` or the next daemon start); a later failure after cointosd stops restarts it on exit. An ordinary `cointos restart` still waits for every admitted request. Never pause agents (`cointos stop`) to hurry an installation: it relaunches every conversation.
+Otherwise it asks the daemon to quiesce: stop starting replies and let started ones finish, so none is cut mid-output. New model requests wait at the admission gate; only started replies (holding a lane, or having read or generated anything, including one the time slice took off its lane) contend for lanes; the drain is ready once no landing is validating and no started reply remains. Untouched queued replies have produced nothing; when cointosd stops, their stream is cut and OpenCode retries them within about a second (verified against OpenCode 1.18.34). At that boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes, without relaunching conversations. Timeout, Ctrl-C or an API failure during the drain cancels quiescence before anything is copied (terminating a backgrounded installer leaves quiescence on until `cancel-restart` or the next daemon start); a later failure after cointosd stops restarts it on exit. Never pause agents (`cointos stop`) to hurry an installation: it relaunches every conversation.
 
 A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below.
 
 ## Isolated service changes
 
-The gateway reads `web/dashboard.html` from the installed runtime on every request, so a dashboard-only change deploys by copying that file; ship it with the installer instead when it depends on daemon changes, so page and daemon never disagree. A change confined to `cointos/coin.py` can deploy by copying it and restarting only `cointos-coin.service` once Coin has no outstanding gateway thought or pending conversation work. Isolated copies avoid shipping unrelated uncommitted source changes.
+The gateway reads `web/dashboard.html` from the installed runtime on every request, so a dashboard-only change deploys by copying that file; ship it with the installer instead when it depends on daemon changes. A change confined to `cointos/coin.py` can deploy by copying it and restarting only `cointos-coin.service` once Coin has no outstanding gateway thought or pending conversation work.
 
 ## Runtime knowledge and registry
 

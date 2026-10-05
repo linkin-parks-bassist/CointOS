@@ -173,3 +173,14 @@ class Checks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvictionOrder(unittest.TestCase):
+    def test_shared_starts_go_before_any_conversation_however_recent(self):
+        from cointos import memory
+        gb = memory.GB
+        snapshots = {"waiting-agent": {"bytes": 4 * gb, "last_run": 1, "owner": "pigen:work"},
+                     "fresh-shared": {"bytes": 2 * gb, "last_run": 9, "owner": "shared"},
+                     "old-shared": {"bytes": 2 * gb, "last_run": 5, "owner": "shared"}}
+        self.assertEqual(memory.to_forget(snapshots, 3, 0), ["old-shared", "fresh-shared"])
+        self.assertEqual(memory.to_forget(snapshots, 5, 0), ["old-shared", "fresh-shared", "waiting-agent"])
