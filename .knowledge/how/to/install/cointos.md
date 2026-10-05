@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T14:09:22+11:00"
+revised_at: "2026-10-05T18:34:26+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -13,24 +13,20 @@ The runtime code contains no schema-compatibility branches. `scripts/upgrade-led
 
 ## Compatible live installation
 
-Use `scripts/install --live [--wait-seconds N]` when the current daemon is reachable and the candidate preserves the process-identity projection owned by `cointos.config.live_incompatibilities`: backend, Lemonade endpoint, snapshot directory, server cgroup, gateway port, work-model identity and model topology/shape.
+Use `scripts/install --live [--wait-seconds N]` (default 60, honoured as given) when the current daemon is reachable and the candidate preserves the process-identity projection owned by `cointos.config.live_incompatibilities`: backend, Lemonade endpoint, snapshot directory, server cgroup, gateway port, work-model identity and model topology/shape. The installer checks that projection before contacting the daemon.
 
-The installer checks that projection before contacting the daemon, so missing or incompatible installed configuration causes no network or systemd action and reports the exact changed paths. Daemon-policy changes such as reasoning, recovery, scheduling and spawning are compatible.
+If nothing the daemon runs changed (`cointos/`, `config/` other than `projects.json`, `systemd/`), the installer copies `roles/`, `web/` and `bin/`, rewrites the runtime leaves and stops: prompts, the dashboard and the CLI are read fresh from disk, so the daemon keeps running untouched.
 
-A live install asks the current daemon to quiesce: admitted thoughts and landing validations finish, while new model requests wait at the admission gate without becoming active thoughts or counting against drain readiness. A disconnected gated caller leaves immediately; cancellation admits waiting requests; shutdown returns one retryable refusal. Holding admission avoids consuming the client's retry budget and leaving it in backoff after replacement. At a quiet request boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes. It does not relaunch agent conversations or inject continuation messages. Timeout or Ctrl-C cancels quiescence before copying or stopping anything. If a later installation step fails after cointosd stops, process-exit cleanup starts the daemon again. Long agent context reads can delay a quiet boundary by tens of minutes; pass a generous `--wait-seconds`.
+Otherwise it asks the daemon to quiesce: new model requests wait at the admission gate, and the drain is ready once no landing is validating and no reply has begun producing output. Replies still queued for a lane or reading their prompt have produced nothing; when cointosd stops, their stream is cut and OpenCode retries them within about a second (verified against OpenCode 1.18.34). At that boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes, without relaunching conversations. Timeout, Ctrl-C or an API failure during the drain cancels quiescence before anything is copied; a later failure after cointosd stops restarts it on exit. An ordinary `cointos restart` still waits for every admitted request.
 
-A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below; copying the files alone leaves its resident tool catalog and settings unchanged.
+A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below.
 
 ## Isolated service changes
 
-The gateway reads `web/dashboard.html` from the installed runtime on every request, so a change confined to that file deploys by copying it to `~/.CointOS/web/dashboard.html` and reloading the page; no install, restart or quiescence is needed.
-
-A change confined to `cointos/coin.py` can deploy by copying that file to `~/.CointOS/cointos/coin.py` and restarting only `cointos-coin.service`. Check that Coin has no outstanding gateway thought first. Coin's deep-turn queue is in memory, so avoid replacement while it has pending conversation work. Agent units, the daemon and loaded models continue.
-
-Isolated copies avoid shipping unrelated uncommitted source changes that a full or live install would copy.
+The gateway reads `web/dashboard.html` from the installed runtime on every request, so a dashboard-only change deploys by copying that file; ship it with the installer instead when it depends on daemon changes, so page and daemon never disagree. A change confined to `cointos/coin.py` can deploy by copying it and restarting only `cointos-coin.service` once Coin has no outstanding gateway thought or pending conversation work. Isolated copies avoid shipping unrelated uncommitted source changes.
 
 ## Runtime knowledge and registry
 
-Each installation replaces the installed tree's `where/am/i.md` and `what/is/cointos.md` with `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`, which writes generated leaves (also the daemon's queue answers) with the CLI-only `kt rewrite --force`, so growth reconsideration, meant for editors, never fails a copy. Edit the source files, not their generated copies. Other runtime leaves remain. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
+Each installation replaces the installed tree's `where/am/i.md` and `what/is/cointos.md` with `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`, which writes generated leaves (also the daemon's queue answers) with the CLI-only `kt rewrite --force`, so growth reconsideration, meant for editors, never fails a copy. Edit the source files, not their generated copies. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
 
-Worktrees live at `~/Projects/.worktrees/<project>/<task>` on `work/<task>` branches. Verify the installed unit `WorkingDirectory`, service state, exact adopted agent identities when live installing, and `cointos check` after every installation.
+Worktrees live at `~/Projects/.worktrees/<project>/<task>` on `work/<task>` branches. After every installation verify that the installed copy contains the change, service state, adopted agent identities when live installing, and `cointos check`.
