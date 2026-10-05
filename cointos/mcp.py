@@ -154,7 +154,8 @@ def peers() -> tuple[str, bool]:
         task = state["tasks"].get(agent["task"]) or {}
         if agent["task"] == me or not task:
             continue
-        lines = [f"{task['id']} ({task['role']}, {agent['state']}): {summary(task.get('brief', ''))}"]
+        called = f"{task['name']}, " if task.get("name") else ""
+        lines = [f"{called}{task['id']} ({task['role']}, {agent['state']}): {summary(task.get('brief', ''))}"]
         if agent.get("doing"):
             lines.append(f"  now: {agent['doing'][:160]}")
         files = changed_files(task)

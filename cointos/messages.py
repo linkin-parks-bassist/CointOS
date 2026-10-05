@@ -17,7 +17,9 @@ from cointos.state import CONFIG, LOCK, L, log
 
 
 def text(message: dict) -> str:
-    return f"<message from=\"{message['from']}\">\n{message['text']}\n</message>"
+    sender = L["tasks"].get(message["from"]) or {}
+    who = f"{sender['name']} ({message['from']})" if sender.get("name") else message["from"]
+    return f"<message from=\"{who}\">\n{message['text']}\n</message>"
 
 
 def post(url: str, session: str, directory: str | None, body: str) -> None:
@@ -29,9 +31,9 @@ def post(url: str, session: str, directory: str | None, body: str) -> None:
         pass
 
 
-def deliver(message: dict, url: str, session: str, directory: str | None) -> None:
+def deliver(message: dict, body: str, url: str, session: str, directory: str | None) -> None:
     try:
-        post(url, session, directory, text(message))
+        post(url, session, directory, body)
     except (OSError, ValueError) as error:
         with LOCK:
             message.pop("posting", None)  # retried on a later tick
@@ -54,5 +56,5 @@ def pending() -> None:
         if not (agent and agent.get("url") and agent.get("session")):
             continue
         message["posting"] = True
-        threading.Thread(target=deliver, args=(message, agent["url"], agent["session"], task.get("worktree")),
+        threading.Thread(target=deliver, args=(message, text(message), agent["url"], agent["session"], task.get("worktree")),
                          daemon=True).start()

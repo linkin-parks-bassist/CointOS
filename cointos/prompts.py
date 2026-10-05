@@ -78,7 +78,8 @@ def assignment(task: dict, where: dict) -> str:
 
 def identity(task: dict) -> str:
     """Who the run is, stated so it never has to infer its role from the kind or the code."""
-    return (f"Task: `{task['id']}`, a {task['kind']} task. Your role: {task['role']}. "
+    called = f"Your name is {task['name']}. " if task.get("name") else ""
+    return (f"Task: `{task['id']}`, a {task['kind']} task. Your role: {task['role']}. {called}"
             "The `cointos` commands you run act as this task with this role's permissions.\n"
             f"Task start date: {task['prompt_date']} (fixed; run `date` for the current date and time).")
 

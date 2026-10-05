@@ -32,7 +32,7 @@ import re
 import time
 from pathlib import Path
 
-from cointos import queues, schema
+from cointos import names, queues, schema
 from cointos.config import ROOT, managed_trees
 from cointos.state import CONFIG, L, log, now
 
@@ -82,6 +82,7 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
     created = now()
     task = {
         "id": f"{where['name']}:{name}", "kind": kind, "role": spec["role"], "place": where["name"],
+        "name": names.invent({t["name"] for t in L["tasks"].values() if t.get("name")}),
         "title": title, "item": item, "brief": brief,
         "record": f"{where['name']}:{item}" if spec["record"] else None, "record_hash": record_hash,
         "worker": worker, "rank": rank, "created_at": created, "updated_at": created,

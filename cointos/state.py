@@ -47,8 +47,11 @@ def alert(text: str) -> None:
 
 def fresh(previous: dict) -> dict:
     """A ledger for a starting daemon, keeping what outlives it: tasks, snapshots, history."""
+    from cointos import names
     for task in previous.get("tasks", {}).values():
         task.pop("validating", None)  # no landing validation survives the daemon that ran it
+        if not task.get("name") and task.get("status") in ("waiting", "running", "review"):
+            task["name"] = names.invent({t["name"] for t in previous["tasks"].values() if t.get("name")})
     for record in previous.get("queue", {}).values():
         holder = record.get("held_by")
         if holder and ":" not in holder:

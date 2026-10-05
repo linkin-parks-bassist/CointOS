@@ -115,7 +115,7 @@ class Tools(unittest.TestCase):
         messages.pending()
         messages.pending()
         self.assertEqual(posted, [("http://127.0.0.1:9", "ses_1", worker["worktree"],
-                                   f'<message from="{self.manager["id"]}">\nUse the memo API\n</message>')])
+                                   f'<message from="{self.manager["name"]} ({self.manager["id"]})">\nUse the memo API\n</message>')])
         self.assertTrue(state.L["messages"][-1]["read"])
 
     def test_a_failed_post_is_retried_later(self):
@@ -144,6 +144,19 @@ class Tools(unittest.TestCase):
         self.assertFalse(state.L["messages"][-1]["read"])
         messages.pending()
         self.assertEqual((len(attempts), state.L["messages"][-1]["read"]), (2, True))
+
+    def test_every_task_gets_its_own_generated_name_for_life(self):
+        from cointos import names, prompts
+        worker = support.queued(self.project, "build")
+        self.assertRegex(worker["name"], r"^[A-Z][a-z]{2,7}$")
+        self.assertNotEqual(worker["name"], self.manager["name"])
+        self.assertIn(f"Your name is {worker['name']}.", prompts.identity(worker))
+        taken = {f"Name{i}" for i in range(50)} | {"Rako"}
+        import random
+        rng = random.Random(3)
+        made = {names.invent(taken, rng) for _ in range(200)}
+        self.assertEqual(len(made & {n.lower() for n in taken}), 0)
+        self.assertGreater(len(made), 150, "names rarely collide")
 
     def test_agents_get_the_cointos_server_in_their_config(self):
         server = opencode.settings(state.CONFIG, "key", {"id": "p:x", "abilities": ["standard"]}, [], "worker-9")["mcp"]["cointos"]

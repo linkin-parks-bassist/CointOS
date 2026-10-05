@@ -483,7 +483,7 @@ function renderAgents(S) {
     setHTML(q(".work"), `${esc(n.head)}${n.context ? `<small>${esc(n.context)}</small>` : ""}`);
     const effort = Object.values(S.thoughts).find(t => t.agent === a.id && t.reasoning_effort)?.reasoning_effort
       || task?.reasoning_effort || a.reasoning_effort;
-    setText(q(".meta"), `${a.id}${effort ? ` · reasoning ${effort}` : ""}`);
+    setText(q(".meta"), [task?.name, a.id, effort && `reasoning ${effort}`].filter(Boolean).join(" · "));
     const live = a.live || {};
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
       ((kind === "tools" || !(live.reasoning || live.content)) && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");

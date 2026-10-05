@@ -70,7 +70,8 @@ def agents_text(state: dict) -> str:
     now = time.time()
     lines = []
     for agent in state["agents"].values():
-        lines.append(f"{agent['id']:16} {agent['state']:9} {agent['place']}:{agent['title']}  up {ago(now - agent['started_at'])}"
+        name = (state["tasks"].get(agent["task"]) or {}).get("name") or ""
+        lines.append(f"{name:9} {agent['id']:16} {agent['state']:9} {agent['place']}:{agent['title']}  up {ago(now - agent['started_at'])}"
                      f"  {agent['thoughts']} thoughts  last activity {ago(now - agent['last_activity'])} ago")
         if agent.get("doing"):
             lines.append(f"{'':16} {agent['doing'][:140]}")
