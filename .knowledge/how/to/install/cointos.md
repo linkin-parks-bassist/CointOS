@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T21:53:12+11:00"
+revised_at: "2026-10-05T22:04:37+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -13,11 +13,11 @@ The runtime code contains no schema-compatibility branches. `scripts/upgrade-led
 
 ## Compatible live installation
 
-Use `scripts/install --live [--wait-seconds N]` (default 60, honoured as given) when the current daemon is reachable and the candidate preserves the process-identity projection owned by `cointos.config.live_incompatibilities`: backend, Lemonade endpoint, snapshot directory, server cgroup, gateway port, work-model identity and model topology/shape. The installer checks that projection before contacting the daemon. Run one installation at a time: each copies whatever the source tree holds when its drain completes.
+Use `scripts/install --live` when the current daemon is reachable and the candidate preserves the process-identity projection owned by `cointos.config.live_incompatibilities`: backend, Lemonade endpoint, snapshot directory, server cgroup, gateway port, work-model identity and model topology/shape. The installer checks that projection before contacting the daemon. Run one installation at a time.
 
 If nothing the daemon runs changed (`cointos/`, `config/` other than `projects.json`, `systemd/`), the installer copies `roles/`, `web/` and `bin/`, rewrites the runtime leaves and stops: prompts, the dashboard and the CLI are read fresh from disk, so the daemon keeps running untouched.
 
-Otherwise it asks the daemon to quiesce: stop starting replies and let started ones finish, so none is cut mid-output. New model requests wait at the admission gate; only started replies (holding a lane, or having read or generated anything, including one the time slice took off its lane) contend for lanes; the drain is ready once no landing is validating and no started reply remains. Untouched queued replies have produced nothing; when cointosd stops, their stream is cut and OpenCode retries them within about a second (verified against OpenCode 1.18.34). At that boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes, without relaunching conversations. Timeout, Ctrl-C or an API failure during the drain cancels quiescence before anything is copied (terminating a backgrounded installer leaves quiescence on until `cancel-restart` or the next daemon start); a later failure after cointosd stops restarts it on exit. Never pause agents (`cointos stop`) to hurry an installation: it relaunches every conversation.
+Otherwise it replaces cointosd at once, waiting for no agent: stopping cointosd ends the GPU step in flight (at most one read chunk or generation step), saves each lane's state, and cuts the replies in progress. It copies and upgrades the runtime, reloads units, starts cointosd and adopts the surviving Coin, agent and model processes without relaunching conversations. A whole live installation takes about 6 seconds, with cointosd down about 2. OpenCode discards a cut reply entirely (no partial reasoning or text is kept in the session) and retries the identical request, verified against OpenCode 1.18.34 with a stream cut mid-reply. The new daemon restores the saved state: a cut read continues where it stopped, and a cut generation restarts from its prompt-end checkpoint, losing only that reply's partial output. A failure after cointosd stops restarts it on exit. Never pause agents (`cointos stop`) for an installation: it relaunches every conversation.
 
 A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below.
 
