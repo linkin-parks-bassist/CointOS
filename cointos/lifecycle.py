@@ -272,12 +272,6 @@ def cancel(items: list[str], by: str, reason: str) -> list[str]:
     current = queues.records()
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("say why the work is cancelled")
-    upkeep = [key for key in items if key not in current and key in L["tasks"] and upkeep_task(L["tasks"][key])]
-    for key in upkeep:
-        cancel_task(L["tasks"][key], by, reason.strip())
-    items = [key for key in items if key not in upkeep]
-    if not items:
-        return upkeep
     for key in items:
         if key not in current:
             raise ValueError(f"unknown queue item {key!r}; name it PROJECT:ITEM")
@@ -310,17 +304,12 @@ def cancel(items: list[str], by: str, reason: str) -> list[str]:
     for task in L["tasks"].values():
         if task.get("cancelled") and task["status"] == "failed":
             retire(task)
-    return upkeep + list(items)
-
-
-def upkeep_task(task: dict) -> bool:
-    """A live task that no queue record owns: gardens, audits, scouts and operators."""
-    return not task.get("record") and task["kind"] not in ("item", "integrate", "decompose") \
-        and task["status"] not in ("done", "failed")
+    return list(items)
 
 
 def cancel_task(task: dict, by: str, reason: str) -> None:
-    """End one record-less task for good: stop its run and settle it as cancelled."""
+    """End one live task that no queue record owns (a garden, audit, scout or operator) for
+    good: stop its run and settle it as cancelled."""
     note = f"cancelled by {by}: {reason}"
     for agent in [a for a in L["agents"].values() if a["task"] == task["id"]]:
         release(agent["id"], note)

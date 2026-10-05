@@ -63,3 +63,16 @@ class Kill(unittest.TestCase):
         self.assertNotIn("gardener-1", state.L["agents"])
         with self.assertRaises(ValueError):
             api.dispatch("cancel", {"items": [task["id"]], "reason": "again"})
+
+    def test_controls_name_tasks_and_reach_their_queue_record_through_it(self):
+        worker = support.queued(self.project, "child")
+        support.running(worker, "worker-1")
+        state.L["tasks"]["p:integrate-child-1"] = {**worker, "id": "p:integrate-child-1", "kind": "integrate",
+                                                   "agent": None, "status": "waiting"}
+        api.dispatch("hold", {"item": "p:integrate-child-1"})  # reaches p:child through its record link
+        self.assertEqual(state.L["queue"]["p:child"]["held_by"], "user")
+        garden = tasks.create("garden", tasks.SYSTEM, "garden", "Work", [7])
+        with self.assertRaisesRegex(ValueError, "has no queue item"):
+            api.dispatch("hold", {"item": garden["id"]})
+        with self.assertRaisesRegex(ValueError, "not a live task"):
+            api.dispatch("cancel", {"items": ["p:nothing"], "reason": "x"})

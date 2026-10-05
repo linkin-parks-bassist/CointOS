@@ -435,11 +435,6 @@ function agentRowSizes(count, capacity) {
   return Array.from({length: rows}, (_, i) => small + (i >= rows - larger ? 1 : 0));
 }
 
-// Gardens, audits, scouts and operators: live tasks no queue record owns, cancelled by task id.
-function upkeepTask(t) {
-  return !!t && !t.record && !["item", "integrate", "decompose"].includes(t.kind) && !["done", "failed"].includes(t.status);
-}
-
 function renderAgents(S) {
   // Agents share one machine and its lanes, so every page shows all of them, matching the
   // header's count; project pages filter only their pipeline and Work list.
@@ -466,9 +461,6 @@ function renderAgents(S) {
     if (card.className !== `agent r-${a.role}`) card.className = `agent r-${a.role}`;
     card.dataset.key = a.task;
     card.dataset.agent = a.id;
-    const own = S.tasks?.[a.task];
-    const cancellable = !!S.queue?.[own?.record || ""] || !!S.queue?.[S.tasks?.[own?.worker]?.record || ""] || upkeepTask(own);
-    card.querySelector('[data-act="cancel-item"]').hidden = !cancellable;
     if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
     cards.delete(a.id);
     card.style.gridColumn = `span ${spans[index]}`;
@@ -681,7 +673,7 @@ function actionsHTML(L, t, it, r) {
       b("move", {top: "⇈ Top", up: "↑ Up", down: "↓ Down", bottom: "⇊ Bottom"}[to], {item: key, to})).join(""));
     out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: key}, "danger"));
   }
-  if (!r && upkeepTask(t)) out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: t.id}, "danger"));
+  if (!r && t && !["done", "failed"].includes(t.status)) out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: t.id}, "danger"));
   if (t && (t.status === "waiting" || t.status === "running")) out.push(`<span class="sep"></span><label>Reasoning <select data-act="reasoning" data-task="${esc(t.id)}">` +
     ["low", "medium", "xhigh"].map(e => `<option${e === t.reasoning_effort ? " selected" : ""}>${e}</option>`).join("") + `</select></label>`);
   return out.length ? `<div class="actions">${out.join("")}</div>` : "";
@@ -819,8 +811,7 @@ document.addEventListener("click", async e => {
   if (!button) return;
   e.stopPropagation(); e.preventDefault();
   const card = button.closest(".agent"), data = {...button.dataset};
-  if (card) { const t = LAST.L.tasks[card.dataset.key]; data.agent ??= card.dataset.agent;
-    data.item ??= (t?.record || LAST.L.tasks[t?.worker]?.record || (upkeepTask(t) ? t.id : undefined)); }
+  if (card) { data.agent ??= card.dataset.agent; data.item ??= card.dataset.key; }  // controls name the task
   const plan = CONTROLS[data.act]?.(data);
   if (!plan) return;
   const [question, action, body, done] = plan;

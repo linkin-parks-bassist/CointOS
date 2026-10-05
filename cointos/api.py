@@ -151,13 +151,24 @@ def queue(body):
     return {"ok": True, "item": item}
 
 
+def queue_key(name: str) -> str | None:
+    """The queue record a control names. Every control takes a task id; an item task's id is
+    its queue key, and any other task reaches its record through its `record` link."""
+    current = queues.records()
+    if name in current:
+        return name
+    task = L["tasks"].get(name)
+    return task["record"] if task and task.get("record") in current else None
+
+
 def decider(body) -> tuple[str, str]:
     """The queue item a hold or revision is about, and who decides about it: the user, or the
     running manager of the item's own project."""
-    key = body.get("item", "")
-    record = queues.records().get(key)
-    if record is None:
-        raise ApiError(f"unknown queue item {key!r}; name it PROJECT:ITEM")
+    name = body.get("item", "")
+    key = queue_key(name)
+    if key is None:
+        raise ApiError(f"{name!r} has no queue item; only queued work can be held, revised or moved")
+    record = queues.records()[key]
     by = proposer(body)
     if by is None:
         return key, "user"
@@ -184,19 +195,39 @@ def revise(body):
 
 
 def cancel(body):
-    items = body.get("items") or []
-    if not isinstance(items, list) or not items or not all(isinstance(i, str) for i in items):
-        raise ApiError("name the queue items or upkeep tasks to cancel as PROJECT:NAME")
+    """End named tasks for good. A task with a queue record withdraws that record (and every run
+    working on it); a live task without one, such as a garden or an audit, just ends."""
+    names = body.get("items") or []
+    if not isinstance(names, list) or not names or not all(isinstance(i, str) for i in names):
+        raise ApiError("name the tasks to cancel as PROJECT:NAME")
+    reason = (body.get("reason") or "").strip()
+    if not reason:
+        raise ApiError("say why the work is cancelled")
+    keys, alone = [], []
+    for name in dict.fromkeys(names):
+        key = queue_key(name)
+        task = L["tasks"].get(name)
+        if key is not None:
+            keys.append(key)
+        elif task is not None and task["status"] not in ("done", "failed"):
+            alone.append(task)
+        else:
+            raise ApiError(f"{name!r} is not a live task or queue item")
     by = proposer(body)
-    if by is not None and (by["role"] != "manager" or any(
-            queues.records().get(i, {}).get("project") != by["place"] for i in items)):
+    if by is not None and (by["role"] != "manager" or alone or any(
+            queues.records()[k]["project"] != by["place"] for k in keys)):
         raise ApiError("only the owning project's running manager, or the user, cancels queued work")
-    return {"ok": True, "cancelled": lifecycle.cancel(list(dict.fromkeys(items)), "user" if by is None else by["id"],
-                                                       body.get("reason", ""))}
+    who = "user" if by is None else by["id"]
+    for task in alone:
+        lifecycle.cancel_task(task, who, reason)
+    return {"ok": True, "cancelled": [t["id"] for t in alone] + (lifecycle.cancel(list(dict.fromkeys(keys)), who, reason) if keys else [])}
 
 
 def move(body):
-    return {"ok": True, "position": queues.move(body.get("item", ""), body.get("to", ""))}
+    key = queue_key(body.get("item", ""))
+    if key is None:
+        raise ApiError(f"{body.get('item', '')!r} has no queue item; only queued work can be moved")
+    return {"ok": True, "position": queues.move(key, body.get("to", ""))}
 
 
 def attention(body):

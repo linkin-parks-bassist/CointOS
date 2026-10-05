@@ -236,7 +236,7 @@ class Revision(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "owning project's running manager"):
             api.dispatch("revise", {"item": "p:impl", "brief": "X", "reason": "r",
                                     "proposed_by": foreign["id"], "run": "manager-2"})
-        with self.assertRaisesRegex(ValueError, "unknown queue item"):
+        with self.assertRaisesRegex(ValueError, "has no queue item"):
             api.dispatch("hold", {"item": "impl"})
         api.dispatch("hold", {"item": "p:impl"})  # the user
         self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
