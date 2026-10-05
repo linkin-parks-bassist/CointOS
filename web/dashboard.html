@@ -52,15 +52,13 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .agent .state.starting { border-style: dashed; }
 @keyframes pulse { 50% { opacity: .45; } }
 .agent .id { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
-/* One line always: the role, then what it is doing where, cut short rather than wrapped. */
-.agent .role { max-width: 100%; padding: 2px 8px; background: var(--c); color: var(--dark); font-size: 12.5px; line-height: 18px;
-  font-weight: 900; text-transform: uppercase; letter-spacing: .1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.agent .role em { font-style: normal; font-weight: 700; text-transform: none; letter-spacing: 0; opacity: .8; }
 .agent .work { font-size: 20px; font-weight: 900; letter-spacing: -.04em; line-height: 1.15; overflow-wrap: anywhere; }
 .agent .work small { display: block; font-size: 13px; font-weight: 700; letter-spacing: 0; color: var(--dark-soft); margin-top: 2px; }
+.agent .by { font-size: 14px; color: var(--dark-text); }
+.agent .by b { color: var(--c); font-weight: 900; font-size: 16px; letter-spacing: -.01em; }
+.agent .by span { color: var(--dark-soft); font-size: 12.5px; }
 .agent .sum { font-size: 13px; line-height: 1.35; color: var(--dark-text); opacity: .85; }
 .agent .sum:empty { display: none; }
-.agent .meta { max-width: 100%; font-size: 12px; color: var(--dark-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Uptime, tokens written, and speed while writing: three fixed lines in a fixed width, so ticking
    numbers never move the title beside them. */
 .agent .stats { min-width: 6.5em; text-align: right; font-size: 12px; line-height: 1.35; color: var(--dark-soft); white-space: nowrap; }
@@ -454,8 +452,8 @@ function renderAgents(S) {
     if (!card) {
       card = document.createElement("article");
       card.dataset.id = a.id;
-      card.innerHTML = `<div class="head"><div class="state"></div><div class="id"><div class="role"></div><div class="work"></div><div class="sum"></div>` +
-        `<div class="meta"></div></div><div class="stats"><b></b><span></span><span></span></div></div><div class="track"></div><div class="live"><div></div></div><div class="foot"><div class="now"></div><div class="ctl"><button type="button" class="btn" data-act="pause-agent">Pause</button>` +
+      card.innerHTML = `<div class="head"><div class="state"></div><div class="id"><div class="work"></div><div class="by"></div><div class="sum"></div>` +
+        `</div><div class="stats"><b></b><span></span><span></span></div></div><div class="track"></div><div class="live"><div></div></div><div class="foot"><div class="now"></div><div class="ctl"><button type="button" class="btn" data-act="pause-agent">Pause</button>` +
         `<button type="button" class="btn" data-act="cancel-item">Cancel task</button></div></div><div class="progress"><span></span></div>`;
     }
     if (card.className !== `agent r-${a.role}`) card.className = `agent r-${a.role}`;
@@ -472,18 +470,19 @@ function renderAgents(S) {
     setText(written, `${a.generated.toLocaleString()} tok`);
     setText(rate, a.rate && a.state === "thinking" && kind === "thinking" && share === undefined ? `${a.rate.toFixed(1)} tok/s` : "idle");
     const task = S.tasks?.[a.task];
-    setHTML(q(".role"), `${esc(a.role)} <em>${esc(ROLE_VERB[a.role] || "working")} · ${esc(a.place)}` +
-      `${(task?.stage || a.stage) ? ` · ${esc(stageName(task?.stage || a.stage))}` : ""}</em>`);
     const step = FLOW?.items.get(a.role === "integrator" ? task?.worker : a.task)?.step;
     setHTML(q(".track"), trackHTML(step, a.role));
     const trackClass = step ? "track" : "track upkeep";
     if (q(".track").className !== trackClass) q(".track").className = trackClass;
-    const n = named(a.title, a.place);
+    const n = named(a.title, a.place), stage = task?.stage || a.stage;
     setText(q(".sum"), summaryOf(S, a.task) || "");
-    setHTML(q(".work"), `${esc(n.head)}${n.context ? `<small>${esc(n.context)}</small>` : ""}`);
+    const context = [n.context, stage && stageName(stage)].filter(Boolean).join(" · ");
+    setHTML(q(".work"), `${esc(n.head)}${context ? `<small>${esc(context)}</small>` : ""}`);
+    setHTML(q(".by"), `being ${esc(BY_VERB[a.role] || "carried out")} by <b>${esc(task?.name || a.id)}</b> <span>(${esc(a.role)})</span>`);
     const effort = Object.values(S.thoughts).find(t => t.agent === a.id && t.reasoning_effort)?.reasoning_effort
       || task?.reasoning_effort || a.reasoning_effort;
-    setText(q(".meta"), [task?.name, a.id, effort && `reasoning ${effort}`].filter(Boolean).join(" · "));
+    const tip = [a.id, effort && `reasoning ${effort}`].filter(Boolean).join(" · ");
+    if (card.title !== tip) card.title = tip;
     const live = a.live || {};
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
       ((kind === "tools" || !(live.reasoning || live.content)) && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
@@ -501,6 +500,9 @@ const FLOW_STEPS = [["blocked", "Blocked", "waiting on others"], ["ready", "Read
   ["building", "Building", "a worker has it"], ["review", "Review", "awaiting the integrator"],
   ["integrating", "Integrating", "being checked and landed"], ["landed", "Landed", "on main"]];
 const TRACK = [["ready", "Queued"], ["building", "Build"], ["review", "Review"], ["integrating", "Integrate"], ["landed", "Landed"]];
+// How a card says who is on its task: "being carried out by Qunos (worker)".
+const BY_VERB = {worker: "carried out", integrator: "reviewed", manager: "planned", steward: "looked after",
+  gardener: "tended", "tree-auditor": "audited", "test-auditor": "audited", operator: "carried out"};
 const ROLE_VERB = {worker: "building", integrator: "reviewing & landing", manager: "planning", steward: "tidying loose ends",
   gardener: "gardening knowledge", "tree-auditor": "auditing knowledge", "test-auditor": "auditing tests", operator: "operating"};
 const KIND_LABEL = {steward: "loose ends", garden: "garden", "tree-audit": "tree audit", "test-audit": "test audit",
