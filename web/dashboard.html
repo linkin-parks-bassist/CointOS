@@ -736,7 +736,10 @@ function renderDrawer(L) {
 function renderWork(L) {
   const groups = [["running", "In progress"], ["review", "Waiting for the integrator"], ["waiting", "Up next"]];
   const here = place => !ROUTE.project || place === ROUTE.project;
-  const tasks = Object.values(L.tasks).filter(t => here(t.place)).sort((a, b) => b.updated_at - a.updated_at);
+  // Active system tasks (scouts, auditors, operators) work across projects, so project pages list
+  // them too; their history stays on the home page.
+  const tasks = Object.values(L.tasks).filter(t => here(t.place) ||
+    (t.place === "system" && ["running", "review", "waiting"].includes(t.status))).sort((a, b) => b.updated_at - a.updated_at);
   const records = Object.values(L.queue || {}).filter(r => here(r.project));
   const queued = records.filter(r => r.status !== "done" && !r.replaced_by &&
     (!L.tasks[`${r.project}:${r.item}`] || L.tasks[`${r.project}:${r.item}`].status === "waiting" ||
