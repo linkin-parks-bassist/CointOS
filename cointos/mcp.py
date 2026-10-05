@@ -221,15 +221,21 @@ def catalogue(for_role: str | None) -> list[dict]:
     return tools
 
 
+def missing(required: list[str], arguments: dict) -> str | None:
+    absent = [key for key in required if arguments.get(key) in (None, "", [])]
+    return f"missing required argument(s): {', '.join(absent)}" if absent else None
+
+
 def invoke(name: str, arguments: dict, for_role: str | None) -> tuple[str, bool]:
     if name in MESSAGE_TOOLS:
+        if problem := missing(MESSAGE_TOOLS[name][2], arguments):
+            return problem, True
         result, failed = message_tool(name, arguments)
     elif name in TOOLS and (TOOLS[name][0] is EVERYONE or for_role in TOOLS[name][0]):
-        missing = [key for key in TOOLS[name][3] if arguments.get(key) in (None, "", [])]
         if name == "finish" and bool(arguments.get("complete")) == bool(arguments.get("blocked")):
             return "give exactly one of complete or blocked", True
-        if missing:
-            return f"missing required argument(s): {', '.join(missing)}", True
+        if problem := missing(TOOLS[name][3], arguments):
+            return problem, True
         result, failed = run_cli(TOOLS[name][4](arguments))
     else:
         return f"unknown tool {name!r} for this role", True

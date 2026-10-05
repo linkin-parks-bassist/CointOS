@@ -47,6 +47,7 @@ class Tools(unittest.TestCase):
         self.assertEqual(mcp.invoke("queue", {"project": "p", "name": "x"}, "manager"),
                          ("missing required argument(s): brief", True))
         self.assertTrue(mcp.invoke("finish", {}, "worker")[1])
+        self.assertEqual(mcp.invoke("send", {"text": "hi"}, "worker"), ("missing required argument(s): to", True))
 
     def test_protocol_lists_and_calls_tools(self):
         listed = mcp.respond({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}, "manager")
