@@ -131,3 +131,24 @@ class Silence(unittest.TestCase):
         with patch.object(daemon.lifecycle, 'stop') as stop:
             daemon.look_after_agents()
         stop.assert_called_once_with('x', 'silent too long', requeue=True)
+
+
+class PromptRewrites(unittest.TestCase):
+    def setUp(self):
+        support.fresh_ledger(self)
+
+    def begin(self, owner, tokens):
+        from cointos import lanes
+        with patch.object(lanes, "schedule"), patch.object(lanes.snapshots, "live", lambda o: True), \
+             patch.object(lanes.threading, "Thread") as thread, state.LOCK:
+            state.L["tasks"].setdefault(owner, {"id": owner})
+            lanes.begin("agent", "background", owner, state.L["lanes"][0]["model"], {"tokens": tokens, "reader": {}}, {}, 10)
+        return thread
+
+    def test_a_conversation_that_grows_reports_nothing_but_a_rewritten_one_is_reported(self):
+        from cointos import lanes
+        self.addCleanup(lanes.PROMPTS.clear)
+        self.assertFalse(self.begin("t", list(range(100))).called)
+        self.assertFalse(self.begin("t", list(range(95)) + [7] * 20).called, "only the opening tail may differ")
+        thread = self.begin("t", [1] * 50)
+        self.assertEqual(thread.call_args.kwargs["target"], lanes.report_rewrite)

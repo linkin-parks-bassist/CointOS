@@ -25,6 +25,10 @@ from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, log, now
 RUNS: dict[str, dict] = {}  # thought id -> its tokens and plumbing (kept out of the ledger)
 BUSY: dict[int, str] = {}  # lane position -> the thought whose chunk is in flight there
 HELD: dict[int, list[int]] = {}  # lane position -> the tokens its state holds
+PROMPTS: dict[str, list[int]] = {}  # task -> the tokens of its last rendered prompt
+# A reply ends a prompt with the assistant's opening; how its first tokens merge with what the
+# reply generated may differ, so a prompt continues the last one if all but this tail agrees.
+OPENING_TOKENS = 8
 
 
 def begins(held: list[int] | None, tokens: list[int]) -> bool:
@@ -79,9 +83,29 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
         if klass == "user":
             L["user_last_thought"] = now()
         if owner in L["tasks"]:
+            previous, PROMPTS[owner] = PROMPTS.get(owner), rendered["tokens"]
+            if previous and not begins(previous[:-OPENING_TOKENS], rendered["tokens"]):
+                threading.Thread(target=report_rewrite, args=(owner, model, previous, rendered["tokens"]),
+                                 daemon=True).start()
             snapshots.forget_diverged(owner, model, rendered["tokens"])
+        for gone in [task for task in PROMPTS if not snapshots.live(task)]:
+            del PROMPTS[gone]
         schedule()
     return thought_id
+
+
+def report_rewrite(owner: str, model: str, previous: list[int], tokens: list[int]) -> None:
+    """A task's conversation changed before its last prompt's end, so none of its saved states
+    can be restored: record where, and the text on both sides. Runs outside LOCK."""
+    at = common(previous, tokens)
+    try:
+        text = {key: BACKEND.text(CONFIG, model, part) for key, part in
+                (("before", previous[max(0, at - 40):at]), ("previous_after", previous[at:at + 80]),
+                 ("next_after", tokens[at:at + 80]))}
+    except Exception as error:  # a diagnostic never fails a thought
+        text = {"text_unavailable": f"{type(error).__name__}: {error}"}
+    with LOCK:
+        log("prompt rewritten", owner=owner, previous=len(previous), next=len(tokens), common=at, **text)
 
 
 def cancel(thought_id: str) -> None:
