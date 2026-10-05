@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T21:25:02+11:00"
+revised_at: "2026-10-05T21:32:08+11:00"
 ---
 
 ## Every finished reply re-reads its own tokens
@@ -9,9 +9,9 @@ The work model runs MTP speculative decoding. When a reply ends, the server has 
 
 The cost is accepted for now. The user has declined to patch llama.cpp (retaining no draft tokens beyond an end-of-generation token) at this time; disabling drafting would remove the cost only at a large generation-speed loss.
 
-## A message arriving mid-turn invalidates the recipient's cache
+## A conversation sometimes diverges right after the agent sends a message
 
-`messages.pending` posts a `noReply` user message into the recipient's session as soon as it has a live session. OpenCode orders messages by creation, so a message posted while the agent's reply is still in progress sits before that reply's later steps, and Qwen's chat template strips reasoning from assistant messages that precede a user message. The in-progress turn therefore re-renders differently, and the next request diverges from every saved state past the turn's start (`snapshot forgotten … diverged`, then a partial reread such as 19,181 of 30,032 tokens). Agents that message often reread often. Proposed fix, awaiting the user: deliver messages only when the recipient's current reply has finished.
+Unexplained. Agents exchanging messages normally restore their whole context from cache (two agents messaging each other all evening restored 28k–31k of 28k–31k tokens on most switches). But on 2026-10-05 three divergences followed immediately after the agent's own `cointos_send`: two sends to `user` at 20:09:38 and 20:13:22 (then `snapshot forgotten … diverged` and `restored 0`) and one send to a peer at 20:18:32 (partial reread). `forget_diverged` drops a task's snapshots that do not begin the context its next request renders, so the rendered history before the snapshot's end changed. The mechanism is not established; candidates are how OpenCode records that tool call or its result, and whether a delivered `noReply` message interleaves with the in-progress assistant message. Next check: compare the rendered prompts before and after such a send (the `divergence` journal event only fires when the lane still holds the same owner).
 
 ## Silent snapshot eviction hid lost contexts
 
