@@ -94,27 +94,56 @@ class Tools(unittest.TestCase):
         self.assertIn("parser.c", output.split("changed:")[1])
         self.assertNotIn(self.manager["id"] + " (", output)
 
-    def test_the_gateway_delivers_a_message_on_the_next_request_and_keeps_it_in_place(self):
-        from cointos import gateway
+    def test_a_message_is_posted_once_into_the_recipients_live_session(self):
+        from cointos import messages
+        posted = []
+
+        class Inline:  # the fixtures replace threading.Thread; deliver synchronously instead
+            def __init__(self, target, args, daemon):
+                self.run = lambda: target(*args)
+
+            def start(self):
+                self.run()
+
+        self.enterContext(patch.object(messages.threading, "Thread", Inline))
+        self.enterContext(patch.object(messages, "post", lambda *call: posted.append(call)))
         worker = support.running(support.queued(self.project, "build"), "worker-1")
-        history = [{"role": "system", "content": "S"}, {"role": "user", "content": "Do it"},
-                   {"role": "assistant", "content": "", "tool_calls": [{"id": "1"}]},
-                   {"role": "tool", "tool_call_id": "1", "content": "ok"}]
-        self.assertEqual(gateway.with_messages(history, "worker-1"), history)
         mcp.invoke("send", {"to": worker["id"], "text": "Use the memo API"}, "manager")
-        first = gateway.with_messages(history, "worker-1")
-        self.assertEqual(first[:4], history)
-        self.assertEqual(first[4]["role"], "user")
-        self.assertEqual(first[4]["content"], f'<message from="{self.manager["id"]}">\nUse the memo API\n</message>')
+        messages.pending()  # no live session yet: the message waits
+        self.assertEqual((posted, state.L["messages"][-1]["read"]), ([], False))
+        state.L["agents"]["worker-1"].update(url="http://127.0.0.1:9", session="ses_1")
+        messages.pending()
+        messages.pending()
+        self.assertEqual(posted, [("http://127.0.0.1:9", "ses_1", worker["worktree"],
+                                   f'<message from="{self.manager["id"]}">\nUse the memo API\n</message>')])
         self.assertTrue(state.L["messages"][-1]["read"])
-        later = history + [{"role": "assistant", "content": "Noted."}, {"role": "user", "content": "x"}]
-        second = gateway.with_messages(later, "worker-1")
-        self.assertEqual(second[:5], first, "the delivered message stays where the agent first saw it")
-        self.assertEqual(len(second), len(later) + 1)
-        fresh = [{"role": "system", "content": "S"}, {"role": "user", "content": "Do it again"},
-                 {"role": "assistant", "content": "Reading."}, {"role": "tool", "content": "other"}, {"role": "user", "content": "y"}]
-        self.assertEqual(gateway.with_messages(fresh, "worker-1"), fresh,
-                         "a fresh session's different history never inherits an old insertion")
+
+    def test_a_failed_post_is_retried_later(self):
+        from cointos import messages
+
+        class Inline:
+            def __init__(self, target, args, daemon):
+                self.run = lambda: target(*args)
+
+            def start(self):
+                self.run()
+
+        self.enterContext(patch.object(messages.threading, "Thread", Inline))
+        attempts = []
+
+        def flaky(*call):
+            attempts.append(call)
+            if len(attempts) == 1:
+                raise OSError("connection refused")
+
+        self.enterContext(patch.object(messages, "post", flaky))
+        worker = support.running(support.queued(self.project, "build"), "worker-1")
+        state.L["agents"]["worker-1"].update(url="http://127.0.0.1:9", session="ses_1")
+        mcp.invoke("send", {"to": worker["id"], "text": "Hello"}, "manager")
+        messages.pending()
+        self.assertFalse(state.L["messages"][-1]["read"])
+        messages.pending()
+        self.assertEqual((len(attempts), state.L["messages"][-1]["read"]), (2, True))
 
     def test_agents_get_the_cointos_server_in_their_config(self):
         server = opencode.settings(state.CONFIG, "key", {"id": "p:x", "abilities": ["standard"]}, [], "worker-9")["mcp"]["cointos"]

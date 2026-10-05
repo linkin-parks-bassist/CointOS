@@ -122,39 +122,6 @@ def template_options(body: dict, agent: str) -> dict:
     return options
 
 
-def with_messages(messages: list[dict], agent: str) -> list[dict]:
-    """Deliver a task's unread messages into its conversation on its next model request.
-
-    Agents spend runs in bash, read and edit, whose results cannot carry an inbox notice, so the
-    gateway inserts each new message as a user turn at the end of the request it first sees. The
-    insertion is remembered by position and repeated on every later request of the same
-    conversation (anchored to the message it followed, so a fresh session never inherits it),
-    so the agent keeps seeing it and the cached prefix stays identical. Delivered messages count
-    as read."""
-    def anchor(after: int) -> str:
-        return hashlib.sha256(json.dumps(messages[after - 1], sort_keys=True).encode()).hexdigest() if after else ""
-
-    with LOCK:
-        owner = L["agents"].get(agent)
-        task = L["tasks"].get(owner["task"]) if owner else None
-        if task is None:
-            return messages
-        notices = task.setdefault("notices", [])
-        for message in L.get("messages", []):
-            if message["to"] == task["id"] and not message["read"]:
-                message["read"] = True
-                notices.append({"after": len(messages), "anchor": anchor(len(messages)), "text": (
-                    f"<message from=\"{message['from']}\">\n{message['text']}\n</message>")})
-        placed = sorted((n for n in notices if n["after"] <= len(messages) and n.get("anchor") == anchor(n["after"])),
-                        key=lambda n: n["after"])
-    out, taken = [], 0
-    for notice in placed:
-        out += messages[taken:notice["after"]]
-        taken = notice["after"]
-        out.append({"role": "user", "content": notice["text"]})
-    return out + messages[taken:]
-
-
 def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
     """Render a request and identify the reusable starts of a fresh run by exact tokens.
 
@@ -163,7 +130,7 @@ def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
     each boundary makes each common token prefix safe to share across sequential tasks: of the
     project, of any role, and of the same role.
     """
-    messages = with_messages(stable_environment(body["messages"], agent), agent)
+    messages = stable_environment(body["messages"], agent)
     conversation = {"messages": messages, "tools": body.get("tools"), "template": template,
                     "reasoning_budget": CONFIG.get("reasoning", {}).get("budgets", {}).get(
                         template.get("reasoning_effort"))}

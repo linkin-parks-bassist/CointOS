@@ -14,7 +14,7 @@ import threading
 import time
 import traceback
 
-from cointos import (checks, gateway, keys, lanes, lifecycle, memory, opencode, queues, recovery, runs, settings,
+from cointos import (checks, gateway, keys, messages, lanes, lifecycle, memory, opencode, queues, recovery, runs, settings,
                      snapshots, spawner, viewers)
 from cointos.config import LEDGER, read_json
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, fresh, log, now, save
@@ -152,6 +152,7 @@ def tick(timers: dict) -> None:
     with LOCK:
         lanes.schedule()  # time is an input too: a slice runs out between events
         look_after_agents()
+        messages.pending()
         recovery.enforce()
         _, _, queue_changed = spawner.refresh()
         snapshots.forget_untracked()
