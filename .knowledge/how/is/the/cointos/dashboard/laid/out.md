@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-05T17:12:06+11:00"
+revised_at: "2026-10-05T17:28:32+11:00"
 ---
 
-The dashboard (`web/dashboard.html`, one self-contained page) has two views, chosen by the address hash: `#/` is home and `#/<project>` is a project page. `#/<project>/<task id>` additionally opens that task's detail drawer; home's form is `#//<task id>`. Both views lead with the agent cards (a project page shows its own and system agents), followed by the Work lists (filtered to the project on its page). On home, the side column holds Machine and Recently beside the main column. A project page gives the main column the full width and places those panels below.
+The dashboard (`web/dashboard.html`, one self-contained page) has two views, chosen by the address hash: `#/` is home and `#/<project>` is a project page. `#/<project>/<task id>` additionally opens that task's detail drawer; home's form is `#//<task id>`. Both views lead with the agent cards (a project page shows its own and system agents), followed by the Work lists (project-only, plus active system tasks). On home, the side column holds Machine and Recently beside the main column. A project page gives the main column the full width and places those panels below.
 
 **Home** shows one card per registered project, linking to its page. Each card has the project name, its open-item count, and the first line of its orientation answer. The daemon reads that line through `projects.about` and publishes it as the ledger's `project_about`. Below that are a segmented bar plus key counting the project's items at each pipeline step, then its running agents, or the last landing when none are running. The "Add or create project" form sits at the bottom of the panel; there is no separate project-settings panel.
 
