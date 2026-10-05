@@ -46,7 +46,7 @@ class Halt(unittest.TestCase):
             spawner.spawn()
         next_task.assert_not_called()
 
-    def test_forget_requires_quiescence_and_persists_only_requested_removal(self):
+    def test_forget_requires_a_paused_idle_daemon_and_persists_only_requested_removal(self):
         forgotten = tasks.create("steward", tasks.SYSTEM, "old", "", [6])
         kept = tasks.create("steward", tasks.SYSTEM, "keep", "", [6])
         with self.assertRaises(api.ApiError):

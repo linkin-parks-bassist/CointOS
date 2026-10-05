@@ -17,8 +17,7 @@ BACKEND = importlib.import_module(CONFIG["backend"])
 LOCK = threading.Condition(threading.RLock())
 L: dict = {}
 STOPPING = threading.Event()
-ACTIVE = {"chats": 0, "landings": 0, "speaking": 0}  # admitted chat replies, landing validations, and replies that
-# have begun producing output; drained before replacement
+ACTIVE = {"chats": 0, "landings": 0}  # admitted chat replies and landing validations
 
 
 def now() -> float:
@@ -65,7 +64,7 @@ def fresh(previous: dict) -> dict:
     system_contexts = {digest: text for digest, text in previous.get("system_contexts", {}).items()
                        if digest in live_contexts}
     return {
-        "started_at": now(), "updated_at": now(), "restarting": False, "quiescing": False,
+        "started_at": now(), "updated_at": now(), "restarting": False,
         "paused": previous.get("paused", True),
         "models": {name: {"up": False, "launching": False, "problems": ["not checked yet"]} for name in CONFIG["models"]},
         "lanes": lanes, "thoughts": {}, "agents": {}, "exiting": {}, "viewers": {}, "viewers_opening": {}, "dependency_problems": {},

@@ -60,21 +60,3 @@ class LiveInstallBoundaryTests(unittest.TestCase):
         self.assertFalse(changed(), "an identical daemon with different enrollment needs no restart")
         (self.target / "cointos/state.py").write_text("# older\n")
         self.assertTrue(changed())
-
-    def test_an_interrupted_drain_releases_the_daemon(self):
-        calls = []
-
-        def api(url, action, body=None):
-            calls.append(action)
-            if action == "prepare-restart":
-                raise KeyboardInterrupt
-            return {"ok": True}
-
-        with mock.patch.dict(self.install.__globals__, api=api):
-            with self.assertRaises(KeyboardInterrupt):
-                self.install.__globals__["drain"]("http://x/api/ledger", 60)
-        self.assertEqual(calls, ["prepare-restart", "cancel-restart"])
-
-
-if __name__ == "__main__":
-    unittest.main()

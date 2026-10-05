@@ -260,13 +260,6 @@ class Handler(BaseHTTPRequestHandler):
 
     def think(self, body: dict):
         with LOCK:
-            # Keep new callers at the admission gate during deployment. Repeated 503s
-            # consume OpenCode's finite retries and leave it in exponential backoff
-            # after replacement, where it can be mistaken for a silent agent.
-            while L["quiescing"] and not STOPPING.is_set():
-                if self.peer_closed():
-                    return
-                LOCK.wait(timeout=CONFIG["tick_seconds"])
             if STOPPING.is_set():
                 return self.reply(503, {"error": {"message": "daemon restarting; retry shortly"}})
             ACTIVE["chats"] += 1
@@ -309,22 +302,9 @@ class Handler(BaseHTTPRequestHandler):
             L["thoughts"][thought]["reasoning_effort"] = template.get("reasoning_effort")
             lifecycle.engaged(agent)
         try:
-            return self.answer_thought(body, agent, model, rendered, thought)
-        finally:
-            lanes.cancel(thought)  # request ownership ends on every return or handler failure
-
-    def answer_thought(self, body: dict, agent: str, model: str, rendered: dict, thought: str):
-        """Stream a thought's reply. Once it has produced output it counts as speaking: a
-        deployment waits for speaking replies, while one still queued or reading its prompt can
-        be cut, since its client retries a reply that has produced nothing."""
-        self.speaking = False
-        try:
             return self.reply_thought(body, agent, model, rendered, thought)
         finally:
-            if self.speaking:
-                with LOCK:
-                    ACTIVE["speaking"] -= 1
-                    LOCK.notify_all()
+            lanes.cancel(thought)  # request ownership ends on every return or handler failure
 
     def reply_thought(self, body: dict, agent: str, model: str, rendered: dict, thought: str):
         run = lanes.RUNS[thought]
@@ -353,10 +333,6 @@ class Handler(BaseHTTPRequestHandler):
                     end = item["end"]
                     continue
                 generated += item
-                if not self.speaking:
-                    with LOCK:
-                        ACTIVE["speaking"] += 1
-                    self.speaking = True
                 current = BACKEND.read(CONFIG, model, rendered["reader"], generated, False)
                 show(agent, current)
                 if stream:

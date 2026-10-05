@@ -9,7 +9,6 @@ import shutil
 import subprocess
 import sys
 import urllib.request
-import time
 
 source = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(source))
@@ -27,20 +26,6 @@ def api(url, action, body=None):
                                      data=json.dumps(body or {}).encode(), headers={'Content-Type': 'application/json'})
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.load(response)
-
-
-def drain(url, seconds):
-    deadline = time.monotonic() + seconds
-    try:
-        while time.monotonic() < deadline:
-            if api(url, 'prepare-restart', {'quiesce': True})['ready']:
-                return
-            time.sleep(.2)
-    except BaseException:  # Ctrl-C or an API failure must not leave the daemon holding requests
-        api(url, 'cancel-restart')
-        raise
-    api(url, 'cancel-restart')
-    raise SystemExit('Live installation cancelled: daemon did not reach a quiet request boundary.')
 
 
 # The daemon runs these; anything else (prompts, dashboard, CLI, runtime knowledge) is read fresh
@@ -82,7 +67,7 @@ def write_runtime_knowledge():
     kt.write(target, 'what is cointos', (source / 'runtime/what-is-cointos.md').read_text())
 
 
-def install(live=False, wait_seconds=60):
+def install(live=False):
     if source == target:
         raise SystemExit('Run scripts/install from the source repository.')
     if target.exists() and not (target / '.runtime-install').exists():
@@ -121,7 +106,9 @@ def install(live=False, wait_seconds=60):
         print(f'Updated {target} in place; nothing the daemon runs changed, so it kept running.')
         return
     if live:
-        drain(url, wait_seconds)
+        # No waiting for agents: stopping cointosd ends the GPU step in flight, saves every lane's
+        # state and cuts the replies; OpenCode discards a cut reply and retries the same request,
+        # which the new daemon resumes from that saved state.
         run('systemctl', '--user', 'stop', 'cointosd.service')
         restart_needed = [True]
         def restore_daemon():
@@ -160,9 +147,5 @@ def install(live=False, wait_seconds=60):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--live', action='store_true', help='replace a configuration-compatible daemon around live agents')
-    parser.add_argument('--wait-seconds', type=float, default=60,
-                        help='maximum live-drain wait before cancelling (default: 60)')
     args = parser.parse_args()
-    if args.wait_seconds <= 0:
-        parser.error('--wait-seconds must be positive')
-    install(args.live, args.wait_seconds)
+    install(args.live)

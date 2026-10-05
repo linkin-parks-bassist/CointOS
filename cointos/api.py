@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 
-from cointos import landing, lanes, lifecycle, projects, queues, settings, snapshots, tasks
+from cointos import landing, lifecycle, projects, queues, settings, snapshots, tasks
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
 
 
@@ -326,23 +326,12 @@ def prepare_restart(body):
     if not L["restarting"]:
         L["restarting"] = True
         log("restart draining")
-    if body.get("quiesce") and not L["quiescing"]:
-        L["quiescing"] = True
-        log("restart quiescing")
-    if L["quiescing"]:
-        # A deployment waits for replies holding a lane (reading or generating) and for replies
-        # producing output. Queued replies have produced nothing; when the daemon stops their
-        # stream is cut and OpenCode retries them at once (verified against OpenCode 1.18.34).
-        begun = any(lanes.started(t) for t in L["thoughts"].values())
-        ready = ACTIVE["landings"] == 0 and ACTIVE["speaking"] == 0 and not begun
-    else:
-        ready = ACTIVE["chats"] == 0 and ACTIVE["landings"] == 0 and not L["thoughts"]
+    ready = ACTIVE["chats"] == 0 and ACTIVE["landings"] == 0 and not L["thoughts"]
     return {"ok": True, "ready": ready, "active_requests": ACTIVE["chats"]}
 
 
 def cancel_restart(body):
     L["restarting"] = False
-    L["quiescing"] = False
     LOCK.notify_all()
     for agent in L["agents"].values():
         agent["last_activity"] = now()
