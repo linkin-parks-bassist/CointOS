@@ -87,7 +87,7 @@
     "exit_grace_seconds": 30
   },
   "spawner": {
-    "max_agents": 2,
+    "max_agents": 4,
     "interval_seconds": 5,
     "max_runs_per_task": 5,
     "max_launch_failures": 2,
