@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T06:22:17+10:00"
+revised_at: "2026-10-05T13:23:04+11:00"
 ---
 
 Agents are OpenCode sessions whose only model provider is the CointOS gateway. The on-disk CLI is `~/.local/bin/opencode` 1.18.34; already-running servers may retain their launch version. `cointos/opencode.py` owns per-run configuration, transient units, server/client supervision and event following; `runs.py` owns launch/adoption; `prompts.py` owns the launch message.
@@ -12,7 +12,7 @@ Each run gets a mode-0600 `state/agents/<id>/opencode.json` containing its gatew
 - provider `cointos` at the local `/v1` endpoint, using `@ai-sdk/openai-compatible`;
 - no OpenCode request/header/chunk timeout, because lane waits and prefill can legitimately be long and daemon lifecycle rules own stalls;
 - the configured per-lane context limit and whole-reply `max_thought_tokens`;
-- knowledgetrees MCP enabled and other global MCP servers disabled;
+- knowledgetrees MCP and CointOS's own `cointos` MCP server enabled (`how/do/cointos/agents/use/cointos/tools/and/messages.md`), other global MCP servers disabled;
 - sharing and autoupdate disabled;
 - broad work permission with web access, privilege/package management, systemd, Git push, lifecycle controls and secrets denied unless the task carries an explicit ability that lifts the relevant CointOS denial;
 - read, edit and external-directory denial for every directory listed in the machine-local, untracked `~/.config/cointos/private-paths` (one per line, `#` comments, `~` expanded; absent means none). No ability lifts it, and the source never names those directories;
@@ -40,7 +40,7 @@ A run becomes assignment-engaged only when its first thought is admitted. Exit b
 
 A retryable rejection before streaming may be retried by OpenCode. A stream cut after partial content is not a safe continuation primitive: partial assistant state may be recorded and an unfinished thought may no longer render. CointOS therefore preserves committed conversation/checkpoint state and lets its bounded run lifecycle retry or recover; it does not treat transport finish markers or partial text as completion.
 
-Generation time and generated tokens spend the task's run budget; prefill, lane wait and tools do not. Ordinary interruption keeps the same session. Budget exhaustion may start a bounded fresh session with branch/files plus a compact packet of outward text, completed tool evidence, Git state and counters; hidden reasoning is excluded. Worker items without a branch artifact at the earlier checkpoint recover before the full ceiling. Task budget overrides need no restart; changing configured defaults or reasoning budgets needs a compatible daemon replacement, not a model reload.
+Generation time and generated tokens spend the task's run budget, the only per-run limit; prefill, lane wait and tools do not. Ordinary interruption keeps the same session. Budget exhaustion may start a bounded fresh session with branch/files plus a compact packet of outward text, completed tool evidence, Git state and counters; worker items instead fail to a manager that receives the packet. Hidden reasoning is excluded. Task budget overrides need no restart; changing configured defaults or reasoning budgets needs a compatible daemon replacement, not a model reload.
 
 ## Inspection
 
