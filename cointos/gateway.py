@@ -58,6 +58,9 @@ def stable_environment(messages: list[dict], agent: str) -> list[dict]:
             content = message.get("content")
             if message.get("role") in ("system", "developer") and isinstance(content, str):
                 content = re.sub(r"<env>\n(.*?)\n</env>", environment, content, flags=re.S)
+                # The knowledge-tree dictionary lists every leaf path word, so any tree edit would
+                # change the prefix every new task shares; agents look it up with kt_dict instead.
+                content = re.sub(r"=== kt dict ===\n[^\n]*\n", "", content)
                 message = {**message, "content": content}
             normalized.append(message)
 

@@ -148,3 +148,19 @@ class ToolPinning(unittest.TestCase):
         self.assertEqual(gateway.stable_tools(newer, "agent"), first)
         self.assertIsNone(gateway.stable_tools(None, "agent"))
         self.assertEqual(gateway.stable_tools(newer, "someone-else"), newer)
+
+
+class VolatileStartup(unittest.TestCase):
+    def test_a_tree_edit_does_not_change_the_prefix_new_tasks_share(self):
+        from cointos import gateway
+        from tests import support
+        support.fresh_ledger(self)
+        project = support.project(self, support.repository(self))
+        support.running(support.queued(project, "one"), "first")
+        support.running(support.queued(project, "two"), "second")
+        startup = "=== local:where/am/i.md ===\nOrientation.\n=== kt dict ===\n{words}\n\nProof check required.\n"
+        first = gateway.stable_environment([{"role": "system", "content": startup.format(words="alpha, beta")}], "first")
+        second = gateway.stable_environment([{"role": "system", "content": startup.format(words="alpha, beta, named")}], "second")
+        self.assertEqual(first, second)
+        self.assertNotIn("kt dict", first[0]["content"])
+        self.assertIn("Proof check required.", first[0]["content"])
