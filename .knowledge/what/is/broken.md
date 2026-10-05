@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T20:55:30+11:00"
+revised_at: "2026-10-05T21:06:56+11:00"
 ---
 
 ## Every finished reply re-reads its own tokens
@@ -9,6 +9,6 @@ The work model runs MTP speculative decoding. When a reply ends, the server has 
 
 The cost is accepted for now. The user has declined to patch llama.cpp (retaining no draft tokens beyond an end-of-generation token) at this time; disabling drafting would remove the cost only at a large generation-speed loss. A `divergence` event logs the exact split text whenever a lane that held state truly diverges.
 
-## A full RAM snapshot tier skips saving the outgoing context
+## A full RAM snapshot tier would decline the newest save
 
-`snapshots.room` does not credit RAM until an in-flight spill to disk finishes, so when the RAM snapshot budget is full a lane switch declines to save the outgoing agent's context (`switch` event `saved: false`), and that agent re-reads its whole conversation on its next turn. With four agents rotating on one lane and a 24 GB budget this caused repeated 30k–80k-token prefills that stalled the workstation. The budget is now 40 GB (`memory.snapshots_gb`, disk tier `memory.disk_snapshots_gb` 300), which fits four agents' contexts, so normal rotation should not trigger it. The structural fix, crediting in-flight spills or evicting older snapshots instead of declining the newest, conflicts with the deliberate no-overcommit tests in `tests/test_snapshot_limit.py` and is unresolved. Next check: `switch` events with `saved: false` followed by `restored: 0` for the same owner.
+`snapshots.room` does not credit RAM until an in-flight spill to disk finishes, so when the RAM snapshot budget is full, saving the outgoing context on a lane switch is declined rather than overcommitting RAM, and that agent rereads its conversation on its next turn. Evicting older snapshots instead conflicts with the deliberate no-overcommit tests in `tests/test_snapshot_limit.py`; unresolved. With `memory.snapshots_gb` 40 and four agents the tier sat far from full (about 10 GB), so this is not known to have fired; a `switch` event's `saved: false` alone usually means the lane held nothing worth saving. The 2026-10-05 prefill storms were instead caused by relaunched sessions loading changed tool schemas, which invalidated every saved context; tool definitions are now pinned per task (`gateway.stable_tools`). Next check: a `saved: false` switch followed by `restored: 0` for the same owner with no `snapshot forgotten` event between.
