@@ -31,12 +31,55 @@ def api(url, action, body=None):
 
 def drain(url, seconds):
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        if api(url, 'prepare-restart', {'quiesce': True})['ready']:
-            return
-        time.sleep(.2)
+    try:
+        while time.monotonic() < deadline:
+            if api(url, 'prepare-restart', {'quiesce': True})['ready']:
+                return
+            time.sleep(.2)
+    except BaseException:  # Ctrl-C or an API failure must not leave the daemon holding requests
+        api(url, 'cancel-restart')
+        raise
     api(url, 'cancel-restart')
     raise SystemExit('Live installation cancelled: daemon did not reach a quiet request boundary.')
+
+
+# The daemon runs these; anything else (prompts, dashboard, CLI, runtime knowledge) is read fresh
+# from disk, so a change confined to it installs without replacing the daemon.
+DAEMON_PARTS = ('cointos', 'config', 'systemd')
+COPIED = ('cointos', 'roles', 'web', 'bin', 'systemd', 'config')
+
+
+def files(root):
+    return {path.relative_to(root): path for path in root.rglob('*')
+            if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc'
+            and path.relative_to(root) != Path('config/projects.json')}
+
+
+def daemon_changed():
+    """Whether the candidate differs from the installed runtime in anything the daemon runs."""
+    mine = {k: v for part in DAEMON_PARTS for k, v in files(source).items() if k.parts[0] == part}
+    theirs = {k: v for part in DAEMON_PARTS for k, v in files(target).items() if k.parts[0] == part}
+    return mine.keys() != theirs.keys() or any(mine[k].read_bytes() != theirs[k].read_bytes() for k in mine)
+
+
+def copy_runtime(names):
+    projects_registry = target / 'config/projects.json'
+    saved_projects = projects_registry.read_bytes() if projects_registry.exists() else None
+    for name in names:
+        dest = target / name
+        if dest.exists():
+            shutil.rmtree(dest)
+        shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    if saved_projects is not None:
+        projects_registry.write_bytes(saved_projects)
+
+
+def write_runtime_knowledge():
+    orientation = (source / 'runtime/where-am-i.md').read_text()
+    if not (target / '.knowledge').exists():
+        run('kt', 'init', orientation, cwd=target)
+    kt.write(target, 'where am i', orientation)
+    kt.write(target, 'what is cointos', (source / 'runtime/what-is-cointos.md').read_text())
 
 
 def install(live=False, wait_seconds=60):
@@ -72,6 +115,11 @@ def install(live=False, wait_seconds=60):
                  '--no-legend', '--no-pager', capture_output=True).stdout.strip()
     if active and not live:
         raise SystemExit('Agent units are still running; installation refused.')
+    if live and not daemon_changed():
+        copy_runtime([name for name in COPIED if name not in DAEMON_PARTS])
+        write_runtime_knowledge()
+        print(f'Updated {target} in place; nothing the daemon runs changed, so it kept running.')
+        return
     if live:
         drain(url, wait_seconds)
         run('systemctl', '--user', 'stop', 'cointosd.service')
@@ -87,22 +135,10 @@ def install(live=False, wait_seconds=60):
     os.chmod(target, 0o700)
     # Project enrollment is user-managed runtime configuration. Source projects.json is
     # only the first-install seed; upgrades must not erase projects added through the CLI.
-    projects_registry = target / 'config/projects.json'
-    saved_projects = projects_registry.read_bytes() if projects_registry.exists() else None
-    for name in ('cointos', 'roles', 'web', 'bin', 'systemd', 'config'):
-        dest = target / name
-        if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    if saved_projects is not None:
-        projects_registry.write_bytes(saved_projects)
+    copy_runtime(COPIED)
     (target / '.runtime-install').write_text(str(source) + '\n')
     run(str(source / 'scripts/upgrade-ledger'), str(target / 'state/cointos.json'))
-    orientation = (source / 'runtime/where-am-i.md').read_text()
-    if not (target / '.knowledge').exists():
-        run('kt', 'init', orientation, cwd=target)
-    kt.write(target, 'where am i', orientation)
-    kt.write(target, 'what is cointos', (source / 'runtime/what-is-cointos.md').read_text())
+    write_runtime_knowledge()
     units.mkdir(parents=True, exist_ok=True)
     for template in (source / 'systemd').glob('*.service'):
         rendered = template.read_text().replace('@ROOT@', str(target)).replace('@HOME@', str(Path.home()))

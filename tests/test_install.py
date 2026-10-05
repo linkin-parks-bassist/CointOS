@@ -50,6 +50,31 @@ class LiveInstallBoundaryTests(unittest.TestCase):
         contact.assert_not_called()
         systemd.assert_not_called()
 
+    def test_daemon_changes_are_detected_and_projects_ignored(self):
+        changed = self.install.__globals__["daemon_changed"]
+        source = self.install.__globals__["source"]
+        for part in ("cointos", "config", "systemd"):
+            import shutil
+            shutil.copytree(source / part, self.target / part, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        (self.target / "config/projects.json").write_text("[]")
+        self.assertFalse(changed(), "an identical daemon with different enrollment needs no restart")
+        (self.target / "cointos/state.py").write_text("# older\n")
+        self.assertTrue(changed())
+
+    def test_an_interrupted_drain_releases_the_daemon(self):
+        calls = []
+
+        def api(url, action, body=None):
+            calls.append(action)
+            if action == "prepare-restart":
+                raise KeyboardInterrupt
+            return {"ok": True}
+
+        with mock.patch.dict(self.install.__globals__, api=api):
+            with self.assertRaises(KeyboardInterrupt):
+                self.install.__globals__["drain"]("http://x/api/ledger", 60)
+        self.assertEqual(calls, ["prepare-restart", "cancel-restart"])
+
 
 if __name__ == "__main__":
     unittest.main()
