@@ -436,7 +436,8 @@ function agentRowSizes(count, capacity) {
 }
 
 function renderAgents(S) {
-  const agents = Object.values(S.agents).filter(a => !ROUTE.project || a.place === ROUTE.project).sort((a, b) => a.started_at - b.started_at);
+  // System agents (scouts, test auditors) work across projects, so every project page shows them.
+  const agents = Object.values(S.agents).filter(a => !ROUTE.project || a.place === ROUTE.project || a.place === "system").sort((a, b) => a.started_at - b.started_at);
   let grid = $("agents").querySelector(".agents");
   if (!agents.length) {
     setHTML($("agents"), `<div class="empty">${S.paused ? "Agents are paused. <b>cointos go</b> lets them run again."
