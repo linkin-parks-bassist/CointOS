@@ -210,6 +210,45 @@ def attention(body):
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- messages between tasks and the user
+
+MESSAGES_KEPT = 200
+
+
+def sender(body) -> str:
+    """'user' for the user's own CLI, else the active task whose current run is asking."""
+    if not body.get("task"):
+        return "user"
+    task = L["tasks"].get(body["task"])
+    if task is None or not lifecycle.owns(task, body.get("run")):
+        raise ApiError("messages must come from the sending task's current run")
+    return task["id"]
+
+
+def send(body):
+    """One short message to an active task's inbox, or to the user through Coin."""
+    origin, target, text = sender(body), (body.get("to") or "").strip(), (body.get("text") or "").strip()
+    if not text:
+        raise ApiError("a message needs text")
+    if target == "user":
+        alert(f"Message from {origin}: {text}")
+    elif not (target in L["tasks"] and tasks.active(L["tasks"][target])):
+        raise ApiError(f"{target!r} is not an active task; use jobs for task ids, or 'user'")
+    L["messages"] = (L["messages"] + [{"at": now(), "from": origin, "to": target, "text": text,
+                                       "read": target == "user"}])[-MESSAGES_KEPT:]
+    log("message", sender=origin, to=target)
+    return {"ok": True, "to": target}
+
+
+def inbox(body):
+    """The asker's unread messages, marked read."""
+    reader = sender(body)
+    unread = [m for m in L["messages"] if m["to"] == reader and not m["read"]]
+    for message in unread:
+        message["read"] = True
+    return {"messages": [{"from": m["from"], "at": m["at"], "text": m["text"]} for m in unread]}
+
+
 # ---------------------------------------------------------------- the user's controls
 
 def stop_agents(reason: str, project: str | None = None) -> None:
@@ -397,7 +436,7 @@ def project_remove(body):
 
 ACTIONS = {
     "finish": finish, "receipt-delivered": receipt_delivered, "return": send_back, "replace": replace,
-    "queue": queue, "attention": attention,
+    "queue": queue, "attention": attention, "send": send, "inbox": inbox,
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,

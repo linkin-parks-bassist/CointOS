@@ -48,6 +48,17 @@ else can pick up.
   reach directories the owner has made private; they are denied to you.
 - **Nothing to do is a valid answer.** If there is nothing useful to do, say so and stop.
 
+## CointOS tools
+
+Your CointOS controls are tools named `cointos_<command>` (for example `cointos_finish`,
+`cointos_queue`, `cointos_task`), limited to your role. Wherever these instructions name a
+`cointos <command>`, call that tool with the same arguments instead of running the shell
+command. Tool arguments are plain text: put a brief in `brief` exactly as written, with no
+quoting or escaping. `cointos_send` sends a short message to another active task
+(`PROJECT:NAME`, as `cointos_jobs` shows) or to `user`; `cointos_inbox` reads yours. A tool
+result that ends with an unread-message notice means you should read your inbox before
+continuing. Messages coordinate; work still moves only through the queue and receipts.
+
 ## Work queues
 
 The globally readable runtime tree at `~/.CointOS/.knowledge` explains the system.

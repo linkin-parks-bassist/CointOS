@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-02T00:56:34+10:00"
+revised_at: "2026-10-05T12:59:04+11:00"
 ---
 
 Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared by CointOS and other local clients. Its control API is `http://127.0.0.1:13305`; logs are in `journalctl -u lemond`. CointOS is a client, not its owner, and must tolerate another client reloading a model onto a different backend URL.
@@ -36,7 +36,7 @@ CointOS retains Qwen3.8-27B as the minimum work model unless the user chooses a 
 
 ## Reasoning and output
 
-Qwen3.8 accepts low, medium and xhigh `reasoning_effort` through its chat template. CointOS pins task effort, maps it into template options, and mechanically caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens respectively. At the cap it appends the model's closing-think token on the same context and continues into answer or tool output. `max_thought_tokens` still bounds the complete reply. This is a per-reply bound, not a lifetime penalty, and does not establish semantic correctness.
+Qwen3.8 accepts low, medium and xhigh `reasoning_effort` through its chat template. CointOS pins task effort, maps it into template options, and mechanically caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens respectively. At the cap it appends the model's closing-think token on the same context and continues into answer or tool output. `max_thought_tokens` still bounds the complete reply. This is a per-reply bound, not a lifetime penalty. It is the user's deliberate design: Qwen's reasoning stops paying off after about 300 tokens, turning to self-doubt and repetition, and the model works markedly better when forced to act. Do not loosen it without the user.
 
 The template emits reasoning inside `<think>...</think>` and tool calls in its Qwen function-call markup; `backend_llama.read` is the sole decoder for that literal representation.
 

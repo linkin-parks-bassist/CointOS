@@ -66,7 +66,7 @@ def fresh(previous: dict) -> dict:
         "models": {name: {"up": False, "launching": False, "problems": ["not checked yet"]} for name in CONFIG["models"]},
         "lanes": lanes, "thoughts": {}, "agents": {}, "exiting": {}, "viewers": {}, "viewers_opening": {}, "dependency_problems": {},
         "viewers_showing": previous.get("viewers_showing", False),
-        "projects": CONFIG["projects"], "queue": previous.get("queue", {}),
+        "projects": CONFIG["projects"], "queue": previous.get("queue", {}), "messages": previous.get("messages", []),
         "snapshots": previous.get("snapshots", {}), "tasks": tasks, "system_contexts": system_contexts,
         "memory": {}, "model_memory": {name: {"memory_gb": shape["memory_gb"], "weights_gb": shape["weights_gb"]}
                                         for name, shape in CONFIG["models"].items()}, "guard": {"rung": 0, "rung_at": 0, "calm_since": None, "distress_since": None,

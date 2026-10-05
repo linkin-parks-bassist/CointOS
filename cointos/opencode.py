@@ -38,8 +38,9 @@ def unit(agent_id: str) -> str:
     return f"cointos-agent-{agent_id}"
 
 
-def settings(config: dict, key: str, task: dict, protected: list[str]) -> dict:
-    """The run's OpenCode config: the gateway as its only provider, and narrow denials."""
+def settings(config: dict, key: str, task: dict, protected: list[str], agent_id: str = "") -> dict:
+    """The run's OpenCode config: the gateway as its only provider, the CointOS and kt tools,
+    and narrow denials."""
     work = config["work_model"]
     shape = config["models"][work]
     home = str(Path.home())
@@ -64,8 +65,12 @@ def settings(config: dict, key: str, task: dict, protected: list[str]) -> dict:
                               "limit": {"context": shape["ctx_size"] // shape["lanes"],
                                         "output": config["scheduler"]["max_thought_tokens"]}}},
         }},
-        # Agents get the kt MCP server; every other globally configured server is disabled.
-        "mcp": {name: {**server, "enabled": False} for name, server in servers.items() if name != "knowledgetrees"},
+        # Agents get the kt MCP server and CointOS's own tools; every other globally configured
+        # server is disabled.
+        "mcp": {**{name: {**server, "enabled": False} for name, server in servers.items() if name != "knowledgetrees"},
+                "cointos": {"type": "local", "enabled": True, "command": [sys.executable, "-P", "-m", "cointos.mcp"],
+                            "environment": {"PYTHONPATH": str(ROOT), "COINTOS_TASK_ID": task.get("id", ""),
+                                            "COINTOS_AGENT": agent_id}}},
         "permission": {
             "*": "allow", "webfetch": network, "websearch": network, "doom_loop": "deny",
             "bash": {"*": "allow", **{command: "deny" for command in denied}},
@@ -98,7 +103,7 @@ def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protect
     directory.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(directory / "opencode.json", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(descriptor, "w") as stream:
-        json.dump(settings(config, key, task, protected), stream, indent=1)
+        json.dump(settings(config, key, task, protected, agent_id), stream, indent=1)
     command = [OPENCODE, "run", "--dir", task["worktree"], "--format", "json", "--auto",
                "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/{config['work_model']}"]
     if task.get("session"):
