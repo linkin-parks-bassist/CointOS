@@ -346,6 +346,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.wfile.write(b"data: " + json.dumps(error).encode() + b"\n\n") if stream else self.reply(502, error)
         final = BACKEND.read(CONFIG, model, rendered["reader"], generated, True)
         show(agent, final)
+        with LOCK:
+            if agent in L["agents"]:  # its tools now run, silently, until the next request
+                L["agents"][agent]["in_tools"] = bool(final["tool_calls"])
         finish = "tool_calls" if final["tool_calls"] else "length" if end == "limit" else "stop"
         usage = {"prompt_tokens": len(rendered["tokens"]), "completion_tokens": len(generated),
                  "total_tokens": len(rendered["tokens"]) + len(generated)}

@@ -8,14 +8,17 @@ from cointos.scheduler import held_for, lane_allows
 def silent_agents(config: dict, ledger: dict, now: float) -> list[str]:
     """Agents with neither an outstanding thought nor a recent OpenCode event.
 
-    Starting, tools and between-request stalls share this bound. A thought reading,
-    generating or waiting for a lane is accounted for by the scheduler instead.
+    After a reply that ended in tool calls the agent is running those tools, which emit nothing
+    until they finish, so it gets `tool_silent_seconds` (above OpenCode's own 10-minute tool cap).
+    After a reply that ended in text, or while starting, silence means the agent is idle or stuck.
+    A thought reading, generating or waiting for a lane is accounted for by the scheduler instead.
     """
     thinking = {t["agent"] for t in ledger["thoughts"].values()}
+    limits = config["checks"]
     return [agent_id for agent_id, agent in ledger["agents"].items()
             if agent_id not in thinking
             and not ledger.get("tasks", {}).get(agent.get("task"), {}).get("validating")
-            and now - agent["last_activity"] > config["checks"]["agent_silent_seconds"]]
+            and now - agent["last_activity"] > limits["tool_silent_seconds" if agent.get("in_tools") else "agent_silent_seconds"]]
 
 
 def stalled_thoughts(config: dict, ledger: dict, now: float) -> list[dict]:

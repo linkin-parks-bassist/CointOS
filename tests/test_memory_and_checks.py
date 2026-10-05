@@ -10,6 +10,7 @@ CONFIG = {
     "checks": {"idle_lane_seconds": 5, "preempt_seconds": 15, "starve_seconds": 120,
                "thought_stalled_seconds": 60, "alert_recovery_seconds": 30,
                "agent_silent_seconds": config.load()["checks"]["agent_silent_seconds"],
+               "tool_silent_seconds": config.load()["checks"]["tool_silent_seconds"],
                "max_identical_thoughts": 3},
 }
 
@@ -142,6 +143,14 @@ class Checks(unittest.TestCase):
                 self.assertEqual(checks.silent_agents(CONFIG, state, 10 + limit + .01), ["x"])
                 state["agents"]["x"]["last_activity"] = 10 + limit
                 self.assertEqual(checks.silent_agents(CONFIG, state, 10 + limit + .01), [])
+
+    def test_an_agent_running_tools_gets_the_tool_limit(self):
+        quiet, tools = CONFIG["checks"]["agent_silent_seconds"], CONFIG["checks"]["tool_silent_seconds"]
+        state = ledger([], [], {"x": {"state": "running", "last_activity": 0, "repeats": 0, "in_tools": True}})
+        self.assertEqual(checks.silent_agents(CONFIG, state, quiet + 30), [], "a 60-second sleep is not silence")
+        self.assertEqual(checks.silent_agents(CONFIG, state, tools + 1), ["x"], "a hung tool still is")
+        state["agents"]["x"]["in_tools"] = False  # its last reply was text: the turn is over
+        self.assertEqual(checks.silent_agents(CONFIG, state, quiet + 1), ["x"])
 
     def test_a_waiting_or_reading_thought_is_not_tool_silence(self):
         for lane_id, reading in ((None, True), (0, True), (0, False)):
