@@ -311,8 +311,8 @@ def kill(agent_id: str) -> dict:
     """the user ends a run and withholds further admission until explicitly released."""
     task = L["tasks"][L["agents"][agent_id]["task"]]
     if owns(task, agent_id):
-        task["admission_hold"] = "killed by the user"
-    stop(agent_id, "run killed by the user", requeue=True, charge=False)
+        task["admission_hold"] = "paused by the user"
+    stop(agent_id, "paused by the user", requeue=True, charge=False)
     return task
 
 
