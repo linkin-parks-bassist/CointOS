@@ -152,9 +152,10 @@ def schedule() -> None:
         thought["reading"] = reading
     contenders = list(L["thoughts"].values())
     if L["quiescing"]:
-        # A deployment is draining: only replies already producing output keep a lane. Starting
-        # another would keep the lane busy forever; the rest are cut and retried after replacement.
-        contenders = [t for t in contenders if t["lane"] is not None and not t["reading"]]
+        # A deployment is draining: replies already on a lane, reading or generating, finish; no
+        # queued one starts, or the lane would never go quiet. Queued ones are cut and retried
+        # after replacement; cutting a reader would throw away its read.
+        contenders = [t for t in contenders if t["lane"] is not None]
     wanted = scheduler.assign(CONFIG, L["lanes"], contenders, now(), blocked())
     for position, thought_id in wanted.items():
         lane = L["lanes"][position]

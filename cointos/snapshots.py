@@ -101,6 +101,7 @@ def evict(name: str) -> float:
         snapshot["tier"] = "moving"
         threading.Thread(target=spill, args=(name,), daemon=True).start()
         return 0.0
+    log("snapshot evicted", owner=snapshot.get("owner"), tier="memory", tokens=snapshot.get("tokens"))
     drop(name)
     return size_gb(snapshot)
 
@@ -115,6 +116,7 @@ def disk_room(need_gb: float, keep: str) -> bool:
     if leaving is None:
         return False
     for name in leaving:
+        log("snapshot evicted", owner=L["snapshots"][name].get("owner"), tier="disk", tokens=L["snapshots"][name].get("tokens"))
         drop(name)
     return True
 

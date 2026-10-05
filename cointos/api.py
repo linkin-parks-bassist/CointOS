@@ -330,11 +330,11 @@ def prepare_restart(body):
         L["quiescing"] = True
         log("restart quiescing")
     if L["quiescing"]:
-        # A deployment waits only for replies already producing output. Queued replies and ones
-        # still reading their prompt have produced nothing; when the daemon stops their stream
-        # is cut and OpenCode retries them at once (verified against OpenCode 1.18.34).
-        generating = any(t["lane"] is not None and not t.get("reading") for t in L["thoughts"].values())
-        ready = ACTIVE["landings"] == 0 and ACTIVE["speaking"] == 0 and not generating
+        # A deployment waits for replies holding a lane (reading or generating) and for replies
+        # producing output. Queued replies have produced nothing; when the daemon stops their
+        # stream is cut and OpenCode retries them at once (verified against OpenCode 1.18.34).
+        on_lane = any(t["lane"] is not None for t in L["thoughts"].values())
+        ready = ACTIVE["landings"] == 0 and ACTIVE["speaking"] == 0 and not on_lane
     else:
         ready = ACTIVE["chats"] == 0 and ACTIVE["landings"] == 0 and not L["thoughts"]
     return {"ok": True, "ready": ready, "active_requests": ACTIVE["chats"]}

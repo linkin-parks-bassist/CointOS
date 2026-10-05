@@ -216,10 +216,12 @@ class QuiesceReadiness(unittest.TestCase):
         support.fresh_ledger(self)
         self.enterContext(patch.dict(state.ACTIVE, {"chats": 3, "landings": 0, "speaking": 0}))
 
-    def test_queued_and_reading_thoughts_do_not_block_a_deployment(self):
-        state.L["thoughts"] = {"a": {"lane": None, "reading": True}, "b": {"lane": 0, "reading": True}}
+    def test_queued_thoughts_do_not_block_a_deployment_but_a_reader_does(self):
+        state.L["thoughts"] = {"a": {"lane": None, "reading": True}}
         self.assertFalse(api.dispatch('prepare-restart', {})['ready'], 'an ordinary drain still waits for every thought')
         self.assertTrue(api.dispatch('prepare-restart', {'quiesce': True})['ready'])
+        state.L["thoughts"]["b"] = {"lane": 0, "reading": True}
+        self.assertFalse(api.dispatch('prepare-restart', {'quiesce': True})['ready'], 'cutting a reader wastes its read')
         api.dispatch('cancel-restart', {})
 
     def test_a_generating_thought_or_a_speaking_reply_blocks_it(self):
@@ -251,3 +253,17 @@ class QuiesceScheduling(unittest.TestCase):
                 state.L["quiescing"] = False
                 lanes.schedule()
         self.assertEqual([[t["lane"] for t in batch] for batch in seen], [[0], [0, None]])
+
+    def test_a_draining_daemon_keeps_a_reader_on_its_lane(self):
+        from cointos import lanes
+        seen = []
+        model = state.L["lanes"][0]["model"]
+        state.L["thoughts"] = {"reader": {"lane": 0, "reading": True, "model": model},
+                               "queued": {"lane": None, "reading": True, "model": model}}
+        with patch.dict(lanes.HELD, {0: [1]}, clear=True), \
+             patch.object(lanes, "tokens_of", lambda thought: [1, 2, 3, 4, 5]), \
+             patch.object(lanes.scheduler, "assign", lambda config, l, contenders, *rest: seen.append(contenders) or {}):
+            with state.LOCK:
+                state.L["quiescing"] = True
+                lanes.schedule()
+        self.assertEqual([t["lane"] for t in seen[0]], [0])
