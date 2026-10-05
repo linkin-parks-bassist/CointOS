@@ -10,16 +10,18 @@ def write(root, question: str, body: str) -> bool:
     `body`; returns whether it changed.
 
     Generated leaves (runtime guides, published queues) are copies of a source of truth, not
-    answers an agent maintains, so they are replaced rather than rewritten: kt's growth
+    answers an agent maintains, so they are rewritten with `--force`: kt's growth
     reconsideration exists to make editors reconsider a leaf, and a copier cannot."""
     address = "local:" + question.replace(" ", "/") + ".md"
     opened = subprocess.run(["kt", "--lean", "open", address], cwd=root, capture_output=True, text=True)
-    if not opened.returncode:
-        if opened.stdout.strip() == body.strip():
-            return False
+    if opened.returncode:
+        command = ["kt", "add", "--local", question, body]
+    elif opened.stdout.strip() == body.strip():
+        return False
+    else:
         revision = re.search(r"Revision: ([0-9a-f]{64})", opened.stderr)
         if revision is None:
             raise RuntimeError(f"kt did not return a revision for {address}")
-        subprocess.run(["kt", "rm", "--expect", revision[1], address], cwd=root, check=True, capture_output=True, text=True)
-    subprocess.run(["kt", "add", "--local", question, body], cwd=root, check=True, capture_output=True, text=True)
+        command = ["kt", "rewrite", "--force", "--", address, revision[1], body]
+    subprocess.run(command, cwd=root, check=True, capture_output=True, text=True)
     return True

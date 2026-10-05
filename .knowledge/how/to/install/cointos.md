@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T13:43:25+11:00"
+revised_at: "2026-10-05T14:09:22+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -31,6 +31,6 @@ Isolated copies avoid shipping unrelated uncommitted source changes that a full 
 
 ## Runtime knowledge and registry
 
-Each installation replaces the installed tree's `where/am/i.md` and `what/is/cointos.md` with `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`, which removes and re-adds generated leaves (as the daemon does for its queue answers) so kt's growth reconsideration, meant for editors, never fails a copy. Edit the source files, not their generated copies. Other runtime leaves remain. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
+Each installation replaces the installed tree's `where/am/i.md` and `what/is/cointos.md` with `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`, which writes generated leaves (also the daemon's queue answers) with the CLI-only `kt rewrite --force`, so growth reconsideration, meant for editors, never fails a copy. Edit the source files, not their generated copies. Other runtime leaves remain. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
 
 Worktrees live at `~/Projects/.worktrees/<project>/<task>` on `work/<task>` branches. Verify the installed unit `WorkingDirectory`, service state, exact adopted agent identities when live installing, and `cointos check` after every installation.
