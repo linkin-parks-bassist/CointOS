@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T17:57:37+11:00"
+revised_at: "2026-10-05T18:09:36+11:00"
 ---
 
 `cointos/mcp.py` is a stdio MCP server that OpenCode starts for each agent run (`python3 -P -m cointos.mcp`, with `PYTHONPATH` at the installed runtime and the run's `COINTOS_TASK_ID`/`COINTOS_AGENT` in its environment; `opencode.settings` adds it as the `cointos` server). OpenCode exposes its tools as `cointos_<name>`.
@@ -13,4 +13,4 @@ A run sees only its role's tools: everyone gets `finish`, `task`, `jobs`, `statu
 
 **Messages.** `send` puts a short message in an active task's inbox (ledger `messages`, last 200 kept), or alerts the user through Coin for `to: user`. A sender must be the task's current run, or the user's CLI (`cointos message TO "TEXT"`, `cointos inbox`). Each daemon tick, `messages.pending` posts every unread message whose recipient has a live OpenCode session to it once, as a `noReply` user message `<message from="TASK">TEXT</message>` (`POST /session/ID/message`, in a background thread), then marks it read; failed posts retry on a later tick. OpenCode stores it, shows it in the TUI and includes it in the very next model request even mid-turn. `prompt_async` was rejected: OpenCode holds queued prompts until the whole multi-step turn ends, which is also what happens to text a user types into an agent's viewer. `inbox` returns messages not yet delivered.
 
-Evidence: `tests/test_mcp.py` covers catalogues, verbatim briefs, protocol calls, messaging, peers, session delivery (waiting, one post, retry) and config wiring. A recording mock model showed an OpenCode 1.18.34 `noReply` message posted during a tool call appearing exactly once in the next request. Live: a manager used `cointos_task` and `cointos_replace` without shell calls; a demo operator messaged the live Pigen worker, which replied with one sentence and continued.
+Evidence: `tests/test_mcp.py` covers catalogues, verbatim briefs, protocol calls, messaging, peers, session delivery (waiting, one post, retry) and config wiring. A recording mock model showed an OpenCode 1.18.34 `noReply` message posted during a tool call appearing exactly once in the next request. Live: a manager used `cointos_task` and `cointos_replace` without shell calls; two demo operators held a three-message conversation through session delivery, each answering within about a minute of the other's message arriving, and both finished with the exchange quoted in their receipts.
