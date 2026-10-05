@@ -42,26 +42,54 @@ def evidence(task: dict, disposition: str) -> dict:
     lands = schema.KINDS[task["kind"]]["lands"]
     if task["branch"] is not None:
         if not git.clean(task["worktree"]):
-            raise ValueError("commit everything on your branch before finishing")
+            raise ValueError("commit everything on your branch before finishing; uncommitted now (git status):\n"
+                             + uncommitted(task["worktree"]))
         found["commit"] = git.head(task["worktree"])
         where = tasks.place(task)
         if lands == "review":
             expected = "done" if disposition == "complete" else "blocked"
             if queues.status(queues.report(task)) != expected:
-                raise ValueError(f"{queues.REPORT} on your branch must declare exactly one `Status: {expected}`")
+                raise ValueError(f"{queues.REPORT} on your branch must declare exactly one `Status: {expected}` for a "
+                                 f"{disposition} receipt; {report_problem(task)}")
             found["report"] = expected
         elif lands == "merge" and disposition == "complete" and not git.contains(where["path"], task["branch"],
                                                                                  where["main_branch"]):
-            raise ValueError("land your committed branch with `cointos merge` before finishing")
+            raise ValueError(f"land your committed branch with `cointos merge` before finishing: {task['branch']} "
+                             f"is {ahead(where, task)} commit(s) ahead of {where['main_branch']}")
     if task["kind"] == "decompose" and disposition == "complete":
         record = queues.records().get(task["record"])
         revised = record and record["hash"] != task["record_hash"] and (
             record["status"] == "queued" or record.get("replaced_by"))
         if not task.get("replacements") and not revised:
-            raise ValueError("revise the failed item or replace it with `cointos replace CHILD...` before finishing")
+            raise ValueError(f"revise the failed item or replace it with `cointos replace CHILD...` before finishing: "
+                             f"{task['record']} is unchanged since this decomposition began and no replacement "
+                             f"children were recorded")
     if task["kind"] == "garden" and disposition == "complete":
         found.update(garden_health(task))
     return found
+
+
+def uncommitted(worktree, limit: int = 12) -> str:
+    lines = git.result(worktree, "status", "--short").stdout.splitlines()
+    return "\n".join(lines[:limit] + ([f"... and {len(lines) - limit} more"] if len(lines) > limit else []))
+
+
+def report_problem(task: dict) -> str:
+    """What the committed report actually declares, so a refused receipt says what to fix."""
+    text = queues.report(task)
+    if not text:
+        return f"there is no {queues.REPORT} in your worktree"
+    found = queues.statuses(text)
+    if not found:
+        return "it declares no `Status:` line (fenced code and quoted examples do not count)"
+    if len(found) > 1:
+        return f"it declares {len(found)} Status lines ({', '.join(found)}); keep exactly one"
+    return f"it declares `Status: {found[0]}`"
+
+
+def ahead(where: dict, task: dict) -> str:
+    counted = git.result(where["path"], "rev-list", "--count", f"{where['main_branch']}..{task['branch']}")
+    return counted.stdout.strip() if counted.returncode == 0 else "some"
 
 
 def garden_health(task: dict) -> dict:

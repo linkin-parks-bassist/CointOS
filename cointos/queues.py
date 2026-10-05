@@ -29,6 +29,12 @@ def answer(text: str) -> str:
 
 def status(text: str) -> str | None:
     """One unambiguous declaration outside quoted examples and fenced code."""
+    found = statuses(text)
+    return found[0] if len(found) == 1 else None
+
+
+def statuses(text: str) -> list[str]:
+    """Every `Status:` declaration outside quoted examples and fenced code."""
     found_statuses = []
     fence = None
     for line in answer(text).splitlines():
@@ -41,7 +47,7 @@ def status(text: str) -> str | None:
             found = re.fullmatch(r"\**Status:\**\s*([a-z ]+)\**", stripped, re.IGNORECASE)
             if found:
                 found_statuses.append(found[1].strip().lower())
-    return found_statuses[0] if len(found_statuses) == 1 else None
+    return found_statuses
 
 
 def depends(text: str) -> list[str]:

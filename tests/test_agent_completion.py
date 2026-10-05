@@ -378,3 +378,32 @@ class Completion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Refusals(unittest.TestCase):
+    """A refused receipt says what it saw, so the agent fixes it in one step instead of guessing."""
+
+    def setUp(self):
+        support.fresh_ledger(self)
+        support.quiet(self)
+        self.project = support.project(self, support.repository(self))
+        self.worker = support.running(support.queued(self.project, "build"), "worker-1")
+
+    def refusal(self, disposition="complete"):
+        with self.assertRaises(ValueError) as caught:
+            lifecycle.submit(self.worker["id"], "worker-1", disposition, "done")
+        return str(caught.exception)
+
+    def test_uncommitted_work_is_listed(self):
+        (Path(self.worker["worktree"]) / "scratch.c").write_text("int x;\n")
+        self.assertIn("?? scratch.c", self.refusal())
+
+    def test_a_report_problem_is_described(self):
+        self.assertIn(f"there is no {queues.REPORT}", self.refusal())
+        report = Path(self.worker["worktree"]) / queues.REPORT
+        report.write_text("Status: done\n\nStatus: blocked\n")
+        support.commit(self.worker["worktree"])
+        self.assertIn("2 Status lines (done, blocked)", self.refusal())
+        report.write_text("Status: blocked\n")
+        support.commit(self.worker["worktree"])
+        self.assertIn("it declares `Status: blocked`", self.refusal("complete"))
