@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T22:04:37+11:00"
+revised_at: "2026-10-05T22:12:58+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -17,7 +17,7 @@ Use `scripts/install --live` when the current daemon is reachable and the candid
 
 If nothing the daemon runs changed (`cointos/`, `config/` other than `projects.json`, `systemd/`), the installer copies `roles/`, `web/` and `bin/`, rewrites the runtime leaves and stops: prompts, the dashboard and the CLI are read fresh from disk, so the daemon keeps running untouched.
 
-Otherwise it replaces cointosd at once, waiting for no agent: stopping cointosd ends the GPU step in flight (at most one read chunk or generation step), saves each lane's state, and cuts the replies in progress. It copies and upgrades the runtime, reloads units, starts cointosd and adopts the surviving Coin, agent and model processes without relaunching conversations. A whole live installation takes about 6 seconds, with cointosd down about 2. OpenCode discards a cut reply entirely (no partial reasoning or text is kept in the session) and retries the identical request, verified against OpenCode 1.18.34 with a stream cut mid-reply. The new daemon restores the saved state: a cut read continues where it stopped, and a cut generation restarts from its prompt-end checkpoint, losing only that reply's partial output. A failure after cointosd stops restarts it on exit. Never pause agents (`cointos stop`) for an installation: it relaunches every conversation.
+Otherwise it replaces cointosd at once, waiting for no agent: stopping cointosd ends the GPU step in flight (at most one read chunk or generation step), saves each lane's state, and cuts the replies in progress. It copies and upgrades the runtime, reloads units, starts cointosd and adopts the surviving Coin, agent and model processes without relaunching conversations. A whole live installation takes about 6 seconds, with cointosd down about 2. A request cut before output is retried unchanged; a reply cut mid-output is kept by OpenCode as a finished step holding the partial reasoning or text (never a partial tool call: the gateway sends tool calls only once complete), and the next request continues from it (verified against OpenCode 1.18.34). The new daemon restores the saved state: a cut read continues where it stopped; after a cut generation it restores the prompt-end checkpoint and re-reads only the partial reply. A failure after cointosd stops restarts it on exit. Never pause agents (`cointos stop`) for an installation: it relaunches every conversation.
 
 A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below.
 

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T22:04:53+11:00"
+revised_at: "2026-10-05T22:12:59+11:00"
 ---
 
 Use the least disruptive level that can apply the change:
@@ -14,7 +14,7 @@ Use the least disruptive level that can apply the change:
 
 `cointos restart` closes new-run spawning but continues admitting thoughts, landing validations and receipts from existing conversations until the daemon reaches a quiet boundary. `cancel-restart` reopens spawning without changing pause state. Actual daemon shutdown sets `STOPPING`; only then may a newly arriving thought receive a retryable rejection. Timeout or Ctrl-C cancels without stopping processes.
 
-Stopping cointosd directly is safe for conversations: shutdown lets the GPU step in flight end, saves each lane's state, and cuts the replies; OpenCode discards a cut reply and retries it, and the next daemon resumes from the saved state. Requests arriving while it is down get refused and retried with OpenCode's backoff ([retry policy](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.33/packages/opencode/src/session/retry.ts)); after the 2-second replacement in a live installation, a cut agent was back within about 30 seconds with its whole context restored.
+Stopping cointosd directly is safe for conversations: shutdown lets the GPU step in flight end, saves each lane's state, and cuts the replies; OpenCode keeps a cut reply's partial output as a finished step and continues, and the next daemon resumes from the saved state (`how/to/install/cointos.md`). Requests arriving while it is down get refused and retried with OpenCode's backoff ([retry policy](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.33/packages/opencode/src/session/retry.ts)); after the 2-second replacement in a live installation, a cut agent was back within about 30 seconds with its whole context restored.
 
 The replacement daemon adopts a run only when its persisted key/task identity and transient systemd unit are both live. A keyed run whose unit died returns to waiting uncharged. Adoption follows the existing unit and injects no message. Unknown units are stopped. Coin, agents and models keep running across replacement; Coin retains its imported code and startup settings, and changes to those require the separate quiet Coin refresh owned by `how/to/install/cointos.md`.
 
