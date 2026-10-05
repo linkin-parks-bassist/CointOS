@@ -12,6 +12,8 @@ import contextlib
 import io
 import json
 import os
+import re
+import subprocess
 import sys
 
 from cointos import cli
@@ -125,7 +127,45 @@ def run_cli(argv: list[str]) -> tuple[str, bool]:
 
 # ---------------------------------------------------------------- messages
 
+def summary(brief: str) -> str:
+    """A brief's `Summary:` line, else its first line."""
+    found = re.search(r"^Summary:\s*(.+)$", brief or "", re.M)
+    return (found[1] if found else (brief or "").strip().split("\n")[0])[:160]
+
+
+def changed_files(task: dict) -> str:
+    """What a run's worktree has changed since its base commit, committed or not."""
+    worktree, base = task.get("worktree"), task.get("base_commit")
+    if not (worktree and base and os.path.isdir(worktree) and task.get("branch")):
+        return ""
+    result = subprocess.run(["git", "-C", worktree, "diff", "--stat=120", base], capture_output=True, text=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def peers() -> tuple[str, bool]:
+    """Every other live run: what it is for, what it is doing now and what it has changed."""
+    me = identity()["task"]
+    try:
+        state = ledger()
+    except Unreachable as error:
+        return str(error), True
+    sections = []
+    for agent in state["agents"].values():
+        task = state["tasks"].get(agent["task"]) or {}
+        if agent["task"] == me or not task:
+            continue
+        lines = [f"{task['id']} ({task['role']}, {agent['state']}): {summary(task.get('brief', ''))}"]
+        if agent.get("doing"):
+            lines.append(f"  now: {agent['doing'][:160]}")
+        files = changed_files(task)
+        lines.append("  changed:\n" + "\n".join("    " + line for line in files.splitlines()) if files else "  changed: nothing yet")
+        sections.append("\n".join(lines))
+    return ("\n\n".join(sections) or "no other agents are running"), False
+
+
 MESSAGE_TOOLS = {
+    "peers": ("See every other live agent run: its task id, role, what it is for, what it is doing now and which "
+              "files its branch has changed. Check it before changing shared files or interfaces.", {}, []),
     "send": ("Send a short message to another active task (PROJECT:NAME, as `jobs` shows) or to the user ('user'). "
              "Use it to ask or tell, not to hand off work: queued work still goes through the queue.",
              {"to": text("PROJECT:NAME task id, or 'user'"), "text": text("the message")}, ["to", "text"]),
@@ -138,6 +178,8 @@ def identity() -> dict:
 
 
 def message_tool(name: str, arguments: dict) -> tuple[str, bool]:
+    if name == "peers":
+        return peers()
     try:
         if name == "send":
             result = call("send", {**identity(), "to": arguments["to"], "text": arguments["text"]})

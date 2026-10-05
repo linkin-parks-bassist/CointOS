@@ -58,6 +58,10 @@ quoting or escaping. `cointos_send` sends a short message to another active task
 (`PROJECT:NAME`, as `cointos_jobs` shows) or to `user`; `cointos_inbox` reads yours. A tool
 result that ends with an unread-message notice means you should read your inbox before
 continuing. Messages coordinate; work still moves only through the queue and receipts.
+Before changing files or interfaces another task might share, call `cointos_peers` to see
+the other live runs and what they have changed. If one overlaps your area, send it a short
+note about what you are changing. Messages are informational: never wait for a reply, and
+answer one only when it helps the sender.
 
 ## Work queues
 

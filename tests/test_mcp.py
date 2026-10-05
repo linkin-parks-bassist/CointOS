@@ -2,6 +2,7 @@
 between tasks and the user."""
 import json
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -78,6 +79,20 @@ class Tools(unittest.TestCase):
         with patch.object(api, "alert") as alert:
             mcp.invoke("send", {"to": "user", "text": "Need a decision"}, "manager")
         alert.assert_called_once_with(f"Message from {self.manager['id']}: Need a decision")
+
+    def test_peers_show_other_runs_their_purpose_activity_and_changes(self):
+        self.assertEqual(mcp.invoke("peers", {}, "manager")[0], "no other agents are running")
+        worker = support.running(support.queued(self.project, "build", "Summary: Builds the parser front end.\nDo it"), "worker-1")
+        worker["base_commit"] = support.git.head(worker["worktree"])
+        (Path(worker["worktree"]) / "parser.c").write_text("int parse(void);\n")
+        support.git.run(worker["worktree"], "add", "parser.c")
+        state.L["agents"]["worker-1"]["doing"] = "edit: parser.c"
+        output, failed = mcp.invoke("peers", {}, "manager")
+        self.assertFalse(failed)
+        self.assertIn(f"{worker['id']} (worker, running): Builds the parser front end.", output)
+        self.assertIn("now: edit: parser.c", output)
+        self.assertIn("parser.c", output.split("changed:")[1])
+        self.assertNotIn(self.manager["id"] + " (", output)
 
     def test_agents_get_the_cointos_server_in_their_config(self):
         server = opencode.settings(state.CONFIG, "key", {"id": "p:x", "abilities": ["standard"]}, [], "worker-9")["mcp"]["cointos"]
