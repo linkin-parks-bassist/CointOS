@@ -441,8 +441,9 @@ function upkeepTask(t) {
 }
 
 function renderAgents(S) {
-  // System agents (scouts, test auditors) work across projects, so every project page shows them.
-  const agents = Object.values(S.agents).filter(a => !ROUTE.project || a.place === ROUTE.project || a.place === "system").sort((a, b) => a.started_at - b.started_at);
+  // Agents share one machine and its lanes, so every page shows all of them, matching the
+  // header's count; project pages filter only their pipeline and Work list.
+  const agents = Object.values(S.agents).sort((a, b) => a.started_at - b.started_at);
   let grid = $("agents").querySelector(".agents");
   if (!agents.length) {
     setHTML($("agents"), `<div class="empty">${S.paused ? "Agents are paused. <b>cointos go</b> lets them run again."
@@ -1027,7 +1028,6 @@ for (const control of schedulerControls) $(control.id).addEventListener("change"
 function render(L) {
   const agents = Object.values(L.agents), failing = L.checks.filter(c => !c.ok);
   const count = s => Object.values(L.tasks).filter(t => t.status === s).length;
-  const thinking = agents.filter(a => a.state === "thinking").length;
   $("stamp").textContent = "updated " + new Date(L.updated_at * 1000).toLocaleTimeString();
   if (!$("tile-mem")) $("strip").innerHTML = ["state", "agents", "lanes", "queue", "done", "mem", "checks"].map(id =>
     `<div class="tile" id="tile-${id}"><span></span><b></b><small></small>${id === "mem" ? `<div class="meter"><i></i></div>` : ""}</div>`).join("");
@@ -1038,7 +1038,7 @@ function render(L) {
   };
   const held = L.lanes.filter(l => L.thoughts[l.holder]).length;
   tile("state", "CointOS", L.paused ? "Paused" : "Running", L.paused ? "cointos go resumes" : "autonomy on", L.paused ? "bad" : "dark");
-  tile("agents", "Agents", agents.length, `${thinking} thinking now`);
+  tile("agents", "Agents", agents.length, `${held} on the GPU now`);  // the lanes are the one truth
   tile("lanes", "GPU lanes", `${held}/${L.lanes.length}`, "held by agents");
   tile("queue", "Up next", count("waiting"), `${count("review")} awaiting integrator`);
   tile("done", "Done", count("done"), `${count("failed")} gave up`);
