@@ -60,8 +60,8 @@ def fresh(previous: dict) -> dict:
               "held_for": None, "held_class": None, "held_until": 0, "turn_agent": None, "turn_since": 0}
              for name, shape in CONFIG["models"].items() for index in range(shape["lanes"])]
     tasks = previous.get("tasks", {})
-    live_contexts = {task.get("system_context") for task in tasks.values()
-                     if task.get("status") in ("waiting", "running", "review")}
+    live_contexts = {digest for task in tasks.values() if task.get("status") in ("waiting", "running", "review")
+                     for digest in (task.get("system_context"), task.get("tool_context"))}
     system_contexts = {digest: text for digest, text in previous.get("system_contexts", {}).items()
                        if digest in live_contexts}
     return {

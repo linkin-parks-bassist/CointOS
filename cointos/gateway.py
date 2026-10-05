@@ -96,6 +96,25 @@ def stable_environment(messages: list[dict], agent: str) -> list[dict]:
         return result
 
 
+def stable_tools(tools, agent: str):
+    """Pin a managed task's tool definitions at its first request, as its system prefix is pinned.
+
+    The chat template renders tools near the start of the prompt, so a relaunched session that
+    loaded newer tool schemas would diverge from every saved state of its conversation and reread
+    it whole. A conversation keeps the tools it started with; new tools reach new tasks."""
+    with LOCK:
+        owner = L["agents"].get(agent)
+        task = L["tasks"].get(owner["task"]) if owner else None
+        if task is None or tools is None:
+            return tools
+        pinned = L["system_contexts"].get(task.get("tool_context") or "")
+        if pinned is None:
+            encoded = json.dumps(tools, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+            task["tool_context"] = hashlib.sha256(encoded.encode()).hexdigest()
+            pinned = L["system_contexts"].setdefault(task["tool_context"], encoded)
+        return json.loads(pinned)
+
+
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
 
 
@@ -131,7 +150,7 @@ def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
     project, of any role, and of the same role.
     """
     messages = stable_environment(body["messages"], agent)
-    conversation = {"messages": messages, "tools": body.get("tools"), "template": template,
+    conversation = {"messages": messages, "tools": stable_tools(body.get("tools"), agent), "template": template,
                     "reasoning_budget": CONFIG.get("reasoning", {}).get("budgets", {}).get(
                         template.get("reasoning_effort"))}
     rendered = BACKEND.render(CONFIG, model, conversation)

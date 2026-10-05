@@ -133,3 +133,18 @@ class PromptDate(unittest.TestCase):
             rendered = gateway.render_request(body, "agent", state.CONFIG["work_model"], {})
         self.assertNotIn("shared", rendered)
         renderer.assert_called_once()
+
+
+class ToolPinning(unittest.TestCase):
+    def test_a_relaunched_conversation_keeps_the_tools_it_started_with(self):
+        from cointos import gateway, state, tasks
+        from tests import support
+        support.fresh_ledger(self)
+        project = support.project(self, support.repository(self))
+        support.running(support.queued(project, "build"), "agent")
+        first = [{"type": "function", "function": {"name": "cointos_inbox", "parameters": {}}}]
+        newer = [{"type": "function", "function": {"name": "cointos_inbox", "parameters": {"wait": {}}}}]
+        self.assertEqual(gateway.stable_tools(first, "agent"), first)
+        self.assertEqual(gateway.stable_tools(newer, "agent"), first)
+        self.assertIsNone(gateway.stable_tools(None, "agent"))
+        self.assertEqual(gateway.stable_tools(newer, "someone-else"), newer)
