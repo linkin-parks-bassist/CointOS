@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T20:57:43+11:00"
+revised_at: "2026-10-05T21:25:27+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -17,7 +17,7 @@ Use `scripts/install --live [--wait-seconds N]` (default 60, honoured as given) 
 
 If nothing the daemon runs changed (`cointos/`, `config/` other than `projects.json`, `systemd/`), the installer copies `roles/`, `web/` and `bin/`, rewrites the runtime leaves and stops: prompts, the dashboard and the CLI are read fresh from disk, so the daemon keeps running untouched.
 
-Otherwise it asks the daemon to quiesce: new model requests wait at the admission gate, the scheduler starts no new replies, and the drain is ready once no landing is validating and no reply is producing output. Replies still queued for a lane or reading their prompt have produced nothing; when cointosd stops, their stream is cut and OpenCode retries them within about a second (verified against OpenCode 1.18.34). At that boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes, without relaunching conversations. Timeout, Ctrl-C or an API failure during the drain cancels quiescence before anything is copied (a backgrounded installer ignores SIGINT; terminating it leaves quiescence on until `cancel-restart` or the next daemon start); a later failure after cointosd stops restarts it on exit. An ordinary `cointos restart` still waits for every admitted request.
+Otherwise it asks the daemon to quiesce: new model requests wait at the admission gate, no queued reply is given a lane, and the drain is ready once no landing is validating and no reply holds a lane or is producing output. Replies still queued for a lane have produced nothing; when cointosd stops, their stream is cut and OpenCode retries them within about a second (verified against OpenCode 1.18.34). A reply already reading or generating on the lane finishes first, since cutting a reader throws its read away. At that boundary it stops only cointosd, copies and upgrades the runtime, reloads units, restarts cointosd and adopts the surviving Coin, agent and model processes, without relaunching conversations. Timeout, Ctrl-C or an API failure during the drain cancels quiescence before anything is copied (a backgrounded installer ignores SIGINT; terminating it leaves quiescence on until `cancel-restart` or the next daemon start); a later failure after cointosd stops restarts it on exit. An ordinary `cointos restart` still waits for every admitted request. Never pause agents (`cointos stop`) to hurry an installation: it relaunches every conversation.
 
 A live installation preserves Coin's imported code and startup configuration. When those change, finish deployment with a separate quiet Coin refresh as below.
 
