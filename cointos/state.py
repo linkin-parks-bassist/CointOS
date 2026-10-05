@@ -17,7 +17,8 @@ BACKEND = importlib.import_module(CONFIG["backend"])
 LOCK = threading.Condition(threading.RLock())
 L: dict = {}
 STOPPING = threading.Event()
-ACTIVE = {"chats": 0, "landings": 0}  # admitted chat replies and landing validations, drained before replacement
+ACTIVE = {"chats": 0, "landings": 0, "speaking": 0}  # admitted chat replies, landing validations, and replies that
+# have begun producing output; drained before replacement
 
 
 def now() -> float:

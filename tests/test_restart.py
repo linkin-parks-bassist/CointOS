@@ -207,3 +207,25 @@ class QuiescenceIsNotSilence(unittest.TestCase):
         with patch.object(daemon.lifecycle, 'stop') as stop:
             daemon.look_after_agents()
         stop.assert_called_once_with('x', 'silent too long', requeue=True)
+
+
+class QuiesceReadiness(unittest.TestCase):
+    """A deployment waits only for replies already producing output."""
+
+    def setUp(self):
+        support.fresh_ledger(self)
+        self.enterContext(patch.dict(state.ACTIVE, {"chats": 3, "landings": 0, "speaking": 0}))
+
+    def test_queued_and_reading_thoughts_do_not_block_a_deployment(self):
+        state.L["thoughts"] = {"a": {"lane": None, "reading": True}, "b": {"lane": 0, "reading": True}}
+        self.assertFalse(api.dispatch('prepare-restart', {})['ready'], 'an ordinary drain still waits for every thought')
+        self.assertTrue(api.dispatch('prepare-restart', {'quiesce': True})['ready'])
+        api.dispatch('cancel-restart', {})
+
+    def test_a_generating_thought_or_a_speaking_reply_blocks_it(self):
+        state.L["thoughts"] = {"b": {"lane": 0, "reading": False}}
+        self.assertFalse(api.dispatch('prepare-restart', {'quiesce': True})['ready'])
+        state.L["thoughts"] = {}
+        state.ACTIVE["speaking"] = 1
+        self.assertFalse(api.dispatch('prepare-restart', {'quiesce': True})['ready'])
+        api.dispatch('cancel-restart', {})

@@ -292,6 +292,19 @@ class Handler(BaseHTTPRequestHandler):
             lanes.cancel(thought)  # request ownership ends on every return or handler failure
 
     def answer_thought(self, body: dict, agent: str, model: str, rendered: dict, thought: str):
+        """Stream a thought's reply. Once it has produced output it counts as speaking: a
+        deployment waits for speaking replies, while one still queued or reading its prompt can
+        be cut, since its client retries a reply that has produced nothing."""
+        self.speaking = False
+        try:
+            return self.reply_thought(body, agent, model, rendered, thought)
+        finally:
+            if self.speaking:
+                with LOCK:
+                    ACTIVE["speaking"] -= 1
+                    LOCK.notify_all()
+
+    def reply_thought(self, body: dict, agent: str, model: str, rendered: dict, thought: str):
         run = lanes.RUNS[thought]
         stream = bool(body.get("stream"))
         reply_id = "chatcmpl-" + secrets.token_hex(8)
@@ -318,6 +331,10 @@ class Handler(BaseHTTPRequestHandler):
                     end = item["end"]
                     continue
                 generated += item
+                if not self.speaking:
+                    with LOCK:
+                        ACTIVE["speaking"] += 1
+                    self.speaking = True
                 current = BACKEND.read(CONFIG, model, rendered["reader"], generated, False)
                 show(agent, current)
                 if stream:
