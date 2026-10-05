@@ -106,10 +106,15 @@ class Budgets(unittest.TestCase):
         self.assertIn("fresh retries exhausted", self.task["note"])
 
     def test_an_overrunning_worker_item_fails_at_once_by_default(self):
-        with patch.dict(state.CONFIG["recovery"], worker_fresh_retries=0):
+        with patch.dict(state.CONFIG["recovery"], worker_fresh_retries=0), \
+                patch.object(recovery, "packet", return_value="Read rtl_lower.h; the memo owns fire identity"):
             self.spend(seconds=self.task["budget"]["generation_seconds"])
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
+        record = state.L["queue"][f"{self.project['name']}:item"]
+        self.assertTrue(record.get("decompose"))
+        self.assertIn("the memo owns fire identity", record["report"])
+        self.assertIn(self.task["branch"], record["report"])
 
     def test_a_task_override_and_either_limit_triggers(self):
         self.task["budget"] = {"generation_tokens": 100, "generation_seconds": 10}

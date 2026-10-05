@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T00:07:15+11:00"
+revised_at: "2026-10-05T12:26:00+11:00"
 ---
 
 ## Every finished reply re-reads its own tokens

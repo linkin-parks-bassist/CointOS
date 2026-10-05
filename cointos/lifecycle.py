@@ -354,6 +354,7 @@ def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
     fresh = task.get("fresh_retries", 0)
     limit = CONFIG["recovery"]["worker_fresh_retries" if task["kind"] == "item" else "fresh_retries"]
     if fresh >= limit:
+        task.update(recovery_note=reason, recovery_context=packet)  # the recovery manager's evidence
         stop(agent_id, reason + "; fresh retries exhausted", requeue=False)
         return
     task.update(session=None, fresh_retries=fresh + 1, recovery_note=reason, recovery_context=packet)
@@ -490,6 +491,9 @@ def project(task: dict) -> bool:
                   f"Worker receipt: {receipt.get('summary', 'No completion receipt')}\n"
                   f"Evidence: {receipt.get('evidence', {})}\n\n"
                   f"Task failed: {task['note'] or 'run retries exhausted'}")
+        if task.get("recovery_context"):
+            report += (f"\n\nThe worker's last evidence before it stopped (branch {task['branch']}, files preserved); "
+                       f"treat its claims as leads until verified:\n{task['recovery_context']}")
         queues.update(record["project"], record["item"], "blocked",
                       report, decompose=task["kind"] == "item")
     elif task["kind"] == "breakdown" and receipt and record["status"] == "queued":
