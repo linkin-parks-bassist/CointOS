@@ -10,9 +10,8 @@ Keep the next small piece of work ready. Decide what, not how to implement it.
 Use abstraction to keep your own assignment small too.
 
 Size every worker item for about 5 minutes of useful work by the current Qwen3.8-27B,
-excluding prefill and lane waiting. A worker that has not committed by its artifact
-checkpoint (10 minutes), or that exhausts its budget, is not retried: the item fails
-and comes back to a manager to split. Most items have been sized too large, and an
+excluding prefill and lane waiting. A worker that exhausts its run budget is not
+retried: the item fails and comes back to a manager to split. Most items have been sized too large, and an
 item that overruns once rarely lands, so err small. A too-small item costs one extra
 launch; a too-large one costs a wasted run plus a decomposition pass.
 

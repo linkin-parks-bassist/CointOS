@@ -137,15 +137,9 @@ class Budgets(unittest.TestCase):
         self.assertNotIn("worker-1", state.L["agents"])
         self.assertEqual((self.task["status"], self.task["session"], self.task.get("fresh_retries")), ("review", "old", None))
 
-    def test_an_item_without_a_durable_artifact_recovers_at_its_checkpoint(self):
-        with patch.object(recovery, "packet", return_value="useful evidence"):
-            self.spend(seconds=state.CONFIG["recovery"]["artifact_seconds"])
-        self.assertIn("durable-artifact checkpoint", self.task["recovery_note"])
-        self.assertEqual((self.task["status"], self.task["recovery_context"]), ("waiting", "useful evidence"))
-
-    def test_a_productive_item_may_use_its_full_budget(self):
-        (Path(self.task["worktree"]) / "work.txt").write_text("progress\n")
-        self.spend(seconds=state.CONFIG["recovery"]["artifact_seconds"])
+    def test_an_item_that_has_written_nothing_may_use_its_full_budget(self):
+        self.spend(seconds=self.task["budget"]["generation_seconds"] - 1,
+                   tokens=self.task["budget"]["generation_tokens"] - 1)
         self.assertEqual(self.task["status"], "running")
 
 

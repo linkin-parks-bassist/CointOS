@@ -161,8 +161,6 @@
   "recovery": {
     "generation_seconds": 1800,
     "generation_tokens": 36000,
-    "artifact_seconds": 600,
-    "artifact_tokens": 12000,
     "handoff_chars": 6000,
     "fresh_retries": 2,
     "worker_fresh_retries": 0,

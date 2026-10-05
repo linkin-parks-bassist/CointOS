@@ -1,9 +1,9 @@
 """Run budgets, recovery evidence and incident packets.
 
 Each run is charged only for generation: lane waiting, prefill and tool time are free. A run
-past its budget, or a worker item past its artifact checkpoint without a durable artifact,
-restarts fresh from a bounded evidence packet a bounded number of times
-(`lifecycle.retry_fresh`). Caller holds LOCK.
+past its budget restarts fresh from a bounded evidence packet a bounded number of times
+(`lifecycle.retry_fresh`). Long silent stretches before writing are normal for the work
+model, so no earlier checkpoint stops a run. Caller holds LOCK.
 """
 from __future__ import annotations
 
@@ -27,25 +27,9 @@ def enforce() -> None:
             if exhausted:  # only finishing its reply after its receipt
                 lifecycle.stop(agent_id, "generation budget reached after its receipt", requeue=False)
             continue
-        checkpoint = (task["kind"] == "item" and (spent_seconds >= CONFIG["recovery"]["artifact_seconds"]
-                                                  or spent_tokens >= CONFIG["recovery"]["artifact_tokens"])
-                      and not durable_artifact(task))
-        if exhausted or checkpoint:
-            boundary = "generation budget reached" if exhausted else "durable-artifact checkpoint reached"
-            reason = f"{boundary} ({spent_seconds:.0f}s, {spent_tokens} tokens); branch and files preserved"
+        if exhausted:
+            reason = f"generation budget reached ({spent_seconds:.0f}s, {spent_tokens} tokens); branch and files preserved"
             lifecycle.retry_fresh(agent_id, reason, packet(agent_id, task, agent))
-
-
-def durable_artifact(task: dict) -> bool:
-    """Whether an item has left recoverable work beyond its starting branch state."""
-    worktree = task["worktree"]
-    if not Path(worktree).is_dir():
-        return False
-    if not git.clean(worktree):
-        return True
-    base = task.get("base_commit")
-    ahead = git.result(worktree, "rev-list", "--count", f"{base}..HEAD") if base else None
-    return ahead is not None and ahead.returncode == 0 and int(ahead.stdout.strip() or 0) > 0
 
 
 def packet(agent_id: str, task: dict, agent: dict) -> str:

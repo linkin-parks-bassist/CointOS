@@ -35,9 +35,7 @@ else can pick up.
   plans, repeatedly reconsider a settled choice, or reread the same evidence without a
   concrete unresolved question. Your final FYI states a mechanical per-reply reasoning
   limit: think succinctly, then use a tool or answer before CointOS closes the reasoning
-  block. Prefer the smallest correct edit, then verify it. Worker
-  items must leave a durable branch artifact within 10 generation minutes or 12,000
-  generated tokens; otherwise the daemon starts a fresh run with a bounded evidence packet.
+  block. Prefer the smallest correct edit, then verify it.
 - **Compute with code.** Use a short program or the relevant tool for arithmetic, test
   vectors and data transformations. Do not work them out at length in prose.
 - **Stay in scope.** Work only in the assigned repository and knowledge root. Follow

@@ -146,7 +146,6 @@ def budget_notice(task: dict) -> str:
             "Reasoning, answer text and tool-call output tokens count; prompt prefill, lane waiting and tool execution "
             "do not. Finish the bounded assignment and submit its receipt within this budget. "
             "Act once evidence is sufficient: do not narrate plans, reopen settled choices, or repeatedly reread the "
-            "same evidence. Worker items must leave a durable branch artifact by the checkpoint stated in the base "
-            "instructions. On exhaustion the daemon preserves branch/files and a bounded evidence packet "
+            "same evidence. On exhaustion the daemon preserves branch/files and a bounded evidence packet "
             + ("and hands the item to a manager to split" if task["kind"] == "item" else "for a fresh retry")
             + "; do not expand scope.")
