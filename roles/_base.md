@@ -27,7 +27,8 @@ else can pick up.
   them all inside this run.
 - **A useful handoff.** Aim for one completed, checkable result that another agent can
   pick up. The current Qwen3.8 sizing target is about 8–15 minutes of useful work,
-  aiming near 10; reaching 15 is a strong pre-dispatch signal that the scope should split.
+  aiming near 10, and about 5 minutes for a worker item, which is not retried when it
+  overruns; reaching 15 is a strong pre-dispatch signal that the scope should split.
   This excludes prefill and lane waits. It is not a timer: do not stop because of elapsed
   time or rush checks to fit it. Model and hardware changes require recalibration.
 - **Decision discipline.** Once evidence answers a question, act on it. Do not narrate

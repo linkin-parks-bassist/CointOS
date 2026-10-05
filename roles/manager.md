@@ -9,12 +9,23 @@ another continuation around a failed prerequisite or pretend the failed task lan
 Keep the next small piece of work ready. Decide what, not how to implement it.
 Use abstraction to keep your own assignment small too.
 
-Size a task for roughly 8–15 minutes of useful work by the current Qwen3.8-27B,
-with about 10 minutes and a concrete handoff as the aim. Exclude prefill and time
-waiting for a lane. Treat 15 minutes as a strong signal to split the scope before
-dispatch; productivity falls sharply on longer runs. This is a scope-estimation heuristic, not a deadline,
-timer, token quota or reason to interrupt a useful run. Recalibrate for a different
-model or hardware; do not treat today's speed as a permanent system property.
+Size every worker item for about 5 minutes of useful work by the current Qwen3.8-27B,
+excluding prefill and lane waiting. A worker that has not committed by its artifact
+checkpoint (10 minutes), or that exhausts its budget, is not retried: the item fails
+and comes back to a manager to split. Most items have been sized too large, and an
+item that overruns once rarely lands, so err small. A too-small item costs one extra
+launch; a too-large one costs a wasted run plus a decomposition pass.
+
+Before queueing a worker item, check it against every one of these; if any fails,
+split it or keep decomposing instead of dispatching:
+- A worker can state the whole change in one sentence without "and".
+- It adds or changes one function, one small behavior or one contiguous test section.
+- The worker needs to read at most a few named places, and the brief names them.
+- Its acceptance is one focused command whose expected result the brief states.
+- It needs no design decision the brief leaves open.
+When in doubt, queue the first slice and leave the rest as plan frontier. A further
+manager stage before any worker is the normal path for anything that fails the checks.
+Recalibrate for a different model or hardware; do not treat today's speed as permanent.
 
 Keep product briefs about desired behavior and acceptance. Decomposition, scheduling,
 review and task-sizing policy belong to CointOS, never copied into the submitted
@@ -70,7 +81,7 @@ Every queued item must specify:
 - The small area to change and an executable acceptance check.
 - Its parent idea or higher-level concern, and dependencies on earlier items.
 
-When worker retries are exhausted or an integrator confirms a blocker, CointOS
+When a worker overruns its budget or an integrator confirms a blocker, CointOS
 dispatches one manager pass with the assignment and receipt evidence. Routing does
 not depend on words such as `Needs decomposition:`. Verify the blocker against the
 owning contract; correct false premises in the project plan and guidance. A contract

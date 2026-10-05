@@ -77,6 +77,7 @@ class Budgets(unittest.TestCase):
         support.fresh_ledger(self)
         support.quiet(self)
         self.project = support.project(self, support.repository(self))
+        self.enterContext(patch.dict(state.CONFIG["recovery"], worker_fresh_retries=2))
         self.task = support.running(support.queued(self.project, "item"), "worker-1")
         self.task["session"] = "old"
         self.agent = state.L["agents"]["worker-1"]
@@ -97,10 +98,16 @@ class Budgets(unittest.TestCase):
         self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertEqual((self.task["status"], self.task["session"], self.task["fresh_retries"]), ("waiting", None, 1))
         self.assertIn("generation budget reached", self.task["recovery_note"])
-        self.task["fresh_retries"] = state.CONFIG["recovery"]["fresh_retries"]
+        self.task["fresh_retries"] = state.CONFIG["recovery"]["worker_fresh_retries"]
         support.running(self.task, "worker-2", worktree=False)
         state.L["agents"]["worker-2"].update(generation_seconds=0, generation_tokens=self.task["budget"]["generation_tokens"])
         recovery.enforce()
+        self.assertEqual(self.task["status"], "failed")
+        self.assertIn("fresh retries exhausted", self.task["note"])
+
+    def test_an_overrunning_worker_item_fails_at_once_by_default(self):
+        with patch.dict(state.CONFIG["recovery"], worker_fresh_retries=0):
+            self.spend(seconds=self.task["budget"]["generation_seconds"])
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
 

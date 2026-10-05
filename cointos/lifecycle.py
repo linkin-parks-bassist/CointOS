@@ -348,10 +348,12 @@ def stop(agent_id: str, reason: str, requeue: bool, charge: bool = True) -> None
 
 def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
     """Budget recovery: restart the task in a new session from a bounded evidence packet, a
-    bounded number of times; then fail it."""
+    bounded number of times; then fail it. A worker item that overruns is usually oversized,
+    so by default it fails at once and its failure reaches a manager to split it."""
     task = L["tasks"][L["agents"][agent_id]["task"]]
     fresh = task.get("fresh_retries", 0)
-    if fresh >= CONFIG["recovery"]["fresh_retries"]:
+    limit = CONFIG["recovery"]["worker_fresh_retries" if task["kind"] == "item" else "fresh_retries"]
+    if fresh >= limit:
         stop(agent_id, reason + "; fresh retries exhausted", requeue=False)
         return
     task.update(session=None, fresh_retries=fresh + 1, recovery_note=reason, recovery_context=packet)
