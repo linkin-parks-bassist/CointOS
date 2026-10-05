@@ -150,7 +150,12 @@ def schedule() -> None:
             # turn (after a quick tool call) reads only the tool's result, and its slice runs on.
             L["lanes"][thought["lane"]]["turn_since"] = thought["since"] = now()
         thought["reading"] = reading
-    wanted = scheduler.assign(CONFIG, L["lanes"], list(L["thoughts"].values()), now(), blocked())
+    contenders = list(L["thoughts"].values())
+    if L["quiescing"]:
+        # A deployment is draining: only replies already producing output keep a lane. Starting
+        # another would keep the lane busy forever; the rest are cut and retried after replacement.
+        contenders = [t for t in contenders if t["lane"] is not None and not t["reading"]]
+    wanted = scheduler.assign(CONFIG, L["lanes"], contenders, now(), blocked())
     for position, thought_id in wanted.items():
         lane = L["lanes"][position]
         if lane["holder"] == thought_id:

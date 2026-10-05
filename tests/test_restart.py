@@ -229,3 +229,25 @@ class QuiesceReadiness(unittest.TestCase):
         state.ACTIVE["speaking"] = 1
         self.assertFalse(api.dispatch('prepare-restart', {'quiesce': True})['ready'])
         api.dispatch('cancel-restart', {})
+
+
+class QuiesceScheduling(unittest.TestCase):
+    def setUp(self):
+        support.fresh_ledger(self)
+
+    def test_a_draining_daemon_starts_no_new_replies(self):
+        from cointos import lanes
+        seen = []
+        model = state.L["lanes"][0]["model"]
+        state.L["thoughts"] = {"speaking": {"lane": 0, "reading": False, "model": model},
+                               "queued": {"lane": None, "reading": True, "model": model}}
+        context = {"speaking": [1, 2, 3, 4], "queued": [7, 8, 9, 10]}
+        with patch.dict(lanes.HELD, {0: [1, 2, 3]}, clear=True), \
+             patch.object(lanes, "tokens_of", lambda thought: context[thought]), \
+             patch.object(lanes.scheduler, "assign", lambda config, l, contenders, *rest: seen.append(contenders) or {}):
+            with state.LOCK:
+                state.L["quiescing"] = True
+                lanes.schedule()
+                state.L["quiescing"] = False
+                lanes.schedule()
+        self.assertEqual([[t["lane"] for t in batch] for batch in seen], [[0], [0, None]])
