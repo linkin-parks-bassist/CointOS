@@ -1,11 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-06T22:24:51+11:00"
+revised_at: "2026-10-07T08:46:26+11:00"
 ---
 
-## Pigen's unfinished Task 8 tests sit on main, enforcing nothing
-
-Pigen's main still holds section `t8-skeleton` of `tests/rtl_lower_test.c`, red at its first unimplemented assertion, and maps all lowering code to the one whole-binary command `make rtl-lower-test`. Because a failure main already has never blocks a landing, those tests enforce nothing, and the whole-binary command also hides regressions in the other lowering sections. The Pigen manager command `move-task-8-tests-into-packets` owns moving them into per-family test packets with per-section manifest entries; `impl-t8-fire-identity-bits-fix` and its integration are held for it (its branch passes the fire-identity family).
+## Concurrent test runs can share Pigen build outputs
 
 Pigen's test targets build fixed paths such as `/tmp/pigen-rtl-lower-test`, so a packet check running while a landing checks the same target could overwrite the other's binary. Landings are serialized per repository, but packet checks are not serialized against them. Not yet seen.
 
