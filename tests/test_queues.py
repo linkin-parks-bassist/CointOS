@@ -17,6 +17,8 @@ class Depends(unittest.TestCase):
 
     def test_placeholders_and_sentence_punctuation_name_nothing(self):
         self.assertEqual(queues.depends("Depends on: none."), [])
+        self.assertEqual(queues.depends("Depends on: (none)"), [])
+        self.assertEqual(queues.depends("Depends on: [core]"), ["core"])
         self.assertEqual(queues.depends("Depends on: `core`, docs."), ["core", "docs"])
         record = {"depends": ["none.", "core.", "core"]}
         self.assertTrue(queues.normalize_dependencies(record))

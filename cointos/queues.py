@@ -63,9 +63,9 @@ NO_DEPENDENCY = {"none", "nothing", "n/a", "-"}
 
 
 def dependency(name: str) -> str:
-    """One `Depends on:` entry as a queue name: markup and trailing sentence punctuation removed;
-    `none` and similar placeholders name nothing."""
-    name = name.strip().strip("`*").strip().rstrip(".;").strip("`*").strip()
+    """One `Depends on:` entry as a queue name: markup, brackets and trailing sentence punctuation
+    removed; `none` and similar placeholders, such as `(none)`, name nothing."""
+    name = name.strip().strip("`*()[]").strip().rstrip(".;").strip("`*()[]").strip()
     return "" if name.lower() in NO_DEPENDENCY else name
 
 
