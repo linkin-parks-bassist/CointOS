@@ -15,7 +15,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from cointos import git, keys, lanes, opencode, queues, schema, snapshots, tasks, trees
+from cointos import contracts, git, keys, lanes, opencode, queues, schema, snapshots, tasks, trees
 from cointos.state import CONFIG, LOCK, L, alert, log, now, save
 
 RETIRE_PER_TICK = 4  # settled tasks whose worktrees one reconcile pass retires (git runs under LOCK)
@@ -34,7 +34,7 @@ def require_run(task: dict, run: str | None) -> None:
 
 # ---------------------------------------------------------------- receipts
 
-def evidence(task: dict, disposition: str) -> dict:
+def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
     """Check a receipt against the task's artifacts; the evidence to record, or ValueError
     naming what to fix. A branch task leaves nothing uncommitted; a reviewed one submits one
     committed report matching its disposition; a merged one has landed before it completes."""
@@ -52,6 +52,17 @@ def evidence(task: dict, disposition: str) -> dict:
                 raise ValueError(f"{queues.REPORT} on your branch must declare exactly one `Status: {expected}` for a "
                                  f"{disposition} receipt; {report_problem(task)}")
             found["report"] = expected
+            if disposition == "complete" and task.get("stage") == "test-contract":
+                rules = where.get("test_policy") or {}
+                production = contracts.affected(where["path"], task["base_commit"], found["commit"], rules) if rules else set()
+                if production:
+                    raise ValueError("a test packet changes only tests; it also changes " + ", ".join(sorted(production)))
+                if rules:
+                    contracts.contracts(where["path"], found["commit"], rules)
+            if disposition == "complete" and task.get("stage") in schema.TESTED and where.get("test_policy"):
+                if (checked or {}).get("commit") != found["commit"]:
+                    raise ValueError("the packet's tests have not run on this commit; run cointos finish again")
+                found.update(checked)
         elif lands == "merge" and disposition == "complete" and not git.contains(where["path"], task["branch"],
                                                                                  where["main_branch"]):
             raise ValueError(f"land your committed branch with `cointos merge` before finishing: {task['branch']} "
@@ -115,7 +126,7 @@ def _known(task: dict, run: str | None, disposition: str, summary: str) -> dict 
     return receipt
 
 
-def submit(task_id: str, run: str | None, disposition: str, summary: str) -> dict:
+def submit(task_id: str, run: str | None, disposition: str, summary: str, checked: dict | None = None) -> dict:
     """An agent's `cointos finish`: check its evidence, record its receipt, settle its task."""
     task = L["tasks"].get(task_id)
     if task is None:
@@ -133,14 +144,20 @@ def submit(task_id: str, run: str | None, disposition: str, summary: str) -> dic
         raise ValueError(f"a {task['kind']} task finishes with {' or '.join(allowed)}"
                          + ("; land with `cointos land` or send back with `cointos return`"
                             if task["kind"] == "integrate" else ""))
-    return _receive(task, run, disposition, summary, evidence(task, disposition))
+    return _receive(task, run, disposition, summary, evidence(task, disposition, checked))
 
 
 def _receive(task: dict, run: str | None, disposition: str, summary: str, found: dict) -> dict:
     """Record a checked receipt and apply its one transition."""
     receipt = {"run": run, "disposition": disposition, "summary": summary, "evidence": found, "at": now()}
     note = f"{disposition}: {summary}"[:CONFIG["result_chars"]]
-    if schema.KINDS[task["kind"]]["lands"] == "review":
+    if task.get("stage") == "test-contract" and disposition == "complete":
+        # A test packet does not land: it is accepted as the hidden tests of the code that
+        # depends on it, and lands with that code.
+        _settle(task, "done", "accepted as a test packet", receipt=receipt, result=summary,
+                acceptance={"commit": found["commit"], "worker_commit": found["commit"], "via": "tests",
+                            "stage": "test-contract"})
+    elif schema.KINDS[task["kind"]]["lands"] == "review":
         _settle(task, "review", note, receipt=receipt, result=summary)
     elif task["kind"] == "integrate" and disposition == "blocked":
         _settle(task, "failed", note, receipt=receipt, result=summary)

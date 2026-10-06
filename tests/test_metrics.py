@@ -10,8 +10,8 @@ class Summary(unittest.TestCase):
             {"at": 1, "event": "task created", "task": "p:item-a"},
             {"at": 2, "event": "task created", "task": "p:decompose-item-a"},
             {"at": 3, "event": "task created", "task": "p:integrate-item-b-1"},
-            {"at": 4, "event": "verified landing", "stage": "test-contract",
-             "red_gate": {"expected_red": 2, "contracts_run": 5, "red_on_main": 1}},
+            {"at": 4, "event": "verified landing", "stage": "test-contract"},
+            {"at": 4.5, "event": "packet tests failed", "task": "p:item-a"},
             {"at": 5, "event": "verified landing", "stage": "implementation"},
             {"at": 6, "event": "landing gate rejected", "stage": "test-contract"},
             {"at": 7, "event": "brief infeasible", "task": "p:c", "missing": ["a.h::f"]},
@@ -20,6 +20,6 @@ class Summary(unittest.TestCase):
         text = metrics.summary(entries, 24)
         for line in ("implementation 1, test-contract 1", "Gate returns:         test-contract 1",
                      "Infeasible briefs:    1", "Worker items started: 1", "Manager recoveries:   1",
-                     "0 complete, 1 blocked", "2 declared reds verified", "Recoveries per landing: 0.50",
+                     "0 complete, 1 blocked", "Packet test failures: 1", "Recoveries per landing: 0.50",
                      "Implementation share of landings: 50%", "infeasible p:c: a.h::f"):
             self.assertIn(line, text)

@@ -1,9 +1,10 @@
 """The landing gate: how reviewed worker code reaches a project's main branch.
 
-An integrator lands the exact commit it reviewed (`land`), or reconciles an implementation
-already present on main (`incorporate`). The daemon checks the candidate against the worker's
-receipt and the project's accepted test contracts on a fresh checkout, outside the ledger lock,
-then fast-forwards main and settles both tasks through the lifecycle. One landing at a time per
+An integrator lands the exact commit it reviewed, code and its packet's tests together (`land`),
+or reconciles an implementation already present on main (`incorporate`). The daemon checks the
+candidate against the worker's receipt and runs the full suite on a fresh checkout, outside the
+ledger lock: a test that passes on main and fails on the candidate sends the packet back to its
+worker with that test bundled in. Then it fast-forwards main and settles both tasks. One landing at a time per
 repository, under a file lock in its Git directory.
 """
 from __future__ import annotations
@@ -32,38 +33,24 @@ def repository_lock(repo: str):
         yield
 
 
-def checks(repo: str, worker: dict, parent: str, commit: str, rules: dict) -> tuple[list[list[str]], list[list[str]]]:
-    """For a candidate of its worker's construction stage: (the item's own tests, which must pass;
-    the accepted checks covering its changed code, none of which may newly fail). A ValueError when
-    the candidate breaks the stage's contract outright."""
-    stage = worker["stage"]
-    if stage == "test-contract":
-        production = contracts.affected(repo, parent, commit, rules)
-        if production:
-            raise ValueError("test-contract commits cannot change production code: " + ", ".join(sorted(production)))
-        contracts.contracts(repo, commit, rules)
-        return [], []
-    if stage not in ("implementation", "integration"):
-        return [], []  # a skeleton is accepted on the integrator's review
-    own = own_tests(repo, worker, commit, rules)
-    if stage == "implementation":
-        covering = contracts.implementation_checks(repo, worker, parent, commit, rules)
-        return own or covering, covering
-    # Integration is not a way around implementation checks: carried production changes keep
-    # their accepted contracts, and contracts it adds must pass.
-    added = contracts.integration_tests(repo, parent, commit, rules)
-    covering = contracts.affected_checks(repo, parent, commit, parent, rules)
-    return (own or covering) + [c for c in added if c not in (own or covering)], covering
+def tests_of(worker: dict) -> list[str]:
+    """A packet's hidden test commits: those of the accepted test-contract items it depends on.
+    Caller holds LOCK."""
+    found = []
+    for record in queues.records().values():
+        if (record["project"] == worker["place"] and record.get("stage") == "test-contract"
+                and record["status"] == "done" and record.get("commit")
+                and any(name == record["item"] or Path(name).stem == Path(record["item"]).stem
+                        for name in queues.records().get(worker["record"] or "", {}).get("depends", []))):
+            found.append(record["commit"])
+    return found
 
 
-def own_tests(repo: str, worker: dict, commit: str, rules: dict) -> list[list[str]]:
-    """The tests on the item's `Tests:` line, which must be registered contracts."""
-    own = queues.tests(worker["brief"])
-    missing = contracts.unregistered(repo, commit, rules, own)
-    if missing:
-        raise ValueError("the brief's Tests: commands are not registered in the test manifest: "
-                         + "; ".join(" ".join(c) for c in missing))
-    return own
+def check_candidate(repo: str, worker: dict, parent: str, commit: str, rules: dict) -> None:
+    """A ValueError when the candidate breaks its stage's contract outright: an implementer
+    touched tests, or the review changed tests beyond the packet's own."""
+    if worker["stage"] in ("implementation", "integration"):
+        contracts.packet_unchanged(repo, worker, parent, commit, worker["receipt"]["evidence"].get("tests", []), rules)
 
 
 def land(task_id: str, commit: str, run: str | None) -> dict:
@@ -96,28 +83,28 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
         submitted = worker["receipt"]["evidence"]["commit"]
         if git.head(repo, worker["branch"]) != submitted or not git.clean(worker["worktree"]):
             raise ValueError("worker branch is not the clean commit its completion receipt submitted")
-        red = None
+        counts = None
         if parent == commit:  # main already has it: only a landing interrupted after its fast-forward
             if (integration.get("landing") or {}).get("commit") != commit:
                 raise ValueError("commit reached main without passing the landing gate")
         else:
-            try:
-                own, covering = checks(repo, worker, parent, commit, rules)
-                if own or covering:
-                    red = contracts.gate(repo, parent, commit, own, covering, CONFIG["timeouts"]["command_seconds"],
-                                         CONFIG["memory"]["agent_limit_gb"])
-                if worker["stage"] == "test-contract":
-                    red = contracts.red_gate(repo, parent, commit, git.show(repo, submitted, queues.REPORT), rules,
-                                             CONFIG["timeouts"]["command_seconds"], CONFIG["memory"]["agent_limit_gb"])
-            except ValueError as error:
-                if worker["stage"] not in ("implementation", "test-contract"):
-                    raise
+            check_candidate(repo, worker, parent, commit, rules)
+            counts, caused = contracts.suite(repo, parent, commit, rules, CONFIG["timeouts"]["command_seconds"],
+                                             CONFIG["memory"]["agent_limit_gb"])
+            if caused:
+                bundled = [c for c, _, _ in caused]
+                shown = "\n\n".join(f"Failing test: {' '.join(c)}\n{out[-3000:]}\n\nTest source:\n{source}"
+                                     for c, out, source in caused)
+                reason = (f"Landing {commit} broke tests that pass on main; they are now part of this packet's "
+                          f"tests:\n\n{shown}")
                 log("landing gate rejected", task=task_id, worker=worker["id"], stage=worker["stage"],
-                    commit=commit, reason=str(error)[:300])
+                    commit=commit, reason=reason[:300])
                 with LOCK:
-                    lifecycle.returned(L["tasks"][task_id], run, f"Landing {commit} failed validation: {error}")
+                    held = L["tasks"][integration["worker"]]
+                    held["bundled"] = held.get("bundled", []) + [c for c in bundled if c not in held.get("bundled", [])]
+                    lifecycle.returned(L["tasks"][task_id], run, reason)
                     save()
-                raise ValueError(f"{worker['stage']} sent back; integrator should stop: {error}") from error
+                raise ValueError(f"{worker['stage']} sent back; integrator should stop: {reason[:2000]}")
         with LOCK:
             integration, worker = L["tasks"][task_id], L["tasks"][integration["worker"]]
             if (worker["status"] != "review" or git.head(tree) != commit or git.head(repo, main) != parent
@@ -132,7 +119,7 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
                                                         "via": "landing", "stage": worker["stage"]})
             save()
             log("verified landing", task=task_id, commit=commit, stage=worker["stage"],
-                **({"gate": red} if red else {}))
+                **({"gate": counts} if counts else {}))
     return {"ok": True, "commit": commit}
 
 
@@ -161,10 +148,9 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
             raise ValueError("submitted worker changed or has uncommitted work")
         if queues.status(queues.report(worker)) != "done":
             raise ValueError("incorporation requires a done worker report")
-        covering = contracts.incorporated(repo, worker, commit, where["test_policy"])
-        own = own_tests(repo, worker, commit, where["test_policy"])
-        contracts.verify(repo, commit, own or covering, CONFIG["timeouts"]["command_seconds"],
-                         CONFIG["memory"]["agent_limit_gb"])
+        if not contracts.tests_landed(repo, commit, worker["receipt"]["evidence"].get("tests", []), where["test_policy"]):
+            raise ValueError("this packet's tests are not on main; land it with cointos land so they land with it")
+        contracts.incorporated(repo, worker, commit, where["test_policy"])
         with LOCK:
             worker = L["tasks"][worker_id]
             if (worker["status"] != "review" or not git.clean(worker["worktree"])

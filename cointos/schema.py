@@ -43,6 +43,8 @@ KINDS = {
 QUEUE_KINDS = {"queued": "item", "urgent": "item", "command": "breakdown"}
 
 STAGES = ("skeleton", "test-contract", "implementation", "integration")
+# Stages whose code travels with a test packet: the accepted test-contract items they depend on.
+TESTED = ("implementation", "integration")
 EFFORTS = ("low", "medium", "xhigh")
 ABILITIES = ("standard", "control", "network")
 BUDGET_KEYS = ("generation_seconds", "generation_tokens")
@@ -61,10 +63,9 @@ def effort(value) -> str | None:
 
 
 def default_effort(config: dict, task: dict, *, reviewed: dict | None = None) -> str:
-    """Contract creation and review share their configured effort; otherwise use the role.
-    A task's own daemon-owned override always wins, independently of its worker's."""
-    contract = (task["kind"] == "item" and task["stage"] == "test-contract") or (
-        task["kind"] == "integrate" and (reviewed or {}).get("stage") == "test-contract")
+    """Test writing has its configured effort; otherwise use the role. A task's own
+    daemon-owned override always wins, independently of its worker's."""
+    contract = task["kind"] == "item" and task["stage"] == "test-contract"
     key = "test-contract" if contract else KINDS[task["kind"]]["role"]
     return task.get("reasoning_effort") or config["reasoning"].get(key, config["reasoning"]["default"])
 

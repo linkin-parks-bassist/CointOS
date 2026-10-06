@@ -8,7 +8,6 @@ import hashlib
 import json
 import copy
 import re
-import shlex
 from pathlib import Path
 from cointos import git, kt, schema
 from cointos.config import ROOT
@@ -86,16 +85,6 @@ def relies_on(text: str) -> list[str]:
         found = re.match(r"\**Relies on:\**\s*(.+)", line.strip(), re.IGNORECASE)
         if found:
             return [n.strip().strip("`") for n in found.group(1).split(",") if n.strip().strip("`")]
-    return []
-
-
-def tests(text: str) -> list[list[str]]:
-    """The item's own tests on its brief's `Tests:` line: registered manifest commands, separated
-    by `;`, each written as it would be typed (for example `make parser-test T=numbers`)."""
-    for line in text.splitlines():
-        found = re.match(r"\**Tests:\**\s*(.+)", line.strip(), re.IGNORECASE)
-        if found:
-            return [shlex.split(c.strip().strip("`")) for c in found.group(1).split(";") if c.strip().strip("`")]
     return []
 
 

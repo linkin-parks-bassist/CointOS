@@ -1,5 +1,5 @@
-"""The landing gate, incorporation and the agents' landing commands, on real Git repositories with
-tasks, runs and receipts made the way the daemon makes them."""
+"""The landing gate, test packets, incorporation and the agents' landing commands, on real Git
+repositories with tasks, runs and receipts made the way the daemon makes them."""
 import contextlib
 import io
 import json
@@ -11,18 +11,21 @@ from unittest.mock import patch
 from cointos import api, cli, contracts, git, landing, lifecycle, queues, state, tasks
 from tests import support
 
-CODE = "def a():\n    raise NotImplementedError\n\ndef b():\n    raise NotImplementedError\n"
-TESTS = ("import unittest\nimport code\nclass A(unittest.TestCase):\n"
-         "    def test_a(self): self.assertEqual(code.a(), 42)\n"
-         "class B(unittest.TestCase):\n    def test_b(self): self.assertEqual(code.b(), 7)\n")
+CODE = "def a():\n    raise NotImplementedError\n\ndef b():\n    return 7\n"
+TESTS = "import unittest\nimport code\nclass B(unittest.TestCase):\n    def test_b(self): self.assertEqual(code.b(), 7)\n"
+TESTS_A = ("import unittest\nimport code\n\n\nclass A(unittest.TestCase):\n"
+           "    def test_a(self):\n        self.assertEqual(code.a(), 42)\n")
 RULES = {"manifest": "tests/contracts.json", "protected": ["tests/**", "pytest.ini"], "non_code": ["*.md", ".knowledge/**"]}
+B = ["python3", "-m", "unittest", "tests.test_code.B"]
+A = ["python3", "-m", "unittest", "tests.test_a.A"]
 
 
 class Project(unittest.TestCase):
-    """A project with accepted contracts for `code.a` and `code.b`, and a running worker on item."""
+    """Main holds code.b and its green test. A test packet for code.a waits on its own branch,
+    hidden from the running implementer of item, which depends on it."""
 
     stage = "implementation"
-    brief = "Implement A"
+    brief = "Implement A\nDepends on: tests-a"
 
     def setUp(self):
         support.fresh_ledger(self)
@@ -32,30 +35,43 @@ class Project(unittest.TestCase):
         (self.repo / "tests/__init__.py").touch()
         (self.repo / "code.py").write_text(CODE)
         (self.repo / "tests/test_code.py").write_text(TESTS)
-        (self.repo / "tests/contracts.json").write_text(json.dumps(
-            [{"covers": [f"code.py::{n.lower()}"], "command": ["python3", "-m", "unittest", f"tests.test_code.{n}"]}
-             for n in "AB"]))
+        (self.repo / "tests/contracts.json").write_text(json.dumps([{"covers": ["code.py::b"], "command": B}]))
         self.base = support.commit(self.repo)
         self.project = support.project(self, self.repo, test_policy=RULES)
+        self.tests = self.packet("tests-a", {"tests/test_a.py": TESTS_A}, A)
         self.worker = support.queued(self.project, "item", self.brief, stage=self.stage)
         support.running(self.worker, "worker-1")
         self.worker["base_commit"] = self.base
         self.tree = Path(self.worker["worktree"])
-        verify = contracts.verify  # unit tests need no user systemd session for the memory cap
-        self.enterContext(patch.object(contracts, "verify", side_effect=lambda repo, commit, commands, timeout, memory:
-                                       verify(repo, commit, commands, timeout)))
-        gate = contracts.gate
-        self.enterContext(patch.object(contracts, "gate", side_effect=lambda repo, parent, commit, own, covering,
-                                       timeout, memory: gate(repo, parent, commit, own, covering, timeout)))
+        run = contracts._run  # unit tests need no user systemd session for the memory cap
+        self.enterContext(patch.object(contracts, "_run", side_effect=lambda checkout, commit, command, deadline,
+                                       memory_gb=None: run(checkout, commit, command, deadline)))
 
-    def implement(self) -> str:
+    def packet(self, name: str, files: dict, command: list[str]) -> str:
+        """An accepted test packet: its commit on its own branch, off main."""
+        git.run(self.repo, "checkout", "-q", "-b", f"work/{name}")
+        for path, text in files.items():
+            (self.repo / path).write_text(text)
+        manifest = json.loads((self.repo / "tests/contracts.json").read_text())
+        (self.repo / "tests/contracts.json").write_text(json.dumps(manifest + [{"covers": ["code.py::a"], "command": command}]))
+        commit = support.commit(self.repo, f"tests for {name}")
+        git.run(self.repo, "checkout", "-q", "main")
+        queues.add(self.project, "queued", name, "Test A\nRelies on: a", "test-contract")
+        state.L["queue"][f"p:{name}"].update(status="done", commit=commit)
+        return commit
+
+    def implement(self, value: str = "42") -> str:
         path = self.tree / "code.py"
-        path.write_text(path.read_text().replace("raise NotImplementedError", "return 42", 1))
+        path.write_text(path.read_text().replace("raise NotImplementedError", f"return {value}", 1))
         (self.tree / queues.REPORT).write_text("Status: done\n\nA implemented.\n")
         return support.commit(self.tree, "implement a")
 
+    def finish(self) -> dict:
+        return api.dispatch("finish", {"task": self.worker["id"], "run": "worker-1", "outcome": "complete",
+                                       "detail": "A implemented"})["receipt"]
+
     def submit(self) -> str:
-        receipt = lifecycle.submit(self.worker["id"], "worker-1", "complete", "A implemented")
+        receipt = self.finish()
         lifecycle.release("worker-1", "run ended")
         return receipt["evidence"]["commit"]
 
@@ -67,10 +83,13 @@ class Project(unittest.TestCase):
         return integration
 
     def landing(self) -> tuple[dict, str, str]:
-        """A reviewed candidate: (integration, candidate commit, submitted worker commit)."""
+        """A reviewed candidate, the packet's tests then its code: (integration, candidate, worker commit)."""
         self.implement()
         submitted = self.submit()
         integration = self.integrate()
+        for commit in self.worker["receipt"]["evidence"]["tests"]:
+            git.run(self.review, "merge", "--squash", commit)
+            support.commit(self.review, "tests")
         git.run(self.review, "merge", "--squash", submitted)
         (self.review / queues.REPORT).unlink()
         return integration, support.commit(self.review, "land a"), submitted
@@ -79,17 +98,70 @@ class Project(unittest.TestCase):
         return git.head(self.repo, "main")
 
 
+class Packets(Project):
+    def test_the_implementer_cannot_see_its_packets_tests(self):
+        self.assertFalse((self.tree / "tests/test_a.py").exists())
+        self.assertEqual(landing.tests_of(self.worker), [self.tests])
+
+    def test_finishing_runs_the_hidden_tests_and_reveals_only_failures(self):
+        self.implement("41")
+        with self.assertRaises(api.ApiError) as failed:
+            self.finish()
+        message = str(failed.exception)
+        self.assertIn("1 of the packet's 1 tests fail", message)
+        self.assertIn("tests/test_a.py", message)
+        self.assertIn("self.assertEqual(code.a(), 42)", message)
+        self.assertEqual((self.worker["status"], self.worker["receipt"]), ("running", None))
+        self.assertFalse((self.tree / "tests/test_a.py").exists(), "revealed in the message, not the worktree")
+        path = self.tree / "code.py"
+        path.write_text(path.read_text().replace("return 41", "return 42"))
+        support.commit(self.tree, "fix a")
+        receipt = self.finish()
+        self.assertEqual((self.worker["status"], receipt["evidence"]["tests"]), ("review", [self.tests]))
+
+    def test_a_receipt_without_the_packet_check_is_refused(self):
+        self.implement()
+        with self.assertRaisesRegex(ValueError, "have not run on this commit"):
+            lifecycle.submit(self.worker["id"], "worker-1", "complete", "A implemented")
+
+    def test_a_test_packet_is_accepted_without_landing(self):
+        writer = support.queued(self.project, "tests-c", "Test C\nRelies on: b", stage="test-contract")
+        support.running(writer, "writer-1")
+        writer["base_commit"] = self.base
+        tree = Path(writer["worktree"])
+        (tree / "tests/test_c.py").write_text(TESTS)
+        (tree / queues.REPORT).write_text("Status: done\n\nTests for c.\n")
+        commit = support.commit(tree, "tests for c")
+        lifecycle.submit(writer["id"], "writer-1", "complete", "tests for c")
+        self.assertEqual((writer["status"], writer["acceptance"]["via"]), ("done", "tests"))
+        self.assertEqual((state.L["queue"]["p:tests-c"]["status"], state.L["queue"]["p:tests-c"]["commit"]),
+                         ("done", commit))
+        self.assertEqual(self.main(), self.base)
+
+    def test_a_test_packet_cannot_change_code(self):
+        writer = support.queued(self.project, "tests-c", "Test C\nRelies on: b", stage="test-contract")
+        support.running(writer, "writer-1")
+        writer["base_commit"] = self.base
+        tree = Path(writer["worktree"])
+        (tree / "code.py").write_text(CODE + "\ndef c(): return 1\n")
+        (tree / queues.REPORT).write_text("Status: done\n\nTests for c.\n")
+        support.commit(tree, "sneaky code")
+        with self.assertRaisesRegex(ValueError, "changes only tests"):
+            lifecycle.submit(writer["id"], "writer-1", "complete", "tests for c")
+
+
 class Gate(Project):
-    def test_exact_checked_commit_lands_and_a_retry_is_idempotent(self):
+    def test_exact_checked_commit_lands_with_its_tests_and_a_retry_is_idempotent(self):
         integration, candidate, submitted = self.landing()
         result = landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual((result["commit"], self.main()), (candidate, candidate))
+        self.assertIn("tests/test_a.py", git.run(self.repo, "ls-files").split())
         self.assertEqual(landing.land(integration["id"], candidate, "integrator-1"), result)
         self.assertEqual(self.worker["status"], "done")
         self.assertEqual(self.worker["acceptance"], {"commit": candidate, "worker_commit": submitted,
                                                      "via": "landing", "stage": "implementation"})
         self.assertEqual((integration["status"], integration["receipt"]["run"]), ("done", "integrator-1"))
-        self.assertEqual(queues.landed(self.project), {"item"})
+        self.assertEqual(queues.landed(self.project), {"tests-a", "item"})
 
     def test_verified_acceptance_overrides_a_provisional_blocked_record(self):
         integration, candidate, _ = self.landing()
@@ -103,9 +175,17 @@ class Gate(Project):
         integration, _, _ = self.landing()
         (self.review / "tests/test_code.py").write_text("# weakened\n")
         candidate = support.commit(self.review)
-        with self.assertRaisesRegex(ValueError, "protected tests"):
+        with self.assertRaisesRegex(ValueError, "beyond the packet's own"):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
+
+    def test_a_failure_main_already_has_is_not_the_packets(self):
+        (self.repo / "tests/test_code.py").write_text(TESTS.replace("code.b(), 7", "code.b(), 9"))
+        self.base = support.commit(self.repo, "a red test reached main")
+        git.run(self.tree, "merge", "-q", "--ff-only", "main")
+        integration, candidate, _ = self.landing()
+        landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), candidate)
 
     def test_a_commit_already_on_main_without_the_gate_is_refused(self):
         integration, candidate, _ = self.landing()
@@ -117,10 +197,11 @@ class Gate(Project):
     def test_a_worker_moving_during_the_check_prevents_landing(self):
         integration, candidate, _ = self.landing()
 
-        def moved(*args):
+        def moved(*args, **options):
             (self.tree / "extra.py").write_text("x = 1\n")
             support.commit(self.tree)
-        with patch.object(contracts, "gate", side_effect=moved):
+            return {"suite": 0, "red_on_main": 0}, []
+        with patch.object(contracts, "suite", side_effect=moved):
             with self.assertRaisesRegex(ValueError, "refs changed"):
                 landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
@@ -139,180 +220,19 @@ class Gate(Project):
             landing.land(integration["id"], candidate, "integrator-0")
         self.assertEqual(self.main(), self.base)
 
-    def test_a_failing_implementation_returns_to_its_worker(self):
-        integration, _, _ = self.landing()
-        path = self.review / "code.py"
-        path.write_text(path.read_text().replace("return 42", "return -1"))
-        candidate = support.commit(self.review)
-        with self.assertRaisesRegex(ValueError, "test command failed"):
-            landing.land(integration["id"], candidate, "integrator-1")
-        self.assertEqual(self.main(), self.base)
-        self.assertEqual((self.worker["status"], self.worker["receipt"]), ("waiting", None))
-        self.assertIn("test command failed", self.worker["review"])
-        self.assertEqual((integration["status"], integration["receipt"]["disposition"]), ("done", "returned"))
-        self.assertEqual(queues.landed(self.project), set())
-
-
-class OwnTests(Project):
-    """An implementation passes its own tests, named on its brief's `Tests:` line; covering checks
-    that pass on main stay green, and other items' unwritten tests in the same file are not its."""
-
-    brief = "Implement A\nTests: python3 -m unittest tests.test_code.A"
-    SHARED = ("import unittest\nimport code\nclass A(unittest.TestCase):\n"
-              "    def test_a(self): self.assertEqual(code.a(), 42)\n"
-              "class B(unittest.TestCase):\n    def test_b(self): self.assertEqual(code.b(), 7)\n")
-
-    def covering_both(self):
-        """Both contracts cover all of code.py, as a C file's sections cover one source file."""
-        (self.repo / "tests/contracts.json").write_text(json.dumps(
-            [{"covers": ["code.py"], "command": ["python3", "-m", "unittest", f"tests.test_code.{n}"]} for n in "AB"]))
-        self.base = support.commit(self.repo, "file-wide coverage")
-        git.run(self.tree, "merge", "-q", "--ff-only", "main")
-        self.worker["base_commit"] = self.base
-
-    def test_own_tests_passing_land_while_another_items_unwritten_tests_stay_red(self):
-        self.covering_both()
-        integration, candidate, _ = self.landing()
-        landing.land(integration["id"], candidate, "integrator-1")
-        self.assertEqual(self.main(), candidate)
-
-    def test_own_tests_failing_return_the_item(self):
-        self.covering_both()
-        integration, _, _ = self.landing()
-        path = self.review / "code.py"
-        path.write_text(path.read_text().replace("return 42", "return -1"))
-        with self.assertRaisesRegex(ValueError, "test command failed"):
-            landing.land(integration["id"], support.commit(self.review), "integrator-1")
-        self.assertEqual(self.main(), self.base)
-        self.assertEqual(self.worker["status"], "waiting")
-
-    def test_breaking_a_check_green_on_main_returns_the_item(self):
-        self.covering_both()
-        path = self.repo / "code.py"
-        path.write_text(path.read_text().replace("raise NotImplementedError", "return 7").replace(
-            "def a():\n    return 7", "def a():\n    raise NotImplementedError"))
-        self.base = support.commit(self.repo, "b implemented")
-        git.run(self.tree, "merge", "-q", "--ff-only", "main")
-        self.worker["base_commit"] = self.base
+    def test_breaking_a_test_green_on_main_returns_the_packet_with_that_test_bundled(self):
         integration, _, _ = self.landing()
         path = self.review / "code.py"
         path.write_text(path.read_text().replace("return 7", "return 8"))
-        with self.assertRaisesRegex(ValueError, "passes on main"):
-            landing.land(integration["id"], support.commit(self.review), "integrator-1")
-        self.assertEqual(self.main(), self.base)
-
-    def test_unregistered_own_tests_are_refused(self):
-        self.worker["brief"] = "Implement A\nTests: python3 -m unittest tests.test_code"
-        integration, candidate, _ = self.landing()
-        with self.assertRaisesRegex(ValueError, "not registered"):
+        candidate = support.commit(self.review)
+        with self.assertRaisesRegex(ValueError, "broke tests that pass on main"):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
-
-    def test_without_a_tests_line_every_covering_check_must_pass(self):
-        self.worker["brief"] = "Implement A"
-        self.covering_both()
-        integration, candidate, _ = self.landing()
-        with self.assertRaisesRegex(ValueError, "tests.test_code.B"):
-            landing.land(integration["id"], candidate, "integrator-1")
-
-    def test_tests_line_parsing(self):
-        self.assertEqual(queues.tests("x\n**Tests:** `make t T=a`; make t T=\"b c\"\n"),
-                         [["make", "t", "T=a"], ["make", "t", "T=b c"]])
-        self.assertEqual(queues.tests("no line"), [])
-
-
-class IntegrationStage(Project):
-    stage = "integration"
-
-    def test_integration_cannot_carry_failing_production_or_weaken_tests(self):
-        integration, _, _ = self.landing()
-        path = self.review / "code.py"
-        path.write_text(path.read_text().replace("return 42", "return -1"))
-        with self.assertRaisesRegex(ValueError, "test command failed"):
-            landing.land(integration["id"], support.commit(self.review), "integrator-1")
-        self.assertEqual(self.main(), self.base)
-        self.assertEqual(self.worker["status"], "review", "only implementations return automatically")
-        (self.review / "tests/test_code.py").write_text("# weakened\n")
-        with self.assertRaisesRegex(ValueError, "existing protected tests"):
-            landing.land(integration["id"], support.commit(self.review), "integrator-1")
-
-
-class TestContractStage(Project):
-    """A test-contract candidate's declared reds are run and no accepted green check may turn red."""
-
-    stage = "test-contract"
-    brief = "Test A\nRelies on: code.py::a"
-    RED = "Expected red: python3 -m unittest tests.test_d => NotImplementedError"
-
-    def setUp(self):
-        super().setUp()
-        (self.repo / "code.py").write_text(CODE + "\ndef c():\n    return 1\n")
-        (self.repo / "tests/test_c.py").write_text(
-            "import unittest\nimport code\nclass C(unittest.TestCase):\n    def test_c(self): self.assertEqual(code.c(), 1)\n")
-        manifest = json.loads((self.repo / "tests/contracts.json").read_text())
-        manifest.append({"covers": ["code.py::c"], "command": ["python3", "-m", "unittest", "tests.test_c.C"]})
-        (self.repo / "tests/contracts.json").write_text(json.dumps(manifest))
-        self.base = support.commit(self.repo, "accepted green c")
-        git.run(self.tree, "merge", "-q", "--ff-only", "main")
-        gate = contracts.red_gate
-        self.enterContext(patch.object(contracts, "red_gate", side_effect=lambda repo, parent, commit, report, rules,
-                                       timeout, memory: gate(repo, parent, commit, report, rules, timeout)))
-
-    def contract(self, report: str, tests: dict | None = None) -> tuple[dict, str]:
-        files = {"tests/test_d.py": "import unittest\nimport code\nclass D(unittest.TestCase):\n"
-                                    "    def test_a(self): self.assertEqual(code.a(), 42)\n"} if tests is None else tests
-        for path, text in files.items():
-            (self.tree / path).write_text(text)
-        (self.tree / queues.REPORT).write_text("Status: done\n\nTests for a.\n\n" + report + "\n")
-        support.commit(self.tree, "tests for a")
-        submitted = lifecycle.submit(self.worker["id"], "worker-1", "complete", "tests for a")["evidence"]["commit"]
-        lifecycle.release("worker-1", "run ended")
-        integration = self.integrate()
-        git.run(self.review, "merge", "--squash", submitted)
-        (self.review / queues.REPORT).unlink()
-        return integration, support.commit(self.review, "land tests")
-
-    def rejected(self, report: str, message: str, tests: dict | None = None) -> None:
-        integration, candidate = self.contract(report, tests)
-        with self.assertRaisesRegex(ValueError, message):
-            landing.land(integration["id"], candidate, "integrator-1")
-        self.assertEqual(self.main(), self.base)
-        self.assertEqual(self.worker["status"], "waiting", "a failed test-contract gate returns to the worker")
-        self.assertIn(message.split("(")[0].strip(), self.worker["review"])
-
-    def test_a_declared_red_with_its_output_lands(self):
-        integration, candidate = self.contract(self.RED)
-        landing.land(integration["id"], candidate, "integrator-1")
-        self.assertEqual(self.main(), candidate)
-
-    def test_a_red_appended_to_an_accepted_green_target_lands_when_declared(self):
-        staged = (self.repo / "tests/test_c.py").read_text() + "    def test_a(self): self.assertEqual(code.a(), 42)\n"
-        integration, candidate = self.contract(
-            "Expected red: `python3 -m unittest tests.test_c.C` => NotImplementedError", {"tests/test_c.py": staged})
-        landing.land(integration["id"], candidate, "integrator-1")
-        self.assertEqual(self.main(), candidate)
-
-    def test_a_report_without_declared_reds_is_returned(self):
-        self.rejected("All good.", "declares no")
-
-    def test_a_red_failing_for_another_reason_is_returned(self):
-        self.rejected("Expected red: python3 -m unittest tests.test_d => AssertionError", "without its declared output")
-
-    def test_a_declared_red_that_passes_is_returned(self):
-        self.rejected("Expected red: python3 -m unittest tests.test_c.C => anything", "passes on the candidate")
-
-    def test_turning_an_accepted_green_check_red_is_returned(self):
-        broken = (self.repo / "tests/test_c.py").read_text().replace("code.c(), 1", "code.c(), 2")
-        self.rejected(self.RED, "turns accepted green checks red",
-                      {"tests/test_c.py": broken, "tests/test_d.py": "import unittest\nimport code\n"
-                       "class D(unittest.TestCase):\n    def test_a(self): self.assertEqual(code.a(), 42)\n"})
-
-    def test_expected_red_lines_parse_outside_fences_only(self):
-        self.assertEqual(contracts.expected_reds("- Expected red: `make t` => x.c:3\n```\nExpected red: no\n```\n"),
-                         [(["make", "t"], "x.c:3")])
-        self.assertEqual(contracts.expected_reds("Expected red: none\n"), [])
-        with self.assertRaisesRegex(ValueError, "malformed"):
-            contracts.expected_reds("Expected red: make t\n")
+        self.assertEqual((self.worker["status"], self.worker["receipt"]), ("waiting", None))
+        self.assertEqual(self.worker["bundled"], [B])
+        self.assertIn("code.b(), 7", self.worker["review"])
+        self.assertEqual((integration["status"], integration["receipt"]["disposition"]), ("done", "returned"))
+        self.assertEqual(queues.landed(self.project), {"tests-a"})
 
 
 class Incorporation(Project):
@@ -401,6 +321,7 @@ class Commands(Project):
         self.run_command(cli.land, "Add a")  # the API reply may have been lost
         self.assertEqual(sorted(git.run(self.repo, "ls-files").split()),
                          ["code.py", "tests/__init__.py", "tests/contracts.json", "tests/test_code.py"])
+        self.assertNotIn("tests/test_a.py", git.run(self.repo, "ls-files").split(), "a skeleton carries no packet")
         message = git.run(self.repo, "log", "-1", "--format=%B")
         self.assertIn("Add a", message)
         self.assertIn("A implemented.", message)
@@ -434,13 +355,13 @@ class Commands(Project):
         (self.review / "plan.md").write_text("concurrent main frontier\nreviewed worker boundary\n")
         git.run(self.review, "add", "plan.md")
         self.run_command(cli.land, "Add a")  # no manual commit or alternate command
-        self.assertEqual(contracts.gate.call_args.args[4], [["python3", "-m", "unittest", "tests.test_code.A"]])
         accepted = self.worker["acceptance"]
         self.assertEqual((accepted["commit"], accepted["worker_commit"]), (self.main(), submitted))
         self.assertEqual((self.worker["status"], integration["status"]), ("done", "done"))
         self.assertEqual((self.repo / "plan.md").read_text(),
                          "concurrent main frontier\nreviewed worker boundary\n")
         self.assertNotIn(queues.REPORT, git.run(self.repo, "ls-files").split())
+        self.assertIn("tests/test_a.py", git.run(self.repo, "ls-files").split(), "review lands the packet's tests")
         self.assertIn("A implemented.", git.run(self.repo, "log", "-1", "--format=%B"))
         self.run_command(cli.land, "Add a")
         self.assertEqual(self.main(), accepted["commit"])

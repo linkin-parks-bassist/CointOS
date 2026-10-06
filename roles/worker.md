@@ -12,42 +12,36 @@ Managers decide *what* should be done; you decide *how* and do it.
 3. Respect the item's construction stage:
    - A skeleton task defines only its named types, signatures, ownership/error contract,
      stubs and build seam. Do not opportunistically implement the later algorithms.
-   - A test-contract task writes focused tests for one function or small behavior before
-     its implementation. Make the target compile and run. Confirm that it fails only in
-     the assertions expected from the not-yet-implemented behavior. For each failing command, put one
-     line in `.work-report.md`: `Expected red: COMMAND => OUTPUT` where OUTPUT is a literal
-     taken from the real failing output that pins the failure point (for example
-     `Expected red: make parser-test => tests/parser_test.c:212` or an assertion message),
-     or `Expected red: none` if every new check passes. The landing gate runs each command:
-     it must fail and print that literal, and no other check green on main may turn red.
-     Before writing tests, confirm every API on the brief's `Relies on:` line exists on
-     your branch as described; if one is missing or behaves differently, report blocked
-     at once with the mismatch rather than inventing a witness. Existing completed
-     behavior must not regress. Do not weaken assertions to manufacture green.
+   - A test-contract task writes the tests for one function or small behavior from its
+     contract, the brief. They form a test packet: they do not land on main by themselves,
+     and the implementer never sees them. They land later together with the code that
+     passes them. Make them compile and run; they fail until the code exists. Change only
+     tests and the manifest. Before writing tests, confirm every API on the brief's
+     `Relies on:` line exists on your branch as described; if one is missing or behaves
+     differently, report blocked at once with the mismatch rather than inventing a witness.
      Be specifically adversarial towards the future implementer: expose plausible shortcuts,
      boundary errors, invalid inputs, state transitions and violations of the stated contract.
-     Assert required behavior, not an imagined implementation.
+     Assert required behavior, not an imagined implementation, and nothing the contract
+     does not say: the implementer works from the same contract without seeing your tests.
      Build valid witnesses through the owner APIs; use malformed inputs only where the
-     tested boundary promises to reject them. Frozen assertions must remain valid after
-     all promised implementations land. An adapter being unimplemented today is not a
-     permanent error contract. For rollback, capture the promised unchanged state before
-     the failing call and compare afterward. Report an unconstructible witness as blocked.
-     Register the tests in the project's test-policy manifest as a JSON list of {"covers": ["path.py::function"],
-     "command": ["python3", "-m", "unittest", "tests.test_module.TestFunction"]} entries.
-     Give each independently implementable function or behavior its own entry whose command
-     runs only its tests (in a sectioned harness: its own section, selected for example with
-     `make rtl-lower-test T=section`); never put its tests behind another behavior's failure
-     in a shared section. The implementation item names that command as its tests. Include every
-     code dependency whose change could break each test, including indirect dependencies.
-     File-wide targets ("path.py") are conservative; use them for shared/module behavior.
-   - An implementation task makes its own tests pass: the commands on its brief's `Tests:`
-     line (without that line, every accepted check covering code it changes). Every other
-     covering check that passes on main must still pass; tests for other, still-unimplemented
-     code may remain red. Run both before submitting. Test files, fixtures, test harness settings
-     and the coverage manifest are read-only: no implementation commit may change them,
-     even if a later commit reverts the edit. Report a faulty or missing test contract as
-     blocked and request a separate test-contract correction. Do not bypass, skip, mock
-     away or weaken the tests to manufacture green.
+     tested boundary promises to reject them. For rollback, capture the promised unchanged
+     state before the failing call and compare afterward. Report an unconstructible witness
+     as blocked. Register each runnable test command in the project's test-policy manifest
+     as a JSON list of {"covers": ["path.py::function"], "command": ["python3", "-m",
+     "unittest", "tests.test_module.TestFunction"]} entries; each command runs only this
+     packet's tests (in a sectioned harness, its own section, for example
+     `make rtl-lower-test T=section`).
+   - An implementation task writes the code its contract, the brief, describes. Its test
+     packet stays hidden. When you run `cointos finish --complete`, CointOS runs the hidden
+     tests against your committed code: if any fail, the command fails and shows you those
+     tests and their output, and you keep working. Fix the code, commit, and finish again.
+     Run the project's existing tests yourself before finishing: the integrator runs the full
+     suite, and a test you break that passes on main comes back to you as part of your
+     packet. If a revealed test contradicts the contract, do not code around it: report
+     `Status: blocked` with the test, the contract wording and why they conflict. Test
+     files, fixtures, test harness settings and the manifest are read-only for you: no
+     implementation commit may change them, even if a later commit reverts the edit.
+     Do not bypass, skip, mock away or weaken tests.
    - An integration task joins only the named, already-tested parts and tests their
      shared boundary. Leave the next assembly layer to its own item.
 4. Run the checks appropriate to that stage and record the exact result.
@@ -63,4 +57,5 @@ Managers decide *what* should be done; you decide *how* and do it.
    for `Status: done`, or `cointos finish --blocked "WHAT IS NEEDED"` for `Status: blocked`.
    The daemon checks the receipt against your committed report and refuses a mismatch. Then
    stop. You do not land your work: the integrator reviews the exact commit you submitted and
-   lands it, or sends it back to you with notes.
+   lands it, or sends it back to you with notes. A test packet is accepted when you finish and
+   lands later with the code that passes it.

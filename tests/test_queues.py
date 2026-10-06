@@ -138,22 +138,6 @@ class Admission(unittest.TestCase):
                    "Relies on: pigen_present, wrong/file.c::pigen_present, api.h\nTest.", "test-contract")
         self.assertEqual(spawner.next_task()["id"], "p:good")
 
-    def test_an_implementation_naming_unregistered_tests_goes_to_a_manager_without_a_worker(self):
-        (self.repo / "tests").mkdir(exist_ok=True)
-        (self.repo / "tests/contracts.json").write_text(json.dumps(
-            [{"covers": ["a.c"], "command": ["make", "a-test", "T=one"]}]))
-        support.commit(self.repo, "manifest")
-        self.project["test_policy"] = {"manifest": "tests/contracts.json", "protected": ["tests/**"]}
-        queues.add(self.project, "queued", "bad", "Tests: make a-test T=one; make a-test T=two\nImplement two.")
-        self.assertIsNone(spawner.next_task(), "no worker is created for it")
-        self.assertEqual(spawner.next_task()["kind"], "decompose")
-        record = state.L["queue"]["p:bad"]
-        self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
-        self.assertIn("make a-test T=two, not registered", record["report"])
-        self.assertNotIn("p:bad", state.L["tasks"])
-        queues.add(self.project, "queued", "good", "Tests: make a-test T=one\nImplement one.")
-        self.assertTrue(spawner.feasible(self.project, state.L["queue"]["p:good"]))
-
     def test_api_queue_is_durable_on_restart_and_never_writes_project(self):
         api.dispatch("queue", {"project": "p", "kind": "queued", "name": "core", "brief": "Build core"})
         api.dispatch("queue", {"project": "p", "kind": "queued", "name": "ui", "brief": "Depends on: core\nBuild UI"})

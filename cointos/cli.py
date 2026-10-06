@@ -251,6 +251,16 @@ def review() -> str:
             raise SystemExit("commit or resolve existing review edits before staging another worker")
         if here("merge", "--ff-only", main).returncode:
             raise SystemExit("review branch cannot fast-forward to current main; preserve your edits and resolve before review")
+        for tests in worker["receipt"]["evidence"].get("tests", []):  # the packet's tests land with its code
+            if here("merge-base", "--is-ancestor", tests, "HEAD").returncode == 0:
+                continue
+            merged = here("merge", "--squash", tests)
+            if merged.returncode and not conflicted():
+                raise SystemExit(merged.stderr.strip())
+            if conflicted():
+                resolve(conflicted(), "commit the packet's tests with `git commit`, then run cointos review again")
+            here("rm", "-q", "-f", "--ignore-unmatch", "--", queues.REPORT)
+            here("commit", "-q", "-m", f"Tests for {task['item']}")
         squashed = here("merge", "--squash", submitted)
         if squashed.returncode and not conflicted():
             raise SystemExit(squashed.stderr.strip())
@@ -289,7 +299,7 @@ def send_back(notes: str) -> str:
 
 def finish(outcome: str, detail: str) -> str:
     task, run = run_here()
-    call("finish", {"task": task["id"], "run": run, "outcome": outcome, "detail": detail})
+    call("finish", {"task": task["id"], "run": run, "outcome": outcome, "detail": detail}, timeout=LANDING_TIMEOUT)
     return f"receipt accepted: {task['id']} {outcome}."
 
 

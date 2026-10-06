@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import copy
 
-from cointos import landing, lifecycle, projects, queues, settings, snapshots, tasks
+from cointos import contracts, git, landing, lifecycle, projects, queues, schema, settings, snapshots, tasks
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
 
 
@@ -20,6 +20,8 @@ class ApiError(ValueError):
 def dispatch(action: str, body: dict):
     if action in LANDINGS:
         return landing_action(action, body)
+    if action == "finish":
+        return finishing(body)
     if action not in ACTIONS:
         raise ApiError(f"unknown action {action!r}")
     with LOCK:
@@ -64,12 +66,52 @@ def landing_action(action: str, body: dict):
 LANDINGS = ("land", "incorporate")
 
 
+def finishing(body):
+    """`cointos finish`. An implementer's complete receipt first runs its packet's hidden tests,
+    outside the ledger lock; a failure goes straight back to the still-running implementer with
+    the failing tests revealed."""
+    with LOCK:
+        task = L["tasks"].get(body.get("task"))
+        tested = (task is not None and task["kind"] == "item" and task.get("stage") in schema.TESTED
+                  and body.get("outcome") == "complete" and lifecycle.owns(task, body.get("run"))
+                  and not task.get("receipt") and git.clean(task["worktree"]))
+        if tested:
+            if STOPPING.is_set():
+                raise ApiError("daemon draining; finish again after replacement")
+            if task.get("validating"):
+                raise ApiError("this packet's tests are already running")
+            where = tasks.place(task)
+            rules, commit = where.get("test_policy"), git.head(task["worktree"])
+            main, tests = git.head(where["path"], where["main_branch"]), landing.tests_of(task)
+            bundled = list(task.get("bundled", []))
+            task["validating"] = True
+            ACTIVE["landings"] += 1
+    if tested:
+        try:
+            checked = {"commit": commit, "tests": tests}
+            if rules:
+                checked.update(contracts.packet_check(where["path"], main, commit, tests, bundled, rules,
+                                                      CONFIG["timeouts"]["command_seconds"],
+                                                      CONFIG["memory"]["agent_limit_gb"]))
+        except ValueError as error:
+            log("packet tests failed", task=task["id"], commit=commit)
+            raise ApiError(str(error)) from error
+        finally:
+            with LOCK:
+                ACTIVE["landings"] -= 1
+                task.pop("validating", None)
+                for agent in L["agents"].values():
+                    if agent["task"] == task["id"]:
+                        agent["last_activity"] = now()
+    with LOCK:
+        receipt = lifecycle.submit(body["task"], body.get("run"), body.get("outcome"), body.get("detail", ""),
+                                   checked if tested else None)
+        save()
+        queues.publish()
+    return {"ok": True, "receipt": receipt}
+
+
 # ---------------------------------------------------------------- agents' own actions
-
-def finish(body):
-    return {"ok": True, "receipt": lifecycle.submit(body["task"], body.get("run"), body.get("outcome"),
-                                                    body.get("detail", ""))}
-
 
 def receipt_delivered(body):
     lifecycle.receipt_delivered(body["task"], body["run"])
@@ -462,7 +504,7 @@ def project_remove(body):
 
 
 ACTIONS = {
-    "finish": finish, "receipt-delivered": receipt_delivered, "return": send_back, "replace": replace,
+    "receipt-delivered": receipt_delivered, "return": send_back, "replace": replace,
     "queue": queue, "attention": attention, "send": send, "inbox": inbox,
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,

@@ -1,9 +1,10 @@
-"""Implementation test contracts: what a landing must preserve and which accepted checks it must pass.
+"""Test packets: the tests a piece of code travels with, and the suite it must not break.
 
 A project's test policy names its contract manifest (a JSON list of {"covers", "command"}),
-the protected test paths and the non-code paths. The landing gate (`cointos/landing.py`) uses
-these functions to find the accepted checks covering a candidate's changed code; `gate` runs the
-item's own tests and those checks on fresh checkouts of the exact commit.
+the protected test paths and the non-code paths. A test writer's commit registers a packet's
+tests; they stay off main, hidden from the implementer, until they land with the code that
+passes them. `packet_check` runs them when the implementer finishes; `suite` runs every
+registered command on a landing candidate; `verify` runs commands on a fresh checkout.
 """
 from __future__ import annotations
 
@@ -64,7 +65,7 @@ def symbols(source: str) -> tuple[dict, dict, dict, str]:
     return found, imports, references, repr([ast.dump(n, include_attributes=False) for n in module])
 
 
-def affected(repo, before, after, rules, *, inherit_private=False) -> set[str]:
+def affected(repo, before, after, rules) -> set[str]:
     targets = set()
     for path in git.changed(repo, before, after):
         if protected(path, rules) or matches(path, rules.get("non_code", [])):
@@ -102,11 +103,6 @@ def affected(repo, before, after, rules, *, inherit_private=False) -> set[str]:
             targets.add(path)
             continue
         impacted &= definitions
-        # Private helpers inherit the contracts of all reachable public callers.
-        # Unreferenced helpers (including isolated recursive cycles) still need coverage.
-        if inherit_private:
-            impacted = {n for n in impacted if not n.startswith("_") or
-                        not any(u != n and u and not u.startswith("_") for u in users({n}))}
         targets.update(f"{path}::{name}" for name in impacted)
     return targets
 
@@ -126,18 +122,6 @@ def contracts(repo, commit, rules) -> list[dict]:
         if any(s.startswith("/") or ".." in s.split("/") for s in contract["covers"]):
             raise ValueError("test coverage targets must be repository-relative")
     return data
-
-
-def unregistered(repo, commit, rules, commands: list[list[str]]) -> list[list[str]]:
-    """The commands that no accepted contract at a commit registers."""
-    registered = [c["command"] for c in contracts(repo, commit, rules)]
-    return [c for c in commands if c not in registered]
-
-
-def covers(pattern: str, target: str) -> bool:
-    path, _, symbol = target.partition("::")
-    wanted, sep, name = pattern.partition("::")
-    return fnmatch.fnmatchcase(path, wanted) and (not sep or not symbol or fnmatch.fnmatchcase(symbol, name))
 
 
 def implementation_history(repo, worker, main, rules):
@@ -162,40 +146,8 @@ def implementation_history(repo, worker, main, rules):
                     raise ValueError("implementation merge changes protected tests: " + path)
 
 
-def implementation_checks(repo, worker, main, candidate, rules) -> list[list[str]]:
-    implementation_history(repo, worker, main, rules)
-    check_test_diff(repo, main, candidate, rules)  # includes integrator edits/conflict resolutions
-    return affected_checks(repo, main, candidate, main, rules)
-
-
-def affected_checks(repo, before, candidate, contracts_at, rules) -> list[list[str]]:
-    targets = affected(repo, before, candidate, rules)
-    registered = contracts(repo, contracts_at, rules) if targets else []
-    required = affected(repo, before, candidate, rules, inherit_private=True)
-    missing = [t for t in sorted(required) if not any(covers(p, t) for c in registered for p in c["covers"])]
-    if missing:
-        raise ValueError("changed code has no accepted test contract: " + ", ".join(missing))
-    selected = [c["command"] for c in registered if any(covers(p, t) for p in c["covers"] for t in targets)]
-    return [list(command) for command in dict.fromkeys(tuple(c) for c in selected)]
-
-
-def integration_tests(repo, main, candidate, rules):
-    """Integration may add contracts, never weaken the already accepted ones."""
-    for path in git.changed(repo, main, candidate):
-        if protected(path, rules) and path != rules["manifest"] and git.blob(repo, main, path) is not None:
-            raise ValueError("integration changes existing protected tests: " + path)
-    added = []
-    if rules["manifest"] in git.changed(repo, main, candidate):
-        accepted = contracts(repo, main, rules)
-        proposed = contracts(repo, candidate, rules)
-        if any(c not in proposed for c in accepted):
-            raise ValueError("integration removes or changes accepted contracts")
-        added = [c["command"] for c in proposed if c not in accepted]
-    return added
-
-
-def incorporated(repo, worker, commit, rules) -> list[list[str]]:
-    """Exact changed definitions/files must exist on main, with its accepted checks green.
+def incorporated(repo, worker, commit, rules) -> None:
+    """Exact changed definitions/files must exist on main.
 
     This intentionally refuses semantic rewrites: an integrator must review those.
     Ancestry or a green suite alone cannot prove the worker's work was incorporated.
@@ -234,7 +186,6 @@ def incorporated(repo, worker, commit, rules) -> list[list[str]]:
                      and submitted[3] == landed[3])
         if not equal:
             raise ValueError("main does not contain the exact submitted behavior: " + path)
-    return affected_checks(repo, base, head, commit, rules)
 
 
 def _run(checkout, commit, command, deadline, memory_gb=None) -> tuple[int, str]:
@@ -287,94 +238,147 @@ def verify(repo, commit: str, commands: list[list[str]], timeout: float, memory_
                 raise ValueError(f"test command failed ({code}): {command}\n" + text[-8000:])
 
 
-def gate(repo, parent: str, commit: str, own: list[list[str]], covering: list[list[str]], timeout: float,
-         memory_gb=None) -> dict:
-    """An item's own tests must pass, and no covering check that passes on main may fail.
-
-    A covering check already failing on main tests other items' unwritten code; it is not held
-    against this one."""
-    deadline = time.monotonic() + timeout
-    own = list(dict.fromkeys(tuple(c) for c in own))
-    others = [c for c in dict.fromkeys(tuple(c) for c in covering) if c not in own]
-    with checkout(repo, commit) as path:
-        results = {c: _run(path, commit, list(c), deadline, memory_gb) for c in own + others}
-    for command in own:
-        code, text = results[command]
-        if code:
-            raise ValueError(f"test command failed ({code}): {list(command)}\n" + text[-8000:])
-    red = [c for c in others if results[c][0]]
-    if red:
-        with checkout(repo, parent) as path:
-            regressed = [c for c in red if not _run(path, parent, list(c), deadline, memory_gb)[0]]
-        if regressed:
-            raise ValueError("test command failed on the candidate but passes on main: " + "\n".join(
-                f"{list(c)}:\n{results[c][1][-4000:]}" for c in regressed))
-    return {"own": len(own), "checks": len(own) + len(others), "red_on_main": len(red)}
+def registered(repo, commit: str, rules: dict) -> list[list[str]]:
+    """Every test command a commit's manifest registers (none without a manifest)."""
+    if git.blob(repo, commit, rules["manifest"]) is None:
+        return []
+    return [c["command"] for c in contracts(repo, commit, rules)]
 
 
-EXPECTED_RED = re.compile(r"\**Expected red:\**\s*(.*)", re.IGNORECASE)
+def packet_tests(repo, main: str, tests: list[str], rules: dict) -> list[list[str]]:
+    """A packet's own tests: the commands its test commits register beyond main's."""
+    accepted, own = registered(repo, main, rules), []
+    for commit in tests:
+        own += [c for c in registered(repo, commit, rules) if c not in accepted and c not in own]
+    return own
 
 
-def expected_reds(report: str) -> list[tuple[list[str], str]]:
-    """A test-contract report's declared red checks, `Expected red: COMMAND => OUTPUT LITERAL`
-    lines outside fenced code; `Expected red: none` declares that every new check is green."""
-    found, fence, declared = [], None, False
-    for line in report.splitlines():
-        stripped = line.strip().lstrip("-*").strip()
-        if stripped.startswith(("```", "~~~")):
-            marker = stripped[:3]
-            fence = None if fence == marker else marker if fence is None else fence
-            continue
-        match = EXPECTED_RED.fullmatch(stripped) if fence is None else None
-        if not match:
-            continue
-        declared = True
-        value = match.group(1).strip().strip("`").strip()
-        if value.lower() == "none":
-            continue
-        command, sep, literal = value.partition("=>")
-        command, literal = shlex.split(command.strip().strip("`")) if sep else [], literal.strip().strip("`").strip()
-        if not command or not literal:
-            raise ValueError(f"malformed expected red (want `Expected red: COMMAND => OUTPUT LITERAL`): {line.strip()}")
-        found.append((command, literal))
-    if not declared:
-        raise ValueError("test-contract report declares no `Expected red: COMMAND => OUTPUT LITERAL` "
-                         "line (or `Expected red: none`)")
+def packet_files(repo, main: str, tests: list[str], rules: dict) -> list[str]:
+    """The protected files a packet's test commits write."""
+    found = []
+    for commit in tests:
+        base = git.run(repo, "merge-base", main, commit)
+        found += [p for p in git.changed(repo, base, commit) if protected(p, rules) and p not in found]
     return found
 
 
-def red_gate(repo, parent: str, commit: str, report: str, rules: dict, timeout: float, memory_gb=None) -> dict:
-    """Mechanically check a test-contract candidate's claims: every declared red check fails on
-    the candidate with its declared output, and no other contract green on main turns red.
-
-    Candidate results come first; main is only consulted for contracts red on the candidate,
-    so the common all-green case runs each command once."""
-    expected = expected_reds(report)
-    accepted = contracts(repo, parent, rules) if git.show(repo, parent, rules["manifest"]) else []
-    commands = list(dict.fromkeys(tuple(c["command"]) for c in accepted))
-    deadline = time.monotonic() + timeout
-    results: dict[tuple, tuple[int, str]] = {}
+@contextlib.contextmanager
+def combined(repo, commit: str, tests: list[str]):
+    """A fresh detached checkout of `commit` with a packet's test commits merged in: (path, head)."""
     with checkout(repo, commit) as path:
-        for command in commands + [tuple(c) for c, _ in expected if tuple(c) not in commands]:
-            results[command] = _run(path, commit, list(command), deadline, memory_gb)
-    for command, literal in expected:
-        code, text = results[tuple(command)]
-        if not code:
-            raise ValueError(f"declared red check passes on the candidate: {command}")
-        if literal not in text:
-            raise ValueError(f"declared red check {command} failed ({code}) without its declared output "
-                             f"{literal!r}; actual output tail:\n" + text[-4000:])
-    # A declared red is checked by its literal; an accepted target may legitimately turn red
-    # when the new deliberate failure is appended to it.
-    declared = {tuple(c) for c, _ in expected}
-    red = [c for c in commands if results[c][0] and c not in declared]
-    regressed = []
-    if red:
-        with checkout(repo, parent) as path:
-            for command in red:
-                if not _run(path, parent, list(command), deadline, memory_gb)[0]:
-                    regressed.append(command)
-    if regressed:
-        details = "\n".join(f"{list(c)}:\n{results[c][1][-2000:]}" for c in regressed)
-        raise ValueError("test contract turns accepted green checks red: " + details)
-    return {"expected_red": len(expected), "contracts_run": len(commands), "red_on_main": len(red)}
+        for test in tests:
+            merged = git.result(path, "-c", "user.name=CointOS", "-c", "user.email=cointos@localhost",
+                                "merge", "-q", "--no-edit", test)
+            if merged.returncode:
+                git.result(path, "merge", "--abort")
+                raise ValueError(f"the packet's tests ({test[:12]}) do not merge with {commit[:12]}:\n"
+                                 + (merged.stdout + merged.stderr).strip()[-2000:])
+        yield path, git.head(path)
+
+
+LOCATIONS = (re.compile(r'File "([^"]+)", line (\d+)'), re.compile(r"([\w./-]+\.\w+):(\d+)"))
+
+
+def reveal(path, output: str, files: list[str], context: int = 12, limit: int = 6) -> str:
+    """The test source around each failure location the output names in the given files, or the
+    files themselves when it names none."""
+    root, shown, parts = str(path).rstrip("/") + "/", set(), []
+    for pattern in LOCATIONS:
+        for name, number in pattern.findall(output):
+            name = name[len(root):] if name.startswith(root) else name
+            match = next((f for f in files if f == name or f.endswith("/" + name)), None)
+            if match is None or (match, number) in shown or len(parts) >= limit:
+                continue
+            shown.add((match, number))
+            lines = (Path(path) / match).read_text(errors="replace").splitlines()
+            line = int(number)
+            low, high = max(1, line - context), min(len(lines), line + context)
+            parts.append(f"{match}:{low}-{high}\n" + "\n".join(f"{n:6} {lines[n - 1]}" for n in range(low, high + 1)))
+    if not parts:
+        for name in files:
+            if (Path(path) / name).is_file():
+                parts.append(f"{name}\n" + (Path(path) / name).read_text(errors="replace")[:6000])
+    return "\n\n".join(parts)
+
+
+def failures(path, results: list[tuple[list[str], str]], files: list[str]) -> str:
+    """Failing tests as an implementer sees them: command, output tail and revealed source."""
+    return "\n\n".join(f"Failing test: {' '.join(command)}\n{output[-3000:]}\n\nTest source:\n"
+                        f"{reveal(path, output, files)}" for command, output in results)
+
+
+def packet_check(repo, main: str, commit: str, tests: list[str], bundled: list[list[str]], rules: dict,
+                 timeout: float, memory_gb=None) -> dict:
+    """Run a packet's own tests (and any bundled in by its integrator) against its code; a
+    ValueError reveals each failing test."""
+    own = packet_tests(repo, main, tests, rules)
+    own += [list(c) for c in bundled if list(c) not in own]
+    deadline = time.monotonic() + timeout
+    with combined(repo, commit, tests) as (path, head):
+        failed = []
+        for command in own:
+            code, output = _run(path, head, command, deadline, memory_gb)
+            if code:
+                failed.append((command, output))
+        if failed:
+            raise ValueError(f"{len(failed)} of the packet's {len(own)} tests fail. They are shown here; the rest "
+                             f"stay hidden. Fix the code (not the tests), commit, then finish again.\n\n"
+                             + failures(path, failed, packet_files(repo, main, tests, rules)
+                                        + [c for c in bundled_files(path, failed)]))
+    return {"tests": list(tests), "packet_tests": len(own)}
+
+
+def bundled_files(path, failed) -> list[str]:
+    """Test files a failing command's output names, for tests bundled in from the full suite."""
+    found = []
+    for _, output in failed:
+        for pattern in LOCATIONS:
+            for name, _ in pattern.findall(output):
+                name = name[len(str(path)) + 1:] if name.startswith(str(path)) else name
+                if (Path(path) / name).is_file() and name not in found:
+                    found.append(name)
+    return found
+
+
+def packet_unchanged(repo, worker: dict, main: str, candidate: str, tests: list[str], rules: dict) -> None:
+    """The implementer never touched tests, and the candidate's tests are exactly main's plus the
+    packet's: no integrator edit or conflict resolution changes them."""
+    implementation_history(repo, worker, main, rules)
+    changed = [p for p in git.changed(repo, main, candidate) if protected(p, rules)]
+    if not changed:
+        return
+    def blob(commit, name):
+        found = git.result(repo, "rev-parse", "--verify", "--quiet", f"{commit}:{name}")
+        return found.stdout.strip() if found.returncode == 0 else None
+
+    with combined(repo, main, tests) as (_, expected):
+        for name in changed:
+            if blob(candidate, name) != blob(expected, name):
+                raise ValueError("the candidate changes tests beyond the packet's own: " + name)
+
+
+def tests_landed(repo, main: str, tests: list[str], rules: dict) -> bool:
+    """Whether main already holds a packet's tests exactly as written."""
+    files = packet_files(repo, main, tests, rules)
+    if not files:
+        return True
+    with combined(repo, main, tests) as (_, merged):
+        return all(git.blob(repo, merged, name) == git.blob(repo, main, name) for name in files)
+
+
+def suite(repo, main: str, candidate: str, rules: dict, timeout: float, memory_gb=None) -> tuple[dict, list]:
+    """The full suite on a landing candidate: every registered command. Returns its counts and
+    the failures the candidate causes (red on the candidate, not red on main), each as
+    (command, output, revealed source). A failure main already has is not the packet's."""
+    commands = registered(repo, candidate, rules)
+    on_main = registered(repo, main, rules)
+    deadline = time.monotonic() + timeout
+    with checkout(repo, candidate) as path:
+        red = [(c, out) for c in commands for code, out in [_run(path, candidate, c, deadline, memory_gb)] if code]
+        caused = []
+        if red:
+            with checkout(repo, main) as before:
+                already = [c for c, _ in red if c in on_main and _run(before, main, c, deadline, memory_gb)[0]]
+            caused = [(c, out, reveal(path, out, bundled_files(path, [(c, out)])))
+                      for c, out in red if c not in already]
+    return {"suite": len(commands), "red_on_main": len(red) - len(caused)}, caused

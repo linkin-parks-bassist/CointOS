@@ -2,7 +2,7 @@
 
 `cointos metrics` reads the two journal files directly (no daemon needed), so it covers at most
 what they still hold. It reports what the construction pipeline produced and what it spent on
-recovery, including the mechanical brief and test-contract gates.
+recovery, including the brief check and packet test failures.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ def summary(entries: list[dict], hours: float) -> str:
     infeasible = [e for e in entries if e["event"] == "brief infeasible"]
     created = Counter(kind(e.get("task", "")) for e in entries if e["event"] == "task created")
     receipts = Counter((kind(e.get("task", "")), e.get("disposition")) for e in entries if e["event"] == "receipt")
-    reds = [e.get("red_gate") or e["gate"] for e in entries if e["event"] == "verified landing" and (e.get("red_gate") or e.get("gate", {}).get("expected_red") is not None)]
+    packet_failures = sum(1 for e in entries if e["event"] == "packet tests failed")
     total = sum(landed.values())
     first = min((e["at"] for e in entries), default=None)
     covered = (time.time() - first) / 3600 if first else 0.0
@@ -61,9 +61,7 @@ def summary(entries: list[dict], hours: float) -> str:
     blocked = sum(n for (k, d), n in receipts.items() if k == "item" and d == "blocked")
     complete = sum(n for (k, d), n in receipts.items() if k == "item" and d == "complete")
     lines.append(f"Worker receipts:      {complete} complete, {blocked} blocked")
-    if reds:
-        lines.append(f"Red gate:             {len(reds)} test contracts checked, "
-                     f"{sum(r['expected_red'] for r in reds)} declared reds verified")
+    lines.append(f"Packet test failures: {packet_failures} sent straight back to their implementers")
     lines.append("")
     lines.append(f"Recoveries per landing: {created['decompose'] / total:.2f}" if total else
                  "Recoveries per landing: n/a (nothing landed)")
