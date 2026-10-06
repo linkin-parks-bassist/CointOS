@@ -127,7 +127,7 @@ Front-load effort into adversarial tests. Reasoning defaults to low except for m
 test writers; `--reasoning-effort low|medium|xhigh`
 is task metadata for a deliberate override.
 Run budgets are separate metadata: `--generation-seconds N` and
-`--generation-tokens N` override the 1800-second / 36000-token defaults for a child.
+`--generation-tokens N` override the 2400-second / 48000-token defaults for a child.
 Choose a budget for the bounded stage, not for the whole product; split oversized work.
 Use `cointos budget PROJECT:TASK` with those flags to revise waiting/undispatched work.
 The daemon validates, pins and enforces both limits, and gives each run an FYI.

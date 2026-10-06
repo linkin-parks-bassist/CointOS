@@ -2,15 +2,16 @@
 
 Each run is charged only for generation: lane waiting, prefill and tool time are free. A run
 past its budget restarts fresh from a bounded evidence packet a bounded number of times
-(`lifecycle.retry_fresh`). Long silent stretches before writing are normal for the work
-model, so no earlier checkpoint stops a run. Caller holds LOCK.
+(`lifecycle.retry_fresh`). Once a run has spent `recovery.warning_fraction` of either limit it
+gets one message saying so, to wrap up while it still can. Long silent stretches before writing
+are normal for the work model, so nothing stops a run before its budget. Caller holds LOCK.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
 from cointos import git, lifecycle, opencode, queues
-from cointos.state import CONFIG, L
+from cointos.state import CONFIG, L, log, now
 
 
 def enforce() -> None:
@@ -27,9 +28,30 @@ def enforce() -> None:
             if exhausted:  # only finishing its reply after its receipt
                 lifecycle.stop(agent_id, "generation budget reached after its receipt", requeue=False)
             continue
+        if not exhausted and not agent.get("budget_warned") and warned(task, spent_seconds, spent_tokens):
+            agent["budget_warned"] = True
+            warn(task, spent_seconds, spent_tokens)
         if exhausted:
             reason = f"generation budget reached ({spent_seconds:.0f}s, {spent_tokens} tokens); branch and files preserved"
             lifecycle.retry_fresh(agent_id, reason, packet(agent_id, task, agent))
+
+
+def warned(task: dict, spent_seconds: float, spent_tokens: int) -> bool:
+    share = CONFIG["recovery"]["warning_fraction"]
+    return (spent_seconds >= share * task["budget"]["generation_seconds"]
+            or spent_tokens >= share * task["budget"]["generation_tokens"])
+
+
+def warn(task: dict, spent_seconds: float, spent_tokens: int) -> None:
+    """One message into the run's session: its budget is nearly spent."""
+    limits = task["budget"]
+    ending = ("the item goes to a manager to split" if task["kind"] == "item" else "the daemon retries it fresh")
+    text = (f"Budget warning: this run has used {spent_seconds / 60:.0f} of its {limits['generation_seconds'] / 60:.0f} "
+            f"generation minutes ({spent_tokens:,} of {limits['generation_tokens']:,} tokens). Wrap up now. If the "
+            "assignment is done, commit and finish --complete. If not, commit your progress, write exactly what "
+            f"remains in your report and finish --blocked. At the limit the run ends and {ending}.")
+    L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": task["id"], "text": text, "read": False}]
+    log("budget warning", task=task["id"], seconds=round(spent_seconds), tokens=spent_tokens)
 
 
 def packet(agent_id: str, task: dict, agent: dict) -> str:

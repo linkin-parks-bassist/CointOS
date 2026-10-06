@@ -137,6 +137,18 @@ class Budgets(unittest.TestCase):
         self.assertNotIn("worker-1", state.L["agents"])
         self.assertEqual((self.task["status"], self.task["session"], self.task.get("fresh_retries")), ("review", "old", None))
 
+    def test_a_run_is_warned_once_as_its_budget_runs_low(self):
+        limit = self.task["budget"]["generation_seconds"]
+        self.spend(seconds=limit * 0.7)
+        self.assertEqual([m for m in state.L["messages"] if m["to"] == self.task["id"]], [])
+        self.spend(seconds=limit * 0.75)
+        self.spend(seconds=limit * 0.9)
+        warnings = [m for m in state.L["messages"] if m["to"] == self.task["id"]]
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("Budget warning", warnings[0]["text"])
+        self.assertIn("finish --blocked", warnings[0]["text"])
+        self.assertEqual(self.task["status"], "running", "a warning never stops the run")
+
     def test_an_item_that_has_written_nothing_may_use_its_full_budget(self):
         self.spend(seconds=self.task["budget"]["generation_seconds"] - 1,
                    tokens=self.task["budget"]["generation_tokens"] - 1)

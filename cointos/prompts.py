@@ -145,7 +145,8 @@ def budget_notice(task: dict) -> str:
             f"Each uninterrupted reasoning block is limited to {CONFIG['reasoning']['budgets'][effort]:,} tokens at "
             f"{effort} effort; decide succinctly, then use a tool or answer before the daemon closes reasoning for you. "
             "Reasoning, answer text and tool-call output tokens count; prompt prefill, lane waiting and tool execution "
-            "do not. Finish the bounded assignment and submit its receipt within this budget. "
+            "do not. Finish the bounded assignment and submit its receipt within this budget; a message warns you "
+            f"once {CONFIG['recovery']['warning_fraction']:.0%} of either limit is spent. "
             "Act once evidence is sufficient: do not narrate plans, reopen settled choices, or repeatedly reread the "
             "same evidence. On exhaustion the daemon preserves branch/files and a bounded evidence packet "
             + ("and hands the item to a manager to split" if task["kind"] == "item" else "for a fresh retry")

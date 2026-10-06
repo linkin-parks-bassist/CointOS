@@ -160,8 +160,9 @@
   "alerts_kept": 50,
   "result_chars": 2000,
   "recovery": {
-    "generation_seconds": 1800,
-    "generation_tokens": 36000,
+    "generation_seconds": 2400,
+    "generation_tokens": 48000,
+    "warning_fraction": 0.75,
     "handoff_chars": 6000,
     "fresh_retries": 2,
     "worker_fresh_retries": 0,

@@ -106,10 +106,10 @@ class Budgets(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already exists"):
             queues.add(self.project, "queued", "child", "Brief", budget={"generation_tokens": 1235})
         task = tasks.create("item", self.project, "child", "Brief", [4], item="child")
-        self.assertEqual(task["budget"], {"generation_tokens": 1234, "generation_seconds": 1800})
+        self.assertEqual(task["budget"], {"generation_tokens": 1234, "generation_seconds": state.CONFIG["recovery"]["generation_seconds"]})
         restored = state.fresh(json.loads(json.dumps(state.L)))
         with patch.dict(state.CONFIG["recovery"], generation_seconds=9999):
-            self.assertEqual(restored["tasks"][task["id"]]["budget"]["generation_seconds"], 1800)
+            self.assertEqual(restored["tasks"][task["id"]]["budget"]["generation_seconds"], task["budget"]["generation_seconds"])
 
     def test_only_waiting_work_changes_budget_and_the_other_limit_stays(self):
         api.dispatch("queue", {"project": "p", "name": "child", "brief": "Brief", "budget": {"generation_seconds": 90}})
