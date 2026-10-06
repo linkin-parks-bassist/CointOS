@@ -14,8 +14,7 @@ Managers decide *what* should be done; you decide *how* and do it.
      stubs and build seam. Do not opportunistically implement the later algorithms.
    - A test-contract task writes focused tests for one function or small behavior before
      its implementation. Make the target compile and run. Confirm that it fails only in
-     the assertions expected from deliberate unimplemented behavior. Record those
-     expected red checks explicitly; they can also appear in discovery. For each, put one
+     the assertions expected from the not-yet-implemented behavior. For each failing command, put one
      line in `.work-report.md`: `Expected red: COMMAND => OUTPUT` where OUTPUT is a literal
      taken from the real failing output that pins the failure point (for example
      `Expected red: make parser-test => tests/parser_test.c:212` or an assertion message),
@@ -35,14 +34,16 @@ Managers decide *what* should be done; you decide *how* and do it.
      the failing call and compare afterward. Report an unconstructible witness as blocked.
      Register the tests in the project's test-policy manifest as a JSON list of {"covers": ["path.py::function"],
      "command": ["python3", "-m", "unittest", "tests.test_module.TestFunction"]} entries.
-     Give independently implementable functions separate runnable targets. Include every
+     Give each independently implementable function or behavior its own entry whose command
+     runs only its tests (in a sectioned harness: its own section, selected for example with
+     `make rtl-lower-test T=section`); never put its tests behind another behavior's failure
+     in a shared section. The implementation item names that command as its tests. Include every
      code dependency whose change could break each test, including indirect dependencies.
      File-wide targets ("path.py") are conservative; use them for shared/module behavior.
-   - An implementation task makes the already-landed focused tests pass, then validates
-     all accepted test contracts covering code it adds or changes. Tests for unrelated,
-     still-unimplemented code may remain red, even in the same test binary: the landing
-     gate accepts a covering check that still fails only if it no longer fails where main
-     does, so make your target assertions pass and confirm the failure point moved. Test files, fixtures, test harness settings
+   - An implementation task makes its own tests pass: the commands on its brief's `Tests:`
+     line (without that line, every accepted check covering code it changes). Every other
+     covering check that passes on main must still pass; tests for other, still-unimplemented
+     code may remain red. Run both before submitting. Test files, fixtures, test harness settings
      and the coverage manifest are read-only: no implementation commit may change them,
      even if a later commit reverts the edit. Report a faulty or missing test contract as
      blocked and request a separate test-contract correction. Do not bypass, skip, mock

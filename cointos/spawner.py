@@ -11,7 +11,7 @@ import functools
 import subprocess
 from pathlib import Path
 
-from cointos import git, lanes, lifecycle, queues, runs, schema, tasks, trees
+from cointos import contracts, git, lanes, lifecycle, queues, runs, schema, tasks, trees
 from cointos.config import managed_trees
 from cointos.state import CONFIG, STOPPING, L, alert, log, now
 
@@ -119,7 +119,7 @@ def queued_work(scanned: dict, ready: dict) -> list:
             known = L["tasks"].get(f"{project['name']}:{record['item']}")
             if record["status"] != "queued" or (known and (tasks.active(known) or known["record_hash"] == record["hash"])):
                 continue
-            if record.get("stage") == "test-contract" and not feasible(project, record):
+            if record.get("stage") and not feasible(project, record):
                 continue
             kind = schema.QUEUE_KINDS[record["kind"]]
             rank = queue_rank(kind, project, record["position"])
@@ -132,26 +132,36 @@ _FEASIBLE: set[tuple[str, str]] = set()
 
 
 def feasible(project: dict, record: dict) -> bool:
-    """Whether a test-contract brief's `Relies on:` APIs exist on main before any worker spends
-    generation on it. An infeasible brief goes straight to its one managerial recovery pass."""
+    """Whether a worker brief's premises hold on main before any worker spends generation on it:
+    a test contract's `Relies on:` APIs exist, and the `Tests:` an item must pass are registered
+    contracts. An infeasible brief goes straight to its one managerial recovery pass."""
     key = f"{project['name']}:{record['item']}"
     if (key, record["hash"]) in _FEASIBLE:
         return True
-    names = queues.relies_on(record["brief"])
+    names = queues.relies_on(record["brief"]) if record["stage"] == "test-contract" else []
+    own = queues.tests(record["brief"])
+    rules = project.get("test_policy")
+    main = project.get("main_branch", "main")
     try:
-        head = git.head(project["path"], project.get("main_branch", "main"))
+        head = git.head(project["path"], main)
         missing = queues.missing_reliances(project["path"], head, names) if names else []
+        unregistered = contracts.unregistered(project["path"], head, rules, own) if own and rules else []
     except ValueError:
-        return True  # an unreadable repository is reported by the run itself, not guessed here
-    if not missing:
+        return True  # an unreadable repository or manifest is reported by the run itself, not guessed here
+    if not missing and not unregistered:
         _FEASIBLE.add((key, record["hash"]))
         return True
-    report = (f"Assignment: {key} (not dispatched)\n\n{record['brief']}\n\n"
-              f"Dispatch check: the brief relies on {', '.join(missing)}, absent on "
-              f"{project.get('main_branch', 'main')} at {head}. Correct the brief to the owner APIs that exist "
-              f"(hold/revise), or queue the prerequisite skeleton it needs first.")
+    problems = []
+    if missing:
+        problems.append(f"the brief relies on {', '.join(missing)}, absent on {main} at {head}. Correct the brief "
+                        f"to the owner APIs that exist (hold/revise), or queue the prerequisite skeleton it needs first.")
+    if unregistered:
+        problems.append(f"its Tests: line names {'; '.join(' '.join(c) for c in unregistered)}, not registered in "
+                        f"{rules['manifest']} on {main} at {head}. Name the registered commands of its test "
+                        f"contract, or queue the test contract that registers them first.")
+    report = f"Assignment: {key} (not dispatched)\n\n{record['brief']}\n\nDispatch check: " + " Also, ".join(problems)
     queues.update(project["name"], record["item"], "blocked", report, decompose=True)
-    log("brief infeasible", task=key, missing=missing, commit=head)
+    log("brief infeasible", task=key, missing=missing + [" ".join(c) for c in unregistered], commit=head)
     return False
 
 

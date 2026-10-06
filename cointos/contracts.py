@@ -2,8 +2,8 @@
 
 A project's test policy names its contract manifest (a JSON list of {"covers", "command"}),
 the protected test paths and the non-code paths. The landing gate (`cointos/landing.py`) uses
-these functions to decide which commands a candidate commit must pass, then `verify` runs them
-on a fresh checkout of that exact commit.
+these functions to find the accepted checks covering a candidate's changed code; `gate` runs the
+item's own tests and those checks on fresh checkouts of the exact commit.
 """
 from __future__ import annotations
 
@@ -126,6 +126,12 @@ def contracts(repo, commit, rules) -> list[dict]:
         if any(s.startswith("/") or ".." in s.split("/") for s in contract["covers"]):
             raise ValueError("test coverage targets must be repository-relative")
     return data
+
+
+def unregistered(repo, commit, rules, commands: list[list[str]]) -> list[list[str]]:
+    """The commands that no accepted contract at a commit registers."""
+    registered = [c["command"] for c in contracts(repo, commit, rules)]
+    return [c for c in commands if c not in registered]
 
 
 def covers(pattern: str, target: str) -> bool:
@@ -281,46 +287,29 @@ def verify(repo, commit: str, commands: list[list[str]], timeout: float, memory_
                 raise ValueError(f"test command failed ({code}): {command}\n" + text[-8000:])
 
 
-TEST_FAILURE = re.compile(r"^(?:FAIL|ERROR): (\S+ \([\w.]+\))|^FAILED (\S+::\S+)|^FAIL: (\S+) at \S+:\d+",
-                          re.MULTILINE)
-SOURCE_LOCATION = re.compile(r"[\w./-]+\.\w+:\d+")
+def gate(repo, parent: str, commit: str, own: list[list[str]], covering: list[list[str]], timeout: float,
+         memory_gb=None) -> dict:
+    """An item's own tests must pass, and no covering check that passes on main may fail.
 
-
-def failures(output: str) -> set[str]:
-    """Where a failing check failed: unittest/pytest test ids or named sections
-    (`FAIL: <section> at file:line`) when it names them, else the source locations
-    (`file:line`) its output reports, as assertion aborts print them."""
-    tests = {a or b or c for a, b, c in TEST_FAILURE.findall(output)}
-    return tests or set(SOURCE_LOCATION.findall(output))
-
-
-def implementation_gate(repo, parent: str, commit: str, commands: list[list[str]], timeout: float,
-                        memory_gb=None) -> dict:
-    """Judge an implementation by what it changed, not by unrelated unfinished work.
-
-    Every covering check green on main must stay green. A check already red on main (a later
-    item's deliberate red sharing the binary) may stay red, but some failure main reports must be
-    gone from the candidate: the implementation demonstrably fixed what it was for."""
+    A covering check already failing on main tests other items' unwritten code; it is not held
+    against this one."""
     deadline = time.monotonic() + timeout
+    own = list(dict.fromkeys(tuple(c) for c in own))
+    others = [c for c in dict.fromkeys(tuple(c) for c in covering) if c not in own]
     with checkout(repo, commit) as path:
-        results = {tuple(c): _run(path, commit, list(c), deadline, memory_gb) for c in commands}
-    red = [c for c, (code, _) in results.items() if code]
-    if not red:
-        return {"checks": len(results), "red_on_main": 0}
-    with checkout(repo, parent) as path:
-        before = {c: _run(path, parent, list(c), deadline, memory_gb) for c in results}
-    regressed = [c for c in red if not before[c][0]]
-    if regressed:
-        details = "\n".join(f"{list(c)}:\n{results[c][1][-4000:]}" for c in regressed)
-        raise ValueError("test command failed on the candidate but passes on main: " + details)
-    fixed = [c for c, (code, text) in before.items() if code and (
-        not results[c][0] or failures(text) - failures(results[c][1]))]
-    if not fixed:
-        details = "\n".join(f"{list(c)}: still fails at {sorted(failures(results[c][1])) or 'an unidentified point'}"
-                             f"\n{results[c][1][-4000:]}" for c in red)
-        raise ValueError("test command failed where it already fails on main; the implementation fixed none "
-                         "of its covering checks' failures: " + details)
-    return {"checks": len(results), "red_on_main": len(red), "fixed": len(fixed)}
+        results = {c: _run(path, commit, list(c), deadline, memory_gb) for c in own + others}
+    for command in own:
+        code, text = results[command]
+        if code:
+            raise ValueError(f"test command failed ({code}): {list(command)}\n" + text[-8000:])
+    red = [c for c in others if results[c][0]]
+    if red:
+        with checkout(repo, parent) as path:
+            regressed = [c for c in red if not _run(path, parent, list(c), deadline, memory_gb)[0]]
+        if regressed:
+            raise ValueError("test command failed on the candidate but passes on main: " + "\n".join(
+                f"{list(c)}:\n{results[c][1][-4000:]}" for c in regressed))
+    return {"own": len(own), "checks": len(own) + len(others), "red_on_main": len(red)}
 
 
 EXPECTED_RED = re.compile(r"\**Expected red:\**\s*(.*)", re.IGNORECASE)

@@ -44,9 +44,9 @@ class Project(unittest.TestCase):
         verify = contracts.verify  # unit tests need no user systemd session for the memory cap
         self.enterContext(patch.object(contracts, "verify", side_effect=lambda repo, commit, commands, timeout, memory:
                                        verify(repo, commit, commands, timeout)))
-        gate = contracts.implementation_gate
-        self.enterContext(patch.object(contracts, "implementation_gate", side_effect=lambda repo, parent, commit,
-                                       commands, timeout, memory: gate(repo, parent, commit, commands, timeout)))
+        gate = contracts.gate
+        self.enterContext(patch.object(contracts, "gate", side_effect=lambda repo, parent, commit, own, covering,
+                                       timeout, memory: gate(repo, parent, commit, own, covering, timeout)))
 
     def implement(self) -> str:
         path = self.tree / "code.py"
@@ -120,7 +120,7 @@ class Gate(Project):
         def moved(*args):
             (self.tree / "extra.py").write_text("x = 1\n")
             support.commit(self.tree)
-        with patch.object(contracts, "implementation_gate", side_effect=moved):
+        with patch.object(contracts, "gate", side_effect=moved):
             with self.assertRaisesRegex(ValueError, "refs changed"):
                 landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
@@ -153,44 +153,72 @@ class Gate(Project):
         self.assertEqual(queues.landed(self.project), set())
 
 
-class ImplementationProgress(Project):
-    """An implementation is judged by what it changed: green checks stay green, and a check
-    already red on main must lose a failure main reports, not merely fail differently."""
+class OwnTests(Project):
+    """An implementation passes its own tests, named on its brief's `Tests:` line; covering checks
+    that pass on main stay green, and other items' unwritten tests in the same file are not its."""
 
+    brief = "Implement A\nTests: python3 -m unittest tests.test_code.A"
     SHARED = ("import unittest\nimport code\nclass A(unittest.TestCase):\n"
               "    def test_a(self): self.assertEqual(code.a(), 42)\n"
-              "    def test_b(self): self.assertEqual(code.b(), 7)\n")
+              "class B(unittest.TestCase):\n    def test_b(self): self.assertEqual(code.b(), 7)\n")
 
-    def shared(self):
-        """A and B share one red target on main, as a later item's red shares a test binary."""
-        (self.repo / "tests/test_code.py").write_text(self.SHARED)
-        self.base = support.commit(self.repo, "shared target")
+    def covering_both(self):
+        """Both contracts cover all of code.py, as a C file's sections cover one source file."""
+        (self.repo / "tests/contracts.json").write_text(json.dumps(
+            [{"covers": ["code.py"], "command": ["python3", "-m", "unittest", f"tests.test_code.{n}"]} for n in "AB"]))
+        self.base = support.commit(self.repo, "file-wide coverage")
         git.run(self.tree, "merge", "-q", "--ff-only", "main")
         self.worker["base_commit"] = self.base
 
-    def test_fixing_one_failure_lands_while_a_later_items_red_remains(self):
-        self.shared()
+    def test_own_tests_passing_land_while_another_items_unwritten_tests_stay_red(self):
+        self.covering_both()
         integration, candidate, _ = self.landing()
         landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), candidate)
 
-    def test_failing_the_same_test_differently_is_not_progress(self):
-        self.shared()
+    def test_own_tests_failing_return_the_item(self):
+        self.covering_both()
         integration, _, _ = self.landing()
         path = self.review / "code.py"
         path.write_text(path.read_text().replace("return 42", "return -1"))
-        with self.assertRaisesRegex(ValueError, "fixed none"):
+        with self.assertRaisesRegex(ValueError, "test command failed"):
             landing.land(integration["id"], support.commit(self.review), "integrator-1")
         self.assertEqual(self.main(), self.base)
         self.assertEqual(self.worker["status"], "waiting")
 
-    def test_assertion_locations_identify_aborting_failures(self):
-        main = "t: tests/t.c:1362: main: Assertion `rc == 0' failed.\n"
-        self.assertEqual(contracts.failures(main), {"tests/t.c:1362"})
-        self.assertEqual(contracts.failures("PASS: a\nFAIL: t6-storage at tests/t.c:2730: rc == 0\n1 passed, 1 failed\n"),
-                         {"t6-storage"})
-        self.assertEqual(contracts.failures("ERROR: test_a (tests.x.A.test_a)\nFAILED (errors=1)\n"),
-                         {"test_a (tests.x.A.test_a)"})
+    def test_breaking_a_check_green_on_main_returns_the_item(self):
+        self.covering_both()
+        path = self.repo / "code.py"
+        path.write_text(path.read_text().replace("raise NotImplementedError", "return 7").replace(
+            "def a():\n    return 7", "def a():\n    raise NotImplementedError"))
+        self.base = support.commit(self.repo, "b implemented")
+        git.run(self.tree, "merge", "-q", "--ff-only", "main")
+        self.worker["base_commit"] = self.base
+        integration, _, _ = self.landing()
+        path = self.review / "code.py"
+        path.write_text(path.read_text().replace("return 7", "return 8"))
+        with self.assertRaisesRegex(ValueError, "passes on main"):
+            landing.land(integration["id"], support.commit(self.review), "integrator-1")
+        self.assertEqual(self.main(), self.base)
+
+    def test_unregistered_own_tests_are_refused(self):
+        self.worker["brief"] = "Implement A\nTests: python3 -m unittest tests.test_code"
+        integration, candidate, _ = self.landing()
+        with self.assertRaisesRegex(ValueError, "not registered"):
+            landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), self.base)
+
+    def test_without_a_tests_line_every_covering_check_must_pass(self):
+        self.worker["brief"] = "Implement A"
+        self.covering_both()
+        integration, candidate, _ = self.landing()
+        with self.assertRaisesRegex(ValueError, "tests.test_code.B"):
+            landing.land(integration["id"], candidate, "integrator-1")
+
+    def test_tests_line_parsing(self):
+        self.assertEqual(queues.tests("x\n**Tests:** `make t T=a`; make t T=\"b c\"\n"),
+                         [["make", "t", "T=a"], ["make", "t", "T=b c"]])
+        self.assertEqual(queues.tests("no line"), [])
 
 
 class IntegrationStage(Project):
@@ -406,8 +434,7 @@ class Commands(Project):
         (self.review / "plan.md").write_text("concurrent main frontier\nreviewed worker boundary\n")
         git.run(self.review, "add", "plan.md")
         self.run_command(cli.land, "Add a")  # no manual commit or alternate command
-        self.assertEqual(contracts.implementation_gate.call_args.args[3],
-                         [["python3", "-m", "unittest", "tests.test_code.A"]])
+        self.assertEqual(contracts.gate.call_args.args[4], [["python3", "-m", "unittest", "tests.test_code.A"]])
         accepted = self.worker["acceptance"]
         self.assertEqual((accepted["commit"], accepted["worker_commit"]), (self.main(), submitted))
         self.assertEqual((self.worker["status"], integration["status"]), ("done", "done"))

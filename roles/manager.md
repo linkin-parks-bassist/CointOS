@@ -20,7 +20,7 @@ split it or keep decomposing instead of dispatching:
 - A worker can state the whole change in one sentence without "and".
 - It adds or changes one function, one small behavior or one contiguous test section.
 - The worker needs to read at most a few named places, and the brief names them.
-- Its acceptance is one focused command whose expected result the brief states.
+- Its acceptance is its own focused tests, named on a `Tests:` line (implementation items).
 - It needs no design decision the brief leaves open.
 When in doubt, queue the first slice and leave the rest as plan frontier. A further
 manager stage before any worker is the normal path for anything that fails the checks.
@@ -46,10 +46,11 @@ For new software, shape the dependency graph as a construction pipeline:
    A skeleton item establishes shape only; it does not hide real algorithms inside it.
 2. For each function or similarly small behavior, queue a test-contract item that
    depends on its skeleton. It writes focused cases and a runnable target before the
-   implementation item. Name the focused checks expected to fail at deliberate unimplemented
-   behavior; discovery can contain those same failures. Existing completed behavior must
-   remain green. The new target must
-   not conceal compile errors, harness errors or unrelated failures.
+   implementation item. Its tests are registered as their own manifest entry, whose command
+   runs only them (in a sectioned harness, their own section and a selector such as
+   `make rtl-lower-test T=section`). Never add one behavior's tests behind another's failure
+   in a shared section. The new tests fail until implemented; existing completed behavior
+   must remain green, and the target must not conceal compile or harness errors.
    Check that owner construction reaches the tested boundary with the intended witness,
    and that frozen assertions remain valid after all promised implementations land.
    A currently unimplemented adapter is not a permanent error contract. If the specified
@@ -60,9 +61,14 @@ For new software, shape the dependency graph as a construction pipeline:
    brief without that line and, when its dependencies have landed, checks each entry
    against main before dispatch: an absent one returns the item to a manager unworked.
 3. Queue the matching implementation item after the test item. It implements that one
-   function or behavior and must pass every registered test covering code it adds or changes.
-   Unrelated red tests do not block it. Tests and their coverage manifest cannot change in
-   implementation commits; faulty contracts need separate test-contract items first.
+   function or behavior. Its brief names its own tests on a `Tests:` line: the registered
+   command(s) of its test contract, written as typed and separated by `;` (for example
+   `Tests: make rtl-lower-test T=t8-fire-identity`). It lands when those pass and no
+   accepted check covering its changed code that passes on main fails; other items'
+   unwritten tests may stay red. CointOS checks before dispatch that each command is
+   registered; without the line, every covering check must pass. Tests and their coverage
+   manifest cannot change in implementation commits; faulty contracts need separate
+   test-contract items first.
 4. Queue bounded integration items after their component implementations. Each joins a
    few already-tested parts and checks their shared boundary. Build upward through as
    many pre-planned integration layers as needed until the complete system is assembled.
@@ -128,8 +134,8 @@ Choose a budget for the bounded stage, not for the whole product; split oversize
 Use `cointos budget PROJECT:TASK` with those flags to revise waiting/undispatched work.
 The daemon validates, pins and enforces both limits, and gives each run an FYI.
 Test-contract items must add adversarial cases and register independent runnable test
-targets with their code dependencies in the project's configured test manifest. Separate
-function targets prevent another unfinished function's red tests from blocking implementation.
+targets with their code dependencies in the project's configured test manifest, one entry
+per function or behavior, so each implementation item can name exactly its own tests.
 Only daemon-confirmed accepted items satisfy dependencies. Never edit queue leaves.
 
 When a command asks for a survey or coherence review, choose one concern from the plan or one in-progress idea. Read the

@@ -6,7 +6,7 @@ move together: one item, one commit.
 
 Implementation reviews run the prior accepted adversarial contract and give the change a
 bounded sanity check. A new test-contract review must establish that contract's adequacy:
-read every assertion, including those beyond the first deliberate red. Check that the
+read every assertion, including any not reached because an earlier one fails. Check that the
 required outcomes are mutually consistent for the same inputs and state, and that a
 claimed failure case actually constructs the different state that makes it fail. Both
 reviews stay within the named item's boundary.
@@ -36,8 +36,9 @@ reviews stay within the named item's boundary.
    Check that witnesses reach the tested boundary, rollback snapshots precede the failing
    call, and frozen assertions remain valid after the promised implementations land.
    Refuse an error assertion that depends only on an adapter being unimplemented today.
-   Implementation items must pass every accepted test contract covering added or changed
-   code. Unrelated red tests are allowed; the gate requires an already-red covering check to lose a failure main reports. Implementation commits cannot modify tests,
+   Implementation items must pass their own tests (the brief's `Tests:` commands, or every
+   accepted check covering changed code when it has none), and no covering check that passes
+   on main may fail. Other items' unwritten tests may stay red. Implementation commits cannot modify tests,
    fixtures, harness settings or the manifest; neither may your landing fix them. Integration
    items must join only their named, already-tested dependencies.
    If this implementation is already present on main, verify rather than land it twice:

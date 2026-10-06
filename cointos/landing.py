@@ -32,25 +32,38 @@ def repository_lock(repo: str):
         yield
 
 
-def checks(repo: str, worker: dict, parent: str, commit: str, rules: dict) -> list[list[str]]:
-    """The accepted checks a candidate must pass for its worker's construction stage; a
-    ValueError when the candidate breaks the stage's contract outright."""
+def checks(repo: str, worker: dict, parent: str, commit: str, rules: dict) -> tuple[list[list[str]], list[list[str]]]:
+    """For a candidate of its worker's construction stage: (the item's own tests, which must pass;
+    the accepted checks covering its changed code, none of which may newly fail). A ValueError when
+    the candidate breaks the stage's contract outright."""
     stage = worker["stage"]
-    if stage == "implementation":
-        return contracts.implementation_checks(repo, worker, parent, commit, rules)
     if stage == "test-contract":
         production = contracts.affected(repo, parent, commit, rules)
         if production:
             raise ValueError("test-contract commits cannot change production code: " + ", ".join(sorted(production)))
         contracts.contracts(repo, commit, rules)
-        return []
-    if stage == "integration":
-        # Integration is not a way around implementation checks: carried production changes
-        # must pass contracts already accepted on main, plus any contracts it adds.
-        added = contracts.integration_tests(repo, parent, commit, rules)
-        commands = contracts.affected_checks(repo, parent, commit, parent, rules)
-        return commands + [c for c in added if c not in commands]
-    return []  # a skeleton is accepted on the integrator's review
+        return [], []
+    if stage not in ("implementation", "integration"):
+        return [], []  # a skeleton is accepted on the integrator's review
+    own = own_tests(repo, worker, commit, rules)
+    if stage == "implementation":
+        covering = contracts.implementation_checks(repo, worker, parent, commit, rules)
+        return own or covering, covering
+    # Integration is not a way around implementation checks: carried production changes keep
+    # their accepted contracts, and contracts it adds must pass.
+    added = contracts.integration_tests(repo, parent, commit, rules)
+    covering = contracts.affected_checks(repo, parent, commit, parent, rules)
+    return (own or covering) + [c for c in added if c not in (own or covering)], covering
+
+
+def own_tests(repo: str, worker: dict, commit: str, rules: dict) -> list[list[str]]:
+    """The tests on the item's `Tests:` line, which must be registered contracts."""
+    own = queues.tests(worker["brief"])
+    missing = contracts.unregistered(repo, commit, rules, own)
+    if missing:
+        raise ValueError("the brief's Tests: commands are not registered in the test manifest: "
+                         + "; ".join(" ".join(c) for c in missing))
+    return own
 
 
 def land(task_id: str, commit: str, run: str | None) -> dict:
@@ -89,14 +102,10 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
                 raise ValueError("commit reached main without passing the landing gate")
         else:
             try:
-                commands = checks(repo, worker, parent, commit, rules)
-                if worker["stage"] == "implementation":
-                    red = contracts.implementation_gate(repo, parent, commit, commands,
-                                                        CONFIG["timeouts"]["command_seconds"],
-                                                        CONFIG["memory"]["agent_limit_gb"])
-                else:
-                    contracts.verify(repo, commit, commands, CONFIG["timeouts"]["command_seconds"],
-                                     CONFIG["memory"]["agent_limit_gb"])
+                own, covering = checks(repo, worker, parent, commit, rules)
+                if own or covering:
+                    red = contracts.gate(repo, parent, commit, own, covering, CONFIG["timeouts"]["command_seconds"],
+                                         CONFIG["memory"]["agent_limit_gb"])
                 if worker["stage"] == "test-contract":
                     red = contracts.red_gate(repo, parent, commit, git.show(repo, submitted, queues.REPORT), rules,
                                              CONFIG["timeouts"]["command_seconds"], CONFIG["memory"]["agent_limit_gb"])
@@ -152,8 +161,10 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
             raise ValueError("submitted worker changed or has uncommitted work")
         if queues.status(queues.report(worker)) != "done":
             raise ValueError("incorporation requires a done worker report")
-        commands = contracts.incorporated(repo, worker, commit, where["test_policy"])
-        contracts.verify(repo, commit, commands, CONFIG["timeouts"]["command_seconds"], CONFIG["memory"]["agent_limit_gb"])
+        covering = contracts.incorporated(repo, worker, commit, where["test_policy"])
+        own = own_tests(repo, worker, commit, where["test_policy"])
+        contracts.verify(repo, commit, own or covering, CONFIG["timeouts"]["command_seconds"],
+                         CONFIG["memory"]["agent_limit_gb"])
         with LOCK:
             worker = L["tasks"][worker_id]
             if (worker["status"] != "review" or not git.clean(worker["worktree"])
