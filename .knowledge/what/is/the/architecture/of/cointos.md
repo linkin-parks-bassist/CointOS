@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T22:05:42+11:00"
+revised_at: "2026-10-06T15:38:03+11:00"
 ---
 
 # CointOS architecture
@@ -107,12 +107,12 @@ Adoption requires both persisted identity and an active systemd unit. Unknown un
 ## Source ownership
 
 - `config.py`, `schema.py`, `state.py`: configuration/project registry, task vocabulary, ledger/lock/journal/alerts.
-- `tasks.py`, `names.py`, `queues.py`, `lifecycle.py`, `recovery.py`, `messages.py`: durable work, names, projections, reducer, bounded recovery and message delivery.
+- `tasks.py`, `names.py`, `queues.py`, `lifecycle.py`, `recovery.py`, `messages.py`, `trees.py`: durable work, names, projections, reducer, bounded recovery, message delivery and the gardener's knowledge-tree health/selection.
 - `spawner.py`, `runs.py`, `keys.py`: admission, transient execution and gateway identity.
 - `scheduler.py`, `lanes.py`, `snapshots.py`, `memory.py`, `daemon.py`: GPU scheduling, context execution/cache, resource measurement and orchestration.
 - `landing.py`, `contracts.py`, `git.py`: exact candidate acceptance and repository mutation.
 - `gateway.py`, `backend_llama.py`, `opencode.py`, `prompts.py`, `client.py`, `kt.py`, `kt_mcp.py`, `mcp.py`, `viewers.py`: external representation fingertips.
-- `api.py`, `cli.py`, `coin.py`, `settings.py`, `projects.py`, `checks.py`, `journal.py`, `web/dashboard.html`: control, presentation and diagnostics.
+- `api.py`, `cli.py`, `coin.py`, `settings.py`, `projects.py`, `checks.py`, `journal.py`, `metrics.py`, `web/dashboard.html`: control, presentation and diagnostics.
 
 The source repository and installed runtime are distinct. `scripts/install` owns full/live deployment; isolated dashboard or Coin-only copies follow `how/to/install/cointos.md`; `scripts/upgrade-ledger` is the one-shot schema migration boundary. Installed project enrollment is preserved separately from source defaults. Coin's imported code and startup settings survive a live installation; when changed they require a separate quiet Coin-only refresh. New repository creation commits orientation, spec, plan and known-defects leaves before enrollment, and inherits the configured `project_defaults.test_policy` unless explicitly overridden. Imported repositories require a profile before worker landing. Missing optional policy lists mean empty. Registry mutation writes its sorted candidate before replacing the shared in-memory list; a persistence failure leaves both unchanged. `how/to/manage/the/cointos/project/registry.md` owns enrollment and its control boundaries. Runtime queue leaves are daemon projections and are never edited by agents.
 
