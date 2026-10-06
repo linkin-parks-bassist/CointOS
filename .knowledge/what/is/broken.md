@@ -1,11 +1,13 @@
 ---
 status: green
-revised_at: "2026-10-06T20:44:44+11:00"
+revised_at: "2026-10-06T22:24:51+11:00"
 ---
 
-## Pigen's lowering tests cannot yet be run per behavior
+## Pigen's unfinished Task 8 tests sit on main, enforcing nothing
 
-Landings now require an item's own tests (its brief's `Tests:` commands) to pass, but Pigen's `tests/contracts.json` still maps all lowering code to the one whole-binary command `make rtl-lower-test`, and all Task 8 assertions sit in one section, `t8-skeleton`. Until Pigen registers one entry per section and splits that section by behavior, no Task 8 implementation can name its own tests, and the whole-binary entry, red on main, protects no other lowering section against regression. The Pigen manager command `split-rtl-lower-tests-per-behavior` owns that correction; `impl-t8-fire-identity-bits-fix` and its integration are held for it (its branch passes the fire-identity family).
+Pigen's main still holds section `t8-skeleton` of `tests/rtl_lower_test.c`, red at its first unimplemented assertion, and maps all lowering code to the one whole-binary command `make rtl-lower-test`. Because a failure main already has never blocks a landing, those tests enforce nothing, and the whole-binary command also hides regressions in the other lowering sections. The Pigen manager command `move-task-8-tests-into-packets` owns moving them into per-family test packets with per-section manifest entries; `impl-t8-fire-identity-bits-fix` and its integration are held for it (its branch passes the fire-identity family).
+
+Pigen's test targets build fixed paths such as `/tmp/pigen-rtl-lower-test`, so a packet check running while a landing checks the same target could overwrite the other's binary. Landings are serialized per repository, but packet checks are not serialized against them. Not yet seen.
 
 ## Every finished reply re-reads its own tokens
 

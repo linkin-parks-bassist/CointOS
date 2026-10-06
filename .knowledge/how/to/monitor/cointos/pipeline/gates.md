@@ -1,21 +1,20 @@
 ---
 status: green
-revised_at: "2026-10-02T18:52:55+10:00"
+revised_at: "2026-10-06T22:21:39+11:00"
 expires_at: "2026-10-09T00:00:00+10:00"
 ---
 
-The two mechanical test-contract gates (dispatch-time `Relies on:` check and landing-time red gate; mechanism in `what/is/the/shape/of/cointos/work.md`) are judged by whether they cut wasted test-contract cycles without stalling the pipeline. Run `cointos metrics --hours 72` (reads `~/.CointOS/state/events.jsonl` and its one rotated file; the header shows how many hours the journal actually covers, often about three days). For longer trends, record its output here at each review rather than relying on the bounded journal.
+The pipeline's mechanical checks are the dispatch-time `Relies on:` check, the packet check when an implementer finishes, and the landing gate's full suite (mechanism in `what/is/the/shape/of/cointos/work.md`). They are judged by whether they cut wasted cycles without stalling the pipeline. Run `cointos metrics --hours 72` (reads `~/.CointOS/state/events.jsonl` and its one rotated file; the header shows how many hours the journal actually covers, often about three days). For longer trends, record its output here at each review rather than relying on the bounded journal.
 
-Baseline before installation (72 h ending 2026-10-02, Pigen only): 31 landings (test-contract 20, implementation 7, skeleton 3, integration 1); 70 worker items started; 11 manager recoveries; 61 complete and 5 blocked worker receipts; 0.35 recoveries per landing; implementation 23% of landings. Earlier failures this targets: storage-matrix-instances (12b) and the section-8 boundary contract were planned against owner APIs that did not exist, each costing a worker run plus a manager pass.
+Baselines (Pigen only): 72 h ending 2026-10-02: 31 landings (test-contract 20, implementation 7, skeleton 3, integration 1), 70 worker items started, 11 manager recoveries, 0.35 recoveries per landing, implementation 23% of landings. 48 h ending 2026-10-06, under the former comparative implementation gate: 8 landings from 34 worker starts, 14 manager recoveries, no implementation landings. Test packets no longer land on their own, so later windows count landings of code with its tests.
 
 Signals and what they mean:
 
-- **Infeasible briefs > 0** means the dispatch check caught a false premise before any worker spent generation; each one is a saved worker run. Read `infeasible ...` lines: a false positive (the symbol exists but under another spelling, or `Relies on:` named a test-only helper) means the manager guidance or check needs tightening.
-- **Gate returns (test-contract)** counts landings returned for a missing/mismatched `Expected red`, a passing red, or a regression. A few early returns are expected while workers learn the line format. The rate should fall within a day; a persistently high rate means the worker prompt format is unclear to Qwen. Inspect `landing gate rejected` events (`reason` field).
-- **Recoveries per landing** should fall below the 0.35 baseline as infeasible briefs stop reaching workers.
-- **Implementation share of landings** should rise above 23% once test-contract chains stop being redone.
-- **Red gate** line: declared reds verified per test contract; zero across many landings means workers write `Expected red: none` to dodge the gate, which the integrator should challenge.
+- **Infeasible briefs > 0** means the dispatch check caught a false premise before any worker spent generation; each one is a saved worker run. Read `infeasible ...` lines: a false positive (the symbol exists under another spelling, or `Relies on:` named a test-only helper) means the manager guidance or check needs tightening.
+- **Packet test failures** counts `packet tests failed` events: an implementer's finish refused because hidden tests failed. Several per item mean the contract is too vague for blind implementation or a test asserts beyond it; check blocked implementer reports for disputed tests.
+- **Gate returns (implementation)** counts landings that broke a test passing on main and returned with it bundled in. These should be rare; a high rate means implementers are not running the existing suite before finishing.
+- **Recoveries per landing** and **implementation share of landings** should improve on both baselines.
 
-Failure modes to watch: landing timeouts (all contract commands share `timeouts.command_seconds`, 300 s); test-contract work stalling because managers cannot produce a valid `Relies on:` line (visible as repeated queue refusals in manager transcripts); and a decomposition manager loop on one item (one automatic pass, then alert).
+Failure modes to watch: landing timeouts (the full suite shares `timeouts.command_seconds`, 300 s, which a growing suite can outrun); test packets that never land because no implementation item depends on them; red tests left on main, which enforce nothing because a failure main already has never blocks a landing; and a decomposition manager loop on one item (one automatic pass, then alert).
 
-Review again around 2026-10-09 with a fresh 72 h window. Keep or revert each gate based on these numbers, and update this leaf's baseline.
+Review again around 2026-10-09 with a fresh 72 h window and update this leaf's baselines.
