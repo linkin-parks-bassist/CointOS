@@ -156,14 +156,19 @@ def feasible(project: dict, record: dict) -> bool:
 
 
 def integrations() -> list:
-    """One integration at a time per project, of its oldest reviewed item."""
+    """One integration at a time per project, of its oldest reviewed item. An integration occupies
+    its project only while it can proceed: one that is held, or whose worker is back at work,
+    does not keep the project's other reviewed items from being integrated."""
     options = []
     for project in tasks.enabled_projects():
-        if any(t["kind"] == "integrate" and t["place"] == project["name"] and t["status"] in ("running", "waiting")
-               for t in L["tasks"].values()):
+        active = [t for t in L["tasks"].values() if t["kind"] == "integrate" and t["place"] == project["name"]
+                  and t["status"] in ("running", "waiting")]
+        if any(t["status"] == "running" or (not held(t) and L["tasks"][t["worker"]]["status"] == "review")
+               for t in active):
             continue
-        reviewed = [t for t in L["tasks"].values()
-                    if t["place"] == project["name"] and t["status"] == "review" and not held(t)]
+        integrated = {t["worker"] for t in active}
+        reviewed = [t for t in L["tasks"].values() if t["place"] == project["name"] and t["status"] == "review"
+                    and not held(t) and t["id"] not in integrated]
         if reviewed:
             worker = min(reviewed, key=lambda t: t["updated_at"])
             rank = [schema.KINDS["integrate"]["rank"], project.get("priority", 100)]

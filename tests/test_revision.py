@@ -103,6 +103,20 @@ class Revision(unittest.TestCase):
         self.assertIsNone(spawner.next_task())
         self.assertEqual(worker["status"], "review")
 
+    def test_a_stalled_integration_does_not_block_the_projects_other_reviewed_items(self):
+        first = support.reviewed(self.worker("first", start=False), "worker-1")
+        stalled = spawner.next_task()
+        self.assertEqual(stalled["worker"], first["id"])
+        stalled["admission_hold"] = "killed by the user"
+        first["status"] = "running"  # revised: back at work on its brief
+        second = support.reviewed(self.worker("second", start=False), "worker-2")
+        task = spawner.next_task()
+        self.assertEqual((task["kind"], task["worker"]), ("integrate", second["id"]))
+        first["status"] = "review"
+        spawner.next_task()
+        self.assertEqual(sum(t["kind"] == "integrate" and t["worker"] == first["id"] for t in state.L["tasks"].values()),
+                         1, "a held integration's worker gets no second integration")
+
     def test_holds_end_when_their_holder_settles(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         self.as_manager("hold", item="p:impl")
