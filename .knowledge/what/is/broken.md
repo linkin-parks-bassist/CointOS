@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-06T20:42:20+11:00"
+revised_at: "2026-10-06T20:44:44+11:00"
 ---
 
 ## Pigen's lowering tests cannot yet be run per behavior
 
-Landings now require an item's own tests (its brief's `Tests:` commands) to pass, but Pigen's `tests/contracts.json` still maps all lowering code to the one whole-binary command `make rtl-lower-test`, and all Task 8 assertions sit in one section, `t8-skeleton`. Until Pigen registers one entry per section and splits that section by behavior, no Task 8 implementation can name its own tests, and the whole-binary entry, red on main, protects no other lowering section against regression. The urgent Pigen manager command `split-rtl-lower-test-into-behavior-sections` owns that correction; `impl-t8-fire-identity-bits-fix` and its integration are held for it (its branch passes the fire-identity family).
+Landings now require an item's own tests (its brief's `Tests:` commands) to pass, but Pigen's `tests/contracts.json` still maps all lowering code to the one whole-binary command `make rtl-lower-test`, and all Task 8 assertions sit in one section, `t8-skeleton`. Until Pigen registers one entry per section and splits that section by behavior, no Task 8 implementation can name its own tests, and the whole-binary entry, red on main, protects no other lowering section against regression. The Pigen manager command `split-rtl-lower-tests-per-behavior` owns that correction; `impl-t8-fire-identity-bits-fix` and its integration are held for it (its branch passes the fire-identity family).
 
 ## Every finished reply re-reads its own tokens
 
