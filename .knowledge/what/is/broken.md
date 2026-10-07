@@ -1,7 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-07T11:35:24+11:00"
+revised_at: "2026-10-07T20:33:47+11:00"
 ---
+
+## The memory guard unloads the work model its own reload just loaded
+
+Loading the work model alone drives PSI `full avg10` to about 6 and keeps it above `memory.max_psi` for about 21 seconds, even with 83 GB available (measured 2026-10-07). `daemon.guard` treats PSI above the limit for `memory.distress_seconds` as urgent and jumps to the top rung, unloading the model. With modest desktop pressure added, the reload's own spike outlasts that window, so the guard unloads the model it just loaded, waits `memory.calm_seconds` and reloads, repeatedly; each reload stalls the desktop for about 20 seconds. Proposed, awaiting the user: unload only when headroom stays negative after snapshots and background agents give way, so pressure alone stops at stopping background agents.
 
 ## Implementers can find their hidden test packets
 
@@ -21,8 +25,8 @@ Near its 131,072-token window (about 114k), OpenCode compacts a conversation: th
 
 ## Two agents lost their whole context right after messaging the user
 
-Unexplained. On 2026-10-05 at 20:09:39 and 20:13:22, the request after a `cointos_send` to `user` lost its checkpoint and read about 29k tokens cold, though the prompt grew about 155 tokens. Ruled out: the pinned system prompt, OpenCode pruning/compaction, the Qwen template and mid-loop rewording. Tools were not then pinned, and `mcp.catalogue` drops role tools when its ledger lookup fails; pinning now neutralizes that. A later send (22:14:05) kept its checkpoint. If it recurs, `prompt rewritten` names the cause.
+Unexplained. On 2026-10-05, two requests after a `cointos_send` to `user` lost their checkpoints and read about 29k tokens cold, though each prompt grew only about 155 tokens. Ruled out: the pinned system prompt, OpenCode pruning/compaction, the Qwen template and mid-loop rewording. Tools were not then pinned, and `mcp.catalogue` drops role tools when its ledger lookup fails; pinning now neutralizes that. A later send kept its checkpoint. If it recurs, `prompt rewritten` names the cause.
 
 ## Silent snapshot eviction hid lost contexts
 
-Full tiers drop snapshots (`snapshots.disk_room`, `snapshots.evict`), shared launch starts first. A 100 GB disk cap once silently evicted waiting agents' contexts; the disk tier is now 300 GB, RAM 40 GB, and each eviction logs `snapshot evicted` with owner, tier and tokens. `snapshots.room` still declines a save rather than overcommitting RAM during spills; not known to have fired.
+Full tiers drop snapshots (`snapshots.disk_room`, `snapshots.evict`), shared launch starts first; the disk tier is 300 GB, RAM 40 GB, and each eviction logs `snapshot evicted` with owner, tier and tokens. `snapshots.room` still declines a save rather than overcommitting RAM during spills; not known to have fired.
