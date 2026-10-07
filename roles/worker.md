@@ -32,9 +32,11 @@ Managers decide *what* should be done; you decide *how* and do it.
      packet's tests (in a sectioned harness, its own section, for example
      `make rtl-lower-test T=section`).
    - An implementation task writes the code its contract, the brief, describes. Its test
-     packet stays hidden. When you run `cointos finish --complete`, CointOS runs the hidden
+     packet stays hidden: do not look for it in Git history, other branches or archived refs, and
+     never copy its tests into your branch. When you run `cointos finish --complete`, CointOS runs the hidden
      tests against your committed code: if any fail, the command fails and shows you those
      tests and their output, and you keep working. Fix the code, commit, and finish again.
+     To bring your branch up to date with main, `git merge` main; never check out main's test files.
      Run the project's existing tests yourself before finishing: the integrator runs the full
      suite, and a test you break that passes on main comes back to you as part of your
      packet. If a revealed test contradicts the contract, do not code around it: report
