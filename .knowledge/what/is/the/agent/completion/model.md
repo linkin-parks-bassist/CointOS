@@ -1,7 +1,7 @@
 ---
 status: green
-revised_at: "2026-10-07T17:01:00+11:00"
-checked_at: '2026-10-07T17:03:03+11:00'
+revised_at: "2026-10-07T19:55:35+11:00"
+checked_at: "2026-10-07T17:03:03+11:00"
 ---
 
 Agent completion is one receipt-driven lifecycle owned by `cointos/lifecycle.py`. Live evidence is tracked in `what/is/the/live/acceptance/evidence/for/cointos.md`.
@@ -12,14 +12,16 @@ Agent completion is one receipt-driven lifecycle owned by `cointos/lifecycle.py`
 2. **Receipts and delivery.** Every bounded assignment that is not cancelled ends with exactly one typed receipt `{run, disposition, summary, evidence, at}`, recorded on its task.
    - **Run identity.** The run identity is the agent id, carried as `COINTOS_AGENT` next to `COINTOS_TASK_ID` in the run's environment, so the CLI sends both.
    - **Who submits which receipt.** `cointos finish --complete EVIDENCE | --blocked BLOCKER` (POST `/api/finish` `{task, run, outcome, detail}`) is the receipt for every kind except an integrator's completion; the dispositions each kind may submit are data in `schema.KINDS`. An integrator's receipt is its verified `cointos land`/`cointos incorporate` (disposition `complete`, evidence = the acceptance) or `cointos return` (disposition `returned`). `lifecycle.evidence` checks a receipt against the task's artifacts, and a refusal states what it saw: the uncommitted files, the report's actual `Status:` lines, how many commits the branch is ahead of main, or that a decomposition changed nothing.
-   - **Blocked work and recovery.** An integrator may also `finish --blocked`. That fails it and its worker, and routes the failed worker item to one bounded manager pass instead of respawning. An exhausted worker budget uses the same route. The manager receives the original assignment, worker receipt evidence and failure detail. It gets its own configured reasoning and default generation budget rather than worker record overrides, and no report phrase decides routing. A manager may revise the brief or replace the work. A blocked or exhausted manager escalates to the user without another automatic pass for that unchanged failure. Completing a manager revision preserves the revised item's waiting/queued state rather than accepting failed work.
-   - **Duplicates and run ownership.** A repeated identical receipt from the same run returns the recorded one (lost reply). A different receipt, or one from any run other than the task's current run, is refused. Queue proposals, holds, revisions, cancellations and attention requests are checked against the same run ownership. Human holds use the stable `user` identifier; startup normalizes older unscoped human labels to it while retaining scoped manager task IDs.
+   - **A run ends; the assignment does not.** Only a run of the assignment itself can submit its work, so no run's end is a verdict on that work. A run that dies, stalls or exhausts its budget leaves its branch and files, and the task waits for its next run; after exhaustion that run starts a fresh session (`lifecycle.retry_fresh`, at most `recovery.fresh_retries` times) whose first job is to submit work already complete, or to report blocked with what remains when the rest will not fit.
+   - **Blocked work and recovery.** An integrator may also `finish --blocked`. That fails it and its worker, and routes the failed worker item to one bounded manager pass instead of respawning. A worker item whose fresh runs are exhausted uses the same route. The manager receives the original assignment, worker receipt evidence and failure detail. It gets its own configured reasoning and default generation budget rather than worker record overrides, and no report phrase decides routing. A manager may revise the brief (naming finished branch work lets its worker submit it) or replace the work. A blocked or exhausted manager escalates to the user without another automatic pass for that unchanged failure. Completing a manager revision preserves the revised item's waiting/queued state rather than accepting failed work.
+   - **Duplicates and run ownership.** A repeated identical receipt from the same run returns the recorded one (lost reply). A different receipt, or one from any run other than the task's current run, is refused. Queue proposals, holds, revisions, cancellations and attention requests are checked against the same run ownership. Human holds use the stable `user` identifier.
    - **Cancellation.** The user, or the owning project's running manager, can end an assignment without a receipt through `cointos cancel TASK...`. A task with a queue record withdraws it: its runs are released, its tasks (with their integrations and decompositions) are marked failed with `cancelled`, and the record is deleted. A live task without a record (a garden, audit, scout or operator) just ends, for the user only.
    - **Delivery.** A successful terminal CLI command prints and flushes its receipt, then acknowledges `receipt-delivered` with those exact identities. The daemon validates the recorded receipt and asynchronously stops that managed run. A landing validation that already returned the worker is also terminal: the CLI confirms the run's recorded receipt, flushes the error, then acknowledges delivery. Releasing a run revokes its gateway key, and the gateway refuses (410) any later model request carrying it.
    - **Snapshots** follow conversation reachability, not the presence of a historical task record. Startup and periodic lifecycle reconciliation remove caches of terminal tasks without surviving runs, including accepted workers whose run ended while they were still in review. A terminal task's still-active run keeps its cache until release. In-flight transfers remain charged and finish before discarded files are removed; interrupted transfer copies are cold after daemon replacement. Conversation history and retained branch artifacts are independent of these disposable caches.
 
 3. **Evidence.** Each area's focused coverage:
    - ownership, the reducer and refusal evidence: `tests/test_agent_completion.py`;
+   - budgets, exhaustion continuation and recovery packets: `tests/test_recovery.py`;
    - terminal delivery: `tests/test_cli_terminal.py`;
    - conversation reachability: `tests/test_snapshots.py`;
    - exact landing, test packets, incorporation and the landing commands: `tests/test_landing.py`;
@@ -38,6 +40,14 @@ Proof:
 cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_agent_completion
 ```
 
+An exhausted run's assignment continues fresh, the continuing run can submit the finished work, and a worker item whose fresh runs are exhausted reaches a manager with its packet.
+
+Proof:
+
+```bash
+cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_recovery.Budgets
+```
+
 Terminal delivery, snapshot reachability, manager proposals and ended-run key refusal hold.
 
 Proof:
@@ -53,5 +63,3 @@ Proof:
 ```bash
 cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_landing.Gate tests.test_landing.Packets tests.test_landing.Incorporation tests.test_landing.Commands
 ```
-
-Revision: a41d1fcac8b9683878250a9722aae9f519a485f49ba1b77798162cee9db612cf

@@ -405,13 +405,14 @@ def stop(agent_id: str, reason: str, requeue: bool, charge: bool = True) -> None
 
 
 def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
-    """Budget recovery: restart the task in a new session from a bounded evidence packet, a
-    bounded number of times; then fail it. A worker item that overruns is usually oversized,
-    so by default it fails at once and its failure reaches a manager to split it."""
+    """A run spent its budget. That ends the run, never the assignment: its work stays on the
+    branch and files, and the task continues in a new session (with a bounded evidence packet)
+    whose first job is to establish where that work stands. Only that session can submit what
+    the last one finished, or report what remains as a blocker. After `recovery.fresh_retries`
+    such sessions the task fails; a failed worker item reaches a manager with the packet."""
     task = L["tasks"][L["agents"][agent_id]["task"]]
     fresh = task.get("fresh_retries", 0)
-    limit = CONFIG["recovery"]["worker_fresh_retries" if task["kind"] == "item" else "fresh_retries"]
-    if fresh >= limit:
+    if fresh >= CONFIG["recovery"]["fresh_retries"]:
         task.update(recovery_note=reason, recovery_context=packet)  # the recovery manager's evidence
         stop(agent_id, reason + "; fresh retries exhausted", requeue=False)
         return

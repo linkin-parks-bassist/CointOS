@@ -71,13 +71,13 @@ class Replacement(unittest.TestCase):
 
 
 class Budgets(unittest.TestCase):
-    """Generation alone is charged; exhaustion restarts fresh a bounded number of times."""
+    """Generation alone is charged; exhaustion ends the run, and the assignment continues fresh a
+    bounded number of times."""
 
     def setUp(self):
         support.fresh_ledger(self)
         support.quiet(self)
         self.project = support.project(self, support.repository(self))
-        self.enterContext(patch.dict(state.CONFIG["recovery"], worker_fresh_retries=2))
         self.task = support.running(support.queued(self.project, "item"), "worker-1")
         self.task["session"] = "old"
         self.agent = state.L["agents"]["worker-1"]
@@ -98,16 +98,29 @@ class Budgets(unittest.TestCase):
         self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertEqual((self.task["status"], self.task["session"], self.task["fresh_retries"]), ("waiting", None, 1))
         self.assertIn("generation budget reached", self.task["recovery_note"])
-        self.task["fresh_retries"] = state.CONFIG["recovery"]["worker_fresh_retries"]
+        self.task["fresh_retries"] = state.CONFIG["recovery"]["fresh_retries"]
         support.running(self.task, "worker-2", worktree=False)
         state.L["agents"]["worker-2"].update(generation_seconds=0, generation_tokens=self.task["budget"]["generation_tokens"])
         recovery.enforce()
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
 
-    def test_an_overrunning_worker_item_fails_at_once_by_default(self):
-        with patch.dict(state.CONFIG["recovery"], worker_fresh_retries=0), \
-                patch.object(recovery, "packet", return_value="Read rtl_lower.h; the memo owns fire identity"):
+    def test_an_overrunning_worker_item_continues_and_its_finished_work_can_still_be_submitted(self):
+        (Path(self.task["worktree"]) / "done.txt").write_text("finished, never committed\n")
+        self.spend(seconds=self.task["budget"]["generation_seconds"])
+        self.assertEqual((self.task["status"], self.task["session"]), ("waiting", None))
+        text = prompts.launch_text(self.task, self.project)
+        self.assertIn("?? done.txt", text)
+        self.assertIn("if its work is already complete, commit it and submit your receipt now", text)
+        support.running(self.task, "worker-2", worktree=False)
+        (Path(self.task["worktree"]) / queues.REPORT).write_text("Status: done\n")
+        support.commit(self.task["worktree"])
+        lifecycle.submit(self.task["id"], "worker-2", "complete", "Committed the finished work")
+        self.assertEqual(self.task["status"], "review")
+
+    def test_a_worker_item_whose_fresh_runs_are_exhausted_reaches_a_manager_with_the_packet(self):
+        self.task["fresh_retries"] = state.CONFIG["recovery"]["fresh_retries"]
+        with patch.object(recovery, "packet", return_value="Read rtl_lower.h; the memo owns fire identity"):
             self.spend(seconds=self.task["budget"]["generation_seconds"])
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])

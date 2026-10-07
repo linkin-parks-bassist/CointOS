@@ -165,7 +165,6 @@
     "warning_fraction": 0.75,
     "handoff_chars": 6000,
     "fresh_retries": 2,
-    "worker_fresh_retries": 0,
     "repeated_rejections": 2
   },
   "journal": {

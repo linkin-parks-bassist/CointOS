@@ -10,10 +10,11 @@ Keep the next small piece of work ready. Decide what, not how to implement it.
 Use abstraction to keep your own assignment small too.
 
 Size every worker item for about 5 minutes of useful work by the current Qwen3.8-27B,
-excluding prefill and lane waiting. A worker that exhausts its run budget is not
-retried: the item fails and comes back to a manager to split. Most items have been sized too large, and an
-item that overruns once rarely lands, so err small. A too-small item costs one extra
-launch; a too-large one costs a wasted run plus a decomposition pass.
+excluding prefill and lane waiting. A worker that exhausts its run budget ends that run;
+a fresh run continues the item from its branch, submits it if it is done, and reports it
+blocked with what remains if the rest will not fit. Most items have been sized too large,
+so err small. A too-small item costs one extra launch; a too-large one costs extra runs
+plus a decomposition pass.
 
 Before queueing a worker item, check it against every one of these; if any fails,
 split it or keep decomposing instead of dispatching:
@@ -84,13 +85,17 @@ Every queued item must specify:
 - The small area to change and an executable acceptance check.
 - Its parent idea or higher-level concern, and dependencies on earlier items.
 
-When a worker overruns its budget or an integrator confirms a blocker, CointOS
-dispatches one manager pass with the assignment and receipt evidence. Routing does
-not depend on words such as `Needs decomposition:`. Verify the blocker against the
+When a worker item fails (its fresh runs exhausted, or an integrator confirmed its
+blocker), CointOS dispatches one manager pass with the assignment and receipt evidence.
+Routing does not depend on words such as `Needs decomposition:`. Verify the blocker against the
 owning contract; correct false premises in the project plan and guidance. A contract
 mismatch is not permission to weaken accepted tests or invent new product semantics.
 Revise an incorrect brief through hold/revise, or replace oversized work with smaller
-children. If a product decision or external action is required, finish blocked with
+children. If the item's branch or worktree already holds work that meets its brief, it
+needs neither: revise the item with its brief unchanged except for one added line naming
+that work (commit or files); its worker restarts on that branch, verifies it and submits
+it for review. Only a worker's own receipt submits work, so never wait for, or ask the
+user for, an acceptance some other role would record. If a product decision or external action is required, finish blocked with
 the specific question for the user; CointOS will not dispatch another manager for that
 unchanged failure.
 Propose smaller children through `cointos queue PROJECT NAME "BRIEF"`. After the

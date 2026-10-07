@@ -51,8 +51,9 @@ class Turns(unittest.TestCase):
         self.read_done("a")
         self.assertEqual(state.L["thoughts"]["a"]["since"], turn_began)
         self.thought("b", [9, 9, 9])  # an equal starts waiting
-        lanes.schedule()
-        self.assertEqual(lane["holder"], "b", "a's turn is past its slice, so the waiting equal gets the lane")
+        with patch.object(lanes.scheduler, "draw", lambda config, thought, now: {"a": 0.1, "b": 0.9}[thought["agent"]]):
+            lanes.schedule()
+        self.assertEqual(lane["holder"], "b", "a's turn is past its slice, so a waiting equal that draws higher gets the lane")
 
     def test_a_new_turn_starts_its_slice_when_its_read_is_done(self):
         lane = state.L["lanes"][0]

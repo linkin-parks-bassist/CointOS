@@ -1,8 +1,8 @@
 """Run budgets, recovery evidence and incident packets.
 
 Each run is charged only for generation: lane waiting, prefill and tool time are free. A run
-past its budget restarts fresh from a bounded evidence packet a bounded number of times
-(`lifecycle.retry_fresh`). Once a run has spent `recovery.warning_fraction` of either limit it
+past its budget ends; its assignment continues in a fresh session from its branch/files and a
+bounded evidence packet, a bounded number of times (`lifecycle.retry_fresh`). Once a run has spent `recovery.warning_fraction` of either limit it
 gets one message saying so, to wrap up while it still can. Long silent stretches before writing
 are normal for the work model, so nothing stops a run before its budget. Caller holds LOCK.
 """
@@ -45,11 +45,11 @@ def warned(task: dict, spent_seconds: float, spent_tokens: int) -> bool:
 def warn(task: dict, spent_seconds: float, spent_tokens: int) -> None:
     """One message into the run's session: its budget is nearly spent."""
     limits = task["budget"]
-    ending = ("the item goes to a manager to split" if task["kind"] == "item" else "the daemon retries it fresh")
     text = (f"Budget warning: this run has used {spent_seconds / 60:.0f} of its {limits['generation_seconds'] / 60:.0f} "
-            f"generation minutes ({spent_tokens:,} of {limits['generation_tokens']:,} tokens). Wrap up now. If the "
-            "assignment is done, commit and finish --complete. If not, commit your progress, write exactly what "
-            f"remains in your report and finish --blocked. At the limit the run ends and {ending}.")
+            f"generation minutes ({spent_tokens:,} of {limits['generation_tokens']:,} tokens). Commit your work now. "
+            "If the assignment is done, finish --complete. If what remains will not fit in one more run, write "
+            "exactly what is done and what remains in your report and finish --blocked. At the limit this run ends "
+            "and a fresh run of this assignment continues from your branch and files.")
     L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": task["id"], "text": text, "read": False}]
     log("budget warning", task=task["id"], seconds=round(spent_seconds), tokens=spent_tokens)
 

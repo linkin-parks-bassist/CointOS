@@ -63,7 +63,10 @@ def assignment(task: dict, where: dict) -> str:
         parts.append("Fresh recovery: " + task["recovery_note"] +
                      "\nInspect existing branch/files and current main first. Preserve completed work. "
                      "Use the assignment, recovery packet and exact current failures; do not reconstruct prior deliberation. "
-                     "Treat packet claims as leads until verified, then continue from the useful frontier. "
+                     "Treat packet claims as leads until verified. Then decide where the assignment stands: if its "
+                     "work is already complete, commit it and submit your receipt now; if what remains cannot be "
+                     "finished within this run's budget, finish blocked stating exactly what is done and what "
+                     "remains; otherwise continue from the useful frontier. "
                      "\n\nRecovery packet:\n" + str(task.get("recovery_context") or "No transcript evidence was available.") +
                      "\n\nPrior review feedback: " + str(task.get("review") or "none"))
     proposed = [r for r in queues.records().values() if r.get("proposed_by") == task["id"]]
@@ -148,6 +151,5 @@ def budget_notice(task: dict) -> str:
             "do not. Finish the bounded assignment and submit its receipt within this budget; a message warns you "
             f"once {CONFIG['recovery']['warning_fraction']:.0%} of either limit is spent. "
             "Act once evidence is sufficient: do not narrate plans, reopen settled choices, or repeatedly reread the "
-            "same evidence. On exhaustion the daemon preserves branch/files and a bounded evidence packet "
-            + ("and hands the item to a manager to split" if task["kind"] == "item" else "for a fresh retry")
-            + "; do not expand scope.")
+            "same evidence. On exhaustion this run ends; its branch/files and a bounded evidence packet are "
+            "preserved for a fresh run of this assignment, which continues from them; do not expand scope.")
