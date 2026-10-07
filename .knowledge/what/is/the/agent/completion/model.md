@@ -1,7 +1,7 @@
 ---
 status: green
-revised_at: "2026-10-05T18:57:51+11:00"
-checked_at: "2026-10-04T03:24:36+11:00"
+revised_at: "2026-10-07T17:01:00+11:00"
+checked_at: '2026-10-07T17:03:03+11:00'
 ---
 
 Agent completion is one receipt-driven lifecycle owned by `cointos/lifecycle.py`. Live evidence is tracked in `what/is/the/live/acceptance/evidence/for/cointos.md`.
@@ -22,7 +22,7 @@ Agent completion is one receipt-driven lifecycle owned by `cointos/lifecycle.py`
    - ownership, the reducer and refusal evidence: `tests/test_agent_completion.py`;
    - terminal delivery: `tests/test_cli_terminal.py`;
    - conversation reachability: `tests/test_snapshots.py`;
-   - exact landing and incorporation: `tests/test_landing.py`;
+   - exact landing, test packets, incorporation and the landing commands: `tests/test_landing.py`;
    - manager proposals and prompts: `tests/test_handoffs.py`;
    - holds, revisions and cancellation: `tests/test_revision.py`;
    - directed kill/resume and task-named controls: `tests/test_kill.py`;
@@ -46,18 +46,12 @@ Proof:
 cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_cli_terminal tests.test_snapshots tests.test_handoffs tests.test_gateway_disconnect
 ```
 
-Exact landing, implementation progress, integration, incorporation and the landing commands hold.
+Exact landing, test-packet acceptance, incorporation and the landing commands hold.
 
 Proof:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_landing.Gate tests.test_landing.ImplementationProgress tests.test_landing.IntegrationStage tests.test_landing.Incorporation tests.test_landing.Commands
+cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_landing.Gate tests.test_landing.Packets tests.test_landing.Incorporation tests.test_landing.Commands
 ```
 
-The test-contract landing gate holds.
-
-Proof:
-
-```bash
-cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_landing.TestContractStage
-```
+Revision: a41d1fcac8b9683878250a9722aae9f519a485f49ba1b77798162cee9db612cf
