@@ -70,7 +70,7 @@
     "reserve_gb": 24,
     "agent_memory_gb": 1,
     "agent_limit_gb": 8,
-    "max_psi": 1.0,
+    "max_psi": 1.5,
     "distress_seconds": 30,
     "disk_snapshots_gb": 300,
     "shed_step_seconds": 3,

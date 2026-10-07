@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T00:21:00+11:00"
+revised_at: "2026-10-07T20:36:59+11:00"
 ---
 
 The workstation is `DDRiver`, an AMD Ryzen AI MAX+ 395 with Radeon 8060S (Strix Halo), 128 GiB unified physical memory and a GNOME desktop. Live inspection on 2026-09-27 reports Ubuntu 24.04.5 LTS and kernel 7.0.0-34-generic. David's desktop and personal work outrank autonomous agents.
@@ -12,9 +12,10 @@ The workstation is `DDRiver`, an AMD Ryzen AI MAX+ 395 with Radeon 8060S (Strix 
 - `mem_info_gtt_used` under `/sys/class/drm/card*/device/` reports GPU use; the observed value with both configured models idle was about 46.9 decimal GB. `mem_info_gtt_total` reports a 64 GiB domain, not a proven allocation ceiling.
 - `/proc/swaps` currently reports an 8 GiB swap file; swap in use is diagnostic, not a stop threshold.
 - Lemonade is in `inference.slice`. Its current allowance reported by the backend is 77.3 decimal GB. Headroom is the smaller of available RAM minus reserve and server allowance minus anonymous/shared memory.
+- Loading the work model briefly drives PSI `full avg10` to about 6, above the threshold for about 20 seconds, even with ample memory available.
 
 **Measuring everything outside CointOS.** The dashboard estimates other/system allocation as physical minus MemAvailable, configured KV capacity and measured in-memory snapshots. Model weights are kept as their configured size because their reclaimable file-backed pages are already included in MemAvailable. Small daemon, Coin and agent allocations remain in the other/system segment; this is the accepted close-enough error. A checked sample with both models loaded rendered about 20.4 GB weights, 25.6 GB KV, 7.8 GB saved contexts, 20.3 GB other/system and 53.9 GB free/reclaimable remainder. The resource guard remains based on MemAvailable and the Lemonade budget.
 
-**Governing limits** come from `config/cointos.json`, not this leaf: currently a 24 decimal GB reserve, a separate 24 decimal GB RAM snapshot-cache budget (cold caches spill to the bounded disk tier), PSI threshold 1.0, and 30 seconds of sustained distress. Negative headroom first makes snapshots give way and can block background work; sustained PSI distress stops background agents and unloads the work model. There is no 2 GB swap-use limit.
+**Governing limits** live in `config/cointos.json` under `memory`: the workstation reserve (`reserve_gb`), the RAM snapshot-cache budget (`snapshots_gb`; cold caches spill to the bounded disk tier), the PSI threshold (`max_psi`, raised to 1.5 at the user's request because pressure between 1.0 and 1.5 produced only nuisance alerts) and sustained distress (`distress_seconds`). The one threshold drives both the self-check alert and the guard. Negative headroom first makes snapshots give way and can block background work; sustained PSI distress stops background agents and unloads the work model. There is no swap-use limit.
 
 **Earlier observations, not repeated load tests:** approximately 100 GiB was reported allocatable to the GPU; two 131,072-token work-model lanes ran without pressure, whereas loading three caused pressure. Treat these as shape-selection evidence, not guaranteed capacity. Recheck after hardware, kernel, driver or model-shape changes.
