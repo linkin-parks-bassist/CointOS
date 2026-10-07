@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from cointos import memory
-from cointos.scheduler import held_for, lane_allows
+from cointos.scheduler import draw, held_for, lane_allows, slot
 
 
 def silent_agents(config: dict, ledger: dict, now: float) -> list[str]:
@@ -75,13 +75,17 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         for t in waiting if now - t["waiting_since"] > limits["preempt_seconds"]
         and held_by(lambda h, t=t: rank.get(h["class"], 99) > rank.get(t["class"], 99), t)])
 
-    def overdue(h, t):  # how long h has held on past its slice while t was waiting
-        return min(now - t["waiting_since"], now - h["since"] - config["scheduler"]["slice_seconds"])
+    def overdue(h, t):  # how long h has held on past its slice, this slot, while t was waiting
+        slice_seconds = config["scheduler"]["slice_seconds"]
+        return now - max(t["waiting_since"], h["since"] + slice_seconds, slot(config, now) * slice_seconds)
+
+    def beaten(h, t):  # h holds on past its slice although t won this slot's draw against it
+        return (h["class"] == t["class"] and not h["reading"] and draw(config, t, now) > draw(config, h, now)
+                and overdue(h, t) > limits["preempt_seconds"])
 
     check("no agent starves", [
-        f"{t['agent']} passed over for {max(overdue(h, t) for h in thoughts if h['lane'] is not None):.0f}s by an equal past its slice"
-        for t in waiting if held_by(lambda h, t=t: h["class"] == t["class"] and not h["reading"]
-                                    and overdue(h, t) > limits["starve_seconds"], t)])
+        f"{t['agent']} won the draw but waited {max(overdue(h, t) for h in thoughts if h['lane'] is not None):.0f}s"
+        f" behind an equal past its slice" for t in waiting if held_by(lambda h, t=t: beaten(h, t), t)])
 
     check("no silent agent", [
         f"{agent_id} without a thought or event for {now - ledger['agents'][agent_id]['last_activity']:.0f}s"

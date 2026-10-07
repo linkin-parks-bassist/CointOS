@@ -4,11 +4,15 @@ The policy (`what/is/the/architecture/of/cointos.md`, *The scheduler is pre-empt
 - classes are strict: a higher class takes a lane at once, from a generating holder before a
   reading one (a cold read is displaced only when there is no other lane);
 - among equals, a thought still reading its context keeps its lane until the read is done;
-  a generating holder yields to a waiting equal once its turn has lasted `slice_seconds`;
+  a generating holder keeps its lane for `slice_seconds`; after that it and its waiting equals
+  draw lots each slot (a global `slice_seconds` clock), weighted by their role's
+  `scheduler.weights`, and the winner holds the lane for the slot;
 - a tool call yields the lane, but it stays held for its agent for `yield_grace_seconds`, so
   a quick next thought continues the same turn on the same lane.
 """
 from __future__ import annotations
+
+import random
 
 
 def lane_allows(config: dict, lane: dict, klass: str) -> bool:
@@ -26,6 +30,18 @@ def rank(config: dict, klass: str) -> int:
     return config["classes"].index(klass) if klass in config["classes"] else len(config["classes"])
 
 
+def slot(config: dict, now: float) -> int:
+    return int(now // config["scheduler"]["slice_seconds"])
+
+
+def draw(config: dict, thought: dict, now: float) -> float:
+    """The thought's lot for this slot: higher wins, with odds proportional to its weight
+    (u^(1/w), the weighted-sampling key). Seeded by agent and slot, so it is stable for the slot
+    and drawn afresh at the next."""
+    u = random.Random(f"{thought['agent']}:{slot(config, now)}").random()
+    return u ** (1 / thought.get("weight", 1))
+
+
 def held_for(lane: dict, now: float) -> str | None:
     """The agent a free lane is kept for after its tool call, while the grace lasts."""
     return lane.get("held_for") if lane.get("held_until", 0) > now else None
@@ -33,14 +49,14 @@ def held_for(lane: dict, now: float) -> str | None:
 
 def order(config: dict, thought: dict, lanes: list[dict], now: float) -> tuple:
     """Earlier is more entitled to a lane: class first; within a class, holders that are reading
-    or inside their slice and agents returning to a lane kept for them, then waiting thoughts
-    (longest waiting first), then holders whose slice is over."""
+    or inside their slice and agents returning to a lane kept for them, then waiting thoughts and
+    holders whose slice is over, by this slot's draw."""
     klass = rank(config, thought["class"])
     if thought["lane"] is None:
         returning = any(held_for(lane, now) == thought["agent"] for lane in lanes)
-        return (klass, 0, 0) if returning else (klass, 1, thought["waiting_since"])
+        return (klass, 0, 0) if returning else (klass, 1, -draw(config, thought, now))
     in_slice = thought["reading"] or now - thought["since"] < config["scheduler"]["slice_seconds"]
-    return klass, 0 if in_slice else 2, thought["since"]
+    return (klass, 0, thought["since"]) if in_slice else (klass, 1, -draw(config, thought, now))
 
 
 def assign(config: dict, lanes: list[dict], thoughts: list[dict], now: float,
@@ -68,13 +84,18 @@ def assign(config: dict, lanes: list[dict], thoughts: list[dict], now: float,
             holder = by_id.get(lanes[p]["holder"])
             return holder is not None and holder["reading"]
 
+        def holder_draw(p):  # displace the holder that drew lowest, not one that keeps its slot
+            holder = by_id.get(lanes[p]["holder"])
+            return draw(config, holder, now) if holder is not None else 0
+
         open_lanes = [p for p, lane in enumerate(lanes) if open_to_it(p, lane)]
         if not open_lanes:
             continue
         # Cheapest lane first: its own or one kept for it, then one whose state begins its
         # context, then a free one, then one whose holder is generating rather than reading,
-        # then an unreserved one (reserved lanes stay for their classes), then the lowest.
+        # then one whose holder drew lowest, then an unreserved one (reserved lanes stay for
+        # their classes), then the lowest.
         claimed[min(open_lanes, key=lambda p: (p != thought["lane"] and held_for(lanes[p], now) != thought["agent"],
                                                p not in thought["warm"], lanes[p]["holder"] is not None,
-                                               displaces_reader(p), is_reserved(config, lanes[p]), p))] = thought["id"]
+                                               displaces_reader(p), holder_draw(p), is_reserved(config, lanes[p]), p))] = thought["id"]
     return {p: claimed.get(p) for p, lane in enumerate(lanes) if lane["up"]}

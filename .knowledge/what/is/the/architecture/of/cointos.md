@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-06T15:38:03+11:00"
+revised_at: "2026-10-07T19:27:57+11:00"
 ---
 
 # CointOS architecture
@@ -30,7 +30,7 @@ Stable identities and explicit relations connect these representations. Session 
 - **Coin:** a separate Telegram service using the same gateway and control API. One front-model lane is reserved for it. Control lookup and front inference share the configured 12-second first-reply preparation budget; a slow lookup reduces the model's remaining allowance and exhaustion produces a fallback acknowledgement.
 - **Lemonade/llama-server:** machine-level model service outside CointOS. `backend_llama.py` is the sole adapter for its literal API and token/tool representation.
 
-The ledger is plain JSON guarded by one in-process lock and saved atomically. cointosd is the only writer. The API and CLI call domain functions; they do not implement parallel state machines.
+The ledger is plain JSON guarded by one in-process lock and saved atomically. The API and CLI call domain functions; they do not implement parallel state machines.
 
 ## Pre-emptive scheduler
 
@@ -41,7 +41,7 @@ A thought advances in bounded steps: up to `read_chunk_tokens` while establishin
 At each boundary:
 
 1. Higher-class work pre-empts lower-class work. Coin outranks user sessions, which outrank background agents. A generating holder is displaced before a reading holder when possible.
-2. Equal-class cold reading is protected until its context is established. After that, a generating turn whose `slice_seconds` expired yields to the longest-waiting equal.
+2. Equal-class cold reading is protected until its context is established; equals then share lanes by weighted slot lottery (`how/does/the/cointos/scheduler/share/a/lane/among/equal/agents.md`).
 3. A tool call yields the lane. A bounded grace may retain it for a quick follow-up within the same unexpired slice; grace never extends the slice.
 4. Placement prefers the agent's held lane, then a warm lane, then a free lane, then an eligible unreserved lane.
 

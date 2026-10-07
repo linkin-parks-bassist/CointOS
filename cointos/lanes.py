@@ -70,7 +70,9 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
     and finally {"end": how}, how being done, limit, cancelled or failed."""
     thought_id = secrets.token_hex(6)
     with LOCK:
-        L["thoughts"][thought_id] = {"id": thought_id, "agent": agent, "class": klass, "owner": owner, "model": model,
+        task = L["tasks"].get((L["agents"].get(agent) or {}).get("task"))
+        weight = CONFIG["scheduler"]["weights"].get(task["role"], 1) if task else 1
+        L["thoughts"][thought_id] = {"id": thought_id, "agent": agent, "class": klass, "weight": weight, "owner": owner, "model": model,
                                      "lane": None, "since": None, "waiting_since": now(), "warm": [], "reading": True, "opens_turn": False,
                                      "started_at": now(), "generated": 0, "prompt": len(rendered["tokens"]),
                                      "read": 0, "progress_at": now()}

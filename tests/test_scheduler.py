@@ -48,10 +48,12 @@ class Slices(unittest.TestCase):
         thoughts = [holding("a", "background", 0, since=90), waiting("b", "background", since=50)]
         self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=100), {0: "a"})
 
-    def test_holder_yields_after_its_slice_to_a_waiting_equal(self):
+    def test_holder_past_its_slice_and_a_waiting_equal_draw_lots(self):
         lanes = [lane("work", 0, holder="a")]
-        thoughts = [holding("a", "background", 0, since=60), waiting("b", "background", since=95)]
-        self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=100), {0: "b"})
+        for now in range(100, 400, 30):
+            thoughts = [holding("a", "background", 0, since=60), waiting("b", "background", since=95)]
+            winner = max(thoughts, key=lambda t: scheduler.draw(CONFIG, t, now))["id"]
+            self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=now), {0: winner})
 
     def test_a_reading_holder_is_not_preempted_by_an_equal(self):
         lanes = [lane("work", 0, holder="cold")]
@@ -62,16 +64,46 @@ class Slices(unittest.TestCase):
         lanes = [lane("work", 0, holder="a")]
         self.assertEqual(scheduler.assign(CONFIG, lanes, [holding("a", "background", 0, since=0)], now=100), {0: "a"})
 
-    def test_longest_waiting_goes_first(self):
-        lanes = [lane("work", 0)]
-        thoughts = [waiting("new", "background", since=90), waiting("old", "background", since=10)]
-        self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=100), {0: "old"})
+    def test_a_draw_holds_for_its_slot_and_is_redrawn_at_the_next(self):
+        t = waiting("a", "background", since=0)
+        self.assertEqual(scheduler.draw(CONFIG, t, 60), scheduler.draw(CONFIG, t, 89))
+        self.assertNotEqual(scheduler.draw(CONFIG, t, 89), scheduler.draw(CONFIG, t, 90))
 
-    def test_two_lanes_rotate_among_three_equals(self):
+    def test_waiting_equals_win_slots_in_proportion_to_their_weight(self):
+        wins = {"worker": 0, "gardener": 0}
+        for n in range(4000):
+            thoughts = [{**waiting("worker", "background", since=0), "weight": 4},
+                        {**waiting("gardener", "background", since=0), "weight": 1}]
+            wins[scheduler.assign(CONFIG, [lane("work", 0)], thoughts, now=n * 30)[0]] += 1
+        self.assertAlmostEqual(wins["worker"] / 4000, 0.8, delta=0.03)
+
+    def test_an_expired_holder_keeps_its_lane_in_proportion_to_its_weight(self):
+        kept = 0
+        for n in range(4000):
+            thoughts = [{**holding("worker", "background", 0, since=n * 30 - 60), "weight": 4},
+                        waiting("gardener", "background", since=0)]
+            kept += scheduler.assign(CONFIG, [lane("work", 0, holder="worker")], thoughts, now=n * 30) == {0: "worker"}
+        self.assertAlmostEqual(kept / 4000, 0.8, delta=0.03)
+
+    def test_a_holder_inside_its_slice_is_not_in_the_draw(self):
         lanes = [lane("work", 0, holder="a"), lane("work", 1, holder="b")]
-        thoughts = [holding("a", "background", 0, since=0), holding("b", "background", 1, since=50),
-                    waiting("c", "background", since=40)]
-        self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=70), {0: "c", 1: "b"})
+        for now in range(70, 75):
+            thoughts = [holding("a", "background", 0, since=0), holding("b", "background", 1, since=now - 20),
+                        waiting("c", "background", since=40)]
+            winner = max(thoughts[0], thoughts[2], key=lambda t: scheduler.draw(CONFIG, t, now))["id"]
+            self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=now), {0: winner, 1: "b"})
+
+    def test_the_winner_displaces_the_holder_that_drew_lowest(self):
+        lanes = [lane("work", 0, holder="a"), lane("work", 1, holder="b")]
+        for now in range(300, 3000, 30):
+            thoughts = [holding("a", "background", 0, since=0), holding("b", "background", 1, since=0),
+                        waiting("c", "background", since=0)]
+            loser = min(thoughts, key=lambda t: scheduler.draw(CONFIG, t, now))
+            if loser["id"] == "c":
+                continue
+            wanted = scheduler.assign(CONFIG, lanes, thoughts, now=now)
+            self.assertEqual(wanted[loser["lane"]], "c")
+            self.assertEqual(sorted(wanted.values()), sorted(t["id"] for t in thoughts if t is not loser))
 
 
 class Yielding(unittest.TestCase):

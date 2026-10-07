@@ -1,13 +1,13 @@
 import unittest
 
-from cointos import checks, config, memory
+from cointos import checks, config, memory, scheduler
 
 CONFIG = {
     "classes": ["coin", "user", "background"],
     "reserved_lanes": [],
     "memory": {"reserve_gb": 24, "max_psi": 1.0},
     "scheduler": {"slice_seconds": 30},
-    "checks": {"idle_lane_seconds": 5, "preempt_seconds": 15, "starve_seconds": 120,
+    "checks": {"idle_lane_seconds": 5, "preempt_seconds": 15,
                "thought_stalled_seconds": 60, "alert_recovery_seconds": 30,
                "agent_silent_seconds": config.load()["checks"]["agent_silent_seconds"],
                "tool_silent_seconds": config.load()["checks"]["tool_silent_seconds"],
@@ -110,9 +110,21 @@ class Checks(unittest.TestCase):
         state = ledger([lane(holder="bg")], [thought("bg", "background", lane=0), thought("c", "coin", waiting_since=50)])
         self.assertIn("higher classes pre-empt", self.failing(state))
 
-    def test_starving_behind_an_equal_past_its_slice(self):
+    def slot_where(self, test):
+        """A time 20s into a slot whose draw between waiting b and holding a passes `test`."""
+        a, b = thought("a", "background", lane=0), thought("b", "background", waiting_since=0)
+        return next(now for now in range(500, 50000, 30)
+                    if test(scheduler.draw(CONFIG, b, now), scheduler.draw(CONFIG, a, now)))
+
+    def test_starving_when_the_draw_is_won_but_the_lane_not_given(self):
+        now = self.slot_where(lambda b, a: b > a)
         state = ledger([lane(holder="a")], [thought("a", "background", lane=0), thought("b", "background", waiting_since=0)])
-        self.assertIn("no agent starves", self.failing(state, now=500))
+        self.assertIn("no agent starves", self.failing(state, now=now))
+
+    def test_losing_the_draw_is_not_starving(self):
+        now = self.slot_where(lambda b, a: b < a)
+        state = ledger([lane(holder="a")], [thought("a", "background", lane=0), thought("b", "background", waiting_since=0)])
+        self.assertNotIn("no agent starves", self.failing(state, now=now))
 
     def test_waiting_long_behind_reads_is_not_starving_the_moment_a_slice_ends(self):
         state = ledger([lane(holder="a")], [thought("a", "background", lane=0, since=460),

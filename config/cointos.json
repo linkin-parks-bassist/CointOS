@@ -63,7 +63,8 @@
     "slice_seconds": 30,
     "yield_grace_seconds": 15,
     "max_thought_tokens": 16384,
-    "shared_prefix_tokens": 4096
+    "shared_prefix_tokens": 4096,
+    "weights": {"worker": 4, "integrator": 4, "manager": 2}
   },
   "memory": {
     "reserve_gb": 24,
@@ -79,7 +80,6 @@
   "checks": {
     "idle_lane_seconds": 5,
     "preempt_seconds": 15,
-    "starve_seconds": 120,
     "agent_silent_seconds": 600,
     "tool_silent_seconds": 660,
     "thought_stalled_seconds": 60,
