@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-07T20:33:47+11:00"
+revised_at: "2026-10-07T20:36:20+11:00"
 ---
 
-## The memory guard unloads the work model its own reload just loaded
+## The memory guard can unload the work model its own reload just loaded
 
-Loading the work model alone drives PSI `full avg10` to about 6 and keeps it above `memory.max_psi` for about 21 seconds, even with 83 GB available (measured 2026-10-07). `daemon.guard` treats PSI above the limit for `memory.distress_seconds` as urgent and jumps to the top rung, unloading the model. With modest desktop pressure added, the reload's own spike outlasts that window, so the guard unloads the model it just loaded, waits `memory.calm_seconds` and reloads, repeatedly; each reload stalls the desktop for about 20 seconds. Proposed, awaiting the user: unload only when headroom stays negative after snapshots and background agents give way, so pressure alone stops at stopping background agents.
+Loading the work model alone drives PSI `full avg10` to about 6 and keeps it above `memory.max_psi` for about 21 seconds, even with 83 GB available (measured 2026-10-07). `daemon.guard` treats PSI above the limit for `memory.distress_seconds` as urgent and unloads the model. Shedding under genuine desktop load is correct. The defect is the reload: the reload's own spike plus moderate leftover desktop pressure can outlast the window, so the guard unloads the model it just loaded and repeats, each reload stalling the desktop for about 20 seconds. Seen three times in a row under a busy desktop; not once the desktop is quiet. Proposed, awaiting the user: unload only when headroom stays negative after snapshots and background agents give way.
 
 ## Implementers can find their hidden test packets
 
