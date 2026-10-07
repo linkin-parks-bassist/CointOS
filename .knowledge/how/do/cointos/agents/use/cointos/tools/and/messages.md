@@ -1,16 +1,26 @@
 ---
 status: green
-revised_at: "2026-10-05T18:09:36+11:00"
+revised_at: "2026-10-06T02:36:08+11:00"
 ---
 
-`cointos/mcp.py` is a stdio MCP server that OpenCode starts for each agent run (`python3 -P -m cointos.mcp`, with `PYTHONPATH` at the installed runtime and the run's `COINTOS_TASK_ID`/`COINTOS_AGENT` in its environment; `opencode.settings` adds it as the `cointos` server). OpenCode exposes its tools as `cointos_<name>`.
+`cointos/mcp.py` is a stdio MCP server started per OpenCode run (`python3 -P -m cointos.mcp`, installed-runtime `PYTHONPATH`, `COINTOS_TASK_ID`/`COINTOS_AGENT`). OpenCode exposes `cointos_<name>` tools. They run CLI argument vectors in-process without shell quoting, check required arguments and reserve real stdout for protocol messages.
 
-Each tool builds an argument vector for the matching `cli` command and runs it in-process, so arguments never pass through a shell and the CLI and tools share one implementation. Required arguments are checked before running. The server keeps the real stdout for protocol messages and points file descriptor 1 at stderr, so subprocess output cannot corrupt the stream. Before the tools, about half of agents' shell `cointos queue` calls failed on quoting of long briefs.
+Everyone gets `finish`, `task`, `jobs`, `status`, `peers`, `send` and `inbox`. Integrators add `review`, `land`, `return`, `incorporate` and `queue`; managers add `queue`, `hold`, `revise`, `cancel`, `replace`, `supersede`, `budget` and `merge`; stewards/test auditors add `queue` and `attention`; gardeners/tree auditors/operators add `merge`. Daemon permissions remain authoritative. New tool definitions reach newly launched runs only. `roles/_base.md` directs concise coordination and no waiting for replies.
 
-A run sees only its role's tools: everyone gets `finish`, `task`, `jobs`, `status`, `peers`, `send` and `inbox`; integrators add `review`, `land`, `return`, `incorporate` and `queue`; managers add `queue`, `hold`, `revise`, `cancel`, `replace`, `supersede`, `budget` and `merge`; stewards and test auditors add `queue` and `attention`; gardeners, tree auditors and operators add `merge`. The daemon still enforces every permission. `roles/_base.md` tells agents to call `cointos_<command>` wherever instructions name a `cointos <command>`, and to collaborate: check `peers` before changing shared files or interfaces, tell an overlapping run what they change, ask peers what they know, answer briefly, never wait for a reply. Only runs launched after an installation get new tools.
+`peers` shows other live runs, task IDs, roles, purposes, activity and worktree changes. Message destinations use exact IDs from `cointos jobs`; shortened `agents` labels are invalid.
 
-**Peers** lists every other live run: task id, role, state, its brief's `Summary:` line, current activity (`doing`), and `git diff --stat` of its worktree against its base commit.
+`send` accepts an active task, `user`, or `mailbox:NAME`. A task sender must own its current run. The local CLI uses `cointos message TO "TEXT"`. The daemon alone writes the ledger, retaining its last 200 messages.
 
-**Messages.** `send` puts a short message in an active task's inbox (ledger `messages`, last 200 kept), or alerts the user through Coin for `to: user`. A sender must be the task's current run, or the user's CLI (`cointos message TO "TEXT"`, `cointos inbox`). Each daemon tick, `messages.pending` posts every unread message whose recipient has a live OpenCode session to it once, as a `noReply` user message `<message from="TASK">TEXT</message>` (`POST /session/ID/message`, in a background thread), then marks it read; failed posts retry on a later tick. OpenCode stores it, shows it in the TUI and includes it in the very next model request even mid-turn. `prompt_async` was rejected: OpenCode holds queued prompts until the whole multi-step turn ends, which is also what happens to text a user types into an agent's viewer. `inbox` returns messages not yet delivered.
+Task messages are posted once to the live OpenCode session as `noReply` user messages via `POST /session/ID/message`; failed posts retry on later daemon ticks. They reach the next model request even mid-turn. `prompt_async` waits until the multi-step turn ends and is unsuitable. `inbox` reads and marks unread messages.
 
-Evidence: `tests/test_mcp.py` covers catalogues, verbatim briefs, protocol calls, messaging, peers, session delivery (waiting, one post, retry) and config wiring. A recording mock model showed an OpenCode 1.18.34 `noReply` message posted during a tool call appearing exactly once in the next request. Live: a manager used `cointos_task` and `cointos_replace` without shell calls; two demo operators held a three-message conversation through session delivery, each answering within about a minute of the other's message arriving, and both finished with the exchange quoted in their receipts.
+`user` messages alert through Coin and are immediately stored read, so `cointos inbox` does not retrieve those replies. Use a dedicated external mailbox when phone alerts are unwanted:
+
+- Agents send normally to `mailbox:codex` (or another agreed name).
+- External clients receive with `cointos inbox --mailbox codex`, or API `inbox` with `{"mailbox":"codex"}`.
+- External clients reply as themselves with `cointos message --mailbox codex TASK "TEXT"`.
+
+Mailboxes are local polled identities, not tasks or model runs. They require no registration or extra ledger schema. Names contain letters/digits/underscores/hyphens and start with a letter/digit. Mailbox messages remain unread until collected, produce no Coin alert and are never posted to OpenCode. Agent identities cannot impersonate or read an external mailbox. These are same-user local API controls, not authentication against hostile local processes.
+
+An external client must actually monitor its mailbox. Receipt detection does not wake its harness automatically: keep a monitored tool call active or establish supported harness delivery before promising unattended replies.
+
+Evidence: `cointos/{mcp,api,messages,cli}.py`; `tests/test_mcp.py` covers normal delivery, mailboxes, no alerts, one-time receipt, replies and rejected impersonation. OpenCode 1.18.34 mid-tool delivery and a live three-message operator exchange were separately verified.

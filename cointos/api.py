@@ -8,6 +8,7 @@ republish the readable queue projection.
 from __future__ import annotations
 
 import copy
+import re
 
 from cointos import contracts, git, landing, lifecycle, projects, queues, schema, settings, snapshots, tasks
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
@@ -288,8 +289,19 @@ def attention(body):
 MESSAGES_KEPT = 200
 
 
+def mailbox(name: str) -> str:
+    """A local, polled endpoint, without a managed task or Coin notification."""
+    if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]*", name):
+        raise ApiError("mailbox names use letters, digits, underscores and hyphens")
+    return "mailbox:" + name
+
+
 def sender(body) -> str:
     """'user' for the user's own CLI, else the active task whose current run is asking."""
+    if body.get("mailbox") is not None:
+        if body.get("task") or body.get("run"):
+            raise ApiError("only the user's local client may use an external mailbox identity")
+        return mailbox(body["mailbox"])
     if not body.get("task"):
         return "user"
     task = L["tasks"].get(body["task"])
@@ -305,8 +317,10 @@ def send(body):
         raise ApiError("a message needs text")
     if target == "user":
         alert(f"Message from {origin}: {text}")
+    elif target.startswith("mailbox:"):
+        mailbox(target.removeprefix("mailbox:"))
     elif not (target in L["tasks"] and tasks.active(L["tasks"][target])):
-        raise ApiError(f"{target!r} is not an active task; use jobs for task ids, or 'user'")
+        raise ApiError(f"{target!r} is not an active task; use jobs for task ids, 'mailbox:NAME', or 'user'")
     L["messages"] = (L["messages"] + [{"at": now(), "from": origin, "to": target, "text": text,
                                        "read": target == "user"}])[-MESSAGES_KEPT:]
     log("message", sender=origin, to=target)

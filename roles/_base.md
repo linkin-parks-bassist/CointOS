@@ -55,7 +55,8 @@ Your CointOS controls are tools named `cointos_<command>` (for example `cointos_
 `cointos <command>`, call that tool with the same arguments instead of running the shell
 command. Tool arguments are plain text: put a brief in `brief` exactly as written, with no
 quoting or escaping. `cointos_send` sends a short message to another active task
-(`PROJECT:NAME`, as `cointos_jobs` shows) or to `user`; `cointos_inbox` reads yours. A tool
+(`PROJECT:NAME`, as `cointos_jobs` shows), a local external inbox (`mailbox:NAME`,
+without phone alerts), or to `user`; `cointos_inbox` reads yours. A tool
 result that ends with an unread-message notice means you should read your inbox before
 continuing. Messages coordinate; work still moves only through the queue and receipts.
 You work alongside other agents; collaborate with them. Before changing files or interfaces

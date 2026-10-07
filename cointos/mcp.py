@@ -168,9 +168,10 @@ def peers() -> tuple[str, bool]:
 MESSAGE_TOOLS = {
     "peers": ("See every other live agent run: its task id, role, what it is for, what it is doing now and which "
               "files its branch has changed. Check it before changing shared files or interfaces.", {}, []),
-    "send": ("Send a short message to another active task (PROJECT:NAME, as `jobs` shows) or to the user ('user'). "
+    "send": ("Send a short message to another active task (PROJECT:NAME, as `jobs` shows), a local external mailbox "
+             "('mailbox:NAME', without phone alerts), or to the user ('user'). "
              "Use it to ask or tell, not to hand off work: queued work still goes through the queue.",
-             {"to": text("PROJECT:NAME task id, or 'user'"), "text": text("the message")}, ["to", "text"]),
+             {"to": text("PROJECT:NAME task id, 'mailbox:NAME', or 'user'"), "text": text("the message")}, ["to", "text"]),
     "inbox": ("Read this task's unread messages; reading marks them read. wait=true blocks until a message "
               "arrives (up to 5 minutes) instead of returning empty: use it to wait for a reply instead of sleeping.",
               {"wait": {"type": "boolean", "description": "block until a message arrives"}}, []),

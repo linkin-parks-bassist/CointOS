@@ -456,9 +456,11 @@ def parser() -> argparse.ArgumentParser:
     incorporated.add_argument("--worker-commit", required=True, help="exact submitted worker commit SHA")
     sub.add_parser("attention", help="scout/auditor: send a bounded issue to the user through Coin").add_argument("message")
     messaging = sub.add_parser("message", help="send a message to an active task's inbox (an agent run sends as its task)")
-    messaging.add_argument("to", help="PROJECT:NAME task id, or 'user'")
+    messaging.add_argument("to", help="PROJECT:NAME task id, 'mailbox:NAME', or 'user'")
     messaging.add_argument("text")
-    sub.add_parser("inbox", help="read unread messages (an agent run reads its task's; otherwise the user's)")
+    messaging.add_argument("--mailbox", help="send as this local external mailbox")
+    inbox = sub.add_parser("inbox", help="read unread messages (an agent run reads its task's; otherwise the user's)")
+    inbox.add_argument("--mailbox", help="read this local external mailbox")
 
     queue = sub.add_parser("queue", help="add an item to a project's queue")
     queue.add_argument("project")
@@ -623,9 +625,10 @@ COMMANDS = {
                                                                 "run": os.environ.get("COINTOS_AGENT")},
                                                 timeout=LANDING_TIMEOUT)),
     "attention": lambda args: json.dumps(call("attention", proposal({"message": args.message}))),
-    "message": lambda args: "sent to " + call("send", {**sender(), "to": args.to, "text": args.text})["to"],
+    "message": lambda args: "sent to " + call("send", {**sender(), **({"mailbox": args.mailbox} if args.mailbox else {}),
+                                                        "to": args.to, "text": args.text})["to"],
     "inbox": lambda args: "\n\n".join(f"From {m['from']}:\n{m['text']}"
-                                       for m in call("inbox", sender())["messages"]) or "no unread messages",
+                                       for m in call("inbox", {**sender(), **({"mailbox": args.mailbox} if args.mailbox else {})})["messages"]) or "no unread messages",
     "queue": lambda args: call("queue", proposal({
         "project": args.project, "name": args.name, "brief": args.brief, "kind": args.kind, "stage": args.stage,
         "reasoning_effort": args.reasoning_effort, "budget": limits(args)}))["item"],

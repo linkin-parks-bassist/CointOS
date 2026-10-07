@@ -95,6 +95,24 @@ class Tools(unittest.TestCase):
         self.assertIn("parser.c", output.split("changed:")[1])
         self.assertNotIn(self.manager["id"] + " (", output)
 
+    def test_external_mailbox_receives_without_phone_alerts_and_replies_as_itself(self):
+        with patch.object(api, "alert") as alert:
+            result, failed = mcp.invoke("send", {"to": "mailbox:codex", "text": "Hello Codex"}, "manager")
+            self.assertFalse(failed, result)
+            alert.assert_not_called()
+        self.assertFalse(state.L["messages"][-1]["read"])
+        with patch.dict(os.environ, COINTOS_TASK_ID="", COINTOS_AGENT=""):
+            self.assertIn("Hello Codex", cli.COMMANDS["inbox"](cli.parser().parse_args(["inbox", "--mailbox", "codex"])))
+            self.assertEqual(api.dispatch("inbox", {"mailbox": "codex"})["messages"], [])
+            api.dispatch("send", {"mailbox": "codex", "to": self.manager["id"], "text": "Hello back"})
+        self.assertIn("From mailbox:codex:\nHello back", mcp.invoke("inbox", {}, "manager")[0])
+
+    def test_task_cannot_impersonate_or_read_external_mailbox(self):
+        with self.assertRaises(api.ApiError):
+            api.dispatch("inbox", {"task": self.manager["id"], "run": "manager-1", "mailbox": "codex"})
+        for target in ("mailbox:", "mailbox:bad/name", "mailbox:bad name"):
+            self.assertTrue(mcp.invoke("send", {"to": target, "text": "hi"}, "manager")[1])
+
     def test_a_message_is_posted_once_into_the_recipients_live_session(self):
         from cointos import messages
         posted = []

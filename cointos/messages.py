@@ -49,7 +49,7 @@ def pending() -> None:
     """Start delivering every unread message whose recipient now has a live session. Caller
     holds LOCK."""
     for message in L.get("messages", []):
-        if message["read"] or message.get("posting") or message["to"] == "user":
+        if message["read"] or message.get("posting") or message["to"] == "user" or message["to"].startswith("mailbox:"):
             continue
         task = L["tasks"].get(message["to"])
         agent = L["agents"].get(task["agent"]) if task and task.get("agent") else None
