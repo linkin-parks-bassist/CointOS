@@ -1,7 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-07T08:46:26+11:00"
+revised_at: "2026-10-07T11:35:24+11:00"
 ---
+
+## Implementers can find their hidden test packets
+
+Accepted test-packet commits stay in the project repository (their branches are archived under `refs/cointos/archive/`), so `git log --all` or `git show` reaches them. The first live implementer, `pigen:impl-t8-fire-identity-bits-fix`, found its packet commit by the test item's name and applied its tests to its own worktree. The worker prompt now forbids searching for packets and copying tests, and the landing gate still rejects any implementation commit that touches tests, but nothing mechanical hides the tests. Proposed, awaiting the user: move each accepted packet commit into a CointOS-owned repository, drop it from the project's refs, and fetch it only for the packet check and the integrator's review. That stops casual discovery, not an agent deliberately searching `~/.CointOS`.
 
 ## Concurrent test runs can share Pigen build outputs
 
