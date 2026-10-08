@@ -158,13 +158,17 @@
     "mcp_close_seconds": 5
   },
   "alerts_kept": 50,
+  "messages_kept": 200,
+  "summary_words": [5, 20],
   "result_chars": 2000,
   "recovery": {
     "generation_seconds": 2400,
     "generation_tokens": 48000,
     "warning_fraction": 0.75,
     "handoff_chars": 6000,
-    "fresh_retries": 2
+    "fresh_retries": 2,
+    "reorient_after_seconds": 10800,
+    "retire_per_tick": 4
   },
   "journal": {
     "bytes": 8388608

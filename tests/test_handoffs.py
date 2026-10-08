@@ -103,7 +103,7 @@ class Handoffs(unittest.TestCase):
         steward = tasks.create("steward", tasks.SYSTEM, "loose-ends", "Look", [6])
         steward["session"] = "session"
         steward["interrupted_at"] = 1000
-        text = prompts.launch_text(steward, tasks.SYSTEM, at=1000 + prompts.REORIENT_AFTER_SECONDS)
+        text = prompts.launch_text(steward, tasks.SYSTEM, at=1000 + state.CONFIG["recovery"]["reorient_after_seconds"])
         self.assertIn("its receipt", text)
         self.assertNotIn("plain-text final summary", text)
 

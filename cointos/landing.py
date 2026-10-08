@@ -164,4 +164,4 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
 def integrating(worker: dict) -> dict | None:
     """The unfinished integration of a worker, whose receipt a landing of it is."""
     return next((t for t in L["tasks"].values() if t["kind"] == "integrate" and t["worker"] == worker["id"]
-                 and t["status"] in ("waiting", "running")), None)
+                 and tasks.pending(t)), None)

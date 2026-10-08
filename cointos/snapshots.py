@@ -14,7 +14,7 @@ import hashlib
 import secrets
 import threading
 
-from cointos import memory
+from cointos import memory, schema
 from cointos.state import BACKEND, CONFIG, LOCK, L, log, now
 
 RESERVED: dict[str, float] = {}  # in-flight saves, GB
@@ -50,7 +50,7 @@ def live(owner: str | None) -> bool:
     if owner in UNTASKED:
         return True
     task = L["tasks"].get(owner or "")
-    return task is not None and (task["status"] in ("waiting", "running", "review")
+    return task is not None and (task["status"] in schema.ACTIVE
                                  or any(agent["task"] == owner for agent in L["agents"].values()))
 
 

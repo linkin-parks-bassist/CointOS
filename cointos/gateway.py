@@ -68,11 +68,10 @@ def stable_environment(messages: list[dict], agent: str) -> list[dict]:
         encoded = json.dumps(system, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
         pinned_digest = task.get("system_context")
         pinned = L["system_contexts"].get(pinned_digest) if pinned_digest else None
-        if pinned is None:  # includes migration from the earlier KT-suffix-only representation
+        if pinned is None:  # the task's first request pins its system prefix
             pinned_digest = hashlib.sha256(encoded.encode()).hexdigest()
             pinned = L["system_contexts"].setdefault(pinned_digest, encoded)
             task["system_context"] = pinned_digest
-            task.pop("prompt_context", None)
         pinned_system = json.loads(pinned)
         result, inserted = [], False
         for message in normalized:

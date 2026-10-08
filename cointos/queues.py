@@ -48,14 +48,11 @@ def relies_on(text: str) -> list[str]:
     return [n.strip().strip("`") for n in (line(text, "Relies on") or "").split(",") if n.strip().strip("`")]
 
 
-SUMMARY_WORDS = (5, 20)
-
-
 def require_summary(brief: str) -> None:
     """Agents' worker briefs must explain themselves to the dashboard in one short line."""
-    words = len((line(brief, "Summary") or "").split())
-    if not SUMMARY_WORDS[0] <= words <= SUMMARY_WORDS[1]:
-        raise ValueError(f"a worker brief needs a `Summary:` line of {SUMMARY_WORDS[0]}-{SUMMARY_WORDS[1]} plain words "
+    words, (least, most) = len((line(brief, "Summary") or "").split()), CONFIG["summary_words"]
+    if not least <= words <= most:
+        raise ValueError(f"a worker brief needs a `Summary:` line of {least}-{most} plain words "
                          f"saying what the task is for (it is shown on the dashboard){f'; this one has {words}' if words else ''}")
 
 
@@ -131,7 +128,7 @@ def state(record: dict) -> dict:
     if task["kind"] != "item":
         return {"status": "blocked", "blocker": blocker(task), "decompose": False}
     manager = current(record, "decompose-")
-    if manager and manager["status"] in ("done", "failed"):
+    if manager and manager["status"] in schema.SETTLED:
         receipt = manager["receipt"] or {}
         return {"status": "blocked", "decompose": False,
                 "blocker": receipt.get("summary") or manager["note"] or "its manager gave up"}

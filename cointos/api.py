@@ -249,7 +249,7 @@ def cancel(body):
         task = L["tasks"].get(name)
         if key is not None:
             keys.append(key)
-        elif task is not None and task["status"] not in ("done", "failed"):
+        elif task is not None and not tasks.settled(task):
             alone.append(task)
         else:
             raise ApiError(f"{name!r} is not a live task or queue item")
@@ -272,7 +272,6 @@ def move(body):
 
 # ---------------------------------------------------------------- messages between tasks and the user
 
-MESSAGES_KEPT = 200
 
 
 def mailbox(name: str) -> str:
@@ -304,7 +303,7 @@ def send(body):
     elif not (target in L["tasks"] and tasks.active(L["tasks"][target])):
         raise ApiError(f"{target!r} is not an active task; use jobs for task ids, 'mailbox:NAME', or 'user'")
     L["messages"] = (L["messages"] + [{"at": now(), "from": origin, "to": target, "text": text,
-                                       "read": target == "user"}])[-MESSAGES_KEPT:]
+                                       "read": target == "user"}])[-CONFIG["messages_kept"]:]
     log("message", sender=origin, to=target)
     return {"ok": True, "to": target}
 
@@ -452,7 +451,7 @@ def clear_task_history(body):
     protected |= {task["record"] for tid, task in L["tasks"].items() if tid in protected and task["record"]}
     frontier = queues.history_frontier(protected)
     removed = [tid for tid, task in L["tasks"].items()
-               if task["status"] in ("done", "failed") and tid not in protected
+               if tasks.settled(task) and tid not in protected
                and tid not in frontier and task["record"] not in frontier]
     for task_id in removed:
         forget(task_id)

@@ -106,7 +106,7 @@ List those, one per line, in `~/.config/cointos/private-paths`; they are denied 
 - **Managers** run one bounded decomposition stage, keep the project plan's remaining frontier
   honest and queue children. They change queued work with `cointos hold` then `cointos revise`.
 - **Workers** implement one `skeleton`, `test-contract`, `implementation` or `integration` item
-  on an isolated branch and submit an exact commit with a `.work-report.md`.
+  on an isolated branch and submit an exact commit; their receipt is their account of it.
 - **Integrators** review a worker against main and its contracts, maintain the project tree and
   land through the daemon's exact-candidate gate (`cointos land|incorporate|return`).
 - **Stewards** periodically roam the runtime and projects for concrete loose ends and may queue
@@ -116,26 +116,29 @@ List those, one per line, in `~/.config/cointos/private-paths`; they are denied 
   and raise at most one manager command for a real coverage gap.
 - **Gardeners** verify a small batch of knowledge leaves per tree; **tree auditors** check one
   structural concern across a sample.
-- **Operators** carry one user-requested ad-hoc assignment.
+- **Operators** carry one ad-hoc assignment, started by the owner or by any non-worker agent
+  for work the pipeline has no route for, paid from that agent's own run budget.
 
 Every run ends with exactly one receipt the daemon checks against its artifacts:
 `cointos finish --complete "evidence"` or `--blocked "reason"`; an integrator's verified
 land/incorporate/return is its receipt. Process exit, finish markers and final text never
-complete a task. `cointos attention` raises an alert that Coin delivers to the owner.
+complete a task. `cointos message user "TEXT"` (or the agents' `cointos_send` to `user`) reaches
+the owner through Coin from any run.
 
 ## Tests as contracts
 
-Test-contract workers register adversarial checks and code dependencies in the project's
-test-contract manifest. Witnesses must reach the tested boundary, frozen assertions must
-remain valid after implementation, and rollback comparisons must capture state before the
-failing call. Implementation landings cannot change protected tests or harnesses;
-the daemon runs every registered contract covering changed code on the exact candidate before
-main moves (for Python, same-file callers of changed helpers are followed). Every check green
-on main must stay green. A check already red on main, because a later item's deliberate red
-shares its test binary, may stay red only if a failure main reports (a `file:line` assertion
-or a test id) is gone from the candidate; failing the same test differently is not progress.
-A failed gate returns the item with details. The verified acceptance receipt is the sole authority that
-marks a queue item done.
+Code travels with its tests. A test-contract worker writes a behavior's tests from its contract
+and registers their command in the project's manifest (normally `tests/contracts.json`).
+Witnesses must reach the tested boundary, frozen assertions must remain valid after
+implementation, and rollback comparisons must capture state before the failing call. When the
+writer finishes, the daemon runs the suite on main with the tests merged in: tests that already
+pass land at once through review; failing ones become a hidden packet for the implementation
+item that depends on them. That implementer's finish runs the packet and reveals only failing
+tests. The integrator lands code and tests together after the daemon runs every registered
+command on the exact candidate; a test green on main that the candidate breaks returns the item
+with that test added to its packet. Implementation commits cannot change protected tests or
+harnesses, and work finished blocked cannot land, because its hidden tests never ran. A queue
+item is done only through a verified acceptance.
 
 `cointos cancel PROJECT:ITEM... --reason WHY` withdraws unaccepted work for good: it stops any run on
 it, drops the queue records and retires their branches. Live dependents must be cancelled with it.
@@ -146,9 +149,6 @@ what the task is for; the dashboard shows it beside the task, and the API refuse
 Test-contract work is checked mechanically too. Its brief must name the existing owner APIs it
 relies on (`Relies on: name, ...`, function and type names only); once its dependencies land,
 the daemon checks that each name exists somewhere on main and sends an infeasible brief straight to a manager before any worker runs.
-Its report declares each deliberate red as `Expected red: COMMAND => OUTPUT LITERAL` (or
-`Expected red: none`). Landing runs those commands, which must fail and print the literal, and
-returns the item if any other accepted check that is green on main turns red.
 `cointos metrics [--hours N]` reports landings by stage, gate returns, infeasible briefs and
 manager recoveries from the event journal.
 

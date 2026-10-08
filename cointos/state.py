@@ -10,7 +10,7 @@ import json
 import threading
 import time
 
-from cointos import config as configuration, journal
+from cointos import config as configuration, journal, schema
 
 CONFIG = configuration.load()
 BACKEND = importlib.import_module(CONFIG["backend"])
@@ -52,7 +52,7 @@ def fresh(previous: dict) -> dict:
               "held_for": None, "held_class": None, "held_until": 0, "turn_agent": None, "turn_since": 0}
              for name, shape in CONFIG["models"].items() for index in range(shape["lanes"])]
     tasks = previous.get("tasks", {})
-    live_contexts = {digest for task in tasks.values() if task.get("status") in ("waiting", "running", "review")
+    live_contexts = {digest for task in tasks.values() if task.get("status") in schema.ACTIVE
                      for digest in (task.get("system_context"), task.get("tool_context"))}
     system_contexts = {digest: text for digest, text in previous.get("system_contexts", {}).items()
                        if digest in live_contexts}

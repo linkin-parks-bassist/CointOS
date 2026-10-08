@@ -87,11 +87,12 @@ class Retirement(unittest.TestCase):
         self.assertNotIn("retired", task)
 
     def test_retirement_is_bounded_per_pass_and_finishes_over_passes(self):
-        settled = [self.worked(f"t{i}") for i in range(lifecycle.RETIRE_PER_TICK + 2)]
+        per_tick = state.CONFIG["recovery"]["retire_per_tick"]
+        settled = [self.worked(f"t{i}") for i in range(per_tick + 2)]
         for task in settled:
             lifecycle.fail(task, "budget")
         lifecycle.reconcile()
-        self.assertEqual(sum("retired" in t for t in settled), lifecycle.RETIRE_PER_TICK)
+        self.assertEqual(sum("retired" in t for t in settled), per_tick)
         lifecycle.reconcile()
         self.assertTrue(all("retired" in t for t in settled))
 

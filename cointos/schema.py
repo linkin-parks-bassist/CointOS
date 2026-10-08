@@ -42,6 +42,9 @@ KINDS = {
 # The queue kinds agents and the user submit, and the task kind that carries each.
 QUEUE_KINDS = {"queued": "item", "urgent": "item", "command": "breakdown"}
 
+# A task's status: unfinished (waiting for or holding a run, or in review), or settled for good.
+ACTIVE, PENDING, SETTLED = ("waiting", "running", "review"), ("waiting", "running"), ("done", "failed")
+
 STAGES = ("skeleton", "test-contract", "implementation", "integration")
 # Stages whose code travels with a test packet: the accepted test-contract items they depend on.
 TESTED = ("implementation", "integration")

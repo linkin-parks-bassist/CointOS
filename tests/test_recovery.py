@@ -208,7 +208,7 @@ class Evidence(unittest.TestCase):
         queues.add(self.project, "queued", "child", "Brief")
         task = {**tasks.create("item", self.project, "child", "Brief", [4], item="child"),
                 "session": "old", "interrupted_at": 1000}
-        text = prompts.launch_text(task, self.project, at=1000 + prompts.REORIENT_AFTER_SECONDS)
+        text = prompts.launch_text(task, self.project, at=1000 + state.CONFIG["recovery"]["reorient_after_seconds"])
         self.assertTrue(text.startswith("This assignment has been paused for several hours."))
         self.assertIn("daemon-managed budget", text)
 

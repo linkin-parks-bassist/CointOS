@@ -161,7 +161,7 @@ def integrations() -> list:
     options = []
     for project in tasks.enabled_projects():
         active = [t for t in L["tasks"].values() if t["kind"] == "integrate" and t["place"] == project["name"]
-                  and t["status"] in ("running", "waiting")]
+                  and tasks.pending(t)]
         if any(t["status"] == "running" or (not held(t) and L["tasks"][t["worker"]]["status"] == "review")
                for t in active):
             continue
@@ -196,7 +196,7 @@ def tree_work() -> list:
             continue
         health = tree_health(tree)
         if health is None or any(t["place"] == tree["name"] and schema.KINDS[t["kind"]]["scope"] == "tree"
-                                 and t["status"] in ("running", "waiting") for t in L["tasks"].values()):
+                                 and tasks.pending(t) for t in L["tasks"].values()):
             continue
         gardens = [t for t in L["tasks"].values() if t["kind"] == "garden" and t["place"] == tree["name"]]
         latest = max(gardens, key=lambda t: t["created_at"], default=None)
@@ -226,18 +226,18 @@ def periodic() -> list:
     names = {project["name"] for project in projects}
     stewarded = tasks.last_created("steward", "system")
     settled = max((t["updated_at"] for t in L["tasks"].values()
-                   if t["place"] in names and t["status"] in ("done", "failed")), default=0)
+                   if t["place"] in names and tasks.settled(t)), default=0)
     # An idle GPU gets one scout per stretch of settled project work: a scout that finds nothing
     # leaves the GPU idle again but settles no project work, so it does not summon another.
     stalled = (settled > stewarded and idle_seconds() > spawner["idle_steward_seconds"])
     if (projects and (stalled or now() - stewarded > interval)
-            and not any(t["kind"] == "steward" and t["status"] in ("running", "waiting") for t in L["tasks"].values())):
+            and not any(t["kind"] == "steward" and tasks.pending(t) for t in L["tasks"].values())):
         options.append(([schema.KINDS["steward"]["rank"]], lambda: tasks.request_steward()[0]))
     audited = tasks.last_created("test-audit", "system")
     recent = sorted((t for t in L["tasks"].values() if t["place"] in names and t["kind"] in ("item", "integrate")
                      and t["status"] == "done" and t["updated_at"] > audited), key=lambda t: t["updated_at"])
     if (recent and now() - audited > spawner["test_auditor_every_seconds"]
-            and not any(t["kind"] == "test-audit" and t["status"] in ("running", "waiting")
+            and not any(t["kind"] == "test-audit" and tasks.pending(t)
                         for t in L["tasks"].values())):
         options.append(([schema.KINDS["test-audit"]["rank"]], lambda: tasks.request_test_auditor(recent)[0]))
     return options

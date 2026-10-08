@@ -10,9 +10,9 @@ from collections import Counter
 import json
 import time
 
+from cointos import queues
 from cointos.config import STATE
 
-SCHEDULER = ("integrate-", "decompose-", "operator-", "loose-ends-", "test-audit-")
 
 
 def events(since: float) -> list[dict]:
@@ -35,7 +35,7 @@ def events(since: float) -> list[dict]:
 def kind(task: str) -> str:
     """A task's pipeline role from its id: worker item, or the scheduler task kind."""
     name = task.partition(":")[2]
-    for prefix in SCHEDULER:
+    for prefix in queues.RESERVED_PREFIXES:
         if name.startswith(prefix):
             return prefix.rstrip("-")
     return name if name in ("garden", "tree-audit", "steward") or not name else "item"

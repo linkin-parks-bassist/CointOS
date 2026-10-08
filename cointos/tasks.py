@@ -64,7 +64,18 @@ def place(task: dict) -> dict:
 
 
 def active(task: dict) -> bool:
-    return task["status"] in ("waiting", "running", "review")
+    """Unfinished: waiting, running or in review."""
+    return task["status"] in schema.ACTIVE
+
+
+def pending(task: dict) -> bool:
+    """Waiting for or holding a run (not yet in review or settled)."""
+    return task["status"] in schema.PENDING
+
+
+def settled(task: dict) -> bool:
+    """Done or failed: its lifecycle has ended."""
+    return task["status"] in schema.SETTLED
 
 
 # ---------------------------------------------------------------- creating tasks
@@ -163,7 +174,7 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
 
 def request_steward() -> tuple[dict, bool]:
     """The one system-wide loose-end scout: the live one, or a new one now."""
-    existing = [t for t in L["tasks"].values() if t["kind"] == "steward" and t["status"] in ("waiting", "running")]
+    existing = [t for t in L["tasks"].values() if t["kind"] == "steward" and pending(t)]
     if existing:
         return min(existing, key=lambda task: task["created_at"]), False
     projects = enabled_projects()
@@ -181,7 +192,7 @@ def request_steward() -> tuple[dict, bool]:
 
 def request_test_auditor(recent: list[dict]) -> tuple[dict, bool]:
     """One global retrospective test audit of recently accepted work, deduplicated."""
-    existing = [t for t in L["tasks"].values() if t["kind"] == "test-audit" and t["status"] in ("waiting", "running")]
+    existing = [t for t in L["tasks"].values() if t["kind"] == "test-audit" and pending(t)]
     if existing:
         return min(existing, key=lambda task: task["created_at"]), False
     evidence = "\n".join(f"- {task['place']}: {task.get('item') or task['title']} ({task['id']})" for task in recent[-8:])

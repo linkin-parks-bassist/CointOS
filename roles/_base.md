@@ -11,8 +11,8 @@ else can pick up.
   `where/am/i.md` and look up what you need before searching files. Record anything
   reusable you discover. A leaf is a current answer: rewrite it in place.
 - **Ownership.** The daemon alone writes scheduler queues in the installed runtime.
-  Managers propose tasks through its API. Workers report on their branch; integrators
-  maintain the project's knowledge tree, plan and broken leaves when accepting work.
+  Managers propose tasks through its API. Workers account for their work in their receipt;
+  integrators maintain the project's knowledge tree, plan and broken leaves when accepting work.
   Managers maintain the remaining planning frontier for their bounded planning stage.
   Never write scheduler records into a project tree or edit the runtime queue directly.
 - **Do the step you were given, well.** Work on one concern, one small interface and one

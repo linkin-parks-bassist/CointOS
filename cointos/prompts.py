@@ -17,7 +17,6 @@ from cointos.config import ROOT
 from cointos.state import CONFIG
 
 ROLES = ROOT / "roles"
-REORIENT_AFTER_SECONDS = 3 * 60 * 60
 
 
 def launch_text(task: dict, where: dict, at: float | None = None) -> str:
@@ -27,7 +26,7 @@ def launch_text(task: dict, where: dict, at: float | None = None) -> str:
                 "it with your updated report, then submit it again with `cointos finish`.")
     elif task.get("session"):
         interrupted = task.get("interrupted_at")
-        if interrupted is None or (at if at is not None else time.time()) - interrupted < REORIENT_AFTER_SECONDS:
+        if interrupted is None or (at if at is not None else time.time()) - interrupted < CONFIG["recovery"]["reorient_after_seconds"]:
             return "Continue."
         text = ("This assignment has been paused for several hours. Re-orient from the current branch, files and "
                 "conversation, check whether anything material changed, then continue to its receipt without "

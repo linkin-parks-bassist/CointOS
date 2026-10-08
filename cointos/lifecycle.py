@@ -18,8 +18,6 @@ from pathlib import Path
 from cointos import contracts, git, keys, lanes, opencode, queues, schema, snapshots, tasks, trees
 from cointos.state import CONFIG, LOCK, L, alert, log, now, save
 
-RETIRE_PER_TICK = 4  # settled tasks whose worktrees one reconcile pass retires (git runs under LOCK)
-
 
 def owns(task: dict | None, agent_id: str | None) -> bool:
     """Whether this run is its task's current, unreceipted run."""
@@ -28,7 +26,7 @@ def owns(task: dict | None, agent_id: str | None) -> bool:
 
 def require_run(task: dict, run: str | None) -> None:
     """Refuse a lifecycle request from anything but the task's current run (None when it has none)."""
-    if task["agent"] != run or task["status"] not in ("running", "waiting"):
+    if task["agent"] != run or not tasks.pending(task):
         raise ValueError(f"{task['id']} is not owned by run {run!r}; only its current run can finish it")
 
 
@@ -158,7 +156,7 @@ def _receive(task: dict, run: str | None, disposition: str, summary: str, found:
 
 def landed(integration: dict | None, run: str | None, worker: dict, acceptance: dict) -> None:
     """A verified landing or incorporation settles the worker and is its integrator's receipt."""
-    live = integration is not None and integration["status"] not in ("done", "failed")
+    live = integration is not None and not tasks.settled(integration)
     if live:
         require_run(integration, run)
     if worker["status"] != "review":
@@ -315,7 +313,7 @@ def cancel(items: list[str], by: str, reason: str) -> list[str]:
         raise ValueError(f"{', '.join(dependents)} still depend on it; cancel them too or revise their Depends on")
     note = f"cancelled by {by}: {reason.strip()}"
     for key in items:
-        affected = [t for t in L["tasks"].values() if t["status"] not in ("done", "failed")
+        affected = [t for t in L["tasks"].values() if not tasks.settled(t)
                     and (t["id"] == key or t.get("record") == key or (t["kind"] == "integrate" and t.get("worker") == key))]
         for agent in [a for a in L["agents"].values() if a["task"] in {t["id"] for t in affected}]:
             release(agent["id"], note)
@@ -456,7 +454,7 @@ def retire(task: dict) -> bool:
     once main contains it, and archive a dead unlanded branch under `git.ARCHIVE`. A revivable
     task keeps its branch; a checkout with uncommitted work is kept for inspection.
     Returns whether the task was considered (it is then marked `retired`)."""
-    if (task["branch"] is None or task["status"] not in ("done", "failed") or task.get("retired")
+    if (task["branch"] is None or not tasks.settled(task) or task.get("retired")
             or any(agent["task"] == task["id"] for agent in L["agents"].values())):
         return False
     try:
@@ -482,7 +480,7 @@ def _settle(task: dict, status: str, note: str, **fields) -> None:
     """The one task-status write. Settlement does not end a run or its conversation."""
     task.update(status=status, agent=None, note=note, updated_at=now(), **fields)
     task.pop("retired", None)  # a task that settles again is retired again
-    if status in ("done", "failed"):
+    if status in schema.SETTLED:
         for record in queues.records().values():  # a settled task no longer decides about anything it held
             if record["held_by"] == task["id"]:
                 record["held_by"] = None
@@ -524,7 +522,7 @@ def reconcile() -> None:
     snapshots.forget_orphans()
     swept = 0
     for task in list(L["tasks"].values()):  # retire settled work a bounded few at a time under LOCK
-        if swept >= RETIRE_PER_TICK:
+        if swept >= CONFIG["recovery"]["retire_per_tick"]:  # git runs under LOCK, so a few per pass
             break
         try:
             swept += retire(task)
