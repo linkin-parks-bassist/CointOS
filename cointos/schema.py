@@ -84,6 +84,12 @@ def budget(config: dict, overrides=None) -> dict:
     return result
 
 
+def spent(agent: dict) -> dict:
+    """A run's spent budget: what it generated plus what it granted to operators it started."""
+    granted = agent.get("granted", {})
+    return {key: agent.get(key, 0) + granted.get(key, 0) for key in BUDGET_KEYS}
+
+
 def abilities(value) -> list[str]:
     chosen = list(dict.fromkeys(value or ["standard"]))
     if not chosen or any(ability not in ABILITIES for ability in chosen):

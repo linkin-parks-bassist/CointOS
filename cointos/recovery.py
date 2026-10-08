@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cointos import git, lifecycle, opencode, queues
+from cointos import git, lifecycle, opencode, queues, schema
 from cointos.state import CONFIG, L, log, now
 
 
@@ -21,7 +21,8 @@ def enforce() -> None:
         task = L["tasks"][agent["task"]]
         if task.get("validating"):
             continue
-        spent_seconds, spent_tokens = agent.get("generation_seconds", 0), agent.get("generation_tokens", 0)
+        used = schema.spent(agent)
+        spent_seconds, spent_tokens = used["generation_seconds"], used["generation_tokens"]
         exhausted = (spent_seconds >= task["budget"]["generation_seconds"]
                      or spent_tokens >= task["budget"]["generation_tokens"])
         if not lifecycle.owns(task, agent_id):

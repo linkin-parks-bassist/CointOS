@@ -70,10 +70,12 @@ LANDINGS = ("land", "incorporate")
 def finishing(body):
     """`cointos finish`. An implementer's complete receipt first runs its packet's hidden tests,
     outside the ledger lock; a failure goes straight back to the still-running implementer with
-    the failing tests revealed."""
+    the failing tests revealed. A test writer's complete receipt first finds out whether its
+    tests already pass on main."""
     with LOCK:
         task = L["tasks"].get(body.get("task"))
-        tested = (task is not None and task["kind"] == "item" and task.get("stage") in schema.TESTED
+        tested = (task is not None and task["kind"] == "item"
+                  and task.get("stage") in schema.TESTED + ("test-contract",)
                   and body.get("outcome") == "complete" and lifecycle.owns(task, body.get("run"))
                   and not task.get("receipt") and git.clean(task["worktree"]))
         if tested:
@@ -90,7 +92,11 @@ def finishing(body):
     if tested:
         try:
             checked = {"commit": commit, "tests": tests}
-            if rules:
+            if rules and task["stage"] == "test-contract":
+                checked = {"commit": commit, "passing": contracts.passing(
+                    where["path"], main, [commit], rules, CONFIG["timeouts"]["command_seconds"],
+                    CONFIG["memory"]["agent_limit_gb"])}
+            elif rules:
                 checked.update(contracts.packet_check(where["path"], main, commit, tests, bundled, rules,
                                                       CONFIG["timeouts"]["command_seconds"],
                                                       CONFIG["memory"]["agent_limit_gb"]))
@@ -395,9 +401,15 @@ def cancel_restart(body):
 
 
 def run_agent(body):
+    spawner = None
+    if body.get("task"):  # an agent run starting one
+        task = L["tasks"].get(body["task"])
+        if not lifecycle.owns(task, body.get("run")):
+            raise ApiError(f"{body['task']} is not running under {body.get('run')!r}")
+        spawner = (task, L["agents"][body["run"]])
     task = tasks.request_operator(body["name"], body["brief"], body.get("project"), body.get("abilities"),
-                                  body.get("reasoning_effort"), body.get("budget"))
-    log("operator requested", task=task["id"], abilities=task["abilities"])
+                                  body.get("reasoning_effort"), body.get("budget"), spawner)
+    log("operator requested", task=task["id"], abilities=task["abilities"], spawned_by=task.get("spawned_by"))
     return {"ok": True, "task": task["id"]}
 
 

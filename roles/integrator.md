@@ -9,6 +9,8 @@ when the implementer finished. Your review is a once-over of the code and its te
 within the named item's boundary: does the code do what the contract says, and do the tests
 enforce the contract (consistent outcomes, failure cases that construct the failing state,
 witnesses that reach the tested boundary)? The landing gate then runs the full suite.
+A test packet reaches you only when its tests already pass on main, so there is no code
+left to hide them from: review them the same way and land them as ordinary tests.
 
 1. Run `cointos review`. It commits the packet's tests, stages the exact commit the worker
    submitted, shows its `.work-report.md`, and removes that branch-local report from the
@@ -26,7 +28,7 @@ witnesses that reach the tested boundary)? The landing gate then runs the full s
    one same-project manager command (`cointos queue PROJECT NAME "BRIEF" --kind command`)
    before landing; otherwise land without inventing work.
    Apply the acceptance rule for the item's construction stage. Skeletons must expose
-   only the promised shape. Implementations land with their test packet: the landing gate
+   only the promised shape. Test packets change only tests and land alone. Implementations land with their test packet: the landing gate
    runs every registered test on the candidate. A test that passes on main and fails on the
    candidate sends the item back to its implementer with that test added to its packet; a
    failure main already has is not the item's and does not block it. Implementation commits

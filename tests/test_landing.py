@@ -124,19 +124,54 @@ class Packets(Project):
         with self.assertRaisesRegex(ValueError, "have not run on this commit"):
             lifecycle.submit(self.worker["id"], "worker-1", "complete", "A implemented")
 
-    def test_a_test_packet_is_accepted_without_landing(self):
-        writer = support.queued(self.project, "tests-c", "Test C\nRelies on: b", stage="test-contract")
+    def writer(self, name: str, test: str, command: list[str]) -> dict:
+        """A running test writer that has committed one registered test file."""
+        writer = support.queued(self.project, name, "Test C\nRelies on: b", stage="test-contract")
         support.running(writer, "writer-1")
         writer["base_commit"] = self.base
         tree = Path(writer["worktree"])
-        (tree / "tests/test_c.py").write_text(TESTS)
-        (tree / queues.REPORT).write_text("Status: done\n\nTests for c.\n")
-        commit = support.commit(tree, "tests for c")
-        lifecycle.submit(writer["id"], "writer-1", "complete", "tests for c")
+        (tree / f"tests/test_{name.replace('-', '_')}.py").write_text(test)
+        manifest = json.loads((tree / "tests/contracts.json").read_text())
+        (tree / "tests/contracts.json").write_text(json.dumps(manifest + [{"covers": ["code.py::a"], "command": command}]))
+        (tree / queues.REPORT).write_text("Status: done\n\nTests.\n")
+        writer["commit"] = support.commit(tree, f"tests for {name}")
+        return writer
+
+    def finish_writer(self, writer: dict) -> dict:
+        return api.dispatch("finish", {"task": writer["id"], "run": "writer-1", "outcome": "complete",
+                                       "detail": "tests"})["receipt"]
+
+    def test_a_failing_test_packet_is_accepted_without_landing(self):
+        writer = self.writer("tests-c", TESTS_A, ["python3", "-m", "unittest", "tests.test_tests_c.A"])
+        receipt = self.finish_writer(writer)
+        self.assertFalse(receipt["evidence"]["passing"])
         self.assertEqual((writer["status"], writer["acceptance"]["via"]), ("done", "tests"))
         self.assertEqual((state.L["queue"]["p:tests-c"]["status"], state.L["queue"]["p:tests-c"]["commit"]),
-                         ("done", commit))
+                         ("done", writer["commit"]))
         self.assertEqual(self.main(), self.base)
+
+    def test_a_test_packet_that_already_passes_on_main_is_reviewed_and_lands(self):
+        writer = self.writer("tests-c", TESTS, ["python3", "-m", "unittest", "tests.test_tests_c.B"])
+        receipt = self.finish_writer(writer)
+        self.assertTrue(receipt["evidence"]["passing"])
+        self.assertEqual(writer["status"], "review")
+        lifecycle.release("writer-1", "run ended")
+        integration = tasks.create("integrate", self.project, "integrate-tests-c", "Test C", [2],
+                                   item="tests-c", worker=writer["id"])
+        support.running(integration, "integrator-1")
+        review = Path(integration["worktree"])
+        git.run(review, "merge", "--squash", writer["commit"])
+        (review / queues.REPORT).unlink()
+        candidate = support.commit(review, "land tests c")
+        landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual(self.main(), candidate)
+        self.assertIn("tests/test_tests_c.py", git.run(self.repo, "ls-files").split())
+        self.assertEqual((writer["status"], writer["acceptance"]["via"]), ("done", "landing"))
+
+    def test_a_test_packet_receipt_without_its_check_is_refused(self):
+        writer = self.writer("tests-c", TESTS, ["python3", "-m", "unittest", "tests.test_tests_c.B"])
+        with self.assertRaisesRegex(ValueError, "have not run on this commit"):
+            lifecycle.submit(writer["id"], "writer-1", "complete", "tests")
 
     def test_a_test_packet_cannot_change_code(self):
         writer = support.queued(self.project, "tests-c", "Test C\nRelies on: b", stage="test-contract")

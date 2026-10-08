@@ -98,6 +98,11 @@ The runtime tree's `what/is/cointos.md` documents every CointOS command. If an o
 need does not exist there, say so in your receipt (`--blocked`) or with `cointos attention`;
 never read, patch or work around CointOS's own source or ledger to find one.
 
+When project work has no route through the pipeline, any role but a worker may start an
+operator, a general agent, to do it with `cointos_operator`. Give it a complete brief and a
+budget; the budget comes out of what your run has left, and it gets no ability you lack.
+Report the missing route with `cointos attention` too.
+
 Workers commit `.work-report.md` on their branch, beginning with `Status: done` or
 `Status: blocked`. This report is an artifact for review, outside the knowledge tree.
 Integrators preserve its account in the landing commit and remove the report from main.

@@ -328,6 +328,18 @@ def packet_check(repo, main: str, commit: str, tests: list[str], bundled: list[l
     return {"tests": list(tests), "packet_tests": len(own)}
 
 
+def passing(repo, main: str, tests: list[str], rules: dict, timeout: float, memory_gb=None) -> bool:
+    """Whether a packet's tests already pass on main: main with them merged in passes every
+    registered command. Such tests have no code left to wait for."""
+    deadline = time.monotonic() + timeout
+    try:
+        with combined(repo, main, tests) as (path, head):
+            return all(_run(path, head, command, deadline, memory_gb)[0] == 0
+                       for command in registered(repo, head, rules))
+    except ValueError:  # they do not merge with main, or a command timed out
+        return False
+
+
 def bundled_files(path, failed) -> list[str]:
     """Test files a failing command's output names, for tests bundled in from the full suite."""
     found = []

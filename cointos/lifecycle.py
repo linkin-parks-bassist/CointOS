@@ -59,7 +59,8 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
                     raise ValueError("a test packet changes only tests; it also changes " + ", ".join(sorted(production)))
                 if rules:
                     contracts.contracts(where["path"], found["commit"], rules)
-            if disposition == "complete" and task.get("stage") in schema.TESTED and where.get("test_policy"):
+            if (disposition == "complete" and task.get("stage") in schema.TESTED + ("test-contract",)
+                    and where.get("test_policy")):
                 if (checked or {}).get("commit") != found["commit"]:
                     raise ValueError("the packet's tests have not run on this commit; run cointos finish again")
                 found.update(checked)
@@ -151,9 +152,10 @@ def _receive(task: dict, run: str | None, disposition: str, summary: str, found:
     """Record a checked receipt and apply its one transition."""
     receipt = {"run": run, "disposition": disposition, "summary": summary, "evidence": found, "at": now()}
     note = f"{disposition}: {summary}"[:CONFIG["result_chars"]]
-    if task.get("stage") == "test-contract" and disposition == "complete":
-        # A test packet does not land: it is accepted as the hidden tests of the code that
-        # depends on it, and lands with that code.
+    if task.get("stage") == "test-contract" and disposition == "complete" and not found.get("passing"):
+        # A test packet waiting for its code does not land: it is accepted as the hidden tests of
+        # the code that depends on it, and lands with that code. One that already passes on main
+        # has nothing to wait for, so it is reviewed and lands now.
         _settle(task, "done", "accepted as a test packet", receipt=receipt, result=summary,
                 acceptance={"commit": found["commit"], "worker_commit": found["commit"], "via": "tests",
                             "stage": "test-contract"})

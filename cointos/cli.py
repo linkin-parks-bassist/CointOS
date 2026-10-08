@@ -646,7 +646,9 @@ COMMANDS = {
     "project": project_command,
     "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
                                              "abilities": args.ability or ["standard"],
-                                             "reasoning_effort": args.reasoning_effort, "budget": limits(args)})["task"],
+                                             "reasoning_effort": args.reasoning_effort, "budget": limits(args),
+                                             "task": os.environ.get("COINTOS_TASK_ID"),
+                                             "run": os.environ.get("COINTOS_AGENT")})["task"],
 }
 
 

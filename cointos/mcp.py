@@ -50,6 +50,7 @@ WORK_FLAGS = {"stage": "--stage", "reasoning_effort": "--reasoning-effort"}
 MANAGERS = ("manager",)
 SCOUTS = ("steward", "test-auditor")
 LANDERS = ("manager", "gardener", "tree-auditor", "operator")
+SPAWNERS = ("manager", "integrator", "steward", "test-auditor", "gardener", "tree-auditor", "operator")
 EVERYONE = None
 
 # name: (roles or EVERYONE, description, properties, required, argv builder)
@@ -103,6 +104,12 @@ TOOLS = {
                   lambda a: ["supersede", a["task"], *a["replacements"], "--reason", a["reason"]]),
     "budget": (MANAGERS, "Set generation limits on waiting or undispatched work.",
                {"task": text("PROJECT:TASK"), **BUDGET}, ["task"], lambda a: ["budget", a["task"]] + flags(a, BUDGET_FLAGS)),
+    "operator": (SPAWNERS, "Start an operator: a general agent for work the pipeline has no route for. Its budget "
+                 "comes out of what this run has left, and it gets no ability this run lacks.",
+                 {"name": text("short operator name"), "brief": text("its complete assignment"),
+                  "project": text("project it works in; omit for system scope"), **BUDGET},
+                 ["name", "brief", "generation_tokens", "generation_seconds"],
+                 lambda a: ["agent", "run", a["name"], a["brief"]] + flags(a, {"project": "--project", **BUDGET_FLAGS})),
     "attention": (SCOUTS, "Send one bounded issue to the user through Coin.",
                   {"message": text("the issue and what the user must decide or do")}, ["message"],
                   lambda a: ["attention", a["message"]]),

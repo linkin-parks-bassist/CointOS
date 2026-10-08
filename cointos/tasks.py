@@ -13,7 +13,7 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     worktree, branch, base_commit        where it works; system tasks have no branch
     stage, reasoning_effort, budget      pinned metadata; `stage` only for items
     prompt_date, system_context          fixed system-prefix identity (content is deduplicated in the ledger)
-    abilities                            an operator's permissions
+    abilities, spawned_by                an operator's permissions; the task whose run started it
     replacements                         a decomposition's replacement children
     revision                             why and by whom its item was last revised
     review, rejections                   the integrator's latest return notes and their count
@@ -117,19 +117,47 @@ def last_created(kind: str, place_name: str) -> float:
     return L["cadence"].get(f"{kind}:{place_name}", 0)
 
 
-def request_operator(name: str, brief: str, project: str | None, abilities, reasoning_effort, budget) -> dict:
-    """One explicitly requested ad-hoc operator task. Caller holds LOCK."""
+def request_operator(name: str, brief: str, project: str | None, abilities, reasoning_effort, budget,
+                     spawner: tuple[dict, dict] | None = None) -> dict:
+    """One explicitly requested ad-hoc operator task. Caller holds LOCK.
+
+    An agent run may start one too, as (its task, its agent). A worker may not: its work is
+    reviewed, and an operator would land it unreviewed. The operator gets no ability its
+    spawner lacks, and its budget comes out of the spawner's run."""
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
         raise ValueError("operator name must use letters, numbers, dot, underscore or dash")
     if not isinstance(brief, str) or not brief.strip():
         raise ValueError("operator brief is required")
+    abilities = schema.abilities(abilities)
+    if spawner:
+        task, agent = spawner
+        if task["role"] == "worker":
+            raise ValueError("a worker does not start operators: an operator would land its work unreviewed; "
+                             "finish blocked with the evidence instead")
+        if set(abilities) - set(task.get("abilities") or ["standard"]):
+            raise ValueError("an operator gets no ability its spawner lacks")
+        used = schema.spent(agent)
+        left = {key: task["budget"][key] - used[key] for key in schema.BUDGET_KEYS}
+        if not budget or set(budget) != set(schema.BUDGET_KEYS):
+            raise ValueError(f"give the operator both budget limits from what this run has left: "
+                             f"{left['generation_tokens']:,} tokens and {left['generation_seconds']:.0f} seconds")
+        schema.budget(CONFIG, budget)
+        if any(budget[key] > left[key] for key in schema.BUDGET_KEYS):
+            raise ValueError(f"this run has only {left['generation_tokens']:,} tokens and "
+                             f"{left['generation_seconds']:.0f} seconds left to give")
     where = project_named(project) if project else SYSTEM
     known = next((t for t in L["tasks"].values() if t["kind"] == "operator" and t["place"] == where["name"]
                   and t["title"] == f"operator-{name}" and active(t)), None)
     if known:
         raise ValueError(f"operator task {known['id']} is already active")
-    return create("operator", where, f"operator-{name}", brief, [schema.KINDS["operator"]["rank"], where.get("priority", 0)],
-                  abilities=schema.abilities(abilities), reasoning_effort=reasoning_effort, budget=budget)
+    operator = create("operator", where, f"operator-{name}", brief, [schema.KINDS["operator"]["rank"], where.get("priority", 0)],
+                      abilities=abilities, reasoning_effort=reasoning_effort, budget=budget,
+                      spawned_by=spawner[0]["id"] if spawner else None)
+    if spawner:
+        granted = spawner[1].setdefault("granted", {})
+        for key in schema.BUDGET_KEYS:
+            granted[key] = granted.get(key, 0) + budget[key]
+    return operator
 
 
 def request_steward() -> tuple[dict, bool]:

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import patch
 
-from cointos import opencode, prompts, state, tasks
+from cointos import api, opencode, prompts, schema, state, tasks
 from tests import support
 
 
@@ -49,6 +49,39 @@ class OperatorTasks(unittest.TestCase):
                         self.assertEqual(permission[kind]["/srv/secret/**"], "deny")
             with patch.object(opencode, "PRIVATE_PATHS", Path(tmp) / "absent"):
                 self.assertEqual(opencode.private_paths(), [])
+
+    def spawner(self, kind: str = "steward") -> dict:
+        task = tasks.create(kind, tasks.SYSTEM, kind, "Scout.", [6], budget={"generation_tokens": 1000,
+                                                                             "generation_seconds": 600})
+        support.running(task, "spawner-1")
+        state.L["agents"]["spawner-1"]["generation_tokens"] = 400
+        return task
+
+    def test_an_agent_run_starts_an_operator_paid_from_its_own_budget(self):
+        task = self.spawner()
+        operator = api.run_agent({"name": "land", "brief": "Land it.", "task": task["id"], "run": "spawner-1",
+                                  "budget": {"generation_tokens": 500, "generation_seconds": 100}})
+        operator = state.L["tasks"][operator["task"]]
+        self.assertEqual((operator["spawned_by"], operator["budget"]["generation_tokens"]), (task["id"], 500))
+        self.assertEqual(schema.spent(state.L["agents"]["spawner-1"]),
+                         {"generation_tokens": 900, "generation_seconds": 100})
+        with self.assertRaisesRegex(ValueError, "only 100 tokens"):
+            api.run_agent({"name": "more", "brief": "More.", "task": task["id"], "run": "spawner-1",
+                           "budget": {"generation_tokens": 101, "generation_seconds": 1}})
+        with self.assertRaisesRegex(ValueError, "both budget limits"):
+            api.run_agent({"name": "more", "brief": "More.", "task": task["id"], "run": "spawner-1"})
+        with self.assertRaisesRegex(ValueError, "no ability its spawner lacks"):
+            api.run_agent({"name": "more", "brief": "More.", "task": task["id"], "run": "spawner-1",
+                           "abilities": ["control"], "budget": {"generation_tokens": 1, "generation_seconds": 1}})
+
+    def test_a_worker_cannot_start_an_operator_and_a_stranger_cannot_pose_as_a_run(self):
+        task = self.spawner()
+        with self.assertRaises(api.ApiError):
+            api.run_agent({"name": "x", "brief": "X.", "task": task["id"], "run": "someone-else"})
+        worker = dict(task, role="worker")
+        with self.assertRaisesRegex(ValueError, "unreviewed"):
+            tasks.request_operator("x", "X.", None, None, None, {"generation_tokens": 1, "generation_seconds": 1},
+                                   (worker, state.L["agents"]["spawner-1"]))
 
     def test_invalid_ability_is_rejected_before_task_creation(self):
         with self.assertRaisesRegex(ValueError, "abilities"):

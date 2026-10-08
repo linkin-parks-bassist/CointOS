@@ -49,8 +49,9 @@ For new software, shape the dependency graph as a construction pipeline:
    depends on its skeleton. Its brief is the behavior's contract: what the code must do,
    its interface, errors and ownership, precisely enough that tests and code can both be
    written from it without seeing each other. Its worker writes the behavior's test packet:
-   tests registered as their own manifest entry, whose command runs only them. The packet
-   does not land on main by itself and stays hidden from the implementer.
+   tests registered as their own manifest entry, whose command runs only them. While its
+   tests fail on main, the packet stays off main and hidden from the implementer; tests that
+   already pass on main land at once through review.
    Check that owner construction reaches the tested boundary with the intended witness,
    and that frozen assertions remain valid after all promised implementations land.
    A currently unimplemented adapter is not a permanent error contract. If the specified

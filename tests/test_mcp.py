@@ -36,6 +36,9 @@ class Tools(unittest.TestCase):
         self.assertNotIn("land", self.names("worker"))
         self.assertTrue({"finish", "task", "send", "inbox"} <= self.names("worker"))
         self.assertEqual(mcp.invoke("land", {"summary": "x"}, "worker"), ("unknown tool 'land' for this role", True))
+        self.assertIn("operator", self.names("manager"))
+        self.assertIn("operator", self.names("steward"))
+        self.assertNotIn("operator", self.names("worker"))
 
     def test_a_brief_with_quotes_and_newlines_queues_verbatim(self):
         brief = 'Fix the "parser" isn\'t `it`\n$(rm -rf /) && echo hi\nSummary: Fixes the parser quoting edge cases here.'

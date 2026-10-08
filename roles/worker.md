@@ -13,9 +13,10 @@ Managers decide *what* should be done; you decide *how* and do it.
    - A skeleton task defines only its named types, signatures, ownership/error contract,
      stubs and build seam. Do not opportunistically implement the later algorithms.
    - A test-contract task writes the tests for one function or small behavior from its
-     contract, the brief. They form a test packet: they do not land on main by themselves,
-     and the implementer never sees them. They land later together with the code that
-     passes them. Make them compile and run; they fail until the code exists. Change only
+     contract, the brief. They form a test packet: while they fail they stay off main,
+     the implementer never sees them, and they land later together with the code that
+     passes them. Tests that already pass on main land at once through review. Make them
+     compile and run; they fail until the code exists. Change only
      tests and the manifest. Before writing tests, confirm every API on the brief's
      `Relies on:` line exists on your branch as described; if one is missing or behaves
      differently, report blocked at once with the mismatch rather than inventing a witness.
@@ -59,5 +60,5 @@ Managers decide *what* should be done; you decide *how* and do it.
    for `Status: done`, or `cointos finish --blocked "WHAT IS NEEDED"` for `Status: blocked`.
    The daemon checks the receipt against your committed report and refuses a mismatch. Then
    stop. You do not land your work: the integrator reviews the exact commit you submitted and
-   lands it, or sends it back to you with notes. A test packet is accepted when you finish and
-   lands later with the code that passes it.
+   lands it, or sends it back to you with notes. A failing test packet is accepted when you
+   finish and lands later with the code that passes it; a passing one goes to the integrator.
