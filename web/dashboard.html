@@ -248,6 +248,21 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .pbar .s-blocked { --sc: var(--accent-wash); } .pbar .s-ready { --sc: var(--paper); } .pbar .s-building { --sc: #f7c1c9; }
 .pbar .s-review { --sc: #fbe7c0; } .pbar .s-integrating { --sc: #cfe7df; } .pbar .s-landed { --sc: var(--dark); color: var(--dark-text); }
 .pkey { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; color: var(--ink-faint); }
+/* What landed, by kind: a thin stacked bar and its key; landed chips carry the same colour as a stripe. */
+.k-implementation { --kc: var(--accent-bright); } .k-tests { --kc: #8fc7b5; }
+.k-hidden { --kc: repeating-linear-gradient(135deg, #8fc7b5 0 3px, var(--paper) 3px 6px); }
+.k-skeleton { --kc: #c9b3e0; } .k-integration { --kc: #9cc0e0; } .k-planning { --kc: #f2c46b; }
+.lmix { display: grid; gap: 4px; min-width: 0; }
+.lmix .lbar { display: flex; height: 10px; border: 2px solid var(--dark); background: var(--bg); }
+.lmix .lbar span { min-width: 2px; background: var(--kc); border-right: 1px solid var(--dark); }
+.lmix .lbar span:last-child { border-right: 0; }
+.lmix .lkey { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; color: var(--ink-faint); }
+.lmix .lkey span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.lmix .lkey i { width: 9px; height: 9px; border: 1px solid var(--dark); background: var(--kc); }
+.lmix .lkey b { color: var(--ink); }
+.step .lmix { padding: 6px 6px 0; }
+.tchip.landed { position: relative; border-left-width: 1px; padding-left: 9px; }
+.tchip.landed::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--kc); }
 .pkey b { color: var(--ink); }
 .pnow { font-size: 13px; display: grid; gap: 3px; min-width: 0; }
 .pnow div { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -498,7 +513,25 @@ function renderAgents(S) {
 // The pipeline a work item moves through, left to right. Blocked items wait before Ready.
 const FLOW_STEPS = [["blocked", "Blocked", "waiting on others"], ["ready", "Ready", "queued for a worker"],
   ["building", "Building", "a worker has it"], ["review", "Review", "awaiting the integrator"],
-  ["integrating", "Integrating", "being checked and landed"], ["landed", "Landed", "on main"]];
+  ["integrating", "Integrating", "being checked and landed"], ["landed", "Landed", "accepted, by kind"]];
+// What kind of thing a landed item was. Hidden tests are accepted but stay off main until the
+// code that passes them lands; planning is a manager command.
+const LANDED_KINDS = [["implementation", "implementation"], ["tests", "tests"], ["hidden", "hidden tests"],
+  ["skeleton", "skeleton"], ["integration", "integration"], ["planning", "planning"]];
+function landedKind(it) {
+  if (it.record?.kind === "command") return "planning";
+  if (it.stage === "test-contract") return it.task?.acceptance?.via === "tests" ? "hidden" : "tests";
+  return LANDED_KINDS.some(([k]) => k === it.stage) ? it.stage : "implementation";
+}
+// A thin stacked bar and key of the landed items' kinds.
+function landedMix(items) {
+  const n = Object.fromEntries(LANDED_KINDS.map(([k]) => [k, 0]));
+  for (const it of items) n[landedKind(it)]++;
+  const kinds = LANDED_KINDS.filter(([k]) => n[k]);
+  if (!kinds.length) return "";
+  return `<div class="lmix"><div class="lbar">${kinds.map(([k, label]) => `<span class="k-${k}" style="flex:${n[k]}" title="${n[k]} ${label}"></span>`).join("")}</div>` +
+    `<div class="lkey">${kinds.map(([k, label]) => `<span class="k-${k}"><i></i><b>${n[k]}</b> ${label}</span>`).join("")}</div></div>`;
+}
 const TRACK = [["ready", "Queued"], ["building", "Build"], ["review", "Review"], ["integrating", "Integrate"], ["landed", "Landed"]];
 // How a card says who is on its task: "being carried out by Qunos (worker)".
 const BY_VERB = {worker: "carried out", integrator: "reviewed", manager: "planned", steward: "looked after",
@@ -582,7 +615,7 @@ function renderFlow(L) {
   by.landed.sort((a, b) => b.updated - a.updated);
   for (const s of ["blocked", "ready"]) by[s].sort((a, b) => a.priority - b.priority);
   const LIMIT = 6;
-  const sub = (it, s) => [named(it.title).context, stageName(it.stage),
+  const sub = (it, s) => [named(it.title).context, s === "landed" ? LANDED_KINDS.find(([k]) => k === landedKind(it))[1] : stageName(it.stage),
     s === "blocked" && it.blockers.length ? `needs ${it.blockers.map(b => named(b).head).join(", ")}` : "",
     s === "building" && it.task?.agent ? it.task.agent : "",
     s === "integrating" ? it.integrator.agent : "",
@@ -591,8 +624,9 @@ function renderFlow(L) {
     const list = by[s], shown = list.slice(0, LIMIT);
     const live = s === "building" || s === "integrating";
     const step = `<div class="step s-${s}${list.length ? "" : " empty-step"}"><header><span>${label}<small>${hint}</small></span><b>${list.length}</b></header>` +
+      (s === "landed" ? landedMix(list) : "") +
       `<div class="chips">${shown.map(it => chip(it.key, named(it.title).head, sub(it, s),
-        live ? "live" : s === "blocked" ? "held" : "", it.record?.summary)).join("")}` +
+        live ? "live" : s === "blocked" ? "held" : s === "landed" ? `landed k-${landedKind(it)}` : "", it.record?.summary)).join("")}` +
       `${list.length > LIMIT ? `<button type="button" class="tchip more" data-step="${s}">+${list.length - LIMIT} more</button>` : ""}</div></div>`;
     // Blocked feeds Ready; each arrow marches while the step after it holds live work.
     const next = FLOW_STEPS[i + 1]?.[0];
@@ -620,7 +654,8 @@ function renderHome(L) {
       (total ? `<div class="pbar">${steps.filter(count).map(s => `<span class="s-${s}" style="flex:${s === "landed" ? Math.min(count(s), Math.max(3, total - count(s))) : count(s)}" ` +
         `title="${FLOW_STEPS.find(([x]) => x === s)[1]}: ${count(s)}">${count(s)}</span>`).join("")}</div>` +
         `<div class="pkey">${steps.filter(count).map(s => `<span><b>${count(s)}</b> ${FLOW_STEPS.find(([x]) => x === s)[1].toLowerCase()}</span>`).join("")}` +
-        `${failed ? `<span><b>${failed}</b> gave up</span>` : ""}</div>` : "") +
+        `${failed ? `<span><b>${failed}</b> gave up</span>` : ""}</div>` +
+        landedMix(items.filter(it => it.step === "landed")) : "") +
       `<div class="pnow">${agents.length ? agents.map(a => `<div><span class="chip held">${esc(a.role)}</span><span>${esc(named(a.title).head)}</span></div>`).join("")
         : `<span class="muted">${landed ? `Last landed ${ago(landed.updated)} ago: ${esc(named(landed.title).head)}` : "No agents on it now"}</span>`}</div></a>`;
   }).join("") || `<p class="muted">No projects registered.</p>`);
