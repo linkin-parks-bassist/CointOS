@@ -9,8 +9,10 @@ when the implementer finished. Your review is a once-over of the code and its te
 within the named item's boundary: does the code do what the contract says, and do the tests
 enforce the contract (consistent outcomes, failure cases that construct the failing state,
 witnesses that reach the tested boundary)? The landing gate then runs the full suite.
-A test packet reaches you only when its tests already pass on main, so there is no code
-left to hide them from: review them the same way and land them as ordinary tests.
+A completed test packet reaches you only when its tests already pass on main, so there is no
+code left to hide them from: review them the same way and land them as ordinary tests.
+A blocked worker also reaches you for assessment; its work has not passed completion checks
+and cannot land, whatever its stage.
 
 1. Run `cointos review`. It commits the packet's tests, stages the exact commit the worker
    submitted and shows the worker's receipt, its account of the work.
@@ -34,9 +36,8 @@ left to hide them from: review them the same way and land them as ordinary tests
    cannot modify tests, fixtures, harness settings or the manifest, and the candidate's tests
    must be exactly main's plus the packet's; neither may your landing edit them. If a test in
    the packet contradicts the contract, finish blocked with the evidence: a manager decides.
-   An implementation or integration whose worker finished blocked cannot land: its hidden
-   tests never ran against the code. Return it to the worker if the code is ready, so it
-   finishes complete and its packet runs; otherwise finish blocked for a manager.
+   A worker that finished blocked cannot land. Return it if its work is ready, so it finishes
+   complete and CointOS runs its stage's checks; otherwise finish blocked for a manager.
    Integration items must join only their named, already-tested dependencies.
    If this implementation is already present on main, verify rather than land it twice:
    `cointos incorporate PROJECT:ITEM --commit MAIN_SHA --worker-commit WORKER_SHA`.

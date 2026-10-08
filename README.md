@@ -137,7 +137,9 @@ item that depends on them. That implementer's finish runs the packet and reveals
 tests. The integrator lands code and tests together after the daemon runs every registered
 command on the exact candidate; a test green on main that the candidate breaks returns the item
 with that test added to its packet. Implementation commits cannot change protected tests or
-harnesses, and work finished blocked cannot land, because its hidden tests never ran. A queue
+harnesses. Stage checks exclude commits already on main, so importing landed prerequisites
+does not count as worker edits. Work finished blocked cannot land: it must be submitted complete
+and pass its stage's checks first. A queue
 item is done only through a verified acceptance.
 
 `cointos cancel PROJECT:ITEM... --reason WHY` withdraws unaccepted work for good: it stops any run on

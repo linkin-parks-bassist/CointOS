@@ -34,12 +34,6 @@ def protected(path: str, rules: dict) -> bool:
     return path == rules["manifest"] or matches(path, rules.get("protected", []))
 
 
-def check_test_diff(repo, before, after, rules):
-    touched = [p for p in git.changed(repo, before, after) if protected(p, rules)]
-    if touched:
-        raise ValueError("implementation changes protected tests or harness: " + ", ".join(touched))
-
-
 def production(repo, before, after, rules) -> list[str]:
     """The changed paths that are production code: neither protected tests/harness nor non-code."""
     return sorted(p for p in git.changed(repo, before, after)
@@ -63,26 +57,31 @@ def contracts(repo, commit, rules) -> list[dict]:
     return data
 
 
-def implementation_history(repo, worker, main, rules):
+def stage_history(repo, worker, main, rules):
+    """Enforce edit ownership on the task's commits, excluding history already on main.
+
+    The pinned base bounds the assignment; it is not a diff baseline after main advances.
+    Importing main is legal. Inventing a forbidden merge resolution or reverting an earlier
+    forbidden edit does not erase that edit from the assignment's history.
+    """
+    tests_only = worker["stage"] == "test-contract"
+    def forbidden(path):
+        return (not protected(path, rules) and not matches(path, rules.get("non_code", []))
+                if tests_only else protected(path, rules))
+
+    reason = ("a test packet changes only tests; it also changes " if tests_only
+              else "implementation changes protected tests or harness: ")
     base = worker.get("base_commit")
     if not base:
-        raise ValueError("implementation has no pinned test baseline; return it for a fresh assignment")
+        raise ValueError("worker has no pinned baseline; return it for a fresh assignment")
     head = git.head(repo, worker["branch"])
     if not git.contains(repo, base, head):
-        raise ValueError("implementation branch does not contain its pinned test baseline")
-    # Even a test edit subsequently reverted is not an implementation commit.
+        raise ValueError("worker branch does not contain its pinned baseline")
     for commit in git.run(repo, "rev-list", f"{base}..{head}", "--not", main).splitlines():
-        parents = git.run(repo, "rev-list", "--parents", "-n", "1", commit).split()[1:]
-        if len(parents) == 1:
-            check_test_diff(repo, parents[0], commit, rules)
-        else:
-            # Bringing accepted tests from main is legal; inventing protected merge
-            # resolutions is not. Final candidate must still preserve current main.
-            paths = {p for parent in parents for p in git.changed(repo, parent, commit) if protected(p, rules)}
-            for path in paths:
-                blob = git.blob(repo, commit, path)
-                if not any(blob == git.blob(repo, parent, path) for parent in parents):
-                    raise ValueError("implementation merge changes protected tests: " + path)
+        inherited = git.run(repo, "merge-base", main, commit)
+        paths = [p for p in git.changed(repo, inherited, commit) if forbidden(p)]
+        if paths:
+            raise ValueError(reason + ", ".join(paths))
 
 
 def incorporated(repo, worker, commit, rules) -> None:
@@ -90,7 +89,7 @@ def incorporated(repo, worker, commit, rules) -> None:
     equivalent, needs an integrator's review and landing: ancestry or a green suite alone cannot
     prove the worker's work was incorporated."""
     head, base = git.head(repo, worker["branch"]), worker["base_commit"]
-    implementation_history(repo, worker, commit, rules)
+    stage_history(repo, worker, commit, rules)
     paths = production(repo, base, head, rules)
     if not paths:
         raise ValueError("worker has no production changes to reconcile")
@@ -256,7 +255,7 @@ def bundled_files(path, failed) -> list[str]:
 def packet_unchanged(repo, worker: dict, main: str, candidate: str, tests: list[str], rules: dict) -> None:
     """The implementer never touched tests, and the candidate's tests are exactly main's plus the
     packet's: no integrator edit or conflict resolution changes them."""
-    implementation_history(repo, worker, main, rules)
+    stage_history(repo, worker, main, rules)
     changed = [p for p in git.changed(repo, main, candidate) if protected(p, rules)]
     if not changed:
         return
