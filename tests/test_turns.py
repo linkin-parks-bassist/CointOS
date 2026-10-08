@@ -100,7 +100,8 @@ class Turns(unittest.TestCase):
         self.assertEqual(lane["holder"], "a")
         self.assertEqual(lane["turn_since"], began)
         lanes.BUSY.clear()
-        lanes.schedule()
+        with patch.object(lanes.scheduler, "draw", lambda config, thought, now: {"a": 0.1, "b": 0.9}[thought["agent"]]):
+            lanes.schedule()
         self.assertEqual(lane["holder"], "b")
 
     def test_longer_live_slice_keeps_elapsed_turn_and_reading_protection(self):
