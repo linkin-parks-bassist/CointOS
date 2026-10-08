@@ -253,8 +253,8 @@ def bundled_files(path, failed) -> list[str]:
 
 
 def packet_unchanged(repo, worker: dict, main: str, candidate: str, tests: list[str], rules: dict) -> None:
-    """The implementer never touched tests, and the candidate's tests are exactly main's plus the
-    packet's: no integrator edit or conflict resolution changes them."""
+    """Stage ownership holds and the complete test tree equals main plus the packet.
+    A test writer supplies its own commit; an implementer supplies its accepted test commits."""
     stage_history(repo, worker, main, rules)
     with combined(repo, main, tests) as (_, expected):
         changed = [p for p in git.changed(repo, expected, candidate) if protected(p, rules)]

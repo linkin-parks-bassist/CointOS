@@ -43,15 +43,17 @@ def tests_of(worker: dict) -> list[str]:
 
 
 def check_candidate(repo: str, worker: dict, parent: str, commit: str, rules: dict) -> None:
-    """A ValueError when the candidate breaks its stage's contract outright: an implementer
-    touched tests, or the review changed tests beyond the packet's own."""
-    if worker["stage"] in ("implementation", "integration"):
-        contracts.packet_unchanged(repo, worker, parent, commit, worker["receipt"]["evidence"].get("tests", []), rules)
-    elif worker["stage"] == "test-contract":
-        contracts.stage_history(repo, worker, parent, rules)
+    """Every packet lands intact, with edits confined to its stage's ownership."""
+    if worker["stage"] == "skeleton":
+        return
+    evidence = worker["receipt"]["evidence"]
+    tests = evidence.get("tests", [])
+    if worker["stage"] == "test-contract":
+        tests = [evidence["commit"]]
         production = contracts.production(repo, parent, commit, rules)
         if production:
             raise ValueError("a test packet landing changes production code: " + ", ".join(production))
+    contracts.packet_unchanged(repo, worker, parent, commit, tests, rules)
 
 
 def land(task_id: str, commit: str, run: str | None) -> dict:

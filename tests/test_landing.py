@@ -228,6 +228,28 @@ class Packets(Project):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual((self.main(), writer["status"]), (self.base, "review"))
 
+    def test_passing_packet_review_cannot_omit_or_weaken_the_submitted_tests(self):
+        writer = self.writer("tests-c", TESTS, ["python3", "-m", "unittest", "tests.test_tests_c.B"])
+        self.finish_writer(writer)
+        lifecycle.release("writer-1", "run ended")
+        integration = tasks.create("integrate", self.project, "integrate-tests-c", "Test C", [2],
+                                   item="tests-c", worker=writer["id"])
+        support.running(integration, "integrator-1")
+        review = Path(integration["worktree"])
+        for omission in (True, False):
+            with self.subTest(omission=omission):
+                git.run(review, "reset", "--hard", "main")
+                if not omission:
+                    git.run(review, "merge", "--squash", writer["commit"])
+                    (review / "tests/test_tests_c.py").write_text("# assertions removed\n")
+                (review / "notes.md").write_text("reviewed\n")
+                candidate = support.commit(review, "claim tests landed")
+                with patch.object(contracts, "suite") as suite:
+                    with self.assertRaisesRegex(ValueError, "differ from main plus the accepted packet"):
+                        landing.land(integration["id"], candidate, "integrator-1")
+                    suite.assert_not_called()
+                self.assertEqual((self.main(), writer["status"]), (self.base, "review"))
+
 
 class Gate(Project):
     def test_exact_checked_commit_lands_with_its_tests_and_a_retry_is_idempotent(self):
