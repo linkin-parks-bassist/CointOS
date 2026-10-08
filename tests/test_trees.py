@@ -92,6 +92,13 @@ class GardeningTasks(unittest.TestCase):
         with patch.dict(state.CONFIG, projects=[project], trees=[]):
             self.assertEqual([tree["name"] for tree in config.managed_trees(state.CONFIG)], ["project"])
 
+    def test_a_disabled_projects_tree_is_not_maintained(self):
+        project = {"name": "project", "path": str(self.root.parent), "main_branch": "main", "enabled": False}
+        (self.root.parent / ".knowledge").mkdir(exist_ok=True)
+        with patch.dict(state.CONFIG, projects=[project], trees=[]):
+            self.assertEqual(spawner.tree_work(), [])
+            self.assertEqual([tree["name"] for tree in config.managed_trees(state.CONFIG)], ["project"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -178,11 +178,23 @@ def integrations() -> list:
     return options
 
 
+def idle_seconds() -> float:
+    """How long every work-model lane has been free (0 while any is held or kept for an agent)."""
+    work = [lane for lane in L["lanes"] if lane["model"] == CONFIG["work_model"] and lane["up"]]
+    if not work or any(lane["holder"] is not None for lane in work):
+        return 0
+    return now() - max(max(lane.get("free_since", 0), lane.get("held_until", 0)) for lane in work)
+
+
 def tree_work() -> list:
     """Per owned tree, at most one maintenance task: a gardening batch when its health changed or
-    its routine interval passed, else a structural audit when that interval passed."""
+    its routine interval passed, else a structural audit when that interval passed. A disabled
+    project's tree is left alone."""
     options = []
+    disabled = {p["name"] for p in CONFIG["projects"] if not p.get("enabled", True)}
     for tree in managed_trees(CONFIG):
+        if tree["name"] in disabled:
+            continue
         health = tree_health(tree)
         if health is None or any(t["place"] == tree["name"] and schema.KINDS[t["kind"]]["scope"] == "tree"
                                  and t["status"] in ("running", "waiting") for t in L["tasks"].values()):
@@ -203,7 +215,7 @@ def tree_work() -> list:
 
 def periodic() -> list:
     """The system-wide steward, inversely as frequent as the factory is busy (work the user
-    killed is not busyness) and once soon after project work stalls, and a retrospective
+    killed is not busyness) and once soon after the GPU goes idle, and a retrospective
     test audit after new accepted work."""
     options = []
     projects = tasks.enabled_projects()
@@ -218,9 +230,9 @@ def periodic() -> list:
     stewarded = tasks.last_created("steward", "system")
     settled = max((t["updated_at"] for t in L["tasks"].values()
                    if t["place"] in names and t["status"] in ("done", "failed")), default=0)
-    # Projects gone quiet since work last settled get one scout, not one per idle period.
-    stalled = (settled > stewarded and now() - settled > spawner["idle_steward_seconds"]
-               and not any(concern.split(":")[0] in names for concern in concerns))
+    # An idle GPU gets one scout per stretch of settled project work: a scout that finds nothing
+    # leaves the GPU idle again but settles no project work, so it does not summon another.
+    stalled = (settled > stewarded and idle_seconds() > spawner["idle_steward_seconds"])
     if (projects and (stalled or now() - stewarded > interval)
             and not any(t["kind"] == "steward" and t["status"] in ("running", "waiting") for t in L["tasks"].values())):
         options.append(([schema.KINDS["steward"]["rank"]], lambda: tasks.request_steward()[0]))

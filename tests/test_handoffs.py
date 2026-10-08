@@ -153,20 +153,26 @@ class PeriodicSteward(unittest.TestCase):
         with patch.dict(state.CONFIG, spawner={**state.CONFIG["spawner"], "steward_every_seconds": 10}):
             self.assertEqual(spawner.next_task()["id"], "p:work", "one concern doubles the interval to 20 seconds")
 
-    def test_stalled_projects_get_one_prompt_scout(self):
+    def test_an_idle_gpu_gets_one_prompt_scout(self):
         state.L["cadence"]["steward:system"] = state.L["cadence"]["test-audit:system"] = state.now() - 100
         work = support.queued(self.projects[0], "item")
         work.update(status="done", updated_at=state.now() - 50)
+        lanes = [lane for lane in state.L["lanes"] if lane["model"] == state.CONFIG["work_model"]]
+        for lane in lanes:
+            lane.update(up=True, holder=None, free_since=state.now() - 35)
         quick = {**state.CONFIG["spawner"], "steward_every_seconds": 10**6, "idle_steward_seconds": 30,
                  "test_auditor_every_seconds": 10**6}  # the test auditor shares the steward's rank
+        steward = lambda: any(o[0] == [schema.KINDS["steward"]["rank"]] for o in spawner.periodic())
         with patch.dict(state.CONFIG, spawner=quick), patch.object(spawner, "integrations", return_value=[]):
-            with patch.object(spawner, "now", return_value=state.now() - 40):
-                self.assertFalse(any(o[0] == [schema.KINDS["steward"]["rank"]] for o in spawner.periodic()))
+            lanes[0]["holder"] = "busy"
+            self.assertFalse(steward(), "a held lane is not idle, however quiet the projects")
+            lanes[0].update(holder=None, free_since=state.now() - 10)
+            self.assertFalse(steward(), "idle for less than idle_steward_seconds")
+            lanes[0]["free_since"] = state.now() - 35
             task = spawner.next_task()
             self.assertEqual(task["kind"], "steward")
             task["status"] = "done"
-            self.assertFalse(any(o[0] == [schema.KINDS["steward"]["rank"]] for o in spawner.periodic()),
-                             "no repeat until project work settles again")
+            self.assertFalse(steward(), "no repeat until project work settles again")
 
     def test_a_failed_command_blocks_its_record_and_does_not_suppress_the_steward(self):
         state.L["cadence"]["steward:system"] = state.now() - 11
