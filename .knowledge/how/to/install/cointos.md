@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T22:12:58+11:00"
+revised_at: "2026-10-08T22:14:19+11:00"
 ---
 
 Run `scripts/install` from the source repository. It is a standalone installer for `~/.CointOS`, not a CointOS CLI subcommand. The target must either be absent or contain the `.runtime-install` marker.
@@ -9,7 +9,7 @@ Run `scripts/install` from the source repository. It is a standalone installer f
 
 Use `scripts/install` for first installation or any change that invalidates surviving gateway/model processes. Pause CointOS and wait for all agent units to exit. The installer refuses an active unpaused runtime or remaining agent units, stops Coin and cointosd, copies `cointos/`, `roles/`, `web/`, `bin/`, `systemd/` and `config/`, runs the idempotent `scripts/upgrade-ledger`, renders/enables user units, and updates `~/.local/bin/cointos`. It preserves installed `config/projects.json`, because project enrollment is user-managed runtime state rather than a source default. Services remain stopped and pause state is preserved; use `cointos up`, verify `cointos check`, then `cointos go` when autonomy should resume.
 
-The runtime code contains no schema-compatibility branches. `scripts/upgrade-ledger` is the sole migration boundary and refuses legacy running/review work that cannot be converted safely.
+The runtime code contains no schema-compatibility branches. `scripts/upgrade-ledger` is the sole migration boundary: it runs at every installation while cointosd is stopped, reads the installed project registry beside the ledger, converts older ledgers (and any Git artifacts they reference) to the current schema, and changes nothing on a second run. Back up `state/cointos.json` before installing a schema change.
 
 ## Compatible live installation
 
@@ -29,4 +29,4 @@ The gateway reads `web/dashboard.html` from the installed runtime on every reque
 
 Each installation replaces the installed tree's `where/am/i.md` and `what/is/cointos.md` with `runtime/where-am-i.md` and `runtime/what-is-cointos.md` through `cointos/kt.py`, which writes generated leaves (also the daemon's queue answers) with the CLI-only `kt rewrite --force`. Edit the source files, not their generated copies. The runtime tree requires its explicit globally readable kt registration; project trees remain independent.
 
-Worktrees live at `~/Projects/.worktrees/<project>/<task>` on `work/<task>` branches. After every installation verify that the installed copy contains the change, service state, adopted agent identities when live installing, and `cointos check`.
+Worktrees live at `~/Projects/.worktrees/<project>/<task>` on `work/<task>` branches. After every installation verify that the installed copy contains the change, service state, adopted agent identities when live installing, and `cointos check`. The daemon checks are not ready for a few seconds after a live installation; a check run immediately reports the daemon unreachable.
