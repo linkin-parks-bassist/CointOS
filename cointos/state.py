@@ -46,15 +46,8 @@ def alert(text: str) -> None:
 
 def fresh(previous: dict) -> dict:
     """A ledger for a starting daemon, keeping what outlives it: tasks, snapshots, history."""
-    from cointos import names
     for task in previous.get("tasks", {}).values():
         task.pop("validating", None)  # no landing validation survives the daemon that ran it
-        if not task.get("name") and task.get("status") in ("waiting", "running", "review"):
-            task["name"] = names.invent({t["name"] for t in previous["tasks"].values() if t.get("name")})
-    for record in previous.get("queue", {}).values():
-        holder = record.get("held_by")
-        if holder and ":" not in holder:
-            record["held_by"] = "user"  # human labels become one stable identity; task ids are scoped
     lanes = [{"model": name, "index": index, "up": False, "holder": None, "resident": None, "free_since": now(),
               "held_for": None, "held_class": None, "held_until": 0, "turn_agent": None, "turn_since": 0}
              for name, shape in CONFIG["models"].items() for index in range(shape["lanes"])]

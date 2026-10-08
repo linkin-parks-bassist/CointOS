@@ -8,7 +8,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from cointos import api, cli, contracts, git, landing, lifecycle, queues, state, tasks
+from cointos import api, cli, client, contracts, git, landing, lifecycle, queues, state, tasks
 from tests import support
 
 CODE = "def a():\n    raise NotImplementedError\n\ndef b():\n    return 7\n"
@@ -57,18 +57,17 @@ class Project(unittest.TestCase):
         commit = support.commit(self.repo, f"tests for {name}")
         git.run(self.repo, "checkout", "-q", "main")
         queues.add(self.project, "queued", name, "Test A\nRelies on: a", "test-contract")
-        state.L["queue"][f"p:{name}"].update(status="done", commit=commit)
+        queues.finish(state.L["queue"][f"p:{name}"], commit=commit, via="tests")
         return commit
 
     def implement(self, value: str = "42") -> str:
         path = self.tree / "code.py"
         path.write_text(path.read_text().replace("raise NotImplementedError", f"return {value}", 1))
-        (self.tree / queues.REPORT).write_text("Status: done\n\nA implemented.\n")
         return support.commit(self.tree, "implement a")
 
     def finish(self) -> dict:
-        return api.dispatch("finish", {"task": self.worker["id"], "run": "worker-1", "outcome": "complete",
-                                       "detail": "A implemented"})["receipt"]
+        return api.dispatch("finish", {"caller": support.caller(self.worker, "worker-1"), "outcome": "complete",
+                                       "detail": "A implemented."})["receipt"]
 
     def submit(self) -> str:
         receipt = self.finish()
@@ -91,7 +90,6 @@ class Project(unittest.TestCase):
             git.run(self.review, "merge", "--squash", commit)
             support.commit(self.review, "tests")
         git.run(self.review, "merge", "--squash", submitted)
-        (self.review / queues.REPORT).unlink()
         return integration, support.commit(self.review, "land a"), submitted
 
     def main(self) -> str:
@@ -133,12 +131,11 @@ class Packets(Project):
         (tree / f"tests/test_{name.replace('-', '_')}.py").write_text(test)
         manifest = json.loads((tree / "tests/contracts.json").read_text())
         (tree / "tests/contracts.json").write_text(json.dumps(manifest + [{"covers": ["code.py::a"], "command": command}]))
-        (tree / queues.REPORT).write_text("Status: done\n\nTests.\n")
         writer["commit"] = support.commit(tree, f"tests for {name}")
         return writer
 
     def finish_writer(self, writer: dict) -> dict:
-        return api.dispatch("finish", {"task": writer["id"], "run": "writer-1", "outcome": "complete",
+        return api.dispatch("finish", {"caller": support.caller(writer, "writer-1"), "outcome": "complete",
                                        "detail": "tests"})["receipt"]
 
     def test_a_failing_test_packet_is_accepted_without_landing(self):
@@ -146,8 +143,7 @@ class Packets(Project):
         receipt = self.finish_writer(writer)
         self.assertFalse(receipt["evidence"]["passing"])
         self.assertEqual((writer["status"], writer["acceptance"]["via"]), ("done", "tests"))
-        self.assertEqual((state.L["queue"]["p:tests-c"]["status"], state.L["queue"]["p:tests-c"]["commit"]),
-                         ("done", writer["commit"]))
+        self.assertEqual(state.L["queue"]["p:tests-c"]["done"]["commit"], writer["commit"])
         self.assertEqual(self.main(), self.base)
 
     def test_a_test_packet_that_already_passes_on_main_is_reviewed_and_lands(self):
@@ -161,7 +157,6 @@ class Packets(Project):
         support.running(integration, "integrator-1")
         review = Path(integration["worktree"])
         git.run(review, "merge", "--squash", writer["commit"])
-        (review / queues.REPORT).unlink()
         candidate = support.commit(review, "land tests c")
         landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), candidate)
@@ -179,7 +174,6 @@ class Packets(Project):
         writer["base_commit"] = self.base
         tree = Path(writer["worktree"])
         (tree / "code.py").write_text(CODE + "\ndef c(): return 1\n")
-        (tree / queues.REPORT).write_text("Status: done\n\nTests for c.\n")
         support.commit(tree, "sneaky code")
         with self.assertRaisesRegex(ValueError, "changes only tests"):
             lifecycle.submit(writer["id"], "writer-1", "complete", "tests for c")
@@ -196,15 +190,14 @@ class Gate(Project):
         self.assertEqual(self.worker["acceptance"], {"commit": candidate, "worker_commit": submitted,
                                                      "via": "landing", "stage": "implementation"})
         self.assertEqual((integration["status"], integration["receipt"]["run"]), ("done", "integrator-1"))
-        self.assertEqual(queues.landed(self.project), {"tests-a", "item"})
+        self.assertEqual(queues.landed("p"), {"tests-a", "item"})
 
-    def test_verified_acceptance_overrides_a_provisional_blocked_record(self):
+    def test_a_verified_landing_is_the_records_terminal_fact(self):
         integration, candidate, _ = self.landing()
-        queues.update("p", "item", "blocked", "Status: blocked\n\nWaiting on a test correction.\n")
         landing.land(integration["id"], candidate, "integrator-1")
         record = state.L["queue"]["p:item"]
-        self.assertEqual((record["status"], record["commit"]), ("done", candidate))
-        self.assertNotIn("report", record)
+        self.assertEqual((queues.status(record), record["done"]["commit"], record["done"]["via"]),
+                         ("done", candidate, "landing"))
 
     def test_protected_tests_cannot_change_in_an_implementation_landing(self):
         integration, _, _ = self.landing()
@@ -249,6 +242,17 @@ class Gate(Project):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual((self.main(), self.worker["status"]), (self.base, "review"))
 
+    def test_an_implementation_finished_blocked_cannot_land_untested(self):
+        self.implement()
+        lifecycle.submit(self.worker["id"], "worker-1", "blocked", "Done, but the packet would not merge")
+        lifecycle.release("worker-1", "run ended")
+        integration = self.integrate()
+        git.run(self.review, "merge", "--squash", self.worker["receipt"]["evidence"]["commit"])
+        candidate = support.commit(self.review, "land a")
+        with self.assertRaisesRegex(ValueError, "hidden tests never ran"):
+            landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual((self.main(), self.worker["status"]), (self.base, "review"))
+
     def test_only_the_integrations_current_run_can_land(self):
         integration, candidate, _ = self.landing()
         with self.assertRaisesRegex(ValueError, "only its current run"):
@@ -267,7 +271,7 @@ class Gate(Project):
         self.assertEqual(self.worker["bundled"], [B])
         self.assertIn("code.b(), 7", self.worker["review"])
         self.assertEqual((integration["status"], integration["receipt"]["disposition"]), ("done", "returned"))
-        self.assertEqual(queues.landed(self.project), {"tests-a"})
+        self.assertEqual(queues.landed("p"), {"tests-a"})
 
 
 class Incorporation(Project):
@@ -298,14 +302,22 @@ class Incorporation(Project):
             landing.incorporate(self.worker["id"], different, submitted, "integrator-1")
         self.assertEqual(self.worker["status"], "review")
 
-    def test_later_docs_and_unrelated_definitions_do_not_duplicate_accepted_work(self):
+    def test_later_changes_elsewhere_do_not_hide_incorporated_work(self):
         _, _, submitted = self.landing()
-        path = self.review / "code.py"
-        path.write_text('"""Documentation now reflects completed A."""\n' + path.read_text() + "\ndef unrelated(): return 99\n")
+        (self.review / "other.py").write_text("def unrelated(): return 99\n")
         candidate = support.commit(self.review)
         git.run(self.repo, "merge", "--ff-only", candidate)
         landing.incorporate(self.worker["id"], candidate, submitted, "integrator-1")
         self.assertEqual(self.worker["status"], "done")
+
+    def test_a_rewritten_file_needs_a_landing_not_incorporation(self):
+        _, _, submitted = self.landing()
+        path = self.review / "code.py"
+        path.write_text('"""Documentation now reflects completed A."""\n' + path.read_text())
+        candidate = support.commit(self.review)
+        git.run(self.repo, "merge", "--ff-only", candidate)
+        with self.assertRaisesRegex(ValueError, "exact submitted behavior: code.py"):
+            landing.incorporate(self.worker["id"], candidate, submitted, "integrator-1")
 
     def test_a_historical_green_commit_cannot_settle_a_changed_main(self):
         _, candidate, submitted = self.landing()
@@ -332,7 +344,7 @@ class Commands(Project):
     def setUp(self):
         super().setUp()
         self.enterContext(patch.object(cli, "call", side_effect=lambda action, body=None, **options:
-                                       api.dispatch(action, body or {})))
+                                       api.dispatch(action, {**(body or {}), "caller": client.caller()})))
         self.enterContext(patch.object(cli, "ledger", side_effect=lambda: json.loads(json.dumps(state.L))))
         self.enterContext(patch.dict(cli.CONFIG, projects=[self.project], trees=[]))
         previous = os.getcwd()
@@ -359,7 +371,7 @@ class Commands(Project):
         self.assertNotIn("tests/test_a.py", git.run(self.repo, "ls-files").split(), "a skeleton carries no packet")
         message = git.run(self.repo, "log", "-1", "--format=%B")
         self.assertIn("Add a", message)
-        self.assertIn("A implemented.", message)
+        self.assertIn("Worker: A implemented.", message)
         self.assertEqual((self.worker["status"], integration["status"]), ("done", "done"))
 
     def manager(self) -> dict:
@@ -395,7 +407,6 @@ class Commands(Project):
         self.assertEqual((self.worker["status"], integration["status"]), ("done", "done"))
         self.assertEqual((self.repo / "plan.md").read_text(),
                          "concurrent main frontier\nreviewed worker boundary\n")
-        self.assertNotIn(queues.REPORT, git.run(self.repo, "ls-files").split())
         self.assertIn("tests/test_a.py", git.run(self.repo, "ls-files").split(), "review lands the packet's tests")
         self.assertIn("A implemented.", git.run(self.repo, "log", "-1", "--format=%B"))
         self.run_command(cli.land, "Add a")
@@ -437,14 +448,6 @@ class Commands(Project):
         with self.assertRaisesRegex(SystemExit, "integrator"):
             self.run_command(cli.merge)
         self.assertEqual(self.main(), self.base)
-
-    def test_the_worker_report_cannot_land_from_another_task(self):
-        task = self.manager()
-        (Path(task["worktree"]) / queues.REPORT).write_text("Status: done\n\nMaintenance report.\n")
-        support.commit(task["worktree"])
-        with self.assertRaisesRegex(SystemExit, "may never land from a breakdown task"):
-            self.run_command(cli.merge)
-        self.assertNotIn(queues.REPORT, git.run(self.repo, "ls-files").split())
 
 
 if __name__ == "__main__":

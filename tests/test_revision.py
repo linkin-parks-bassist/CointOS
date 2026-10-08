@@ -21,7 +21,7 @@ class Revision(unittest.TestCase):
     def as_manager(self, action, **body):
         if action == "revise" and body.get("brief", "").strip():
             body["brief"] += SUMMARY  # a manager's worker brief explains itself to the dashboard
-        return api.dispatch(action, {**body, "proposed_by": self.manager["id"], "run": "manager-1"})
+        return api.dispatch(action, {**body, "caller": support.caller(self.manager, "manager-1")})
 
     def worker(self, name="impl", brief="Implement it", start=True):
         worker = support.queued(self.project, name, brief)
@@ -55,7 +55,7 @@ class Revision(unittest.TestCase):
             self.as_manager("cancel", items=["p:impl"], reason=" ")
         self.as_manager("cancel", items=["p:impl"], reason="duplicate")
         queues.add(self.project, "queued", "landed", "Landed")
-        state.L["queue"]["p:landed"]["status"] = "done"
+        queues.finish(state.L["queue"]["p:landed"])
         with self.assertRaisesRegex(ValueError, "already accepted"):
             api.dispatch("cancel", {"items": ["p:landed"], "reason": "r"})
 
@@ -68,17 +68,11 @@ class Revision(unittest.TestCase):
 
     # ------------------------------------------------ holding
 
-    def test_human_holds_keep_their_authority_after_daemon_replacement(self):
+    def test_the_user_releases_any_hold_and_a_manager_only_its_own(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         queues.add(self.project, "queued", "managed", "Manager-owned item")
-        state.L["queue"]["p:impl"]["held_by"] = "previous_owner"
-        state.L["queue"]["p:managed"]["held_by"] = self.manager["id"]
-        replacement = state.fresh(state.L)
-        state.L.clear()
-        state.L.update(replacement)
-        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
-        self.assertEqual(state.L["queue"]["p:managed"]["held_by"], self.manager["id"])
-        api.dispatch("hold", {"item": "p:impl"})
+        state.L["queue"]["p:impl"]["held_by"] = "user"
+        self.as_manager("hold", item="p:managed")
         api.dispatch("unhold", {"item": "p:impl"})
         api.dispatch("unhold", {"item": "p:managed"})
         self.assertTrue(all(r["held_by"] is None for r in state.L["queue"].values()))
@@ -152,12 +146,12 @@ class Revision(unittest.TestCase):
     def test_revising_an_undispatched_item_replaces_its_brief_and_dependencies(self):
         queues.add(self.project, "queued", "iface", "Extend the interface")
         queues.add(self.project, "queued", "impl", "Implement it")
-        before = state.L["queue"]["p:impl"]["hash"]
+        before = state.L["queue"]["p:impl"]["version"]
         self.as_manager("revise", item="p:impl", brief="Depends on: iface\nImplement the extended interface",
                         reason="the interface is extended first", stage="implementation")
         record = state.L["queue"]["p:impl"]
-        self.assertEqual((record["depends"], record["status"]), (["iface"], "queued"))
-        self.assertNotEqual(record["hash"], before)
+        self.assertEqual((record["depends"], queues.status(record)), (["iface"], "queued"))
+        self.assertEqual(record["version"], before + 1)
         self.assertEqual(spawner.next_task()["id"], "p:iface", "the revised item now waits for its new dependency")
 
     def test_revising_a_running_item_restarts_it_fresh_on_the_new_brief(self):
@@ -167,8 +161,8 @@ class Revision(unittest.TestCase):
         self.as_manager("revise", item="p:impl", brief="Implement the extended interface", reason="interface extended")
         self.assertNotIn("worker-1", state.L["agents"])
         self.assertEqual((worker["status"], worker["session"], worker["runs"]), ("waiting", None, 0))
-        self.assertEqual((worker["brief"], worker["record_hash"]),
-                         ("Implement the extended interface" + SUMMARY, state.L["queue"]["p:impl"]["hash"]))
+        self.assertEqual((worker["brief"], worker["record_version"]),
+                         ("Implement the extended interface" + SUMMARY, state.L["queue"]["p:impl"]["version"]))
         self.assertTrue((Path(worker["worktree"]) / "partial.c").exists(), "the branch keeps earlier work")
         text = prompts.launch_text(worker, self.project)
         self.assertIn(f"Revised by {self.manager['id']}: interface extended", text)
@@ -214,14 +208,14 @@ class Revision(unittest.TestCase):
         worker = self.worker()
         worker["runs"] = state.CONFIG["spawner"]["max_runs_per_task"]
         lifecycle.stop("worker-1", "silent too long", requeue=True)
-        self.assertEqual((worker["status"], state.L["queue"]["p:impl"]["status"]), ("failed", "blocked"))
+        self.assertEqual((worker["status"], queues.status(state.L["queue"]["p:impl"])), ("failed", "blocked"))
         self.as_manager("revise", item="p:impl", brief="Implement a smaller slice", reason="the old scope was too big")
-        self.assertEqual((worker["status"], worker["runs"], state.L["queue"]["p:impl"]["status"]), ("waiting", 0, "queued"))
+        self.assertEqual((worker["status"], worker["runs"], queues.status(state.L["queue"]["p:impl"])), ("waiting", 0, "queued"))
 
     def test_accepted_or_superseded_work_cannot_be_revised(self):
         worker = self.worker(start=False)
         worker.update(status="done", acceptance={"commit": "c", "worker_commit": "w", "via": "landing"})
-        lifecycle.project(worker)
+        queues.finish(state.L["queue"]["p:impl"], commit="c", via="landing")
         with self.assertRaisesRegex(ValueError, "already accepted"):
             self.as_manager("revise", item="p:impl", brief="Again", reason="more")
         queues.add(self.project, "queued", "old", "Old")
@@ -243,13 +237,13 @@ class Revision(unittest.TestCase):
         queues.add(self.project, "queued", "impl", "Implement it")
         steward = support.running(tasks.create("steward", tasks.SYSTEM, "loose-ends", "", [6]), "steward-1", worktree=False)
         with self.assertRaisesRegex(ValueError, "owning project's running manager"):
-            api.dispatch("hold", {"item": "p:impl", "proposed_by": steward["id"], "run": "steward-1"})
+            api.dispatch("hold", {"item": "p:impl", "caller": support.caller(steward, "steward-1")})
         other = {**self.project, "name": "q"}
         state.CONFIG["projects"].append(other)
         foreign = support.running(support.queued(other, "plan", "Plan", kind="command"), "manager-2", worktree=False)
         with self.assertRaisesRegex(ValueError, "owning project's running manager"):
             api.dispatch("revise", {"item": "p:impl", "brief": "X", "reason": "r",
-                                    "proposed_by": foreign["id"], "run": "manager-2"})
+                                    "caller": support.caller(foreign, "manager-2")})
         with self.assertRaisesRegex(ValueError, "has no queue item"):
             api.dispatch("hold", {"item": "impl"})
         api.dispatch("hold", {"item": "p:impl"})  # the user

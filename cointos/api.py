@@ -7,7 +7,6 @@ republish the readable queue projection.
 """
 from __future__ import annotations
 
-import copy
 import re
 
 from cointos import contracts, git, landing, lifecycle, projects, queues, schema, settings, snapshots, tasks
@@ -16,6 +15,27 @@ from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, sa
 
 class ApiError(ValueError):
     pass
+
+
+def caller(body) -> tuple[dict | None, str | None]:
+    """The agent run a request comes from, as (its task, its run id), or (None, None) for the
+    user. The client names it in `caller` from the run's environment; lifecycle functions and
+    `running` decide whether that run may do what it asks."""
+    identity = body.get("caller") or {}
+    if not identity:
+        return None, None
+    task = L["tasks"].get(identity.get("task"))
+    if task is None:
+        raise ApiError(f"unknown calling task {identity.get('task')!r}")
+    return task, identity.get("run")
+
+
+def running(body) -> dict | None:
+    """The running task a request is made as, if any; it must be that task's current run."""
+    task, run = caller(body)
+    if task is not None and not lifecycle.owns(task, run):
+        raise ApiError(f"{task['id']} is not running under {run!r}")
+    return task
 
 
 def dispatch(action: str, body: dict):
@@ -39,7 +59,8 @@ def landing_action(action: str, body: dict):
     with LOCK:
         if STOPPING.is_set():
             raise ApiError("daemon draining; retry landing after replacement")
-        target = L["tasks"][body["task"]]
+        integration, run = caller(body)
+        target = integration if action == "land" else L["tasks"][body["task"]]
         validating = [target["id"]] + ([target["worker"]] if action == "land" else
                                        [t["id"] for t in [landing.integrating(target)] if t])
         if any(L["tasks"][tid].get("validating") for tid in validating):
@@ -49,9 +70,9 @@ def landing_action(action: str, body: dict):
         ACTIVE["landings"] += 1
     try:
         if action == "land":
-            result = landing.land(body["task"], body["commit"], body.get("run"))
+            result = landing.land(target["id"], body["commit"], run)
         else:
-            result = landing.incorporate(body["task"], body["commit"], body["worker_commit"], body.get("run"))
+            result = landing.incorporate(target["id"], body["commit"], body["worker_commit"], run)
         queues.publish()
         return result
     finally:
@@ -73,10 +94,12 @@ def finishing(body):
     the failing tests revealed. A test writer's complete receipt first finds out whether its
     tests already pass on main."""
     with LOCK:
-        task = L["tasks"].get(body.get("task"))
-        tested = (task is not None and task["kind"] == "item"
+        task, run = caller(body)
+        if task is None:
+            raise ApiError("finish is an agent run's own receipt")
+        tested = (task["kind"] == "item"
                   and task.get("stage") in schema.TESTED + ("test-contract",)
-                  and body.get("outcome") == "complete" and lifecycle.owns(task, body.get("run"))
+                  and body.get("outcome") == "complete" and lifecycle.owns(task, run)
                   and not task.get("receipt") and git.clean(task["worktree"]))
         if tested:
             if STOPPING.is_set():
@@ -111,7 +134,7 @@ def finishing(body):
                     if agent["task"] == task["id"]:
                         agent["last_activity"] = now()
     with LOCK:
-        receipt = lifecycle.submit(body["task"], body.get("run"), body.get("outcome"), body.get("detail", ""),
+        receipt = lifecycle.submit(task["id"], run, body.get("outcome"), body.get("detail", ""),
                                    checked if tested else None)
         save()
         queues.publish()
@@ -121,47 +144,25 @@ def finishing(body):
 # ---------------------------------------------------------------- agents' own actions
 
 def receipt_delivered(body):
-    lifecycle.receipt_delivered(body["task"], body["run"])
+    task, run = caller(body)
+    lifecycle.receipt_delivered(task["id"], run)
     return {"ok": True}
 
 
 def send_back(body):
-    lifecycle.returned(L["tasks"][body["task"]], body.get("run"), body["notes"])
+    task, run = caller(body)
+    lifecycle.returned(task, run, body["notes"])
     return {"ok": True}
 
 
 def replace(body):
-    """A decomposition manager repoints the dependents of its oversized item to its children;
-    its receipt later retires the item."""
-    task = L["tasks"][body["task"]]
-    if task["kind"] != "decompose" or not lifecycle.owns(task, body.get("run")):
+    """A decomposition manager replaces its failed item with already-queued children: the item's
+    dependents depend on the children instead."""
+    task = running(body)
+    if task is None or task["kind"] != "decompose":
         raise ApiError("only a running decomposition manager replaces its item")
-    children = body["children"]
-    if not children or not isinstance(children, list):
-        raise ApiError("children must list existing replacement item names")
-    records = queues.records()
-    if any(child == task["item"] or f"{task['place']}:{child}" not in records for child in children):
-        raise ApiError("replacement children must exist and exclude the parent")
-    # A child that names its parent inherits the parent's own dependencies instead; any other
-    # dependent waits for all the children.
-    parent = records.get(f"{task['place']}:{task['item']}", {}).get("depends", [])
-    revised = copy.deepcopy(records)
-    for record in revised.values():
-        if record["project"] == task["place"] and task["item"] in record["depends"]:
-            instead = parent if record["item"] in children else children
-            record["depends"] = list(dict.fromkeys(name for dep in record["depends"]
-                                                   for name in (instead if dep == task["item"] else [dep])))
-    def cycles(view):
-        mine = [r for r in view.values() if r["project"] == task["place"]]
-        return {n for n, s in queues.readiness([r for r in mine if r["status"] != "done"],
-                                               {r["item"] for r in mine if r["status"] == "done"}).items()
-                if "cycle" in s}
-    if cycles(revised) - cycles(records):
-        raise ApiError("replacement would leave a dependency cycle; no records changed")
-    for key, record in revised.items():
-        records[key].update(record)
-    task["replacements"] = list(dict.fromkeys(children))
-    log("item replaced", task=task["id"], children=task["replacements"])
+    queues.replace(queues.records()[task["record"]], body.get("children"), "replaced by " + task["id"])
+    task["replacements"] = list(dict.fromkeys(body["children"]))
     return {"ok": True}
 
 
@@ -171,20 +172,10 @@ PROPOSERS = {"manager": (True, None), "integrator": (True, ("command",)),
              "steward": (False, ("command",)), "test-auditor": (False, ("command",))}
 
 
-def proposer(body) -> dict | None:
-    """The running task a request is made as, if any; it must be that task's current run."""
-    if not body.get("proposed_by"):
-        return None
-    task = L["tasks"].get(body["proposed_by"])
-    if task is None or not lifecycle.owns(task, body.get("run")):
-        raise ApiError("a proposal must come from the proposing task's current run")
-    return task
-
-
 def queue(body):
     project = tasks.project_named(body.get("project", ""))
     kind = body.get("kind", "queued")
-    by = proposer(body)
+    by = running(body)
     if by is not None:
         own_project, kinds = PROPOSERS.get(by["role"], (True, ()))
         if (kinds is not None and kind not in kinds) or (own_project and by["place"] != project["name"]):
@@ -218,7 +209,7 @@ def decider(body) -> tuple[str, str]:
     if key is None:
         raise ApiError(f"{name!r} has no queue item; only queued work can be held, revised or moved")
     record = queues.records()[key]
-    by = proposer(body)
+    by = running(body)
     if by is None:
         return key, "user"
     if by["role"] != "manager" or by["place"] != record["project"]:
@@ -262,7 +253,7 @@ def cancel(body):
             alone.append(task)
         else:
             raise ApiError(f"{name!r} is not a live task or queue item")
-    by = proposer(body)
+    by = running(body)
     if by is not None and (by["role"] != "manager" or alone or any(
             queues.records()[k]["project"] != by["place"] for k in keys)):
         raise ApiError("only the owning project's running manager, or the user, cancels queued work")
@@ -279,17 +270,6 @@ def move(body):
     return {"ok": True, "position": queues.move(key, body.get("to", ""))}
 
 
-def attention(body):
-    by = proposer(body)
-    message = body.get("message", "").strip()
-    if by is None or by["role"] not in ("steward", "test-auditor"):
-        raise ApiError("attention may only be sent by a running scout or test auditor")
-    if not message:
-        raise ApiError("attention message is required")
-    alert(f"{by['role']} needs the user: {message}")
-    return {"ok": True}
-
-
 # ---------------------------------------------------------------- messages between tasks and the user
 
 MESSAGES_KEPT = 200
@@ -304,16 +284,12 @@ def mailbox(name: str) -> str:
 
 def sender(body) -> str:
     """'user' for the user's own CLI, else the active task whose current run is asking."""
+    task = running(body)
     if body.get("mailbox") is not None:
-        if body.get("task") or body.get("run"):
+        if task is not None:
             raise ApiError("only the user's local client may use an external mailbox identity")
         return mailbox(body["mailbox"])
-    if not body.get("task"):
-        return "user"
-    task = L["tasks"].get(body["task"])
-    if task is None or not lifecycle.owns(task, body.get("run")):
-        raise ApiError("messages must come from the sending task's current run")
-    return task["id"]
+    return "user" if task is None else task["id"]
 
 
 def send(body):
@@ -401,12 +377,8 @@ def cancel_restart(body):
 
 
 def run_agent(body):
-    spawner = None
-    if body.get("task"):  # an agent run starting one
-        task = L["tasks"].get(body["task"])
-        if not lifecycle.owns(task, body.get("run")):
-            raise ApiError(f"{body['task']} is not running under {body.get('run')!r}")
-        spawner = (task, L["agents"][body["run"]])
+    task, run = caller(body)
+    spawner = (running(body), L["agents"][run]) if task is not None else None
     task = tasks.request_operator(body["name"], body["brief"], body.get("project"), body.get("abilities"),
                                   body.get("reasoning_effort"), body.get("budget"), spawner)
     log("operator requested", task=task["id"], abilities=task["abilities"], spawned_by=task.get("spawned_by"))
@@ -420,7 +392,18 @@ def scout(body):
 
 
 def supersede(body):
-    return queues.supersede(body["task"], body["replacements"], body["reason"])
+    """The user replaces failed or blocked work with existing items, without accepting it."""
+    record = queues.records().get(body.get("task", ""))
+    if record is not None and record.get("replaced_by"):
+        if (record["replaced_by"], record.get("replacement_reason")) != (body.get("replacements"), body.get("reason", "").strip()):
+            raise ApiError("it already has a different replacement")
+        return {"ok": True, "replaced_by": record["replaced_by"]}  # a retry after a lost reply
+    if record is None or queues.status(record) != "blocked":
+        raise ApiError("only blocked work can be superseded; stop or cancel active work first")
+    queues.replace(record, body.get("replacements"), body.get("reason", ""))
+    if record["item"] and f"{record['project']}:{record['item']}" in L["tasks"]:
+        L["tasks"][f"{record['project']}:{record['item']}"]["replaced_by"] = record["replaced_by"]
+    return {"ok": True, "replaced_by": record["replaced_by"]}
 
 
 def clear_review(body):
@@ -522,7 +505,7 @@ def project_remove(body):
     name = body["project"].lower()
     if any(t["place"].lower() == name and tasks.active(t) for t in L["tasks"].values()):
         raise ApiError("cannot remove a project with waiting, running or review work; disable it first and settle the work")
-    if any(r["project"].lower() == name and r["status"] == "queued" for r in queues.records().values()):
+    if any(r["project"].lower() == name and queues.status(r) == "queued" for r in queues.records().values()):
         raise ApiError("cannot remove a project with queued records")
     project = projects.remove(CONFIG, body["project"])
     log("project removed", project=project["name"])
@@ -531,7 +514,7 @@ def project_remove(body):
 
 ACTIONS = {
     "receipt-delivered": receipt_delivered, "return": send_back, "replace": replace,
-    "queue": queue, "attention": attention, "send": send, "inbox": inbox,
+    "queue": queue, "send": send, "inbox": inbox,
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,

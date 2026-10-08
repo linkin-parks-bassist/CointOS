@@ -59,25 +59,25 @@ class OperatorTasks(unittest.TestCase):
 
     def test_an_agent_run_starts_an_operator_paid_from_its_own_budget(self):
         task = self.spawner()
-        operator = api.run_agent({"name": "land", "brief": "Land it.", "task": task["id"], "run": "spawner-1",
+        operator = api.run_agent({"name": "land", "brief": "Land it.", "caller": support.caller(task, "spawner-1"),
                                   "budget": {"generation_tokens": 500, "generation_seconds": 100}})
         operator = state.L["tasks"][operator["task"]]
         self.assertEqual((operator["spawned_by"], operator["budget"]["generation_tokens"]), (task["id"], 500))
         self.assertEqual(schema.spent(state.L["agents"]["spawner-1"]),
                          {"generation_tokens": 900, "generation_seconds": 100})
         with self.assertRaisesRegex(ValueError, "only 100 tokens"):
-            api.run_agent({"name": "more", "brief": "More.", "task": task["id"], "run": "spawner-1",
+            api.run_agent({"name": "more", "brief": "More.", "caller": support.caller(task, "spawner-1"),
                            "budget": {"generation_tokens": 101, "generation_seconds": 1}})
         with self.assertRaisesRegex(ValueError, "both budget limits"):
-            api.run_agent({"name": "more", "brief": "More.", "task": task["id"], "run": "spawner-1"})
+            api.run_agent({"name": "more", "brief": "More.", "caller": support.caller(task, "spawner-1")})
         with self.assertRaisesRegex(ValueError, "no ability its spawner lacks"):
-            api.run_agent({"name": "more", "brief": "More.", "task": task["id"], "run": "spawner-1",
+            api.run_agent({"name": "more", "brief": "More.", "caller": support.caller(task, "spawner-1"),
                            "abilities": ["control"], "budget": {"generation_tokens": 1, "generation_seconds": 1}})
 
     def test_a_worker_cannot_start_an_operator_and_a_stranger_cannot_pose_as_a_run(self):
         task = self.spawner()
         with self.assertRaises(api.ApiError):
-            api.run_agent({"name": "x", "brief": "X.", "task": task["id"], "run": "someone-else"})
+            api.run_agent({"name": "x", "brief": "X.", "caller": support.caller(task, "someone-else")})
         worker = dict(task, role="worker")
         with self.assertRaisesRegex(ValueError, "unreviewed"):
             tasks.request_operator("x", "X.", None, None, None, {"generation_tokens": 1, "generation_seconds": 1},

@@ -28,7 +28,7 @@ class Kill(unittest.TestCase):
                 task = state.L["tasks"][task["id"]]
                 api.resume({})
                 self.assertFalse(spawner.runnable(task, {"p": {"child": "ready"}}))
-                with patch.object(spawner, "refresh", return_value=({}, {}, False)), \
+                with patch.object(spawner, "refresh", return_value=({}, {})), \
                      patch.object(spawner, "reorder"), patch.object(spawner, "queued_work", return_value=[]), \
                      patch.object(spawner, "integrations", return_value=[]), \
                      patch.object(spawner, "tree_work", return_value=[]), \

@@ -92,22 +92,17 @@ audits, retries or which agent did what. Write "BUF lowering is unimplemented; i
 in tests/rtl_lower_test.c section 12 fail at the call", not "the storage test-contract
 landed and the implementation item is queued". A product plan lists product steps, not
 work items. Workflow problems (a gate, a prompt, a process gap) are CointOS defects: report
-them with `cointos attention` or in your receipt, never in the project tree.
+them to the user (`cointos_send` to `user`) or in your receipt, never in the project tree.
 
 The runtime tree's `what/is/cointos.md` documents every CointOS command. If an operation you
-need does not exist there, say so in your receipt (`--blocked`) or with `cointos attention`;
+need does not exist there, say so in your receipt (`--blocked`) or to the user;
 never read, patch or work around CointOS's own source or ledger to find one.
 
 When project work has no route through the pipeline, any role but a worker may start an
 operator, a general agent, to do it with `cointos_operator`. Give it a complete brief and a
 budget; the budget comes out of what your run has left, and it gets no ability you lack.
-Report the missing route with `cointos attention` too.
+Report the missing route to the user too.
 
-Workers commit `.work-report.md` on their branch, beginning with `Status: done` or
-`Status: blocked`. This report is an artifact for review, outside the knowledge tree.
-Integrators preserve its account in the landing commit and remove the report from main.
-No other role creates or lands `.work-report.md`; the non-worker landing gate rejects it
-mechanically outside worker review.
 Every run ends with exactly one completion receipt, which the daemon checks against
 your artifacts: `cointos finish --complete "EVIDENCE"` or `cointos finish --blocked
 "BLOCKER"`. An integrator's receipt is its verified `cointos land`, `cointos incorporate`

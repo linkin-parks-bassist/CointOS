@@ -161,38 +161,28 @@ class Completion(unittest.TestCase):
 
     # ------------------------------------------------ evidence by kind
 
-    def worker(self, report: str, commit=True) -> dict:
+    def worker(self, commit=True) -> dict:
         worker = support.running(support.queued(self.project, "parser"), "worker-1")
-        (Path(worker["worktree"]) / queues.REPORT).write_text(report)
+        (Path(worker["worktree"]) / "parser.c").write_text("int parse(void);\n")
         if commit:
             support.commit(worker["worktree"])
         return worker
 
     def test_a_worker_receipt_submits_its_committed_branch_for_review(self):
-        worker = self.worker("Status: done\n\nParser exists.\n")
+        worker = self.worker()
         receipt = lifecycle.submit(worker["id"], "worker-1", "complete", "Parser exists")
         self.assertEqual(worker["status"], "review")
-        self.assertEqual(receipt["evidence"], {"commit": support.git.head(worker["worktree"]), "report": "done"})
+        self.assertEqual(receipt["evidence"], {"commit": support.git.head(worker["worktree"])})
         lifecycle.release("worker-1", "run ended")
         self.assertTrue(Path(worker["worktree"]).is_dir(), "the integrator still needs the worker's branch")
 
     def test_a_blocked_worker_is_reviewed_too(self):
-        worker = self.worker("Status: blocked\n\nNeeds decomposition: split.\n")
-        lifecycle.submit(worker["id"], "worker-1", "blocked", "Needs decomposition")
+        worker = self.worker()
+        lifecycle.submit(worker["id"], "worker-1", "blocked", "Needs decomposition: split")
         self.assertEqual(worker["status"], "review")
 
-    def test_a_worker_receipt_must_match_one_committed_report(self):
-        worker = self.worker("Status: done\n")
-        with self.assertRaisesRegex(ValueError, "Status: blocked"):
-            lifecycle.submit(worker["id"], "worker-1", "blocked", "Stuck")
-        (Path(worker["worktree"]) / queues.REPORT).write_text("Status: in progress\n")
-        support.commit(worker["worktree"])
-        with self.assertRaisesRegex(ValueError, "Status: done"):
-            lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
-        self.assertEqual((worker["status"], worker["receipt"]), ("running", None))
-
     def test_an_uncommitted_worker_cannot_finish(self):
-        worker = self.worker("Status: done\n", commit=False)
+        worker = self.worker(commit=False)
         with self.assertRaisesRegex(ValueError, "commit"):
             lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
 
@@ -235,7 +225,7 @@ class Completion(unittest.TestCase):
     # ------------------------------------------------ integrators
 
     def integration(self) -> tuple[dict, dict]:
-        worker = self.worker("Status: done\n")
+        worker = self.worker()
         lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
         lifecycle.release("worker-1", "run ended")
         integration = tasks.create("integrate", self.project, "integrate-parser", worker["brief"], [2],
@@ -283,15 +273,15 @@ class Completion(unittest.TestCase):
         self.assertEqual((integration["status"], worker["status"]), ("failed", "failed"))
 
     def test_verified_blocker_dispatches_one_manager_without_magic_words(self):
-        worker = self.worker("Status: blocked\n\nIdentical inputs share identity; requested output is impossible.\n")
-        lifecycle.submit(worker["id"], "worker-1", "blocked", "Contract mismatch")
+        worker = self.worker()
+        lifecycle.submit(worker["id"], "worker-1", "blocked", "Contract mismatch: identical inputs share identity")
         lifecycle.release("worker-1", "run ended")
         integration = support.running(tasks.create("integrate", self.project, "integrate-parser", worker["brief"],
                                                    [2], item="parser", worker=worker["id"]), "integrator-1")
         lifecycle.submit(integration["id"], "integrator-1", "blocked", "Verified identity mismatch; repair the brief")
         lifecycle.release("integrator-1", "run ended")
         record = queues.records()[worker["record"]]
-        self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
+        self.assertEqual((queues.status(record), queues.state(record)["decompose"]), ("blocked", True))
         self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt the user")
         manager = spawner.next_task()
         self.assertEqual((manager["role"], manager["item"]), ("manager", "parser"))
@@ -301,7 +291,7 @@ class Completion(unittest.TestCase):
         self.assertIs(spawner.next_task(), manager, "reconciliation must not create a second manager")
         support.running(manager, "manager-1")
         lifecycle.submit(manager["id"], "manager-1", "blocked", "the user must choose the public contract")
-        self.assertFalse(record["decompose"])
+        self.assertFalse(queues.state(record)["decompose"])
         self.assertIn("the user must choose", state.L["alerts"][-1]["text"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
 
@@ -311,14 +301,14 @@ class Completion(unittest.TestCase):
         manager = spawner.next_task()
         self.assertEqual((manager["kind"], manager["item"]), ("decompose", "exhausted"))
         lifecycle.fail(manager, "manager retries exhausted")
-        self.assertFalse(queues.records()[worker["record"]]["decompose"])
+        self.assertFalse(queues.state(queues.records()[worker["record"]])["decompose"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
 
     def test_recovery_manager_does_not_inherit_the_failed_workers_limits(self):
         queues.add(self.project, "queued", "tiny", "Build one bounded concern", reasoning_effort="low",
                    budget={"generation_seconds": 1, "generation_tokens": 200})
         worker = tasks.create("item", self.project, "tiny", "Build one bounded concern", [4], item="tiny",
-                              record_hash=queues.records()["p:tiny"]["hash"])
+                              record_version=queues.records()["p:tiny"]["version"])
         lifecycle.fail(worker, "fresh retries exhausted")
         with patch.dict(state.CONFIG["reasoning"], manager="medium"):
             manager = spawner.next_task()
@@ -331,12 +321,13 @@ class Completion(unittest.TestCase):
         worker = support.queued(self.project, "wrong", "Impossible contract")
         lifecycle.fail(worker, "contract mismatch")
         manager = support.running(spawner.next_task(), "manager-1")
-        api.dispatch("hold", {"item": worker["id"], "proposed_by": manager["id"], "run": "manager-1"})
+        as_manager = support.caller(manager, "manager-1")
+        api.dispatch("hold", {"item": worker["id"], "caller": as_manager})
         api.dispatch("revise", {"item": worker["id"], "brief": "Corrected contract\nSummary: Fixes the contract so shared identity is allowed.", "reason": "Identity is shared",
-                                "proposed_by": manager["id"], "run": "manager-1"})
+                                "caller": as_manager})
         lifecycle.submit(manager["id"], "manager-1", "complete", "Corrected the contract")
-        self.assertEqual((worker["status"], queues.records()[worker["record"]]["status"]), ("waiting", "queued"))
-        self.assertNotIn("wrong", queues.landed(self.project))
+        self.assertEqual((worker["status"], queues.status(queues.records()[worker["record"]])), ("waiting", "queued"))
+        self.assertNotIn("wrong", queues.landed("p"))
         lifecycle.reconcile()
         self.assertEqual(queues.records()[worker["record"]]["brief"], "Corrected contract\nSummary: Fixes the contract so shared identity is allowed.")
 
@@ -397,13 +388,3 @@ class Refusals(unittest.TestCase):
     def test_uncommitted_work_is_listed(self):
         (Path(self.worker["worktree"]) / "scratch.c").write_text("int x;\n")
         self.assertIn("?? scratch.c", self.refusal())
-
-    def test_a_report_problem_is_described(self):
-        self.assertIn(f"there is no {queues.REPORT}", self.refusal())
-        report = Path(self.worker["worktree"]) / queues.REPORT
-        report.write_text("Status: done\n\nStatus: blocked\n")
-        support.commit(self.worker["worktree"])
-        self.assertIn("2 Status lines (done, blocked)", self.refusal())
-        report.write_text("Status: blocked\n")
-        support.commit(self.worker["worktree"])
-        self.assertIn("it declares `Status: blocked`", self.refusal("complete"))

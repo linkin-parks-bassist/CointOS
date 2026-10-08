@@ -1,7 +1,9 @@
-"""The implementation test-contract analysis: which checks a change must pass, on real Git."""
+"""Test policy on real Git: what counts as production code, test immutability, and how a
+registered command runs on an exact candidate."""
 import json
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
 from cointos import contracts, git
@@ -42,48 +44,32 @@ class Contracts(unittest.TestCase):
     def implement(self):
         p = self.tree / "code.py"
         p.write_text(p.read_text().replace("raise NotImplementedError", "return 42", 1))
-        (self.tree / ".work-report.md").write_text("Status: done\n\nA implemented.\n")
         return self.commit(self.tree)
 
     def checks(self, commit):
         """An implementation candidate's test immutability, as the landing gate checks it."""
         contracts.packet_unchanged(self.repo, self.worker, self.base, commit, [], self.rules)
 
-    def test_shared_helper_change_selects_transitive_callers(self):
-        p = self.tree / "code.py"
-        p.write_text("def _h(): return 0\ndef _middle(): return _h()\n"
-                     "def a(): return _middle()\ndef b(): return _h()\n")
-        before = self.commit(self.tree)
-        p.write_text(p.read_text().replace("return 0", "return 1"))
-        after = self.commit(self.tree)
-        self.assertEqual(contracts.affected(self.repo, before, after, self.rules),
-                         {"code.py::_h", "code.py::_middle", "code.py::a", "code.py::b"})
+    def run_on(self, candidate, command, timeout=5):
+        """One registered command on a fresh checkout of the exact candidate: (exit code, output)."""
+        with contracts.checkout(self.repo, candidate) as path:
+            return contracts._run(path, candidate, command, time.monotonic() + timeout)
 
-    def test_changed_import_binding_selects_unchanged_users(self):
-        p = self.tree / "code.py"
-        p.write_text("from math import floor as op\ndef a(): return op(1.5)\n"
-                     "def b(): raise NotImplementedError\n")
-        before = self.commit(self.tree)
-        p.write_text(p.read_text().replace("floor", "ceil"))
-        after = self.commit(self.tree)
-        self.assertEqual(contracts.affected(self.repo, before, after, self.rules), {"code.py::a"})
+    def test_production_is_every_changed_path_but_tests_and_documents(self):
+        (self.tree / "code.py").write_text("def a(): return 1\n")
+        (self.tree / "notes.md").write_text("notes\n")
+        (self.tree / "tests/test_more.py").write_text("# more\n")
+        (self.tree / "lib.c").write_text("int x;\n")
+        self.assertEqual(contracts.production(self.repo, self.base, self.commit(self.tree), self.rules),
+                         ["code.py", "lib.c"])
 
-    def test_import_module_use_and_wildcard_remain_whole_file(self):
-        for prefix in ("import os\nROOT = os.getcwd()\n", "from math import *\n",
-                       "from __future__ import annotations\n", "import os\n"):
-            with self.subTest(prefix=prefix):
-                git.run(self.tree, "reset", "--hard", self.base)
-                p = self.tree / "code.py"
-                p.write_text(prefix + p.read_text())
-                self.assertEqual(contracts.affected(self.repo, self.base, self.commit(self.tree), self.rules),
-                                 {"code.py"})
-
-    def test_changed_code_failure_blocks(self):
-        candidate = self.implement()
+    def test_changed_code_failure_shows(self):
+        self.implement()
         (self.tree / "code.py").write_text("def a(): return 0\n\ndef b(): raise NotImplementedError\n")
         candidate = self.commit(self.tree)
-        with self.assertRaisesRegex(ValueError, "test command failed"):
-            contracts.verify(self.repo, candidate, [["python3", "-m", "unittest", "tests.test_code.A"]], 5)
+        code, output = self.run_on(candidate, ["python3", "-m", "unittest", "tests.test_code.A"])
+        self.assertNotEqual(code, 0)
+        self.assertIn("AssertionError", output)
 
     def test_test_edit_even_reverted_in_later_commit_is_rejected(self):
         path = self.tree / "tests/test_code.py"
@@ -111,17 +97,16 @@ class Contracts(unittest.TestCase):
     def test_candidate_is_checked_without_untracked_workspace_helpers(self):
         candidate = self.implement()
         (self.tree / "local_only").touch()
-        with self.assertRaisesRegex(ValueError, "test command failed"):
-            contracts.verify(self.repo, candidate, [["python3", "-c", "from pathlib import Path; assert Path('local_only').exists()"]], 5)
+        code, _ = self.run_on(candidate, ["python3", "-c", "from pathlib import Path; assert Path('local_only').exists()"])
+        self.assertNotEqual(code, 0)
         with self.assertRaisesRegex(ValueError, "changed the checked-out candidate"):
-            contracts.verify(self.repo, candidate, [["python3", "-c", "from pathlib import Path; Path('code.py').write_text('')"]], 5)
+            self.run_on(candidate, ["python3", "-c", "from pathlib import Path; Path('code.py').write_text('')"])
 
     def test_test_runner_timeout_is_bounded_and_checkout_removed(self):
         candidate = self.implement()
         with self.assertRaisesRegex(ValueError, "timed out"):
-            contracts.verify(self.repo, candidate, [["python3", "-c", "import time; time.sleep(30)"]], 0.05)
+            self.run_on(candidate, ["python3", "-c", "import time; time.sleep(30)"], 0.05)
         self.assertNotIn("cointos-check-", git.run(self.repo, "worktree", "list"))
-
 
 if __name__ == "__main__":
     unittest.main()

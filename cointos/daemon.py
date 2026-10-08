@@ -152,9 +152,8 @@ def tick(timers: dict) -> None:
         look_after_agents()
         messages.pending()
         recovery.enforce()
-        _, _, queue_changed = spawner.refresh()
+        spawner.refresh()
         snapshots.forget_untracked()
-        L["incidents"] = recovery.incidents()
         if CONFIG["viewers"]["max_viewers"]:
             viewers.look_after(windows)
         if now() - timers["spawn"] >= CONFIG["spawner"]["interval_seconds"]:
@@ -173,8 +172,7 @@ def tick(timers: dict) -> None:
         for thought in checks.stalled_thoughts(CONFIG, L, now()):
             lanes.cancel(thought["id"])
     save()
-    if queue_changed:
-        queues.publish()
+    queues.publish()
 
 
 def shutdown() -> None:

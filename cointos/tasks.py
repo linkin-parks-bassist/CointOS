@@ -5,7 +5,8 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
 
     id, kind, role, place, title        identity; `place` is a project, a tree, or "system"
     item, brief                          what to do; `item` names its queue item, if any
-    record, record_hash                  its daemon queue record and the version it was made for
+    record, record_version               its daemon queue record and the record version it was made for
+    health_hash                          a garden's tree-health identity when it was made
     worker                               an integration's worker task
     rank, created_at, updated_at         admission order and times
     status, runs, agent, session, note   lifecycle: waiting | running | review | done | failed
@@ -69,7 +70,7 @@ def active(task: dict) -> bool:
 # ---------------------------------------------------------------- creating tasks
 
 def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: str | None = None,
-           record_hash: str | None = None, worker: str | None = None, reasoning_effort: str | None = None,
+           record_version: int | None = None, worker: str | None = None, reasoning_effort: str | None = None,
            budget: dict | None = None, **fields) -> dict:
     """A new waiting task of `kind` in `where`. A queue-backed task is named by its item, so its
     id is its record's key; any other is numbered (`garden-3`), so ids never repeat. Caller holds LOCK."""
@@ -84,7 +85,7 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
         "id": f"{where['name']}:{name}", "kind": kind, "role": spec["role"], "place": where["name"],
         "name": names.invent({t["name"] for t in L["tasks"].values() if t.get("name")}),
         "title": title, "item": item, "brief": brief,
-        "record": f"{where['name']}:{item}" if spec["record"] else None, "record_hash": record_hash,
+        "record": f"{where['name']}:{item}" if spec["record"] else None, "record_version": record_version,
         "worker": worker, "rank": rank, "created_at": created, "updated_at": created,
         "status": "waiting", "runs": 0, "agent": None, "session": None, "note": None,
         "receipt": None, "result": None, "revision": None,
@@ -212,7 +213,7 @@ def set_budget(task_id: str, changes) -> dict:
     task, record = L["tasks"].get(task_id), queues.records().get(task_id)
     if task and (task["status"] != "waiting" or task.get("validating")):
         raise ValueError("budget changes require an inactive waiting task")
-    if not task and (not record or record["status"] != "queued"):
+    if not task and (not record or queues.status(record) != "queued"):
         raise ValueError("budget changes require a waiting task or undispatched queue item")
     if not changes:
         raise ValueError("budget changes must contain at least one limit")

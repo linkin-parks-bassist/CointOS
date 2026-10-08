@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cointos import git, lifecycle, opencode, queues, schema
+from cointos import git, lifecycle, opencode, schema
 from cointos.state import CONFIG, L, log, now
 
 
@@ -67,20 +67,3 @@ def packet(agent_id: str, task: dict, agent: dict) -> str:
         sections += ["Git status:\n" + (status or "clean"), "Commits since start:\n" + (commits or "none")]
     sections += list(reversed(opencode.evidence(agent_id, limit=7)))
     return "\n\n".join(sections)[:CONFIG["recovery"]["handoff_chars"]]
-
-
-def incidents() -> list[dict]:
-    """One stable, bounded packet per mechanical problem; no model diagnosis here."""
-    packets = [{"task": key, "reason": reason} for key, reason in sorted(L["dependency_problems"].items())]
-    for task in L["tasks"].values():
-        if task.get("replaced_by") or task["status"] == "done":
-            continue
-        if task["status"] == "failed":
-            packets.append({"task": task["id"], "reason": task["note"] or "run retries exhausted"})
-        elif task["status"] == "review" and task["stage"] == "implementation":
-            if (queues.records().get(task["record"]) or {}).get("commit"):
-                packets.append({"task": task["id"], "reason": "queue has a commit but task remains in review"})
-        if task.get("rejections", 0) >= CONFIG["recovery"]["repeated_rejections"]:
-            packets.append({"task": task["id"], "reason": "repeated landing rejection",
-                            "evidence": (task.get("review") or "")[:1000]})
-    return packets

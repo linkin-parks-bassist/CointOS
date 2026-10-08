@@ -164,8 +164,7 @@
     "generation_tokens": 48000,
     "warning_fraction": 0.75,
     "handoff_chars": 6000,
-    "fresh_retries": 2,
-    "repeated_rejections": 2
+    "fresh_retries": 2
   },
   "journal": {
     "bytes": 8388608

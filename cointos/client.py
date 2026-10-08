@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 
@@ -14,9 +15,19 @@ class Unreachable(Exception):
     """The daemon is not answering (halted, restarting or not started)."""
 
 
+def caller() -> dict | None:
+    """The agent run this process belongs to, from its environment; None for the user."""
+    task, run = os.environ.get("COINTOS_TASK_ID"), os.environ.get("COINTOS_AGENT")
+    return {"task": task, "run": run} if task and run else None
+
+
 def call(action: str, body: dict | None = None, timeout: float = CONFIG["timeouts"]["api_seconds"]) -> dict:
-    """POST one control action. The daemon's refusal raises ValueError with its reason."""
-    return _request(f"/api/{action}", json.dumps(body or {}).encode(), timeout)
+    """POST one control action, as this process's agent run when it is one. The daemon's
+    refusal raises ValueError with its reason."""
+    body = dict(body or {})
+    if caller():
+        body["caller"] = caller()
+    return _request(f"/api/{action}", json.dumps(body).encode(), timeout)
 
 
 def ledger(*, timeout: float = CONFIG["timeouts"]["api_seconds"]) -> dict:

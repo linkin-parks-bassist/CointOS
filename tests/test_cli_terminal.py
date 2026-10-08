@@ -12,11 +12,11 @@ class TerminalCommands(unittest.TestCase):
         with patch.dict(os.environ, {"COINTOS_TASK_ID": "p:work", "COINTOS_AGENT": "worker-1"}), \
                 patch.dict(cli.COMMANDS, {"finish": lambda args: "receipt accepted"}), \
                 patch("builtins.print", side_effect=lambda value, flush=False: order.append(("print", value, flush))), \
-                patch.object(cli, "call", side_effect=lambda action, body: order.append((action, body)) or {"ok": True}):
+                patch.object(cli, "call", side_effect=lambda action, body=None: order.append((action, body)) or {"ok": True}):
             cli.main(["finish", "--complete", "done"])
         self.assertEqual(order, [
             ("print", "receipt accepted", True),
-            ("receipt-delivered", {"task": "p:work", "run": "worker-1"}),
+            ("receipt-delivered", None),
         ])
 
     def test_a_validation_error_that_returned_work_is_still_terminal(self):
@@ -26,11 +26,11 @@ class TerminalCommands(unittest.TestCase):
                 patch.dict(cli.COMMANDS, {"land": lambda args: (_ for _ in ()).throw(ValueError("sent back"))}), \
                 patch("builtins.print", side_effect=lambda value, **kwargs: order.append(("print", value, kwargs))), \
                 patch.object(cli, "ledger", return_value=recorded), \
-                patch.object(cli, "call", side_effect=lambda action, body: order.append((action, body)) or {"ok": True}):
+                patch.object(cli, "call", side_effect=lambda action, body=None: order.append((action, body)) or {"ok": True}):
             cli.main(["land", "summary"])
         self.assertEqual(order, [
             ("print", "sent back", {"file": __import__("sys").stderr, "flush": True}),
-            ("receipt-delivered", {"task": "p:integrate", "run": "integrator-1"}),
+            ("receipt-delivered", None),
         ])
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from cointos import api, cli, lifecycle, opencode, prompts, queues, schema, spawner, state, tasks
+from cointos import api, client, lifecycle, opencode, prompts, queues, schema, spawner, state, tasks
 from tests import support
 
 
@@ -22,24 +22,24 @@ class Handoffs(unittest.TestCase):
 
     def test_a_stage_completes_while_its_queued_children_continue(self):
         api.dispatch("queue", {"project": "p", "kind": "queued", "name": "tests", "brief": "Write tests\nSummary: Writes the tests this stage needs first.",
-                               "proposed_by": self.task["id"], "run": "manager-1"})
+                               "caller": support.caller(self.task, "manager-1")})
         receipt = self.finish("complete", "Plan committed and tests queued")
         self.assertEqual((receipt["run"], receipt["disposition"]), ("manager-1", "complete"))
         self.assertEqual(receipt["evidence"]["commit"], support.git.head(self.task["worktree"]))
         self.assertEqual((self.task["status"], self.task["agent"]), ("done", None))
-        self.assertEqual((state.L["queue"]["p:build"]["status"], state.L["queue"]["p:tests"]["status"]), ("done", "queued"))
+        self.assertEqual((queues.status(state.L["queue"]["p:build"]), queues.status(state.L["queue"]["p:tests"])), ("done", "queued"))
         self.assertEqual(state.L["queue"]["p:tests"]["proposed_by"], self.task["id"])
 
     def test_a_disposition_must_suit_the_kind_without_mutation(self):
         with self.assertRaisesRegex(ValueError, "complete or blocked"):
             self.finish("continue", "Wait for tests")
         self.assertEqual((self.task["status"], self.task["receipt"]), ("running", None))
-        self.assertEqual(state.L["queue"]["p:build"]["status"], "queued")
+        self.assertEqual(queues.status(state.L["queue"]["p:build"]), "queued")
 
     def test_a_blocker_is_explicit(self):
         self.finish("blocked", "Need an external decision")
-        self.assertEqual((state.L["queue"]["p:build"]["status"], state.L["queue"]["p:build"]["report"]),
-                         ("blocked", "Need an external decision"))
+        found = queues.state(state.L["queue"]["p:build"])
+        self.assertEqual((found["status"], found["blocker"]), ("blocked", "Need an external decision"))
         self.assertTrue(state.L["alerts"])
 
     def test_an_unlanded_plan_cannot_finish(self):
@@ -50,9 +50,9 @@ class Handoffs(unittest.TestCase):
 
     def test_a_finished_task_can_no_longer_propose(self):
         self.finish("complete", "Nothing left to queue")
-        with self.assertRaisesRegex(ValueError, "current run"):
+        with self.assertRaisesRegex(ValueError, "not running under"):
             api.dispatch("queue", {"project": "p", "kind": "queued", "name": "later", "brief": "Later",
-                                   "proposed_by": self.task["id"], "run": "manager-1"})
+                                   "caller": support.caller(self.task, "manager-1")})
 
     def running_as(self, kind, role_task_name="role"):
         task = tasks.create(kind, tasks.SYSTEM if schema.KINDS[kind]["scope"] == "system" else self.project,
@@ -61,7 +61,7 @@ class Handoffs(unittest.TestCase):
 
     def propose(self, by, kind, name, project="p"):
         return api.dispatch("queue", {"project": project, "kind": kind, "name": name, "brief": "A concrete concern",
-                                      "proposed_by": by["id"], "run": by["agent"]})
+                                      "caller": support.caller(by, by["agent"])})
 
     def test_stewards_and_test_auditors_propose_only_manager_commands_in_any_project(self):
         other = {**self.project, "name": "q"}
@@ -81,21 +81,21 @@ class Handoffs(unittest.TestCase):
             self.propose(integrator, "queued", "code")
 
     def test_a_proposal_must_come_from_the_proposing_tasks_current_run(self):
-        with self.assertRaisesRegex(ValueError, "current run"):
+        with self.assertRaisesRegex(ValueError, "not running under"):
             api.dispatch("queue", {"project": "p", "kind": "queued", "name": "x", "brief": "X",
-                                   "proposed_by": self.task["id"], "run": "someone-else"})
+                                   "caller": support.caller(self.task, "someone-else")})
 
-    def test_scout_attention_becomes_a_coin_alert(self):
-        steward = self.running_as("steward")
-        api.dispatch("attention", {"proposed_by": steward["id"], "run": steward["agent"],
-                                   "message": "Choose the recovery boundary"})
-        self.assertIn("Choose the recovery boundary", state.L["alerts"][-1]["text"])
-        with self.assertRaisesRegex(ValueError, "running scout or test auditor"):
-            api.dispatch("attention", {"proposed_by": self.task["id"], "run": "manager-1", "message": "Hi"})
+    def test_any_running_task_reaches_the_user_through_coin(self):
+        for by in (self.running_as("steward"), self.task):
+            api.dispatch("send", {"caller": support.caller(by, by["agent"]), "to": "user",
+                                  "text": "Choose the recovery boundary"})
+            self.assertIn(f"Message from {by['id']}: Choose the recovery boundary", state.L["alerts"][-1]["text"])
 
     def test_agent_commands_act_as_their_run(self):
         with patch.dict(os.environ, COINTOS_TASK_ID=self.task["id"], COINTOS_AGENT="manager-1"):
-            self.assertEqual(cli.proposal({"x": 1}), {"x": 1, "proposed_by": self.task["id"], "run": "manager-1"})
+            self.assertEqual(client.caller(), {"task": self.task["id"], "run": "manager-1"})
+        with patch.dict(os.environ, {"COINTOS_TASK_ID": "", "COINTOS_AGENT": ""}):
+            self.assertIsNone(client.caller(), "the user's own commands carry no caller")
         environment = opencode.environment(Path("/tmp/run"), {"task": {"id": "system:loose-ends-1"}})
         self.assertEqual(environment["COINTOS_TASK_ID"], "system:loose-ends-1")
 
@@ -181,8 +181,9 @@ class PeriodicSteward(unittest.TestCase):
         with patch.dict(state.CONFIG, spawner={**state.CONFIG["spawner"], "steward_every_seconds": 10}):
             task = spawner.next_task()
         self.assertEqual(task["kind"], "steward")
-        self.assertEqual(state.L["queue"]["p:dead"]["status"], "blocked")
-        self.assertIn("Task failed", state.L["queue"]["p:dead"]["report"])
+        found = queues.state(state.L["queue"]["p:dead"])
+        self.assertEqual(found["status"], "blocked")
+        self.assertIn("Task failed", found["blocker"])
 
     def test_the_test_auditor_follows_recent_accepted_work_once(self):
         state.L["cadence"]["steward:system"] = state.now()

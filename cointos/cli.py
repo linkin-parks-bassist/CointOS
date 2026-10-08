@@ -1,9 +1,9 @@
 """`cointos`: the user's and the agents' command line over the daemon.
 
 Reports (`status`, `agents`, `jobs`, `check`, `projects`) are formatted here as text, which
-Coin reuses. Agent commands (`finish`, `merge`, `review`, `land`, `return`, `replace`, `queue`,
-`attention`) act as the agent run whose environment they run in (`COINTOS_TASK_ID`,
-`COINTOS_AGENT`), so the daemon can tell which run submitted what.
+Coin reuses. A command run inside an agent run acts as that run: the client names it as the
+request's `caller` from the run's environment (`COINTOS_TASK_ID`, `COINTOS_AGENT`), so the
+daemon can tell which run asked for what.
 """
 from __future__ import annotations
 
@@ -196,8 +196,8 @@ def merge() -> str:
     task, run = run_here()
     lands = schema.KINDS[task["kind"]]["lands"]
     if lands == "review":
-        raise SystemExit("Workers do not land their work. Commit everything on your branch with .work-report.md, "
-                         "then submit it with `cointos finish`: the integrator reviews and lands it.")
+        raise SystemExit("Workers do not land their work. Commit everything on your branch, then submit it with "
+                         "`cointos finish`: the integrator reviews and lands it.")
     if task["branch"] is None:
         raise SystemExit("this system task has no branch to land")
     main = main_branch(task)
@@ -209,16 +209,13 @@ def merge() -> str:
         resolve(conflicted(), again)
     if not git.clean("."):
         raise SystemExit("your worktree has uncommitted changes; commit them first, then run `cointos merge` again")
-    if here("cat-file", "-e", f"HEAD:{queues.REPORT}").returncode == 0:
-        raise SystemExit(f"{queues.REPORT} is a worker-to-integrator artifact and may never land from a {task['kind']} "
-                         "task; remove it, commit that removal, and run `cointos merge` again")
     if here("merge", "--no-edit", main).returncode != 0:
         if conflicted():
             resolve(conflicted(), again)
         here("merge", "--abort")
         raise SystemExit(f"bringing your branch up to date with {main} failed; nothing has landed")
     if lands == "gate":
-        result = call("land", {"task": task["id"], "commit": git.head("."), "run": run}, timeout=LANDING_TIMEOUT)
+        result = call("land", {"commit": git.head(".")}, timeout=LANDING_TIMEOUT)
         return f"verified and landed {result['commit']} on {main}; this is your receipt."
     checkout = Path(git.run(".", "rev-parse", "--path-format=absolute", "--git-common-dir")).parent
     if git.result(checkout, "branch", "--show-current").stdout.strip() != main:
@@ -241,11 +238,11 @@ def integration() -> tuple[dict, dict, str]:
 
 
 def review() -> str:
-    """Stage the worker's submitted commit for review; its branch-local report is shown, not staged."""
+    """Stage the worker's submitted commit, after its packet's tests, for review, and show the
+    worker's account: its completion receipt."""
     task, worker, run = integration()
     main = main_branch(task)
     submitted = worker["receipt"]["evidence"]["commit"]
-    account = git.show(".", submitted, queues.REPORT)
     if not (here("diff", "--cached", "--quiet").returncode or conflicted()):
         if not git.clean("."):
             raise SystemExit("commit or resolve existing review edits before staging another worker")
@@ -259,13 +256,12 @@ def review() -> str:
                 raise SystemExit(merged.stderr.strip())
             if conflicted():
                 resolve(conflicted(), "commit the packet's tests with `git commit`, then run cointos review again")
-            here("rm", "-q", "-f", "--ignore-unmatch", "--", queues.REPORT)
             here("commit", "-q", "-m", f"Tests for {task['item']}")
         squashed = here("merge", "--squash", submitted)
         if squashed.returncode and not conflicted():
             raise SystemExit(squashed.stderr.strip())
-        here("rm", "-q", "-f", "--ignore-unmatch", "--", queues.REPORT)
-    lines = [f"Worker report for {task['item']}:\n\n{account}\n", here("diff", "--cached", "--stat").stdout]
+    lines = [f"Worker receipt for {task['item']}:\n\n{worker['receipt']['summary']}\n",
+             here("diff", "--cached", "--stat").stdout]
     if conflicted():
         resolve(conflicted(), "carry on with review; cointos land commits it")
     return "\n".join(lines + ['Check the diff and tests, maintain the project tree and plan, then cointos land "summary", '
@@ -278,47 +274,33 @@ def land(summary: str) -> str:
     task, worker, run = integration()
     if conflicted():
         resolve(conflicted(), "run cointos land again")
-    account = git.show(".", worker["receipt"]["evidence"]["commit"], queues.REPORT).strip()
-    message = f"{summary.strip()}\n\n{account}"
-    here("rm", "-q", "-f", "--ignore-unmatch", "--", queues.REPORT)
+    message = f"{summary.strip()}\n\nWorker: {worker['receipt']['summary']}"
     here("add", "-A")
     if here("diff", "--cached", "--quiet").returncode:
         committed = here("commit", "-q", "-m", message)
         if committed.returncode:
             raise SystemExit(committed.stderr.strip() or committed.stdout.strip())
-    elif not account or here("log", "-1", "--format=%B").stdout.strip() != message:
+    elif here("log", "-1", "--format=%B").stdout.strip() != message:
         raise SystemExit("nothing reviewed to land; run cointos review first")
     return merge()
 
 
 def send_back(notes: str) -> str:
     task, worker, run = integration()
-    call("return", {"task": task["id"], "run": run, "notes": notes})
+    call("return", {"notes": notes})
     return f"sent {task['item']} back to its worker; this is your receipt."
 
 
 def finish(outcome: str, detail: str) -> str:
     task, run = run_here()
-    call("finish", {"task": task["id"], "run": run, "outcome": outcome, "detail": detail}, timeout=LANDING_TIMEOUT)
+    call("finish", {"outcome": outcome, "detail": detail}, timeout=LANDING_TIMEOUT)
     return f"receipt accepted: {task['id']} {outcome}."
 
 
 def replace(children: list[str]) -> str:
     task, run = run_here()
-    call("replace", {"task": task["id"], "run": run, "children": children})
+    call("replace", {"children": children})
     return f"dependents of {task['item']} now depend on {', '.join(children)}; finish when your plan has landed"
-
-
-def sender() -> dict:
-    """Who a message is from: this agent run's task, or the user outside any run."""
-    return {"task": os.environ.get("COINTOS_TASK_ID"), "run": os.environ.get("COINTOS_AGENT")}
-
-
-def proposal(body: dict) -> dict:
-    """A request made as this agent run, when it runs in one."""
-    if os.environ.get("COINTOS_TASK_ID"):
-        body.update(proposed_by=os.environ["COINTOS_TASK_ID"], run=os.environ.get("COINTOS_AGENT"))
-    return body
 
 
 # ---------------------------------------------------------------- live views
@@ -454,7 +436,6 @@ def parser() -> argparse.ArgumentParser:
     incorporated.add_argument("task", help="project:task in review")
     incorporated.add_argument("--commit", required=True, help="exact current main commit SHA")
     incorporated.add_argument("--worker-commit", required=True, help="exact submitted worker commit SHA")
-    sub.add_parser("attention", help="scout/auditor: send a bounded issue to the user through Coin").add_argument("message")
     messaging = sub.add_parser("message", help="send a message to an active task's inbox (an agent run sends as its task)")
     messaging.add_argument("to", help="PROJECT:NAME task id, 'mailbox:NAME', or 'user'")
     messaging.add_argument("text")
@@ -567,9 +548,9 @@ def show_task(task_id: str) -> str:
 
 def hold_command(args) -> str:
     if args.release:
-        call("unhold", proposal({"item": args.item}))
+        call("unhold", ({"item": args.item}))
         return f"released {args.item}"
-    call("hold", proposal({"item": args.item}))
+    call("hold", ({"item": args.item}))
     return f"held {args.item}: it will not start until you revise or release it"
 
 
@@ -621,23 +602,21 @@ COMMANDS = {
     "return": lambda args: send_back(args.notes),
     "replace": lambda args: replace(args.children),
     "incorporate": lambda args: json.dumps(call("incorporate", {"task": args.task, "commit": args.commit,
-                                                                "worker_commit": args.worker_commit,
-                                                                "run": os.environ.get("COINTOS_AGENT")},
+                                                                "worker_commit": args.worker_commit},
                                                 timeout=LANDING_TIMEOUT)),
-    "attention": lambda args: json.dumps(call("attention", proposal({"message": args.message}))),
-    "message": lambda args: "sent to " + call("send", {**sender(), **({"mailbox": args.mailbox} if args.mailbox else {}),
+    "message": lambda args: "sent to " + call("send", {**({"mailbox": args.mailbox} if args.mailbox else {}),
                                                         "to": args.to, "text": args.text})["to"],
     "inbox": lambda args: "\n\n".join(f"From {m['from']}:\n{m['text']}"
-                                       for m in call("inbox", {**sender(), **({"mailbox": args.mailbox} if args.mailbox else {})})["messages"]) or "no unread messages",
-    "queue": lambda args: call("queue", proposal({
+                                       for m in call("inbox", {**({"mailbox": args.mailbox} if args.mailbox else {})})["messages"]) or "no unread messages",
+    "queue": lambda args: call("queue", ({
         "project": args.project, "name": args.name, "brief": args.brief, "kind": args.kind, "stage": args.stage,
         "reasoning_effort": args.reasoning_effort, "budget": limits(args)}))["item"],
     "hold": hold_command,
-    "revise": lambda args: call("revise", proposal({
+    "revise": lambda args: call("revise", ({
         "item": args.item, "brief": args.brief, "reason": args.reason, "stage": args.stage,
         "reasoning_effort": args.reasoning_effort, "budget": limits(args)}))["item"] + " revised",
     "move": lambda args: json.dumps(call("move", {"item": args.item, "to": args.to})),
-    "cancel": lambda args: json.dumps(call("cancel", proposal({"items": args.items, "reason": args.reason}))),
+    "cancel": lambda args: json.dumps(call("cancel", ({"items": args.items, "reason": args.reason}))),
     "supersede": lambda args: json.dumps(call("supersede", {"task": args.task, "replacements": args.replacements,
                                                             "reason": args.reason})),
     "clear-review": lambda args: json.dumps(call("clear-review", {"task": args.task, "reason": args.reason})),
@@ -646,9 +625,7 @@ COMMANDS = {
     "project": project_command,
     "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
                                              "abilities": args.ability or ["standard"],
-                                             "reasoning_effort": args.reasoning_effort, "budget": limits(args),
-                                             "task": os.environ.get("COINTOS_TASK_ID"),
-                                             "run": os.environ.get("COINTOS_AGENT")})["task"],
+                                             "reasoning_effort": args.reasoning_effort, "budget": limits(args)})["task"],
 }
 
 
@@ -658,7 +635,7 @@ def deliver_receipt() -> None:
     if not task_id or not run:
         raise SystemExit("terminal CointOS commands require a managed agent run")
     # The daemon stops this exact unit.  This acknowledgement call may be cut off with it.
-    call("receipt-delivered", {"task": task_id, "run": run})
+    call("receipt-delivered")
 
 
 def has_receipt_here() -> bool:

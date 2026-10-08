@@ -6,12 +6,13 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from cointos import api, cli, mcp, opencode, state
+from cointos import api, cli, client, mcp, opencode, state
 from tests import support
 
 
-def direct(action, body, **_):
-    return api.dispatch(action, body)
+def direct(action, body=None, **_):
+    """The client's call made in-process: as this process's agent run when it is one."""
+    return api.dispatch(action, {**(body or {}), **({"caller": client.caller()} if client.caller() else {})})
 
 
 class Tools(unittest.TestCase):
@@ -112,7 +113,7 @@ class Tools(unittest.TestCase):
 
     def test_task_cannot_impersonate_or_read_external_mailbox(self):
         with self.assertRaises(api.ApiError):
-            api.dispatch("inbox", {"task": self.manager["id"], "run": "manager-1", "mailbox": "codex"})
+            api.dispatch("inbox", {"caller": support.caller(self.manager, "manager-1"), "mailbox": "codex"})
         for target in ("mailbox:", "mailbox:bad/name", "mailbox:bad name"):
             self.assertTrue(mcp.invoke("send", {"to": target, "text": "hi"}, "manager")[1])
 

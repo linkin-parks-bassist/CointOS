@@ -1,100 +1,51 @@
-"""Daemon-owned scheduler records, published as current answers in the runtime tree.
+"""Queue records: the work wanted in each project, and the view of where that work stands.
 
-The ledger is the durable source; the runtime leaves are its readable projection.
-Project trees never contain scheduler records. All mutations run under the daemon lock.
+A record holds what is asked for (brief, dependencies, stage, effort, budget, order, holds) and
+one terminal fact written once by the lifecycle: `done`. Everything else about its state is
+derived from its tasks by `state`, never stored: a record whose current task failed is blocked;
+a failed worker item awaits its one managerial recovery pass. `version` counts revisions of what
+is asked; a task made for an older version no longer speaks for the record. All mutations run
+under the daemon lock; the runtime tree's queue leaves are a readable projection.
 """
 from __future__ import annotations
-import hashlib
-import json
 import copy
+import json
 import re
-from pathlib import Path
 from cointos import git, kt, schema
 from cointos.config import ROOT
-from cointos.state import CONFIG, L, log
+from cointos.state import CONFIG, L, log, now
 
-REPORT = ".work-report.md"
 # Queue item names that would collide with the ids of scheduler-created tasks in a project.
 RESERVED = ("garden", "tree-audit")
 RESERVED_PREFIXES = ("integrate-", "decompose-", "operator-", "loose-ends-", "test-audit-")
 
-def answer(text: str) -> str:
-    """A leaf's answer body, without front matter."""
-    if text.startswith("---\n"):
-        end = text.find("\n---\n", 4)
-        if end != -1:
-            return text[end + 5:]
-    return text
 
-
-def status(text: str) -> str | None:
-    """One unambiguous declaration outside quoted examples and fenced code."""
-    found = statuses(text)
-    return found[0] if len(found) == 1 else None
-
-
-def statuses(text: str) -> list[str]:
-    """Every `Status:` declaration outside quoted examples and fenced code."""
-    found_statuses = []
-    fence = None
-    for line in answer(text).splitlines():
-        stripped = line.strip()
-        if stripped.startswith(("```", "~~~")):
-            marker = stripped[:3]
-            fence = None if fence == marker else marker if fence is None else fence
-            continue
-        if fence is None:
-            found = re.fullmatch(r"\**Status:\**\s*([a-z ]+)\**", stripped, re.IGNORECASE)
-            if found:
-                found_statuses.append(found[1].strip().lower())
-    return found_statuses
-
-
-def depends(text: str) -> list[str]:
-    """The items named on the leaf's `Depends on:` line: paths or bare names, comma-separated."""
-    for line in answer(text).splitlines():
-        found = re.match(r"\**Depends on:\**\s*(.+)", line.strip(), re.IGNORECASE)
+def line(text: str, label: str) -> str | None:
+    """The value of a brief's `Label:` line, if it has one."""
+    for row in text.splitlines():
+        found = re.match(rf"\**{label}:\**\s*(.+)", row.strip(), re.IGNORECASE)
         if found:
-            return [n for n in (dependency(name) for name in found[1].split(",")) if n]
-    return []
+            return found[1].strip()
+    return None
 
 
 NO_DEPENDENCY = {"none", "nothing", "n/a", "-"}
 
 
-def dependency(name: str) -> str:
-    """One `Depends on:` entry as a queue name: markup, brackets and trailing sentence punctuation
-    removed; `none` and similar placeholders, such as `(none)`, name nothing."""
-    name = name.strip().strip("`*()[]").strip().rstrip(".;").strip("`*()[]").strip()
-    return "" if name.lower() in NO_DEPENDENCY else name
-
-
-def normalize_dependencies(record: dict) -> bool:
-    """Clean a stored dependency list in place (records queued before `dependency` existed). True on change."""
-    cleaned = list(dict.fromkeys(n for n in (dependency(d) for d in record.get("depends", [])) if n))
-    if cleaned == record.get("depends", []):
-        return False
-    record["depends"] = cleaned
-    return True
+def depends(text: str) -> list[str]:
+    """The items named on a brief's `Depends on:` line, comma-separated; `none` names nothing."""
+    names = []
+    for name in (line(text, "Depends on") or "").split(","):
+        name = name.strip().strip("`*()[]").strip().rstrip(".;").strip("`*()[]").strip()
+        if name and name.lower() not in NO_DEPENDENCY and name not in names:
+            names.append(name)
+    return names
 
 
 def relies_on(text: str) -> list[str]:
     """The owner APIs on a brief's `Relies on:` line: function or type names (a `path::name`
     citation or a file path is also accepted), comma-separated."""
-    for line in text.splitlines():
-        found = re.match(r"\**Relies on:\**\s*(.+)", line.strip(), re.IGNORECASE)
-        if found:
-            return [n.strip().strip("`") for n in found.group(1).split(",") if n.strip().strip("`")]
-    return []
-
-
-def summary(text: str) -> str | None:
-    """The plain-language explainer on a brief's `Summary:` line, shown on the dashboard."""
-    for line in text.splitlines():
-        found = re.match(r"\**Summary:\**\s*(.+)", line.strip(), re.IGNORECASE)
-        if found:
-            return found[1].strip()
-    return None
+    return [n.strip().strip("`") for n in (line(text, "Relies on") or "").split(",") if n.strip().strip("`")]
 
 
 SUMMARY_WORDS = (5, 20)
@@ -102,7 +53,7 @@ SUMMARY_WORDS = (5, 20)
 
 def require_summary(brief: str) -> None:
     """Agents' worker briefs must explain themselves to the dashboard in one short line."""
-    words = len((summary(brief) or "").split())
+    words = len((line(brief, "Summary") or "").split())
     if not SUMMARY_WORDS[0] <= words <= SUMMARY_WORDS[1]:
         raise ValueError(f"a worker brief needs a `Summary:` line of {SUMMARY_WORDS[0]}-{SUMMARY_WORDS[1]} plain words "
                          f"saying what the task is for (it is shown on the dashboard){f'; this one has {words}' if words else ''}")
@@ -128,49 +79,6 @@ def missing_reliances(repo, commit: str, names: list[str]) -> list[str]:
     return missing
 
 
-def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
-    """Each item's readiness from its `Depends on:` line: "ready" once every item it depends on
-    has landed (`done`, item paths); "waiting" while any is still in the queue; otherwise the
-    problem that keeps it from ever becoming ready (an unknown or blocked dependency, or a
-    cycle). A blocked dependency awaiting its manager keeps its dependents waiting: a
-    manager replaces it with smaller children and repoints them. Pure."""
-    paths = {item["item"]: item for item in items}
-    stems = {Path(item["item"]).stem: item["item"] for item in items}
-    done_stems = {Path(name).stem: name for name in done}
-
-    def resolve(name):
-        return name if name in paths else stems.get(Path(name).stem)
-
-    def finished(name):
-        return name in done or Path(name).stem in done_stems
-
-    def stuck(name):  # blocked for good; one awaiting decomposition will be replaced
-        return paths[name]["status"] == "blocked" and not paths[name].get("decompose")
-
-    def reaches(start, target, seen):
-        for name in paths[start].get("depends", []):
-            found = resolve(name)
-            if found == target or (found and found not in seen and reaches(found, target, seen | {found})):
-                return True
-        return False
-
-    result = {}
-    for item in items:
-        needed = [name for name in item.get("depends", []) if not finished(name)]
-        unknown = [name for name in needed if resolve(name) is None]
-        if unknown:
-            result[item["item"]] = f"depends on unknown {', '.join(unknown)}"
-        elif reaches(item["item"], item["item"], {item["item"]}):
-            result[item["item"]] = "depends on itself through a cycle"
-        elif any(stuck(resolve(name)) for name in needed):
-            result[item["item"]] = "depends on a blocked item: " + ", ".join(
-                resolve(name) for name in needed if stuck(resolve(name)))
-        else:
-            result[item["item"]] = "waiting" if needed else "ready"
-    return result
-
-
-
 def slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60] or "item"
 
@@ -179,15 +87,110 @@ def records() -> dict:
     return L["queue"]
 
 
-def scan(project: dict) -> list[dict]:
-    return [dict(record, position=i) for i, record in enumerate(sorted(records().values(), key=lambda r: r["priority"]))
-            if record["project"] == project["name"] and record["status"] != "done"]
+def key(record: dict) -> str:
+    return f"{record['project']}:{record['item']}"
 
 
-def landed(project: dict) -> set[str]:
-    return {r["item"] for r in records().values()
-            if r["project"] == project["name"] and r["status"] == "done"}
+# ---------------------------------------------------------------- where a record stands
 
+def current(record: dict, kind_name: str | None = None) -> dict | None:
+    """The record's task (or its decomposition, given `decompose-`) made for its current version."""
+    task_id = f"{record['project']}:{kind_name or ''}{record['item']}"
+    task = L["tasks"].get(task_id)
+    return task if task and task.get("record_version") == record["version"] else None
+
+
+def blocker(task: dict) -> str:
+    """What a failed task leaves for the manager who must decide about it."""
+    receipt = task["receipt"] or {}
+    report = (f"Assignment: {task['id']}\n\n{task['brief']}\n\n"
+              f"Worker receipt: {receipt.get('summary', 'No completion receipt')}\n"
+              f"Evidence: {receipt.get('evidence', {})}\n\n"
+              f"Task failed: {task['note'] or 'run retries exhausted'}")
+    if task.get("recovery_context"):
+        report += (f"\n\nThe worker's last evidence before it stopped (branch {task['branch']}, files preserved); "
+                   f"treat its claims as leads until verified:\n{task['recovery_context']}")
+    return report
+
+
+def state(record: dict) -> dict:
+    """Where a record stands, from its terminal fact and its current tasks:
+    {"status": "done" | "replaced" | "blocked" | "queued", "blocker": text or None,
+     "decompose": whether a failed worker item awaits its one managerial recovery pass}."""
+    if record.get("done"):
+        return {"status": "done", "blocker": None, "decompose": False}
+    if record.get("replaced_by"):
+        return {"status": "replaced", "blocker": None, "decompose": False}
+    task = current(record)
+    if task is None:
+        return {"status": "queued", "blocker": None, "decompose": False}
+    if task["kind"] == "breakdown" and task["status"] == "done" and task["receipt"]["disposition"] == "blocked":
+        return {"status": "blocked", "blocker": task["receipt"]["summary"], "decompose": False}
+    if task["status"] != "failed":
+        return {"status": "queued", "blocker": None, "decompose": False}
+    if task["kind"] != "item":
+        return {"status": "blocked", "blocker": blocker(task), "decompose": False}
+    manager = current(record, "decompose-")
+    if manager and manager["status"] in ("done", "failed"):
+        receipt = manager["receipt"] or {}
+        return {"status": "blocked", "decompose": False,
+                "blocker": receipt.get("summary") or manager["note"] or "its manager gave up"}
+    return {"status": "blocked", "blocker": blocker(task), "decompose": True}
+
+
+def status(record: dict) -> str:
+    return state(record)["status"]
+
+
+def view() -> dict:
+    """The records with where each stands, for the dashboard, CLI and Coin."""
+    return {k: {**r, **state(r)} for k, r in records().items()}
+
+
+def live(project_name: str) -> list[dict]:
+    """A project's records still wanted (not done or replaced), in queue order, with positions."""
+    mine = sorted((r for r in records().values() if r["project"] == project_name
+                   and status(r) not in ("done", "replaced")), key=lambda r: r["priority"])
+    return [dict(r, position=i) for i, r in enumerate(mine)]
+
+
+def landed(project_name: str) -> set[str]:
+    return {r["item"] for r in records().values() if r["project"] == project_name and r.get("done")}
+
+
+def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
+    """Each live item's readiness from its dependencies: "ready" once every item it depends on is
+    done; "waiting" while any is still wanted; otherwise the problem that keeps it from ever
+    becoming ready (an unknown or blocked dependency, or a cycle). A blocked dependency awaiting
+    its manager keeps its dependents waiting: the manager replaces it and repoints them."""
+    by_name = {item["item"]: item for item in items}
+
+    def stuck(name):
+        found = state(by_name[name])
+        return found["status"] == "blocked" and not found["decompose"]
+
+    def reaches(start, target, seen):
+        for name in by_name[start].get("depends", []):
+            if name == target or (name in by_name and name not in seen and reaches(name, target, seen | {name})):
+                return True
+        return False
+
+    result = {}
+    for item in items:
+        needed = [name for name in item.get("depends", []) if name not in done]
+        unknown = [name for name in needed if name not in by_name]
+        if unknown:
+            result[item["item"]] = f"depends on unknown {', '.join(unknown)}"
+        elif reaches(item["item"], item["item"], {item["item"]}):
+            result[item["item"]] = "depends on itself through a cycle"
+        elif any(stuck(name) for name in needed):
+            result[item["item"]] = "depends on a blocked item: " + ", ".join(name for name in needed if stuck(name))
+        else:
+            result[item["item"]] = "waiting" if needed else "ready"
+    return result
+
+
+# ---------------------------------------------------------------- changing what is wanted
 
 def add(project: dict, kind: str, name: str, brief: str, stage=None, reasoning_effort=None, budget=None) -> str:
     """A new queued record, or the same one again for a retried identical proposal."""
@@ -198,22 +201,18 @@ def add(project: dict, kind: str, name: str, brief: str, stage=None, reasoning_e
     item = slug(name)
     if item in RESERVED or item.startswith(RESERVED_PREFIXES):
         raise ValueError("name is reserved for scheduler tasks")
-    record = {"project": project["name"], "item": item, "kind": record_kind(kind),
-              "status": "queued", "decompose": False, "held_by": None,
-              "priority": (min((r["priority"] for r in records().values()), default=0) - 1 if kind == "urgent"
-                           else max((r["priority"] for r in records().values()), default=0) + 1),
-              **contents(record_kind(kind), brief, stage, reasoning_effort, budget)}
-    key = f"{project['name']}:{item}"
-    if key in records():
-        if all(records()[key].get(k) == record.get(k) for k in ("kind", "brief", "stage", "reasoning_effort", "budget")):
+    record_kind = "command" if kind == "command" else "queued"
+    priorities = [r["priority"] for r in records().values()]
+    record = {"project": project["name"], "item": item, "kind": record_kind, "held_by": None, "version": 1,
+              "priority": min(priorities, default=0) - 1 if kind == "urgent" else max(priorities, default=0) + 1,
+              **contents(record_kind, brief, stage, reasoning_effort, budget)}
+    existing = records().get(key(record))
+    if existing:
+        if all(existing.get(k) == record.get(k) for k in ("kind", "brief", "stage", "reasoning_effort", "budget")):
             return item  # retry after a lost API response
-        raise ValueError(f"{key} already exists; choose another name")
-    records()[key] = record
+        raise ValueError(f"{key(record)} already exists; choose another name")
+    records()[key(record)] = record
     return item
-
-
-def record_kind(queue_kind: str) -> str:
-    return "command" if queue_kind == "command" else "queued"
 
 
 def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=None) -> dict:
@@ -226,17 +225,16 @@ def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=No
     if stage == "test-contract" and not relies_on(brief):
         raise ValueError("a test-contract brief needs a `Relies on: name, ...` line naming the existing "
                          "functions and types its witnesses and assertions use; they are checked against main at dispatch")
-    fields = {"brief": brief.strip(), "summary": summary(brief), "depends": depends(brief), "stage": stage,
-              "reasoning_effort": schema.effort(reasoning_effort),
-              "hash": hashlib.sha256(brief.strip().encode()).hexdigest()[:16]}
+    fields = {"brief": brief.strip(), "summary": line(brief, "Summary"), "depends": depends(brief), "stage": stage,
+              "reasoning_effort": schema.effort(reasoning_effort)}
     if budget is not None:
         fields["budget"] = dict(budget)
     return fields
 
 
 def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=None) -> None:
-    """Replace what a record asks for. It queues again: an earlier blocker or decomposition request
-    described the previous brief. Omitted metadata is retained; supplied budget fields merge."""
+    """Replace what a record asks for: a new version, queued afresh. Omitted metadata is
+    retained; supplied budget fields merge."""
     if budget is not None:
         schema.budget(CONFIG, budget)
         budget = {**record.get("budget", {}), **budget}
@@ -247,164 +245,125 @@ def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=N
                        record["reasoning_effort"] if reasoning_effort is None else reasoning_effort,
                        budget)
     record.pop("budget", None)
-    record.pop("report", None)
-    record.update(status="queued", decompose=False, held_by=None, **revised)
+    record.update(held_by=None, version=record["version"] + 1, **revised)
 
 
-def update(project: str, item: str, status_value: str, report: str = "", *, decompose: bool = False) -> None:
-    record = records()[f"{project}:{item}"]
-    record.update(status=status_value, decompose=decompose)
-    if report:
-        record["report"] = report
-    record["hash"] = hashlib.sha256(repr(record).encode()).hexdigest()[:16]
+def finish(record: dict, **facts) -> None:
+    """The terminal fact: this record's work is done. Written once, by the lifecycle."""
+    record["done"] = {"at": now(), **facts}
 
 
-def accepted(project: str, item: str, commit: str) -> None:
-    """Make verified acceptance the terminal authority for one queue record.
+def replace(record: dict, replacements: list[str], reason: str) -> None:
+    """Replace a record with existing same-project records: dependents of it depend on the
+    replacements instead, except a replacement that depended on it, which inherits its
+    dependencies. Nothing changes if that would leave a new cycle."""
+    if not isinstance(replacements, list) or not replacements or not all(isinstance(n, str) for n in replacements):
+        raise ValueError("name the replacement items")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("say why it is replaced")
+    replacements = list(dict.fromkeys(replacements))
+    project, item = record["project"], record["item"]
+    current_records = records()
+    for name in replacements:
+        other = current_records.get(f"{project}:{name}")
+        if name == item or other is None or status(other) in ("replaced", "blocked"):
+            raise ValueError(f"invalid same-project replacement: {name}")
+    revised = copy.deepcopy(current_records)
+    for other in revised.values():
+        if other["project"] == project and item in other["depends"]:
+            instead = record["depends"] if other["item"] in replacements else replacements
+            other["depends"] = list(dict.fromkeys(n for dep in other["depends"]
+                                                  for n in (instead if dep == item else [dep])))
 
-    Worker reports describe the submitted attempt. Once the daemon records a verified
-    landing receipt they can no longer keep scheduling state blocked.
-    """
-    record = records()[f"{project}:{item}"]
-    record.update(status="done", decompose=False, commit=commit)
-    record.pop("report", None)
-    record["hash"] = hashlib.sha256(repr(record).encode()).hexdigest()[:16]
-
-
-def report(task: dict) -> str:
-    try:
-        return (Path(task["worktree"]) / REPORT).read_text()
-    except OSError:
-        return ""
-
-
-def history_frontier(active_tasks: set[str]) -> set[str]:
-    """Queue identities still needed by unfinished work, including transitive prerequisites."""
-    current = records()
-    protected = {key for key, record in current.items()
-                 if record["status"] == "queued" or (record["status"] == "blocked" and record.get("decompose"))
-                 or key in active_tasks or record.get("proposed_by") in active_tasks}
-
-    def key_for(project: str, name: str) -> str | None:
-        direct = f"{project}:{name}"
-        if direct in current:
-            return direct
-        stem = Path(name).stem
-        return next((key for key, record in current.items()
-                     if record["project"] == project and Path(record["item"]).stem == stem), None)
-
-    pending = list(protected)
-    while pending:
-        record = current[pending.pop()]
-        for name in (*record.get("depends", []), *record.get("replaced_by", [])):
-            key = key_for(record["project"], name)
-            if key is not None and key not in protected:
-                protected.add(key)
-                pending.append(key)
-
-    return protected
-
-
-def clear_history(active_tasks: set[str]) -> list[str]:
-    """Remove terminal queue history that no live frontier still references. Caller holds LOCK."""
-    current = records()
-    protected = history_frontier(active_tasks)
-
-    removed = [key for key, record in current.items()
-               if key not in protected and record["status"] in ("done", "blocked")]
-    for key in removed:
-        del current[key]
-    return removed
+    def cycles(view_of):
+        mine = [r for r in view_of.values() if r["project"] == project and not r.get("done")]
+        return {n for n, s in readiness(mine, landed(project)).items() if "cycle" in s}
+    if cycles(revised) - cycles(current_records):
+        raise ValueError("replacement would leave a dependency cycle; no records changed")
+    for k, other in revised.items():
+        current_records[k]["depends"] = other["depends"]
+    record.update(replaced_by=replacements, replacement_reason=reason.strip())
+    log("item replaced", item=key(record), replacements=replacements, reason=reason.strip())
 
 
 MOVES = ("top", "up", "down", "bottom")
 
 
-def move(key: str, where: str) -> int:
+def move(record_key: str, where: str) -> int:
     """Move one live queue item among the project's live items; the spawner admits by this order.
     Returns the item's new position. Caller holds LOCK."""
-    current = records()
-    record = current.get(key)
-    if record is None or record["status"] == "done":
-        raise ValueError(f"no live queue item {key!r}")
+    record = records().get(record_key)
+    if record is None or record.get("done"):
+        raise ValueError(f"no live queue item {record_key!r}")
     if where not in MOVES:
         raise ValueError(f"move must be one of {', '.join(MOVES)}")
-    live = sorted((r for r in current.values() if r["project"] == record["project"] and r["status"] != "done"),
+    mine = sorted((r for r in records().values() if r["project"] == record["project"] and not r.get("done")),
                   key=lambda r: r["priority"])
-    index = live.index(record)
+    index = mine.index(record)
     if where in ("top", "bottom"):
-        others = [r["priority"] for r in current.values() if r is not record]
+        others = [r["priority"] for r in records().values() if r is not record]
         record["priority"] = (min(others, default=0) - 1) if where == "top" else (max(others, default=0) + 1)
     else:
         neighbour = index - 1 if where == "up" else index + 1
-        if 0 <= neighbour < len(live):
-            record["priority"], live[neighbour]["priority"] = live[neighbour]["priority"], record["priority"]
-    log("queue item moved", item=key, to=where)
-    return sorted((r for r in current.values() if r["project"] == record["project"] and r["status"] != "done"),
+        if 0 <= neighbour < len(mine):
+            record["priority"], mine[neighbour]["priority"] = mine[neighbour]["priority"], record["priority"]
+    log("queue item moved", item=record_key, to=where)
+    return sorted((r for r in records().values() if r["project"] == record["project"] and not r.get("done")),
                   key=lambda r: r["priority"]).index(record)
 
 
-def supersede(task_id: str, replacements: list[str], reason: str) -> dict:
-    """Replace failed/blocked prerequisites without declaring their work accepted. Caller holds LOCK."""
-    records_now = records()
-    old = records_now.get(task_id)
-    if (old is None or not isinstance(reason, str) or not reason.strip() or not isinstance(replacements, list)
-            or not replacements or not all(isinstance(n, str) for n in replacements)):
-        raise ValueError("supersede requires a queued task ID, existing bare replacement names and a reason")
-    replacements = list(dict.fromkeys(replacements))
-    if old.get("replaced_by"):
-        if old["replaced_by"] != replacements or old.get("replacement_reason") != reason.strip():
-            raise ValueError("task already has a different replacement")
-        return {"ok": True, "replaced_by": replacements}
-    task = L["tasks"].get(task_id, {})
-    if (task.get("status") not in ("failed", "done", None)
-            or (old["status"] != "blocked" and task.get("status") != "failed")):
-        raise ValueError("only failed or blocked work can be superseded; stop active work first")
-    project, item = old["project"], old["item"]
-    for name in replacements:
-        record = records_now.get(f"{project}:{name}")
-        if (name == item or record is None or record.get("replaced_by") or record["status"] == "blocked"
-                or L["tasks"].get(f"{project}:{name}", {}).get("status") == "failed"):
-            raise ValueError(f"invalid same-project replacement: {name}")
-    revised = copy.deepcopy(records_now)
-    def same_item(name):
-        return name == item or Path(name).stem == Path(item).stem
-    for r in revised.values():
-        if r["project"] == project:
-            if any(same_item(n) for n in r["depends"]):
-                r["depends"] = list(dict.fromkeys(n for dep in r["depends"]
-                                                 for n in (replacements if same_item(dep) else [dep])))
-    graph = [r for r in revised.values() if r["project"] == project and r["status"] != "done"]
-    done = {r["item"] for r in revised.values() if r["project"] == project and r["status"] == "done"}
-    before = readiness([r for r in records_now.values() if r["project"] == project and r["status"] != "done"], done)
-    if any("cycle" in s and "cycle" not in before.get(n, "") for n, s in readiness(graph, done).items()):
-        raise ValueError("replacement would leave a dependency cycle; no records changed")
-    # Keep existing dict identities: callers may hold records under the same lock.
-    for key, record in revised.items():
-        records_now[key].update(record)
-    old.update(status="blocked", decompose=False, replaced_by=replacements, replacement_reason=reason.strip())
-    if task:
-        task.update(replaced_by=replacements, replacement_reason=reason.strip())
-    log("prerequisite superseded", task=task_id, replacements=replacements, reason=reason.strip())
-    return {"ok": True, "replaced_by": replacements}
+# ---------------------------------------------------------------- history
+
+def history_frontier(active_tasks: set[str]) -> set[str]:
+    """Queue identities still needed by unfinished work, including transitive prerequisites."""
+    current_records = records()
+    protected = set()
+    for record_key, record in current_records.items():
+        found = state(record)
+        if (found["status"] == "queued" or found["decompose"] or record_key in active_tasks
+                or record.get("proposed_by") in active_tasks):
+            protected.add(record_key)
+    pending = list(protected)
+    while pending:
+        record = current_records[pending.pop()]
+        for name in (*record.get("depends", []), *record.get("replaced_by", [])):
+            other = f"{record['project']}:{name}"
+            if other in current_records and other not in protected:
+                protected.add(other)
+                pending.append(other)
+    return protected
+
+
+def clear_history(active_tasks: set[str]) -> list[str]:
+    """Remove settled queue records that no live frontier still references. Caller holds LOCK."""
+    protected = history_frontier(active_tasks)
+    removed = [k for k in records() if k not in protected]
+    for record_key in removed:
+        del records()[record_key]
+    return removed
+
+
+PUBLISHED: dict[tuple[str, str], str] = {}  # the answer each runtime queue leaf last received
 
 
 def publish() -> None:
-    """Refresh the derived runtime queue answers; called only by the daemon."""
+    """Refresh the derived runtime queue answers when they change; called only by the daemon."""
     for kind, question in (("queued", "what is queued"), ("command", "what is the command queue")):
         body = "The daemon alone owns this queue. Submit changes through its API.\n"
         for r in sorted(records().values(), key=lambda r: r["priority"]):
-            if r["kind"] == kind and r["status"] != "done":
-                body += (f"\n## {r['project']}:{r['item']}\n\nStatus: {r['status']}\n"
-                         f"Stage: {r['stage'] or 'manager command'}\nReasoning effort: {r['reasoning_effort'] or 'stage default'}\n\n{r['brief']}\n")
-                body += "\nCurrent dependencies: " + (", ".join(r["depends"]) or "none") + "\n"
-                body += "Run budget metadata: " + json.dumps(r.get("budget", {})) + " (omitted limits use daemon defaults)\n"
-                if r["held_by"]:
-                    body += f"Held by {r['held_by']}: it will not start until revised or released.\n"
-                if r.get("replaced_by"):
-                    body += f"\nReplaced by: {', '.join(r['replaced_by'])}\nReason: {r['replacement_reason']}\n"
-                if r.get("report"):
-                    body += f"\nCurrent blocker: {r['report']}\n"
+            found = state(r)
+            if r["kind"] != kind or found["status"] in ("done", "replaced"):
+                continue
+            body += (f"\n## {key(r)}\n\nStatus: {found['status']}\n"
+                     f"Stage: {r['stage'] or 'manager command'}\nReasoning effort: {r['reasoning_effort'] or 'stage default'}\n\n{r['brief']}\n")
+            body += "\nCurrent dependencies: " + (", ".join(r["depends"]) or "none") + "\n"
+            body += "Run budget metadata: " + json.dumps(r.get("budget", {})) + " (omitted limits use daemon defaults)\n"
+            if r["held_by"]:
+                body += f"Held by {r['held_by']}: it will not start until revised or released.\n"
+            if found["blocker"]:
+                body += f"\nCurrent blocker: {found['blocker']}\n"
         if "\n## " not in body:
             body += "\nThe queue is empty.\n"
-        kt.write(ROOT, question, body)
+        if PUBLISHED.get((str(ROOT), question)) != body:
+            kt.write(ROOT, question, body)
+            PUBLISHED[(str(ROOT), question)] = body

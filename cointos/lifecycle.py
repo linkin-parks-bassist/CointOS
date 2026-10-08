@@ -4,7 +4,7 @@ Every bounded assignment ends through one typed completion receipt tied to its t
 (`what/is/the/agent/completion/model.md`). The runner reports execution facts only: process
 exit, OpenCode finish markers and outward text never decide completion. A receipt's artifacts
 are checked as evidence before it is recorded; the functions here alone transition lifecycle
-state, and queue records are a projection of what they settle. Callers hold LOCK.
+state and write a queue record's one terminal fact, `done`. Callers hold LOCK.
 
     waiting --start--> running --receipt--> review (reviewed kinds) | done | failed (blocked integrator)
     running --run ended or stopped without receipt--> waiting (retry) | failed (runs exhausted)
@@ -36,8 +36,8 @@ def require_run(task: dict, run: str | None) -> None:
 
 def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
     """Check a receipt against the task's artifacts; the evidence to record, or ValueError
-    naming what to fix. A branch task leaves nothing uncommitted; a reviewed one submits one
-    committed report matching its disposition; a merged one has landed before it completes."""
+    naming what to fix. A branch task leaves nothing uncommitted; a merged one has landed
+    before it completes; a test packet changes only tests; tested work has passed its check."""
     found = {}
     lands = schema.KINDS[task["kind"]]["lands"]
     if task["branch"] is not None:
@@ -47,18 +47,12 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
         found["commit"] = git.head(task["worktree"])
         where = tasks.place(task)
         if lands == "review":
-            expected = "done" if disposition == "complete" else "blocked"
-            if queues.status(queues.report(task)) != expected:
-                raise ValueError(f"{queues.REPORT} on your branch must declare exactly one `Status: {expected}` for a "
-                                 f"{disposition} receipt; {report_problem(task)}")
-            found["report"] = expected
-            if disposition == "complete" and task.get("stage") == "test-contract":
-                rules = where.get("test_policy") or {}
-                production = contracts.affected(where["path"], task["base_commit"], found["commit"], rules) if rules else set()
+            rules = where.get("test_policy")
+            if disposition == "complete" and task.get("stage") == "test-contract" and rules:
+                production = contracts.production(where["path"], task["base_commit"], found["commit"], rules)
                 if production:
-                    raise ValueError("a test packet changes only tests; it also changes " + ", ".join(sorted(production)))
-                if rules:
-                    contracts.contracts(where["path"], found["commit"], rules)
+                    raise ValueError("a test packet changes only tests; it also changes " + ", ".join(production))
+                contracts.contracts(where["path"], found["commit"], rules)
             if (disposition == "complete" and task.get("stage") in schema.TESTED + ("test-contract",)
                     and where.get("test_policy")):
                 if (checked or {}).get("commit") != found["commit"]:
@@ -70,9 +64,7 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
                              f"is {ahead(where, task)} commit(s) ahead of {where['main_branch']}")
     if task["kind"] == "decompose" and disposition == "complete":
         record = queues.records().get(task["record"])
-        revised = record and record["hash"] != task["record_hash"] and (
-            record["status"] == "queued" or record.get("replaced_by"))
-        if not task.get("replacements") and not revised:
+        if not (record and (record["version"] != task["record_version"] or record.get("replaced_by"))):
             raise ValueError(f"revise the failed item or replace it with `cointos replace CHILD...` before finishing: "
                              f"{task['record']} is unchanged since this decomposition began and no replacement "
                              f"children were recorded")
@@ -84,19 +76,6 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
 def uncommitted(worktree, limit: int = 12) -> str:
     lines = git.result(worktree, "status", "--short").stdout.splitlines()
     return "\n".join(lines[:limit] + ([f"... and {len(lines) - limit} more"] if len(lines) > limit else []))
-
-
-def report_problem(task: dict) -> str:
-    """What the committed report actually declares, so a refused receipt says what to fix."""
-    text = queues.report(task)
-    if not text:
-        return f"there is no {queues.REPORT} in your worktree"
-    found = queues.statuses(text)
-    if not found:
-        return "it declares no `Status:` line (fenced code and quoted examples do not count)"
-    if len(found) > 1:
-        return f"it declares {len(found)} Status lines ({', '.join(found)}); keep exactly one"
-    return f"it declares `Status: {found[0]}`"
 
 
 def ahead(where: dict, task: dict) -> str:
@@ -152,13 +131,14 @@ def _receive(task: dict, run: str | None, disposition: str, summary: str, found:
     """Record a checked receipt and apply its one transition."""
     receipt = {"run": run, "disposition": disposition, "summary": summary, "evidence": found, "at": now()}
     note = f"{disposition}: {summary}"[:CONFIG["result_chars"]]
+    record = queues.records().get(task["record"]) if task["record"] else None
     if task.get("stage") == "test-contract" and disposition == "complete" and not found.get("passing"):
         # A test packet waiting for its code does not land: it is accepted as the hidden tests of
         # the code that depends on it, and lands with that code. One that already passes on main
         # has nothing to wait for, so it is reviewed and lands now.
-        _settle(task, "done", "accepted as a test packet", receipt=receipt, result=summary,
-                acceptance={"commit": found["commit"], "worker_commit": found["commit"], "via": "tests",
-                            "stage": "test-contract"})
+        acceptance = {"commit": found["commit"], "worker_commit": found["commit"], "via": "tests", "stage": "test-contract"}
+        _settle(task, "done", "accepted as a test packet", receipt=receipt, result=summary, acceptance=acceptance)
+        queues.finish(record, commit=found["commit"], via="tests")
     elif schema.KINDS[task["kind"]]["lands"] == "review":
         _settle(task, "review", note, receipt=receipt, result=summary)
     elif task["kind"] == "integrate" and disposition == "blocked":
@@ -168,6 +148,8 @@ def _receive(task: dict, run: str | None, disposition: str, summary: str, found:
             _settle(worker, "failed", "could not be integrated: " + summary)
     else:
         _settle(task, "done", note, receipt=receipt, result=summary)
+        if task["kind"] == "breakdown" and disposition == "complete" and record and record["version"] == task["record_version"]:
+            queues.finish(record, by=task["id"])
     if disposition == "blocked" and task["role"] not in ("worker", "integrator"):
         alert(f"{task['id']} blocked: {summary}")
     log("receipt", task=task["id"], run=run, disposition=disposition)
@@ -184,6 +166,8 @@ def landed(integration: dict | None, run: str | None, worker: dict, acceptance: 
     if worker["receipt"]["evidence"]["commit"] != acceptance["worker_commit"]:
         raise ValueError("the landed worker commit is not the one its receipt submitted")
     _settle(worker, "done", "accepted via " + acceptance["via"], review=None, acceptance=acceptance)
+    if worker["record"] in queues.records():
+        queues.finish(queues.records()[worker["record"]], commit=acceptance["commit"], via=acceptance["via"])
     if live:
         _receive(integration, run, "complete", f"{worker['item']} accepted at {acceptance['commit']}",
                  dict(acceptance))
@@ -213,7 +197,7 @@ def hold(key: str, by: str) -> None:
     uncharged. The hold ends when the item is revised, when it is released, or when the holding
     task settles."""
     record = queues.records()[key]
-    if record["status"] == "done":
+    if record.get("done"):
         raise ValueError(f"{key} is already accepted; queue new work instead")
     if record["held_by"] not in (None, by):
         raise ValueError(f"{key} is already held by {record['held_by']}")
@@ -240,7 +224,7 @@ def revise(key: str, by: str, reason: str, brief: str, stage=None, reasoning_eff
         raise ValueError("say why the item is revised")
     record = queues.records()[key]
     task = L["tasks"].get(key)
-    if record["status"] == "done" or (task and task["status"] == "done"):
+    if record.get("done") or (task and task.get("acceptance")):
         raise ValueError(f"{key} is already accepted; queue new work instead")
     if record.get("replaced_by"):
         raise ValueError(f"{key} was superseded by {', '.join(record['replaced_by'])}")
@@ -253,7 +237,7 @@ def revise(key: str, by: str, reason: str, brief: str, stage=None, reasoning_eff
     if task and task["status"] in ("waiting", "running", "review", "failed"):
         if task["status"] == "running":
             stop(task["agent"], f"revised by {by}", requeue=True, charge=False)
-        task.update(brief=record["brief"], stage=record["stage"], record_hash=record["hash"],
+        task.update(brief=record["brief"], stage=record["stage"], record_version=record["version"],
                     reasoning_effort=schema.default_effort(CONFIG, {**task, "reasoning_effort": record["reasoning_effort"]}),
                     budget=schema.budget(CONFIG, record.get("budget")), session=None, runs=0, fresh_retries=0,
                     rejections=0,
@@ -322,14 +306,11 @@ def cancel(items: list[str], by: str, reason: str) -> list[str]:
     for key in items:
         if key not in current:
             raise ValueError(f"unknown queue item {key!r}; name it PROJECT:ITEM")
-        if current[key]["status"] == "done":
+        if current[key].get("done"):
             raise ValueError(f"{key} is already accepted; it cannot be cancelled")
     cancelled = {(current[k]["project"], current[k]["item"]) for k in items}
-    def named(record, name):
-        return (record["project"], name) in cancelled or (record["project"], Path(name).stem) in {
-            (p, Path(i).stem) for p, i in cancelled}
-    dependents = sorted(k for k, r in current.items() if k not in items and r["status"] != "done"
-                        and not r.get("replaced_by") and any(named(r, d) for d in r["depends"]))
+    dependents = sorted(k for k, r in current.items() if k not in items and not r.get("done")
+                        and not r.get("replaced_by") and any((r["project"], d) in cancelled for d in r["depends"]))
     if dependents:
         raise ValueError(f"{', '.join(dependents)} still depend on it; cancel them too or revise their Depends on")
     note = f"cancelled by {by}: {reason.strip()}"
@@ -465,10 +446,9 @@ def clean_up(task: dict) -> None:
 
 def revivable(task: dict) -> bool:
     """Whether `cointos revise` could still restart this task on its branch: a failed item whose
-    queue record is live, unaccepted and not superseded."""
+    queue record is live, unaccepted and not replaced."""
     record = queues.records().get(task["record"]) if task["record"] else None
-    return (task["status"] == "failed" and record is not None and record["status"] != "done"
-            and not record.get("replaced_by") and not task.get("replaced_by"))
+    return task["status"] == "failed" and record is not None and queues.status(record) == "blocked"
 
 
 def retire(task: dict) -> bool:
@@ -506,7 +486,6 @@ def _settle(task: dict, status: str, note: str, **fields) -> None:
         for record in queues.records().values():  # a settled task no longer decides about anything it held
             if record["held_by"] == task["id"]:
                 record["held_by"] = None
-    project(task)
 
 
 def receipt_delivered(task_id: str, agent_id: str) -> None:
@@ -534,51 +513,15 @@ def receipt_delivered(task_id: str, agent_id: str) -> None:
     threading.Thread(target=retire, daemon=True).start()
 
 
-def project(task: dict) -> bool:
-    """Make the task's queue record show what its settlement says. Idempotent; True on change."""
-    record = queues.records().get(task["record"]) if task["record"] else None
-    if record is None:
-        return False
-    receipt, acceptance = task["receipt"] or {}, task.get("acceptance")
-    if task["kind"] == "item" and acceptance:
-        if (record["status"], record.get("commit")) == ("done", acceptance["commit"]) and not (
-                record.get("report") is not None or record.get("decompose")):
-            return False
-        queues.accepted(record["project"], record["item"], acceptance["commit"])
-    elif task["kind"] in ("item", "breakdown", "decompose") and task["status"] == "failed":
-        if task["record_hash"] != record["hash"] or (record["status"] != "queued" and task["kind"] != "decompose"):
-            return False
-        report = (f"Assignment: {task['id']}\n\n{task['brief']}\n\n"
-                  f"Worker receipt: {receipt.get('summary', 'No completion receipt')}\n"
-                  f"Evidence: {receipt.get('evidence', {})}\n\n"
-                  f"Task failed: {task['note'] or 'run retries exhausted'}")
-        if task.get("recovery_context"):
-            report += (f"\n\nThe worker's last evidence before it stopped (branch {task['branch']}, files preserved); "
-                       f"treat its claims as leads until verified:\n{task['recovery_context']}")
-        queues.update(record["project"], record["item"], "blocked",
-                      report, decompose=task["kind"] == "item")
-    elif task["kind"] == "breakdown" and receipt and record["status"] == "queued":
-        blocked = receipt["disposition"] == "blocked"
-        queues.update(record["project"], record["item"], "blocked" if blocked else "done",
-                      receipt["summary"] if blocked else "")
-    elif (task["kind"] == "decompose" and receipt.get("disposition") == "complete"
-          and task["record_hash"] == record["hash"] and record["status"] != "done"):
-        queues.update(record["project"], record["item"], "done")
-    elif task["kind"] == "decompose" and receipt.get("disposition") == "blocked" and task["record_hash"] == record["hash"]:
-        queues.update(record["project"], record["item"], "blocked", receipt["summary"])
-    else:
-        return False
-    return True
+def refuse_dispatch(task: dict, reason: str) -> None:
+    """A new task whose brief cannot be carried out as written fails before any run: its record
+    goes to its one managerial recovery pass like any other failed item."""
+    _settle(task, "failed", reason)
 
 
-def reconcile() -> bool:
-    """Re-project settled tasks and retire caches whose conversations have ended."""
+def reconcile() -> None:
+    """Retire caches whose conversations have ended and settled work's worktrees."""
     snapshots.forget_orphans()
-    changed = False
-    for task in L["tasks"].values():
-        if project(task):
-            log("queue record reconciled", task=task["id"])
-            changed = True
     swept = 0
     for task in list(L["tasks"].values()):  # retire settled work a bounded few at a time under LOCK
         if swept >= RETIRE_PER_TICK:
@@ -588,4 +531,3 @@ def reconcile() -> bool:
         except ValueError as error:
             task["retired"] = f"failed: {error}"
             log("retire failed", task=task["id"], error=str(error))
-    return changed

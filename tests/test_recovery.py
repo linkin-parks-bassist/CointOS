@@ -1,4 +1,4 @@
-"""Run budgets and fresh recovery, worker reports, superseded prerequisites, and the journal."""
+"""Run budgets and fresh recovery, superseded prerequisites, and the journal."""
 import copy
 import json
 from pathlib import Path
@@ -6,19 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cointos import journal, lifecycle, opencode, prompts, queues, recovery, state, tasks
+from cointos import api, journal, lifecycle, opencode, prompts, queues, recovery, state, tasks
 from tests import support
-
-
-class Reports(unittest.TestCase):
-    def test_headings_and_frontmatter_do_not_hide_completion(self):
-        self.assertEqual(queues.status("---\nstatus: green\n---\n# Work report\n\n**Status:** done\nEvidence."), "done")
-
-    def test_quoted_examples_do_not_submit_and_ambiguous_reports_fail(self):
-        self.assertIsNone(queues.status("```md\nStatus: done\n```\n> Status: done"))
-        self.assertIsNone(queues.status("Status: done\nStatus: blocked"))
-        self.assertIsNone(queues.status("Status: done\nStatus: done"))
-        self.assertEqual(queues.status("# Heading\nStatus: blocked\nNeeds decomposition: split"), "blocked")
 
 
 class Replacement(unittest.TestCase):
@@ -27,46 +16,43 @@ class Replacement(unittest.TestCase):
         self.project = support.project(self, support.repository(self))
         for name, brief in [("old", "Old"), ("new", "New"), ("next", "Depends on: old\nNext")]:
             queues.add(self.project, "queued", name, brief)
-        tasks.create("item", self.project, "old", "Old", [4], item="old")["status"] = "failed"
-        queues.update("p", "old", "blocked")
+        lifecycle.fail(tasks.create("item", self.project, "old", "Old", [4], item="old", record_version=1), "gave up")
+
+    def supersede(self, replacements, reason):
+        return api.dispatch("supersede", {"task": "p:old", "replacements": replacements, "reason": reason})
 
     def ready(self):
-        return queues.readiness(queues.scan(self.project), queues.landed(self.project))
+        return queues.readiness(queues.live("p"), queues.landed("p"))
 
     def test_replacement_survives_restart_and_waits_for_real_acceptance(self):
-        receipt = queues.supersede("p:old", ["new"], "Verified replacement")
+        receipt = self.supersede(["new"], "Verified replacement")
         restored = json.loads(json.dumps(state.L))
         state.L.clear()
         state.L.update(state.fresh(restored))
-        self.assertEqual(queues.supersede("p:old", ["new"], "Verified replacement"), receipt)
+        self.assertEqual(self.supersede(["new"], "Verified replacement"), receipt, "a retry is safe")
         self.assertEqual(state.L["tasks"]["p:old"]["status"], "failed")
-        self.assertNotIn("old", queues.landed(self.project))
+        self.assertNotIn("old", queues.landed("p"))
         self.assertEqual((state.L["queue"]["p:next"]["depends"], self.ready()["next"]), (["new"], "waiting"))
-        queues.update("p", "new", "done")
+        queues.finish(state.L["queue"]["p:new"])
         self.assertEqual(self.ready()["next"], "ready")
 
     def test_cycles_unknown_and_conflicting_retries_do_not_mutate(self):
         state.L["queue"]["p:new"]["depends"] = ["next"]
         before = copy.deepcopy(state.L["queue"])
         with self.assertRaisesRegex(ValueError, "cycle"):
-            queues.supersede("p:old", ["new"], "Cycle")
+            self.supersede(["new"], "Cycle")
         self.assertEqual(state.L["queue"], before)
         with self.assertRaisesRegex(ValueError, "same-project"):
-            queues.supersede("p:old", ["q:new"], "Unknown")
+            self.supersede(["q:new"], "Unknown")
         state.L["queue"]["p:new"]["depends"] = []
-        queues.supersede("p:old", ["new"], "Good")
+        self.supersede(["new"], "Good")
         with self.assertRaisesRegex(ValueError, "different replacement"):
-            queues.supersede("p:old", ["next"], "Different")
-
-    def test_dependency_aliases_follow_the_same_replacement(self):
-        state.L["queue"]["p:next"]["depends"] = ["what/is/the/queued/old.md"]
-        queues.supersede("p:old", ["new"], "Replacement")
-        self.assertEqual(state.L["queue"]["p:next"]["depends"], ["new"])
+            self.supersede(["next"], "Different")
 
     def test_a_failed_replacement_is_rejected(self):
-        tasks.create("item", self.project, "new", "New", [4], item="new")["status"] = "failed"
+        lifecycle.fail(tasks.create("item", self.project, "new", "New", [4], item="new", record_version=1), "gave up")
         with self.assertRaisesRegex(ValueError, "invalid same-project replacement"):
-            queues.supersede("p:old", ["new"], "Still failed")
+            self.supersede(["new"], "Still failed")
         self.assertEqual(state.L["queue"]["p:next"]["depends"], ["old"])
 
 
@@ -113,7 +99,7 @@ class Budgets(unittest.TestCase):
         self.assertIn("?? done.txt", text)
         self.assertIn("if its work is already complete, commit it and submit your receipt now", text)
         support.running(self.task, "worker-2", worktree=False)
-        (Path(self.task["worktree"]) / queues.REPORT).write_text("Status: done\n")
+        (Path(self.task["worktree"]) / "done.txt").write_text("done\n")
         support.commit(self.task["worktree"])
         lifecycle.submit(self.task["id"], "worker-2", "complete", "Committed the finished work")
         self.assertEqual(self.task["status"], "review")
@@ -124,10 +110,10 @@ class Budgets(unittest.TestCase):
             self.spend(seconds=self.task["budget"]["generation_seconds"])
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
-        record = state.L["queue"][f"{self.project['name']}:item"]
-        self.assertTrue(record.get("decompose"))
-        self.assertIn("the memo owns fire identity", record["report"])
-        self.assertIn(self.task["branch"], record["report"])
+        found = queues.state(state.L["queue"][f"{self.project['name']}:item"])
+        self.assertTrue(found["decompose"])
+        self.assertIn("the memo owns fire identity", found["blocker"])
+        self.assertIn(self.task["branch"], found["blocker"])
 
     def test_a_task_override_and_either_limit_triggers(self):
         self.task["budget"] = {"generation_tokens": 100, "generation_seconds": 10}
@@ -137,13 +123,13 @@ class Budgets(unittest.TestCase):
         self.assertEqual(self.task["status"], "waiting")
 
     def test_a_committed_report_without_a_receipt_does_not_win_over_the_budget(self):
-        (Path(self.task["worktree"]) / queues.REPORT).write_text("Status: done\n")
+        (Path(self.task["worktree"]) / "done.txt").write_text("done\n")
         support.commit(self.task["worktree"])
         self.spend(seconds=self.task["budget"]["generation_seconds"])
         self.assertEqual((self.task["status"], self.task["fresh_retries"]), ("waiting", 1))
 
     def test_a_receipted_run_over_budget_is_released_without_retry(self):
-        (Path(self.task["worktree"]) / queues.REPORT).write_text("Status: done\n")
+        (Path(self.task["worktree"]) / "done.txt").write_text("done\n")
         support.commit(self.task["worktree"])
         lifecycle.submit(self.task["id"], "worker-1", "complete", "Done")
         self.spend(seconds=self.task["budget"]["generation_seconds"])

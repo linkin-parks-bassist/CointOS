@@ -25,7 +25,7 @@ class RuntimeQueue(unittest.TestCase):
         persisted = json.loads(json.dumps(state.L, sort_keys=True))
         state.L.clear()
         state.L.update(state.fresh(persisted))
-        self.assertEqual([r["item"] for r in queues.scan(p)], ["u-urgent", "z-first", "a-second"])
+        self.assertEqual([r["item"] for r in queues.live("p")], ["u-urgent", "z-first", "a-second"])
 
     def test_real_kt_creation_update_and_noop(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -44,7 +44,7 @@ class RuntimeQueue(unittest.TestCase):
                 after = subprocess.run(['kt', '--lean', 'open', 'local:what/is/the/command/queue.md'],
                                        cwd=root, check=True, capture_output=True, text=True)
                 self.assertEqual(after.stderr, revision)
-                queues.update('p', 'plan', 'done')
+                queues.finish(queues.records()['p:plan'])
                 queues.publish()
                 done = subprocess.run(['kt', '--lean', 'open', 'local:what/is/the/command/queue.md'],
                                       cwd=root, check=True, capture_output=True, text=True)

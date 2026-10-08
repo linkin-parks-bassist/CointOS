@@ -13,8 +13,7 @@ A test packet reaches you only when its tests already pass on main, so there is 
 left to hide them from: review them the same way and land them as ordinary tests.
 
 1. Run `cointos review`. It commits the packet's tests, stages the exact commit the worker
-   submitted, shows its `.work-report.md`, and removes that branch-local report from the
-   staged result.
+   submitted and shows the worker's receipt, its account of the work.
    Resolve conflicts. The item's construction stage is fixed and decides its landing checks.
 2. Check the change against what the item asked for: read the whole diff
    (`git diff --cached`) and run relevant checks. Verify the boundary report against
@@ -35,6 +34,9 @@ left to hide them from: review them the same way and land them as ordinary tests
    cannot modify tests, fixtures, harness settings or the manifest, and the candidate's tests
    must be exactly main's plus the packet's; neither may your landing edit them. If a test in
    the packet contradicts the contract, finish blocked with the evidence: a manager decides.
+   An implementation or integration whose worker finished blocked cannot land: its hidden
+   tests never ran against the code. Return it to the worker if the code is ready, so it
+   finishes complete and its packet runs; otherwise finish blocked for a manager.
    Integration items must join only their named, already-tested dependencies.
    If this implementation is already present on main, verify rather than land it twice:
    `cointos incorporate PROJECT:ITEM --commit MAIN_SHA --worker-commit WORKER_SHA`.

@@ -58,7 +58,12 @@ def queued(where: dict, name: str, brief: str = "Do it", kind: str = "queued", *
     item = queues.add(where, kind, name, brief, **options)
     record = queues.records()[f"{where['name']}:{item}"]
     task_kind = "breakdown" if kind == "command" else "item"
-    return tasks.create(task_kind, where, item, record["brief"], [4], item=item, record_hash=record["hash"])
+    return tasks.create(task_kind, where, item, record["brief"], [4], item=item, record_version=record["version"])
+
+
+def caller(task: dict | str, run: str) -> dict:
+    """The `caller` a request made from this task's run carries."""
+    return {"task": task if isinstance(task, str) else task["id"], "run": run}
 
 
 def running(task: dict, agent_id: str = "run-1", worktree: bool = True) -> dict:
@@ -75,9 +80,9 @@ def running(task: dict, agent_id: str = "run-1", worktree: bool = True) -> dict:
 
 
 def reviewed(task: dict, agent_id: str = "run-1", status: str = "done") -> dict:
-    """A worker run that committed its report and submitted it for review."""
+    """A worker run that committed its work and submitted it for review."""
     running(task, agent_id)
-    (Path(task["worktree"]) / queues.REPORT).write_text(f"Status: {status}\n\nDone.\n")
+    (Path(task["worktree"]) / "work.txt").write_text("work\n")
     commit(task["worktree"], "work")
     lifecycle.submit(task["id"], agent_id, "complete" if status == "done" else "blocked", "Done")
     lifecycle.release(agent_id, "run ended")

@@ -90,14 +90,13 @@ class Halt(unittest.TestCase):
         second = support.queued(where, "second", "Depends on: first\nSecond")
         for task in (first, second):
             task.update(status="done", session="retained-session", receipt={"evidence": "accepted"})
-            queues.update("p", task["item"], "done")
+            queues.finish(state.L["queue"][task["id"]])
         queues.add(where, "queued", "next", "Depends on: second\nNext")
         failed = support.queued(where, "failed")
-        failed.update(status="failed", session="unfinished-session")
-        queues.update("p", "failed", "blocked", "Needs a manager", decompose=True)
+        failed.update(status="failed", session="unfinished-session")  # it awaits its manager
         forgotten = support.queued(where, "old")
         forgotten.update(status="done")
-        queues.update("p", "old", "done")
+        queues.finish(state.L["queue"]["p:old"])
         with patch.object(snapshots, "forget_owner") as forget:
             api.dispatch("clear-task-history", {})
         self.assertNotIn(forgotten["id"], state.L["tasks"])

@@ -2,19 +2,18 @@
 
 A project's test policy names its contract manifest (a JSON list of {"covers", "command"}),
 the protected test paths and the non-code paths. A test writer's commit registers a packet's
-tests; they stay off main, hidden from the implementer, until they land with the code that
-passes them. `packet_check` runs them when the implementer finishes; `suite` runs every
-registered command on a landing candidate; `verify` runs commands on a fresh checkout.
+tests. Tests that already pass on main (`passing`) land at once; failing ones stay off main,
+hidden from the implementer, until they land with the code that passes them. `packet_check`
+runs them when the implementer finishes; `suite` runs every registered command on a landing
+candidate.
 """
 from __future__ import annotations
 
-import ast
 import contextlib
 import fnmatch
 import json
 import os
 import re
-import shlex
 from pathlib import Path
 import signal
 import secrets
@@ -41,70 +40,10 @@ def check_test_diff(repo, before, after, rules):
         raise ValueError("implementation changes protected tests or harness: " + ", ".join(touched))
 
 
-def symbols(source: str) -> tuple[dict, dict, dict, str]:
-    """Index top-level definitions and named imports; retain executable module code."""
-    tree = ast.parse(source)
-    found, imports, references, module = {}, {}, {}, []
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            found[node.name] = ast.dump(node, include_attributes=False)
-            references[node.name] = {n.id for n in ast.walk(node)
-                                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-        elif isinstance(node, (ast.Import, ast.ImportFrom)) and not (
-                isinstance(node, ast.ImportFrom) and (node.module == "__future__" or
-                                                     any(a.name == "*" for a in node.names))):
-            for alias in node.names:
-                name = alias.asname or (alias.name.split(".")[0] if isinstance(node, ast.Import) else alias.name)
-                # Keep repeated bindings and import order visible.
-                imports.setdefault(name, []).append((type(node).__name__, getattr(node, "module", None),
-                                                      getattr(node, "level", 0), alias.name, alias.asname))
-        else:
-            module.append(node)
-    references[""] = {n.id for node in module for n in ast.walk(node)
-                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-    return found, imports, references, repr([ast.dump(n, include_attributes=False) for n in module])
-
-
-def affected(repo, before, after, rules) -> set[str]:
-    targets = set()
-    for path in git.changed(repo, before, after):
-        if protected(path, rules) or matches(path, rules.get("non_code", [])):
-            continue
-        if not path.endswith(".py"):
-            targets.add(path)
-            continue
-        versions = []
-        for rev in (before, after):
-            try:
-                versions.append(symbols(git.show(repo, rev, path)))
-            except SyntaxError:
-                versions.append(None)
-        old, new = versions
-        if old is None or new is None or old[3] != new[3]:
-            targets.add(path)
-            continue
-        definitions = old[0].keys() | new[0].keys()
-        changed_names = {n for n in definitions if old[0].get(n) != new[0].get(n)}
-        changed_imports = {n for n in old[1].keys() | new[1].keys() if old[1].get(n) != new[1].get(n)}
-        references = {n: old[2].get(n, set()) | new[2].get(n, set()) for n in definitions | {""}}
-
-        def users(names):
-            reached = set(names)
-            while True:
-                expanded = reached | {n for n, refs in references.items() if refs & reached}
-                if expanded == reached:
-                    return reached
-                reached = expanded
-
-        impacted = users(changed_names | changed_imports)
-        # Import side effects, wildcard/future imports and executable module edits
-        # cannot safely be assigned to one function. Unused imports stay conservative.
-        if "" in impacted or any(not (users({n}) & definitions) for n in changed_imports):
-            targets.add(path)
-            continue
-        impacted &= definitions
-        targets.update(f"{path}::{name}" for name in impacted)
-    return targets
+def production(repo, before, after, rules) -> list[str]:
+    """The changed paths that are production code: neither protected tests/harness nor non-code."""
+    return sorted(p for p in git.changed(repo, before, after)
+                  if not protected(p, rules) and not matches(p, rules.get("non_code", [])))
 
 
 def contracts(repo, commit, rules) -> list[dict]:
@@ -147,44 +86,16 @@ def implementation_history(repo, worker, main, rules):
 
 
 def incorporated(repo, worker, commit, rules) -> None:
-    """Exact changed definitions/files must exist on main.
-
-    This intentionally refuses semantic rewrites: an integrator must review those.
-    Ancestry or a green suite alone cannot prove the worker's work was incorporated.
-    """
+    """Main holds exactly the production files the worker changed. A rewrite, however
+    equivalent, needs an integrator's review and landing: ancestry or a green suite alone cannot
+    prove the worker's work was incorporated."""
     head, base = git.head(repo, worker["branch"]), worker["base_commit"]
     implementation_history(repo, worker, commit, rules)
-    targets = affected(repo, base, head, rules)
-    if not targets:
+    paths = production(repo, base, head, rules)
+    if not paths:
         raise ValueError("worker has no production changes to reconcile")
-    for path in sorted({t.partition("::")[0] for t in targets}):
-        equal = git.blob(repo, head, path) == git.blob(repo, commit, path)
-        if not equal and path.endswith(".py"):
-            versions = []
-            for revision in (base, head, commit):
-                source = git.show(repo, revision, path)
-                tree = ast.parse(source)
-                # Documentation refreshes are not changed executable behavior.
-                for node in ast.walk(tree):
-                    body = getattr(node, "body", None)
-                    if (isinstance(body, list) and body and isinstance(body[0], ast.Expr)
-                            and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
-                        body.pop(0)
-                versions.append(symbols(ast.unparse(tree)))
-            before, submitted, landed = versions
-            names = {n for n in before[0].keys() | submitted[0].keys() if before[0].get(n) != submitted[0].get(n)}
-            while True:
-                expanded = names | {n for name in names for n in submitted[2].get(name, set()) if n in submitted[0]}
-                if expanded == names:
-                    break
-                names = expanded
-            bindings = {n for n in before[1].keys() | submitted[1].keys() if before[1].get(n) != submitted[1].get(n)}
-            # Keep the imported environment of changed definitions stable too.
-            bindings |= {n for name in names for n in submitted[2].get(name, set()) if n in submitted[1]}
-            equal = (all(submitted[0].get(n) == landed[0].get(n) for n in names)
-                     and all(submitted[1].get(n) == landed[1].get(n) for n in bindings)
-                     and submitted[3] == landed[3])
-        if not equal:
+    for path in paths:
+        if git.blob(repo, head, path) != git.blob(repo, commit, path):
             raise ValueError("main does not contain the exact submitted behavior: " + path)
 
 
@@ -226,16 +137,6 @@ def checkout(repo, commit: str):
             yield path
         finally:
             git.run(repo, "worktree", "remove", "--force", str(path))
-
-
-def verify(repo, commit: str, commands: list[list[str]], timeout: float, memory_gb=None) -> None:
-    """Run the accepted checks on a fresh detached checkout of the exact candidate."""
-    deadline = time.monotonic() + timeout
-    with checkout(repo, commit) as path:
-        for command in commands:
-            code, text = _run(path, commit, command, deadline, memory_gb)
-            if code:
-                raise ValueError(f"test command failed ({code}): {command}\n" + text[-8000:])
 
 
 def registered(repo, commit: str, rules: dict) -> list[list[str]]:

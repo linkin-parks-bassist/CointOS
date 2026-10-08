@@ -14,7 +14,7 @@ import fcntl
 import re
 from pathlib import Path
 
-from cointos import contracts, git, lifecycle, queues, tasks
+from cointos import contracts, git, lifecycle, queues, schema, tasks
 from cointos.state import CONFIG, LOCK, L, log, save
 
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -36,14 +36,10 @@ def repository_lock(repo: str):
 def tests_of(worker: dict) -> list[str]:
     """A packet's hidden test commits: those of the accepted test-contract items it depends on.
     Caller holds LOCK."""
-    found = []
-    for record in queues.records().values():
-        if (record["project"] == worker["place"] and record.get("stage") == "test-contract"
-                and record["status"] == "done" and record.get("commit")
-                and any(name == record["item"] or Path(name).stem == Path(record["item"]).stem
-                        for name in queues.records().get(worker["record"] or "", {}).get("depends", []))):
-            found.append(record["commit"])
-    return found
+    depends = queues.records().get(worker["record"] or "", {}).get("depends", [])
+    packets = (queues.records().get(f"{worker['place']}:{name}") for name in depends)
+    return [r["done"]["commit"] for r in packets
+            if r and r.get("stage") == "test-contract" and (r.get("done") or {}).get("commit")]
 
 
 def check_candidate(repo: str, worker: dict, parent: str, commit: str, rules: dict) -> None:
@@ -66,6 +62,9 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
             return {"ok": True, "commit": commit}  # a retry after a lost reply
         if worker["status"] != "review":
             raise ValueError("worker is not in review")
+        if worker["stage"] in schema.TESTED and worker["receipt"]["disposition"] != "complete":
+            raise ValueError("its worker finished blocked, so its hidden tests never ran against this code; return "
+                             "it to the worker to finish complete, or finish blocked for a manager")
         lifecycle.require_run(integration, run)
         where, worker = dict(tasks.place(integration)), dict(worker)
     repo, main, tree = where["path"], where["main_branch"], integration["worktree"]
@@ -146,8 +145,8 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
             raise ValueError("incorporation requires the current main HEAD, not a historical ancestor")
         if git.head(repo, worker["branch"]) != worker_commit or not git.clean(worker["worktree"]):
             raise ValueError("submitted worker changed or has uncommitted work")
-        if queues.status(queues.report(worker)) != "done":
-            raise ValueError("incorporation requires a done worker report")
+        if worker["receipt"]["disposition"] != "complete":
+            raise ValueError("incorporation requires the worker's complete receipt")
         if not contracts.tests_landed(repo, commit, worker["receipt"]["evidence"].get("tests", []), where["test_policy"]):
             raise ValueError("this packet's tests are not on main; land it with cointos land so they land with it")
         contracts.incorporated(repo, worker, commit, where["test_policy"])

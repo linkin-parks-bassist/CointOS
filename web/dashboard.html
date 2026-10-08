@@ -540,7 +540,6 @@ const ROLE_VERB = {worker: "building", integrator: "reviewing & landing", manage
   gardener: "gardening knowledge", "tree-auditor": "auditing knowledge", "test-auditor": "auditing tests", operator: "operating"};
 const KIND_LABEL = {steward: "loose ends", garden: "garden", "tree-audit": "tree audit", "test-audit": "test audit",
   decompose: "decompose", breakdown: "breakdown", operator: "operator"};
-const stem = name => name.split("/").pop().replace(/\.[^.]+$/, "");
 const pretty = s => String(s || "").replace(/-/g, " ");
 // A work item's slug as a headline plus its context: "elastic-rtl-task-5-test-contract-fix-s6" in pigen
 // becomes "Test Contract Fix §6" with context "Pigen · Elastic RTL Task 5".
@@ -562,7 +561,7 @@ const stageName = s => s ? s.split("-").map(word).join(" ") : "";
 function unmet(L, r) {
   const records = Object.values(L.queue || {});
   return (r.depends || []).filter(name => !records.some(d => d.project === r.project &&
-    d.status === "done" && (d.item === name || stem(d.item) === stem(name))));
+    d.status === "done" && d.item === name));
 }
 
 // Every work item (queue record and/or item task) with the pipeline step it is at now.
@@ -761,7 +760,7 @@ function renderDrawer(L) {
     (receipt ? block(`Receipt · ${esc(receipt.disposition)}${receipt.run ? " · " + esc(receipt.run) : ""}${receipt.at ? " · " + ago(receipt.at) + " ago" : ""}`,
       receipt.summary + (receipt.evidence ? `\n\nevidence: ${JSON.stringify(receipt.evidence)}` : "")) : "") +
     block("Note", t?.note) + block("Result", t?.result !== receipt?.summary ? t?.result : "") +
-    block("Report", r?.report) + block("Revision", t?.revision) + block("Recovery", t?.recovery_note) +
+    block("Blocker", r?.blocker) + block("Revision", t?.revision) + block("Recovery", t?.recovery_note) +
     block("Brief", t?.brief || r?.brief));
 }
 
@@ -789,7 +788,7 @@ function renderWork(L) {
       `<button type="button" class="btn" data-act="move" data-to="down" data-item="${esc(r.project + ":" + r.item)}" title="Move down">↓</button></span></div>` +
       `<div class="meta clamp">${esc(r.kind === "command" ? "Command" : "Worker task")}${r.stage ? ` · ${esc(r.stage)}` : ""}` +
       `${r.depends?.length ? ` · Depends on: ${esc(r.depends.join(", "))}` : ""}` +
-      `${r.report ? ` · ${esc(r.report)}` : ""}</div></div>`;
+      `${r.blocker ? ` · ${esc(r.blocker)}` : ""}</div></div>`;
   }).join("");
   const taskLabel = t => t.kind === "steward" ? "System: loose ends" : t.kind === "item" || t.kind === "integrate"
     ? `${named(t.title).head}${t.kind === "integrate" ? " (review)" : ""}` : `${stageName(KIND_LABEL[t.kind] || t.kind)}`;

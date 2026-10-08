@@ -110,9 +110,6 @@ TOOLS = {
                   "project": text("project it works in; omit for system scope"), **BUDGET},
                  ["name", "brief", "generation_tokens", "generation_seconds"],
                  lambda a: ["agent", "run", a["name"], a["brief"]] + flags(a, {"project": "--project", **BUDGET_FLAGS})),
-    "attention": (SCOUTS, "Send one bounded issue to the user through Coin.",
-                  {"message": text("the issue and what the user must decide or do")}, ["message"],
-                  lambda a: ["attention", a["message"]]),
 }
 
 

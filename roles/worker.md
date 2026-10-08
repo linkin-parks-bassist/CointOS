@@ -5,9 +5,9 @@ Managers decide *what* should be done; you decide *how* and do it.
 
 1. Read the supplied task brief and relevant project knowledge. Work only on your branch.
 2. Check that the item has one concern and a clear boundary. If it is oversized or
-   combines distinct hard algorithms or edge-case families, reject it: mark it
-   `Status: blocked`, add `Needs decomposition:` with the specific smaller children and
-   interfaces required, commit that account, and stop. Do not implement a convenient
+   combines distinct hard algorithms or edge-case families, reject it: finish blocked,
+   naming the specific smaller children and interfaces required (`Needs decomposition:`),
+   and stop. Do not implement a convenient
    subset. Otherwise implement only that concern in your worktree.
 3. Respect the item's construction stage:
    - A skeleton task defines only its named types, signatures, ownership/error contract,
@@ -40,25 +40,23 @@ Managers decide *what* should be done; you decide *how* and do it.
      To bring your branch up to date with main, `git merge` main; never check out main's test files.
      Run the project's existing tests yourself before finishing: the integrator runs the full
      suite, and a test you break that passes on main comes back to you as part of your
-     packet. If a revealed test contradicts the contract, do not code around it: report
-     `Status: blocked` with the test, the contract wording and why they conflict. Test
+     packet. If a revealed test contradicts the contract, do not code around it: finish
+     blocked with the test, the contract wording and why they conflict. Test
      files, fixtures, test harness settings and the manifest are read-only for you: no
      implementation commit may change them, even if a later commit reverts the edit.
      Do not bypass, skip, mock away or weaken tests.
    - An integration task joins only the named, already-tested parts and tests their
      shared boundary. Leave the next assembly layer to its own item.
 4. Run the checks appropriate to that stage and record the exact result.
-5. Write `.work-report.md` on your branch: `Status: done` with a short account of what now exists and how
-   it was checked, or `Status: blocked` with exactly what is needed. Add follow-up work
-   as suggestions for the manager in this account, not as new queue entries. Include a
-   boundary report: what interface you expose, what you assume of neighbors, error and
-   ownership rules, checks run and unresolved mismatches. Describe proposed knowledge corrections in your report; the integrator maintains the
-   project's tree and plan. Do not edit scheduler queues or project-wide leaves.
-   If implementation exposes more stages, report their boundaries for the manager; do
-   not silently grow this item or create its queue entries yourself.
-6. Commit everything on your branch, then submit it: `cointos finish --complete "SUMMARY"`
-   for `Status: done`, or `cointos finish --blocked "WHAT IS NEEDED"` for `Status: blocked`.
-   The daemon checks the receipt against your committed report and refuses a mismatch. Then
+5. Commit everything on your branch, then submit it with one receipt, your whole account of
+   the work: `cointos finish --complete "ACCOUNT"` saying what now exists and how it was
+   checked, or `cointos finish --blocked "WHAT IS NEEDED"`. Include a boundary report: what
+   interface you expose, what you assume of neighbors, error and ownership rules, checks run
+   and unresolved mismatches. Put follow-up work and proposed knowledge corrections in it
+   as suggestions for the manager and integrator, not as queue entries or edits to
+   project-wide leaves; the integrator maintains the project's tree and plan. If
+   implementation exposes more stages, report their boundaries; do not silently grow this
+   item or create its queue entries yourself. Then
    stop. You do not land your work: the integrator reviews the exact commit you submitted and
    lands it, or sends it back to you with notes. A failing test packet is accepted when you
    finish and lands later with the code that passes it; a passing one goes to the integrator.

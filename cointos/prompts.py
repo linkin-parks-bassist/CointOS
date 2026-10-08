@@ -73,7 +73,7 @@ def assignment(task: dict, where: dict) -> str:
     if proposed:  # a fresh session has no memory of what earlier runs of this assignment queued
         parts.append("Earlier runs of this assignment already queued the following. Do not queue this work again "
                      "under any name; `cointos revise`, `cointos hold` or `cointos cancel` it instead:\n" +
-                     "\n".join(f"- {r['project']}:{r['item']} ({'landed' if r['status'] == 'done' else r['status']})"
+                     "\n".join(f"- {r['project']}:{r['item']} ({'landed' if queues.status(r) == 'done' else queues.status(r)})"
                                f"{': ' + r['summary'] if r.get('summary') else ''}" for r in proposed))
     parts.append(ending(task, where))
     return "\n\n".join(parts)
@@ -132,8 +132,7 @@ def ending(task: dict, where: dict) -> str:
                        "`cointos return \"NOTES\"`, or, if you can do neither, `cointos finish --blocked \"REASON\"`. "
                        "A successful terminal command delivers the receipt and ends this managed run automatically.")
     if lands == "review":
-        text += ("Commit your work and `.work-report.md` on this branch; the matching receipt is `--complete` for "
-                 "`Status: done` and `--blocked` for `Status: blocked`.\n\n")
+        text += "Commit your work on this branch; your receipt is your account of it for the integrator.\n\n"
     return text + ("Your run ends with exactly one receipt: `cointos finish --complete \"EVIDENCE\"` when this bounded "
                    "assignment is done, or `cointos finish --blocked \"SPECIFIC BLOCKER\"`. The daemon checks it against "
                    "your artifacts and refuses it with the reason if they do not match; fix that and finish again. "

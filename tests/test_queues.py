@@ -1,70 +1,25 @@
 import copy
-import json
 import unittest
 
-from cointos import api, lifecycle, queues, spawner, state
+from cointos import api, lifecycle, queues, spawner, state, tasks
 from tests import support
-
-
-def item(name, status="queued", depends=(), decompose=False):
-    return {"item": f"what/is/the/queued/{name}.md", "status": status, "depends": list(depends), "decompose": decompose}
 
 
 class Depends(unittest.TestCase):
     def test_the_depends_on_line(self):
-        text = "---\nstatus: green\n---\nStatus: queued\n\nDepends on: `what/is/the/queued/core.md`, docs\n\nBrief."
-        self.assertEqual(queues.depends(text), ["what/is/the/queued/core.md", "docs"])
+        self.assertEqual(queues.depends("Depends on: `core`, docs\n\nBrief."), ["core", "docs"])
 
     def test_placeholders_and_sentence_punctuation_name_nothing(self):
         self.assertEqual(queues.depends("Depends on: none."), [])
         self.assertEqual(queues.depends("Depends on: (none)"), [])
         self.assertEqual(queues.depends("Depends on: [core]"), ["core"])
-        self.assertEqual(queues.depends("Depends on: `core`, docs."), ["core", "docs"])
-        record = {"depends": ["none.", "core.", "core"]}
-        self.assertTrue(queues.normalize_dependencies(record))
-        self.assertEqual(record["depends"], ["core"])
-        self.assertFalse(queues.normalize_dependencies(record))
+        self.assertEqual(queues.depends("Depends on: `core`, docs., core"), ["core", "docs"])
 
     def test_no_line_no_dependencies(self):
-        self.assertEqual(queues.depends("Status: queued\n\nIt depends on nothing in particular."), [])
+        self.assertEqual(queues.depends("It depends on nothing in particular."), [])
 
 
-class Readiness(unittest.TestCase):
-    """An item is ready once the daemon confirms its prerequisites are accepted."""
-
-    def test_an_item_waits_until_what_it_depends_on_has_landed(self):
-        items = [item("core"), item("rest", depends=["what/is/the/queued/core.md"])]
-        self.assertEqual(queues.readiness(items, set()),
-                         {"what/is/the/queued/core.md": "ready", "what/is/the/queued/rest.md": "waiting"})
-        landed = {"what/is/the/queued/core.md"}
-        self.assertEqual(queues.readiness(items[1:], landed), {"what/is/the/queued/rest.md": "ready"})
-
-    def test_bare_names_resolve_and_chains_hold(self):
-        items = [item("b", depends=["a"]), item("c", depends=["b"])]
-        ready = queues.readiness(items, {"what/is/the/queued/a.md"})
-        self.assertEqual(ready["what/is/the/queued/b.md"], "ready")
-        self.assertEqual(ready["what/is/the/queued/c.md"], "waiting")
-
-    def test_an_unknown_dependency_is_a_problem(self):
-        self.assertIn("unknown", queues.readiness([item("x", depends=["nosuch"])], set())["what/is/the/queued/x.md"])
-
-    def test_a_blocked_dependency_is_a_problem(self):
-        ready = queues.readiness([item("a", "blocked"), item("b", depends=["a"])], set())
-        self.assertIn("blocked", ready["what/is/the/queued/b.md"])
-
-    def test_a_cycle_is_a_problem(self):
-        ready = queues.readiness([item("a", depends=["b"]), item("b", depends=["a"])], set())
-        self.assertIn("cycle", ready["what/is/the/queued/a.md"])
-        self.assertIn("cycle", ready["what/is/the/queued/b.md"])
-
-    def test_a_dependency_awaiting_decomposition_keeps_dependents_waiting(self):
-        ready = queues.readiness([item("a", "blocked", decompose=True), item("b", depends=["a"])], set())
-        self.assertEqual(ready["what/is/the/queued/b.md"], "waiting")
-
-
-class Admission(unittest.TestCase):
-    """Queue order is priority, and a worker's decomposition request dispatches a manager."""
-
+class Queue(unittest.TestCase):
     def setUp(self):
         support.fresh_ledger(self)
         support.quiet(self)
@@ -72,29 +27,117 @@ class Admission(unittest.TestCase):
         self.project = support.project(self, self.repo)
         state.L["cadence"]["steward:system"] = state.now()
 
-    def queue(self, *entries):
-        for name, brief, status, report in entries:
-            queues.add(self.project, "queued", name, brief)
-            if status != "queued":
-                queues.update("p", name, status, report)
+    def add(self, name, brief=None, kind="queued"):
+        queues.add(self.project, kind, name, brief or name.upper())
+        return queues.records()[f"p:{name}"]
+
+    def failed(self, name, brief=None):
+        """A record whose worker item failed: it awaits its one managerial recovery pass."""
+        record = self.add(name, brief)
+        task = tasks.create("item", self.project, name, record["brief"], [4], item=name, record_version=record["version"])
+        lifecycle.fail(task, "worker gave up")
+        return record
+
+    def stuck(self, name, brief=None):
+        """A failed item whose manager also gave up: blocked for good."""
+        record = self.failed(name, brief)
+        manager = tasks.create("decompose", self.project, f"decompose-{name}", "Fix it", [3], item=name,
+                               record_version=record["version"])
+        lifecycle.fail(manager, "manager gave up")
+        return record
+
+
+class State(Queue):
+    """Where a record stands is derived from its tasks; only `done` is stored."""
+
+    def test_a_new_record_is_queued(self):
+        self.assertEqual(queues.state(self.add("a")), {"status": "queued", "blocker": None, "decompose": False})
+
+    def test_a_failed_item_awaits_its_manager_then_a_failed_manager_blocks_it(self):
+        record = self.failed("a")
+        found = queues.state(record)
+        self.assertEqual((found["status"], found["decompose"]), ("blocked", True))
+        self.assertIn("worker gave up", found["blocker"])
+        self.stuck("b")
+        found = queues.state(queues.records()["p:b"])
+        self.assertEqual((found["status"], found["decompose"], found["blocker"]), ("blocked", False, "manager gave up"))
+
+    def test_a_revision_makes_the_failed_task_history(self):
+        record = self.failed("a")
+        queues.revise(record, "A, but smaller.")
+        self.assertEqual((queues.status(record), record["version"]), ("queued", 2))
+
+    def test_done_and_replaced_are_terminal(self):
+        record = self.add("a")
+        queues.finish(record, commit="abc")
+        self.assertEqual(queues.status(record), "done")
+        self.assertEqual(queues.landed("p"), {"a"})
+        self.add("b")
+        replaced = self.failed("c")
+        queues.replace(replaced, ["b"], "smaller")
+        self.assertEqual(queues.status(replaced), "replaced")
+
+    def test_the_served_view_carries_each_records_state(self):
+        self.failed("a")
+        view = queues.view()["p:a"]
+        self.assertEqual((view["status"], view["decompose"]), ("blocked", True))
+        self.assertNotIn("status", queues.records()["p:a"], "the stored record holds no state")
+
+
+class Readiness(Queue):
+    """An item is ready once the daemon confirms its prerequisites are done."""
+
+    def ready(self):
+        return queues.readiness(queues.live("p"), queues.landed("p"))
+
+    def test_an_item_waits_until_what_it_depends_on_is_done(self):
+        core, _ = self.add("core"), self.add("rest", "Depends on: core\nRest")
+        self.assertEqual(self.ready(), {"core": "ready", "rest": "waiting"})
+        queues.finish(core)
+        self.assertEqual(self.ready(), {"rest": "ready"})
+
+    def test_an_unknown_dependency_is_a_problem(self):
+        self.add("x", "Depends on: nosuch\nX")
+        self.assertIn("unknown", self.ready()["x"])
+
+    def test_a_blocked_dependency_is_a_problem(self):
+        self.stuck("a")
+        self.add("b", "Depends on: a\nB")
+        self.assertIn("blocked", self.ready()["b"])
+
+    def test_a_cycle_is_a_problem(self):
+        self.add("a", "Depends on: b\nA")
+        self.add("b", "Depends on: a\nB")
+        self.assertIn("cycle", self.ready()["a"])
+        self.assertIn("cycle", self.ready()["b"])
+
+    def test_a_dependency_awaiting_decomposition_keeps_dependents_waiting(self):
+        self.failed("a")
+        self.add("b", "Depends on: a\nB")
+        self.assertEqual(self.ready()["b"], "waiting")
+
+
+class Admission(Queue):
+    """Queue order is priority, and a failed worker item dispatches one manager."""
 
     def test_the_first_entry_runs_first(self):
-        self.queue(("urgent", "Now.", "queued", ""), ("later", "Later.", "queued", ""))
+        self.add("urgent", "Now.")
+        self.add("later", "Later.")
         self.assertEqual(spawner.next_task()["id"], "p:urgent")
 
-    def test_needs_decomposition_dispatches_a_manager_once(self):
-        self.queue(("big", "Big.", "blocked", "Status: blocked\n\nNeeds decomposition: split lexing from parsing."),
-                   ("after", "Depends on: big\n\nAfter.", "queued", ""))
-        queues.update("p", "big", "blocked", "Split lexing from parsing", decompose=True)
+    def test_a_failed_item_dispatches_a_manager_once(self):
+        self.failed("big", "Big.")
+        self.add("after", "Depends on: big\n\nAfter.")
         task = spawner.next_task()
         self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("decompose", "manager", "big", "p:big"))
+        self.assertIn("worker gave up", task["brief"])
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
         task["status"] = "running"
         self.assertIsNone(spawner.next_task())
 
     def test_the_user_reorders_a_project_queue(self):
         for name in ("a", "b", "c"):
-            queues.add(self.project, "queued", name, name.upper())
+            self.add(name)
         order = lambda: [r["item"] for r in sorted(state.L["queue"].values(), key=lambda r: r["priority"])]
         self.assertEqual(api.dispatch("move", {"item": "p:c", "to": "up"})["position"], 1)
         self.assertEqual(order(), ["a", "c", "b"])
@@ -106,10 +149,9 @@ class Admission(unittest.TestCase):
             api.dispatch("move", {"item": "p:a", "to": "sideways"})
 
     def test_a_brief_carries_its_summary_and_agents_must_write_one(self):
-        queues.add(self.project, "queued", "plain", "Do it.\nSummary: Explains the task in five words.")
-        self.assertEqual(queues.records()["p:plain"]["summary"], "Explains the task in five words.")
-        queues.add(self.project, "command", "ask", "Decide something.")
-        self.assertIsNone(queues.records()["p:ask"]["summary"], "commands and user briefs may omit it")
+        self.assertEqual(self.add("plain", "Do it.\nSummary: Explains the task in five words.")["summary"],
+                         "Explains the task in five words.")
+        self.assertIsNone(self.add("ask", "Decide something.", "command")["summary"], "commands and user briefs may omit it")
         for brief in ("Do it.", "Do it.\nSummary: Too short.", "Summary: " + "word " * 21):
             with self.subTest(brief=brief), self.assertRaisesRegex(ValueError, "Summary"):
                 queues.require_summary(brief)
@@ -120,18 +162,18 @@ class Admission(unittest.TestCase):
         self.assertEqual(queues.relies_on("Depends on: x\nRelies on: `src/a.h::pigen_a`, src/b.c\n"),
                          ["src/a.h::pigen_a", "src/b.c"])
 
-    def test_a_brief_relying_on_absent_apis_goes_to_a_manager_without_a_worker(self):
+    def test_a_brief_relying_on_absent_apis_is_refused_before_any_run_and_goes_to_a_manager(self):
         (self.repo / "api.h").write_text("int pigen_present(void);\nint pigen_presently(void);\n")
         support.commit(self.repo, "api")
         queues.add(self.project, "queued", "bad", "Relies on: pigen_present, pigen_pres, other.h::pigen_presently, nope.h\nTest.",
                    "test-contract")
-        self.assertIsNone(spawner.next_task(), "no worker is created for it")
         task = spawner.next_task()
-        self.assertEqual((task["kind"], task["item"]), ("decompose", "bad"))
-        record = state.L["queue"]["p:bad"]
-        self.assertEqual((record["status"], record["decompose"]), ("blocked", True))
-        self.assertIn("pigen_pres, nope.h, absent on main", record["report"])
-        self.assertNotIn("p:bad", state.L["tasks"])
+        self.assertEqual((task["kind"], task["item"]), ("decompose", "bad"), "the refused item's manager runs next")
+        refused = state.L["tasks"]["p:bad"]
+        self.assertEqual((refused["status"], refused["runs"]), ("failed", 0), "no worker run was spent")
+        found = queues.state(state.L["queue"]["p:bad"])
+        self.assertEqual((found["status"], found["decompose"]), ("blocked", True))
+        self.assertIn("pigen_pres, nope.h, absent on main", found["blocker"])
 
     def test_a_brief_relying_on_present_apis_dispatches(self):
         (self.repo / "api.h").write_text("int pigen_present(void);\n")
@@ -149,21 +191,11 @@ class Admission(unittest.TestCase):
         core["status"] = "review"
         integration = spawner.next_task()
         self.assertEqual((integration["id"], integration["worker"]), ("p:integrate-core-1", "p:core"))
-        queues.update("p", "core", "done")
+        queues.finish(state.L["queue"]["p:core"], commit="abc")
         core["status"] = integration["status"] = "done"
         restored = state.fresh(copy.deepcopy(state.L))
-        self.assertEqual(restored["queue"]["p:core"]["status"], "done")
+        self.assertEqual(restored["queue"]["p:core"]["done"]["commit"], "abc")
         self.assertEqual(spawner.next_task()["id"], "p:ui")
-
-    def test_acceptance_reconciles_a_stale_blocked_queue_record(self):
-        worker = support.queued(self.project, "stale")
-        queues.update("p", "stale", "blocked", "Status: blocked\n\nOld attempt")
-        worker.update(status="done", acceptance={"commit": "abc", "worker_commit": "def", "via": "landing"})
-        _, _, changed = spawner.refresh()
-        record = state.L["queue"]["p:stale"]
-        self.assertTrue(changed)
-        self.assertEqual((record["status"], record["commit"]), ("done", "abc"))
-        self.assertNotIn("report", record)
 
     def test_command_dispatch_and_retry_deduplication(self):
         body = {"project": "p", "kind": "command", "name": "plan", "brief": "Plan the next stage"}
@@ -174,35 +206,58 @@ class Admission(unittest.TestCase):
         self.assertEqual((task["kind"], task["role"], task["stage"]), ("breakdown", "manager", None))
         self.assertNotIn("CointOS", task["worktree"])
 
-    def test_replacement_repoints_dependents_and_the_receipt_retires_the_item(self):
-        for name, brief in (("big", "Big"), ("after", "Depends on: big\nAfter"), ("small", "Small")):
-            queues.add(self.project, "queued", name, brief)
-        queues.update("p", "big", "blocked", "Split the scope", decompose=True)
+    def test_a_completed_command_is_done_and_a_blocked_one_is_blocked(self):
+        for name in ("plan", "stuck"):
+            self.add(name, "Plan.", "command")
+        for name, outcome in (("plan", "complete"), ("stuck", "blocked")):
+            task = spawner.next_task()
+            self.assertEqual(task["item"], name)
+            support.running(task, f"m-{name}", worktree=False)
+            task["branch"] = None
+            lifecycle.submit(task["id"], f"m-{name}", outcome, "Planned" if outcome == "complete" else "Needs the user")
+        self.assertEqual(queues.status(queues.records()["p:plan"]), "done")
+        self.assertEqual(queues.state(queues.records()["p:stuck"])["blocker"], "Needs the user")
+
+    def test_replacement_repoints_dependents_and_marks_the_item_replaced(self):
+        self.failed("big", "Big")
+        self.add("after", "Depends on: big\nAfter")
+        self.add("small", "Small")
         task = spawner.next_task()
-        with self.assertRaisesRegex(ValueError, "running decomposition manager"):
-            api.dispatch("replace", {"task": task["id"], "run": "someone", "children": ["small"]})
+        with self.assertRaisesRegex(ValueError, "not running"):
+            api.dispatch("replace", {"caller": support.caller(task, "someone"), "children": ["small"]})
         support.running(task, "manager-1")
-        api.dispatch("replace", {"task": task["id"], "run": "manager-1", "children": ["small"]})
+        api.dispatch("replace", {"caller": support.caller(task, "manager-1"), "children": ["small"]})
         self.assertEqual(state.L["queue"]["p:after"]["depends"], ["small"])
-        self.assertEqual(queues.landed(self.project), set(), "replaced, not settled")
+        self.assertEqual(queues.status(state.L["queue"]["p:big"]), "replaced")
+        task["branch"] = None
         lifecycle.submit(task["id"], "manager-1", "complete", "Split into small")
-        self.assertEqual(queues.landed(self.project), {"big"})
+        self.assertEqual(queues.landed("p"), set(), "replaced, never accepted")
 
     def test_a_child_naming_its_parent_inherits_the_parents_dependencies(self):
-        for name, brief in (("base", "Base"), ("big", "Depends on: base\nBig"), ("after", "Depends on: big\nAfter"),
-                            ("a", "Depends on: big\nA"), ("b", "Depends on: a\nB")):
-            queues.add(self.project, "queued", name, brief)
-        queues.update("p", "big", "blocked", "Split the scope", decompose=True)
-        task = next(t for t in iter(spawner.next_task, None) if t["item"] == "big")
-        support.running(task, "manager-1")
-        api.dispatch("replace", {"task": task["id"], "run": "manager-1", "children": ["a", "b"]})
+        self.add("base", "Base")
+        self.failed("big", "Depends on: base\nBig")
+        for name, brief in (("after", "Depends on: big\nAfter"), ("a", "Depends on: big\nA"), ("b", "Depends on: a\nB")):
+            self.add(name, brief)
+        queues.replace(queues.records()["p:big"], ["a", "b"], "split")
         self.assertEqual(state.L["queue"]["p:a"]["depends"], ["base"])
         self.assertEqual(state.L["queue"]["p:b"]["depends"], ["a"])
         self.assertEqual(state.L["queue"]["p:after"]["depends"], ["a", "b"])
 
+    def test_the_user_supersedes_blocked_work_without_accepting_it(self):
+        self.stuck("old")
+        self.add("new", "New")
+        self.add("after", "Depends on: old\nAfter")
+        api.dispatch("supersede", {"task": "p:old", "replacements": ["new"], "reason": "a better plan"})
+        self.assertEqual(state.L["queue"]["p:after"]["depends"], ["new"])
+        self.assertEqual(state.L["tasks"]["p:old"]["replaced_by"], ["new"])
+        with self.assertRaisesRegex(ValueError, "only blocked work"):
+            api.dispatch("supersede", {"task": "p:new", "replacements": ["after"], "reason": "no"})
+
     def test_clear_history_keeps_only_terminal_records_needed_by_live_work(self):
-        self.queue(("old", "Old.", "done", ""), ("needed", "Needed.", "done", ""),
-                   ("next", "Depends on: needed\n\nNext.", "queued", ""), ("dead", "No replacement.", "blocked", ""))
+        queues.finish(self.add("old"))
+        queues.finish(self.add("needed"))
+        self.add("next", "Depends on: needed\n\nNext.")
+        self.stuck("dead")
         self.assertEqual(set(queues.clear_history(set())), {"p:old", "p:dead"})
         self.assertEqual(set(state.L["queue"]), {"p:needed", "p:next"})
 
