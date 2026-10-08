@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-09T01:52:04+11:00"
+revised_at: "2026-10-09T02:08:19+11:00"
 checked_at: "2026-10-09T01:22:08+11:00"
 expires_at: "2026-10-16T00:00:00+10:00"
 ---
@@ -12,7 +12,7 @@ Baselines (Pigen only): 72 h ending 2026-10-02: 31 landings (test-contract 20, i
 Signals and what they mean:
 
 - **Infeasible briefs > 0** means the dispatch check caught a false premise before any worker spent generation; each one is a saved worker run. Read `infeasible ...` lines: a false positive (the symbol exists under another spelling, or `Relies on:` named a test-only helper) means the manager guidance or check needs tightening.
-- **Packet test failures** counts `packet tests failed` events: an implementer's finish refused because hidden tests failed. Several per item mean the contract is too vague for blind implementation or a test asserts beyond it; check blocked implementer reports for disputed tests.
+- **Packet test failures** counts `packet tests failed` events: an implementer's finish refused because hidden tests failed. Repeated failures warrant inspecting the actual assertions and code: implementation errors, ambiguous briefs and tests beyond the contract require different remedies. Counts alone do not identify the cause.
 - **Gate returns (implementation)** counts landings that broke a test passing on main and returned with it bundled in. These should be rare; a high rate means implementers are not running the existing suite before finishing.
 - **Recoveries per landing** and **implementation share of landings** should improve on both baselines.
 
