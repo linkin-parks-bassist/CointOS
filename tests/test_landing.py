@@ -178,6 +178,56 @@ class Packets(Project):
         with self.assertRaisesRegex(ValueError, "changes only tests"):
             lifecycle.submit(writer["id"], "writer-1", "complete", "tests for c")
 
+    def test_a_packet_inherits_landed_prerequisites_without_owning_their_code(self):
+        for update in ("merge", "rebase"):
+            with self.subTest(update=update):
+                name = "tests-" + update
+                writer = self.writer(name, TESTS_A,
+                                     ["python3", "-m", "unittest", f"tests.test_tests_{update}.A"])
+                tree = Path(writer["worktree"])
+                (self.repo / f"{update}.py").write_text("def prerequisite(): return None\n")
+                main = support.commit(self.repo, "land prerequisite after writer started")
+                git.run(tree, update, "main")
+                submitted = git.head(tree)
+                receipt = self.finish_writer(writer)
+                self.assertFalse(receipt["evidence"]["passing"])
+                self.assertEqual(writer["base_commit"], self.base, "do not repair attribution by moving the base")
+                self.assertEqual((writer["status"], writer["acceptance"]["via"]), ("done", "tests"))
+                self.assertEqual(state.L["queue"][writer["id"]]["done"]["commit"], submitted)
+                self.assertEqual(self.main(), main, "red tests stay off main")
+                lifecycle.release("writer-1", "run ended")
+
+    def test_a_blocked_test_writer_cannot_land_even_if_the_suite_passes(self):
+        writer = self.writer("tests-c", TESTS, ["python3", "-m", "unittest", "tests.test_tests_c.B"])
+        lifecycle.submit(writer["id"], "writer-1", "blocked", "Submission needs infrastructure repair")
+        lifecycle.release("writer-1", "run ended")
+        integration = tasks.create("integrate", self.project, "integrate-tests-c", "Test C", [2],
+                                   item="tests-c", worker=writer["id"])
+        support.running(integration, "integrator-1")
+        review = Path(integration["worktree"])
+        git.run(review, "merge", "--squash", writer["commit"])
+        candidate = support.commit(review, "land tests")
+        with patch.object(contracts, "suite") as suite:
+            with self.assertRaisesRegex(ValueError, "finished blocked"):
+                landing.land(integration["id"], candidate, "integrator-1")
+            suite.assert_not_called()
+        self.assertEqual((self.main(), writer["status"]), (self.base, "review"))
+
+    def test_review_cannot_add_production_code_to_a_passing_test_packet(self):
+        writer = self.writer("tests-c", TESTS, ["python3", "-m", "unittest", "tests.test_tests_c.B"])
+        self.finish_writer(writer)
+        lifecycle.release("writer-1", "run ended")
+        integration = tasks.create("integrate", self.project, "integrate-tests-c", "Test C", [2],
+                                   item="tests-c", worker=writer["id"])
+        support.running(integration, "integrator-1")
+        review = Path(integration["worktree"])
+        git.run(review, "merge", "--squash", writer["commit"])
+        (review / "code.py").write_text(CODE.replace("raise NotImplementedError", "return 42"))
+        candidate = support.commit(review, "tests plus unsolicited implementation")
+        with self.assertRaisesRegex(ValueError, "test packet landing changes production code"):
+            landing.land(integration["id"], candidate, "integrator-1")
+        self.assertEqual((self.main(), writer["status"]), (self.base, "review"))
+
 
 class Gate(Project):
     def test_exact_checked_commit_lands_with_its_tests_and_a_retry_is_idempotent(self):
@@ -203,9 +253,22 @@ class Gate(Project):
         integration, _, _ = self.landing()
         (self.review / "tests/test_code.py").write_text("# weakened\n")
         candidate = support.commit(self.review)
-        with self.assertRaisesRegex(ValueError, "beyond the packet's own"):
+        with self.assertRaisesRegex(ValueError, "differ from main plus the accepted packet"):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
+
+    def test_landing_cannot_omit_all_or_part_of_its_accepted_test_packet(self):
+        integration, complete, _ = self.landing()
+        for omitted in (("tests",), ("tests/test_a.py",), ("tests/contracts.json",)):
+            with self.subTest(omitted=omitted):
+                git.run(self.review, "reset", "--hard", complete)
+                git.run(self.review, "restore", "--source=main", "--staged", "--worktree", "--", *omitted)
+                candidate = support.commit(self.review, "omit part of the packet")
+                with patch.object(contracts, "suite") as suite:
+                    with self.assertRaisesRegex(ValueError, "packet"):
+                        landing.land(integration["id"], candidate, "integrator-1")
+                    suite.assert_not_called()
+                self.assertEqual((self.main(), self.worker["status"]), (self.base, "review"))
 
     def test_a_failure_main_already_has_is_not_the_packets(self):
         (self.repo / "tests/test_code.py").write_text(TESTS.replace("code.b(), 7", "code.b(), 9"))
@@ -249,7 +312,7 @@ class Gate(Project):
         integration = self.integrate()
         git.run(self.review, "merge", "--squash", self.worker["receipt"]["evidence"]["commit"])
         candidate = support.commit(self.review, "land a")
-        with self.assertRaisesRegex(ValueError, "hidden tests never ran"):
+        with self.assertRaisesRegex(ValueError, "completion checks have not passed"):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual((self.main(), self.worker["status"]), (self.base, "review"))
 
@@ -333,7 +396,7 @@ class Incorporation(Project):
         (self.repo / "tests/new_test.py").write_text("# accepted new contract\n")
         accepted = support.commit(self.repo)
         git.run(self.tree, "merge", "--no-edit", "main")
-        contracts.implementation_history(self.repo, self.worker, accepted, RULES)
+        contracts.stage_history(self.repo, self.worker, accepted, RULES)
 
 
 class Commands(Project):

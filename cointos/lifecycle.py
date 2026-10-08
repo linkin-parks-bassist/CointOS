@@ -47,9 +47,7 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
         if lands == "review":
             rules = where.get("test_policy")
             if disposition == "complete" and task.get("stage") == "test-contract" and rules:
-                production = contracts.production(where["path"], task["base_commit"], found["commit"], rules)
-                if production:
-                    raise ValueError("a test packet changes only tests; it also changes " + ", ".join(production))
+                contracts.stage_history(where["path"], task, git.head(where["path"], where["main_branch"]), rules)
                 contracts.contracts(where["path"], found["commit"], rules)
             if (disposition == "complete" and task.get("stage") in schema.TESTED + ("test-contract",)
                     and where.get("test_policy")):

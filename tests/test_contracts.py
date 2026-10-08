@@ -82,6 +82,42 @@ class Contracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "protected tests"):
             self.checks(candidate)
 
+    def test_a_test_writer_cannot_erase_a_production_edit_by_reverting_it(self):
+        self.worker["stage"] = "test-contract"
+        path = self.tree / "code.py"
+        original = path.read_text()
+        self.implement()
+        path.write_text(original)
+        self.commit(self.tree)
+        with self.assertRaisesRegex(ValueError, "changes only tests.*code.py"):
+            contracts.stage_history(self.repo, self.worker, self.base, self.rules)
+
+    def test_a_merge_cannot_invent_changes_outside_its_stage(self):
+        for stage, name in (("test-contract", "code.py"), ("implementation", "tests/test_code.py")):
+            with self.subTest(stage=stage):
+                git.run(self.tree, "reset", "--hard", self.base)
+                git.run(self.repo, "reset", "--hard", self.base)
+                self.worker["stage"] = stage
+                (self.tree / "notes.md").write_text("worker notes\n")
+                self.commit(self.tree)
+                (self.repo / name).write_text("# accepted on main\n")
+                main = self.commit(self.repo)
+                git.run(self.tree, "merge", "--no-commit", "main")
+                (self.tree / name).write_text("# invented in the merge\n")
+                self.commit(self.tree)
+                with self.assertRaisesRegex(ValueError, "changes.*" + name):
+                    contracts.stage_history(self.repo, self.worker, main, self.rules)
+
+    def test_a_merge_cannot_discard_inherited_changes_outside_its_stage(self):
+        self.worker["stage"] = "test-contract"
+        (self.tree / "notes.md").write_text("worker notes\n")
+        self.commit(self.tree)
+        (self.repo / "code.py").write_text("# landed prerequisite\n")
+        main = self.commit(self.repo)
+        git.run(self.tree, "merge", "-s", "ours", "--no-edit", "main")
+        with self.assertRaisesRegex(ValueError, "changes only tests.*code.py"):
+            contracts.stage_history(self.repo, self.worker, main, self.rules)
+
     def test_test_add_delete_rename_and_manifest_edit_are_rejected(self):
         for operation in ("add", "delete", "rename", "manifest"):
             with self.subTest(operation=operation):

@@ -16,8 +16,10 @@ Managers decide *what* should be done; you decide *how* and do it.
      contract, the brief. They form a test packet: while they fail they stay off main,
      the implementer never sees them, and they land later together with the code that
      passes them. Tests that already pass on main land at once through review. Make them
-     compile and run; they fail until the code exists. Change only
-     tests and the manifest. Before writing tests, confirm every API on the brief's
+     compile and run; they fail until the code exists. Never skip or weaken required assertions
+     to make an unimplemented behavior pass. Change only tests and the manifest; merging main
+     to obtain landed prerequisites is allowed and does not count as your production edits.
+     Before writing tests, confirm every API on the brief's
      `Relies on:` line exists on your branch as described; if one is missing or behaves
      differently, report blocked at once with the mismatch rather than inventing a witness.
      Be specifically adversarial towards the future implementer: expose plausible shortcuts,

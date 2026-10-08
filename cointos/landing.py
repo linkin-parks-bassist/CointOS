@@ -14,7 +14,7 @@ import fcntl
 import re
 from pathlib import Path
 
-from cointos import contracts, git, lifecycle, queues, schema, tasks
+from cointos import contracts, git, lifecycle, queues, tasks
 from cointos.state import CONFIG, LOCK, L, log, save
 
 SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -47,6 +47,11 @@ def check_candidate(repo: str, worker: dict, parent: str, commit: str, rules: di
     touched tests, or the review changed tests beyond the packet's own."""
     if worker["stage"] in ("implementation", "integration"):
         contracts.packet_unchanged(repo, worker, parent, commit, worker["receipt"]["evidence"].get("tests", []), rules)
+    elif worker["stage"] == "test-contract":
+        contracts.stage_history(repo, worker, parent, rules)
+        production = contracts.production(repo, parent, commit, rules)
+        if production:
+            raise ValueError("a test packet landing changes production code: " + ", ".join(production))
 
 
 def land(task_id: str, commit: str, run: str | None) -> dict:
@@ -62,8 +67,8 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
             return {"ok": True, "commit": commit}  # a retry after a lost reply
         if worker["status"] != "review":
             raise ValueError("worker is not in review")
-        if worker["stage"] in schema.TESTED and worker["receipt"]["disposition"] != "complete":
-            raise ValueError("its worker finished blocked, so its hidden tests never ran against this code; return "
+        if worker["receipt"]["disposition"] != "complete":
+            raise ValueError("its worker finished blocked, so completion checks have not passed; return "
                              "it to the worker to finish complete, or finish blocked for a manager")
         lifecycle.require_run(integration, run)
         where, worker = dict(tasks.place(integration)), dict(worker)
