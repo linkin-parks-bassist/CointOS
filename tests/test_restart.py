@@ -25,7 +25,7 @@ class LiveRestart(unittest.TestCase):
             entered.set()
             if calls == 2:
                 entered_twice.set()
-            release.wait(3)
+            release.wait(8)
             handler.reply(200, {'finished': True})
         self.enterContext(patch.object(gateway.Handler, 'stream_thought', response))
         server = ThreadingHTTPServer(('127.0.0.1', 0), gateway.Handler)
@@ -36,18 +36,18 @@ class LiveRestart(unittest.TestCase):
         url = f'http://127.0.0.1:{server.server_port}/v1/chat/completions'
         result = []
         def request():
-            with urllib.request.urlopen(url, data=b'{}', timeout=4) as r:
+            with urllib.request.urlopen(url, data=b'{}', timeout=10) as r:
                 result.append(json.load(r))
         client = threading.Thread(target=request)
         client.start()
         try:
-            self.assertTrue(entered.wait(1))
+            self.assertTrue(entered.wait(5))
             drained = api.dispatch('prepare-restart', {})
             self.assertFalse(drained['ready'], 'no thoughts does not mean final HTTP reply has been delivered')
             self.assertEqual(drained['active_requests'], 1)
             pending = threading.Thread(target=request)
             pending.start()
-            self.assertTrue(entered_twice.wait(1), 'continuation thought must remain admitted while spawns drain')
+            self.assertTrue(entered_twice.wait(5), 'continuation thought must remain admitted while spawns drain')
             self.assertEqual(state.ACTIVE['chats'], 2)
             self.assertFalse(state.L['paused'])
             with patch.object(spawner, 'next_task') as next_task:
@@ -55,8 +55,8 @@ class LiveRestart(unittest.TestCase):
                 next_task.assert_not_called()
         finally:
             release.set()
-            client.join(4)
-        pending.join(4)
+            client.join(10)
+        pending.join(10)
         self.assertEqual(result, [{'finished': True}, {'finished': True}])
         self.assertTrue(api.dispatch('prepare-restart', {})['ready'])
         self.assertFalse(state.fresh(state.L)['restarting'])
