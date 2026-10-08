@@ -253,9 +253,22 @@ class Gate(Project):
         integration, _, _ = self.landing()
         (self.review / "tests/test_code.py").write_text("# weakened\n")
         candidate = support.commit(self.review)
-        with self.assertRaisesRegex(ValueError, "beyond the packet's own"):
+        with self.assertRaisesRegex(ValueError, "differ from main plus the accepted packet"):
             landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
+
+    def test_landing_cannot_omit_all_or_part_of_its_accepted_test_packet(self):
+        integration, complete, _ = self.landing()
+        for omitted in (("tests",), ("tests/test_a.py",), ("tests/contracts.json",)):
+            with self.subTest(omitted=omitted):
+                git.run(self.review, "reset", "--hard", complete)
+                git.run(self.review, "restore", "--source=main", "--staged", "--worktree", "--", *omitted)
+                candidate = support.commit(self.review, "omit part of the packet")
+                with patch.object(contracts, "suite") as suite:
+                    with self.assertRaisesRegex(ValueError, "packet"):
+                        landing.land(integration["id"], candidate, "integrator-1")
+                    suite.assert_not_called()
+                self.assertEqual((self.main(), self.worker["status"]), (self.base, "review"))
 
     def test_a_failure_main_already_has_is_not_the_packets(self):
         (self.repo / "tests/test_code.py").write_text(TESTS.replace("code.b(), 7", "code.b(), 9"))

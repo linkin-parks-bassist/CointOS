@@ -256,17 +256,10 @@ def packet_unchanged(repo, worker: dict, main: str, candidate: str, tests: list[
     """The implementer never touched tests, and the candidate's tests are exactly main's plus the
     packet's: no integrator edit or conflict resolution changes them."""
     stage_history(repo, worker, main, rules)
-    changed = [p for p in git.changed(repo, main, candidate) if protected(p, rules)]
-    if not changed:
-        return
-    def blob(commit, name):
-        found = git.result(repo, "rev-parse", "--verify", "--quiet", f"{commit}:{name}")
-        return found.stdout.strip() if found.returncode == 0 else None
-
     with combined(repo, main, tests) as (_, expected):
-        for name in changed:
-            if blob(candidate, name) != blob(expected, name):
-                raise ValueError("the candidate changes tests beyond the packet's own: " + name)
+        changed = [p for p in git.changed(repo, expected, candidate) if protected(p, rules)]
+        if changed:
+            raise ValueError("candidate tests differ from main plus the accepted packet: " + ", ".join(changed))
 
 
 def tests_landed(repo, main: str, tests: list[str], rules: dict) -> bool:
