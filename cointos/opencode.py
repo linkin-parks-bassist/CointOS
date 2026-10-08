@@ -290,30 +290,50 @@ def stop_group(pgid: int, grace: float = TIMEOUTS["agent_stop_grace_seconds"]) -
         pass
 
 
-def processes_by(variable: str) -> dict[str, list[int]]:
-    """Live processes carrying an environment variable, by its value."""
-    found: dict[str, list[int]] = {}
-    prefix = variable.encode() + b"="
+def live_processes():
+    """Each live (not zombie) process: (pid, its /proc directory)."""
     for proc in Path("/proc").iterdir():
         if not proc.name.isdigit():
             continue
         try:
-            environ = (proc / "environ").read_bytes()
-            state = (proc / "stat").read_text().rsplit(")", 1)[1].split()[0]
+            if (proc / "stat").read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                continue
         except OSError:
             continue
-        if state == "Z":
+        yield int(proc.name), proc
+
+
+def processes_by(variable: str) -> dict[str, list[int]]:
+    """Live processes carrying an environment variable, by its value."""
+    found: dict[str, list[int]] = {}
+    prefix = variable.encode() + b"="
+    for pid, proc in live_processes():
+        try:
+            environ = (proc / "environ").read_bytes()
+        except OSError:
             continue
         for entry in environ.split(b"\0"):
             if entry.startswith(prefix):
-                found.setdefault(entry[len(prefix):].decode(), []).append(int(proc.name))
+                found.setdefault(entry[len(prefix):].decode(), []).append(pid)
                 break
     return found
 
 
+AGENT_UNIT = re.compile(r"/cointos-agent-([^/]+)\.service(?:/|$)", re.M)
+
+
 def find_processes() -> dict[str, list[int]]:
-    """Live agent processes, by agent id."""
-    return processes_by("COINTOS_AGENT")
+    """Live agent processes, by agent id: the processes inside each agent's unit. An inherited
+    COINTOS_AGENT variable (a test run, a shell started from a run) does not make an agent."""
+    found: dict[str, list[int]] = {}
+    for pid, proc in live_processes():
+        try:
+            unit_of = AGENT_UNIT.search((proc / "cgroup").read_text())
+        except OSError:
+            continue
+        if unit_of:
+            found.setdefault(unit_of[1], []).append(pid)
+    return found
 
 
 if __name__ == "__main__":

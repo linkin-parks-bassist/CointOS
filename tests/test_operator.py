@@ -83,6 +83,14 @@ class OperatorTasks(unittest.TestCase):
             tasks.request_operator("x", "X.", None, None, None, {"generation_tokens": 1, "generation_seconds": 1},
                                    (worker, state.L["agents"]["spawner-1"]))
 
+    def test_an_inherited_agent_variable_does_not_make_a_process_an_agent(self):
+        import os, subprocess
+        child = subprocess.Popen(["sleep", "30"], env={**os.environ, "COINTOS_AGENT": "not-an-agent"})
+        self.addCleanup(child.wait)
+        self.addCleanup(child.kill)
+        self.assertIn(child.pid, opencode.processes_by("COINTOS_AGENT").get("not-an-agent", []))
+        self.assertNotIn("not-an-agent", opencode.find_processes(), "only an agent unit's processes are an agent")
+
     def test_invalid_ability_is_rejected_before_task_creation(self):
         with self.assertRaisesRegex(ValueError, "abilities"):
             tasks.request_operator("bad", "Brief", None, ["sudo"], None, None)

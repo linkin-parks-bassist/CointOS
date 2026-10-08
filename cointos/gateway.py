@@ -194,11 +194,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status: int, value, content_type="application/json"):
         body = value if isinstance(value, bytes) else json.dumps(value).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the client hung up (a closed dashboard tab); there is no one left to answer
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
