@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-02T03:45:40+10:00"
+revised_at: "2026-10-08T18:30:01+11:00"
 ---
 
-Use `cointos project list` to inspect enrollment. `cointos project add PATH [--name NAME]` enrolls an existing Git repository. `cointos project new NAME [--path PATH]` creates a repository whose initial commit contains orientation, spec, plan and known-defects leaves before enrollment. The known-defects answer starts with no established defects, so every route named by the generated orientation exists. Both commands accept `--main-branch`, integer `--priority`, `--disabled` and test-policy options shown by CLI help. Lower priorities run first within a lifecycle class. Disabled projects do not admit new product work; their existing registered knowledge trees still participate in gardening.
+Use `cointos project list` to inspect enrollment. `cointos project add PATH [--name NAME]` enrolls an existing Git repository. `cointos project new NAME [--path PATH]` creates a repository whose initial commit contains orientation, spec, plan and known-defects leaves before enrollment. The known-defects answer starts with no established defects, so every route named by the generated orientation exists. Both commands accept `--main-branch`, integer `--priority`, `--disabled` and test-policy options shown by CLI help. Lower priorities run first within a lifecycle class. Disabled projects admit no new product work, and their knowledge trees get no gardening or tree audits (`spawner.tree_work`).
 
 New repositories inherit `project_defaults.test_policy` from operational config unless given an explicit profile. The shipped profile names `tests/contracts.json`, protects `tests/**` and `Makefile`, and classifies `.knowledge/**` and `*.md` as non-code. Documentation can land without a manifest; production changes still require accepted test coverage. Imported repositories need an explicit profile before worker landing. Optional `protected` and `non_code` lists mean empty when omitted; enrollment completes those fields and contract analysis also accepts older manifest-only records without weakening coverage.
 
@@ -13,4 +13,4 @@ Enrollment is the installed runtime's separate `config/projects.json`, not the s
 
 `cointos/projects.py` validates repository-root identity, project-name and path uniqueness, integer priority and supported fields, then writes a sorted candidate registry atomically before replacing the shared in-memory list. Failed persistence leaves both projections unchanged. Updates replace the affected record only after the write succeeds. The CLI/control boundary owns active-work removal checks and stopping disabled runs.
 
-Evidence: `projects.py`, `api.py`, CLI help, `config.managed_trees` and `tests/test_projects.py`, including committed initial routes, tree-write failure before enrollment and write-failure coverage for add/update/remove. Live control-surface and Telegram acceptance belongs to `what/is/the/live/acceptance/evidence/for/cointos.md`; mechanism tests alone do not establish it.
+Evidence: `projects.py`, `api.py`, CLI help, `config.managed_trees`, `spawner.tree_work`, `tests/test_projects.py` (committed initial routes, tree-write failure before enrollment and write-failure coverage for add/update/remove) and `tests/test_trees.py` (a disabled project's tree is not maintained). Live control-surface and Telegram acceptance belongs to `what/is/the/live/acceptance/evidence/for/cointos.md`; mechanism tests alone do not establish it.
