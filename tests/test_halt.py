@@ -56,6 +56,7 @@ class Halt(unittest.TestCase):
         with self.assertRaises(api.ApiError):
             api.dispatch("forget-task", {"task": forgotten["id"]})
         state.L["agents"].clear()
+        state.L["lanes"] = [{**state.L["lanes"][0], "index": index} for index in range(2)]
         state.L["lanes"][0]["resident"] = forgotten["id"]
         state.L["lanes"][1]["resident"] = kept["id"]
         with patch.object(snapshots, "forget_owner") as forget:

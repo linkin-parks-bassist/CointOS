@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-10T15:21:24+11:00"
+revised_at: "2026-10-10T16:58:17+11:00"
 ---
 
-## Coin misses the 15-second reply target and idles a model
+## Coin misses the 15-second reply target
 
-Coin now runs on the work model alone. Proof of life meets 15 seconds only with the lane free and its shared start restored; cold reads and pre-emption take 23–30 seconds, tool-using turns minutes, and only `status` answers while the guard has the work model unloaded (measurements in `how/does/telegram/reach/cointos.md`). The front model (about 7 GB) and its reserved Coin lane stay loaded with no user; removing them needs a paused full installation, awaiting the user. Proof-of-life compliance with the per-message reminder rests on one live turn. Coin has no tool to answer an agent that messaged the user.
+Coin runs on the work model alone. Proof of life meets 15 seconds only with the lane free and its shared start restored; cold reads and pre-emption take 23–30 seconds, tool-using turns minutes, and only `status` answers while the guard has the work model unloaded (measurements in `how/does/telegram/reach/cointos.md`). Proof-of-life compliance with the per-message reminder rests on one live turn. Coin has no tool to answer an agent that messaged the user.
 
 ## The memory guard can unload the work model its own reload just loaded
 

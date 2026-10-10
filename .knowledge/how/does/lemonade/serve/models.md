@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-05T12:59:04+11:00"
+revised_at: "2026-10-10T16:58:55+11:00"
 ---
 
 Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared by CointOS and other local clients. Its control API is `http://127.0.0.1:13305`; logs are in `journalctl -u lemond`. CointOS is a client, not its owner, and must tolerate another client reloading a model onto a different backend URL.
@@ -9,7 +9,7 @@ Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) 
 
 - `GET /api/v1/health` reports each model's loaded state, backend URL, effective launch command, recipe options, PID and pin state. CointOS refreshes this map during model checks.
 - `POST /v1/load` accepts the model name, context size, complete llama.cpp argument string, merge/save flags and pin state. CointOS uses `merge_args: false` and `save_options: false`, so its operational config determines the active shape without rewriting Lemonade's saved recipe.
-- `POST /v1/unload` unloads one named model; an absent model may answer 404.
+- `POST /v1/unload` unloads one named model; an absent model may answer 404. A pinned model dropped from config stays loaded until unloaded here.
 - Model files under `/var/lib/lemonade` are not readable by the user's account, so models are started through Lemonade rather than directly.
 
 Lemonade and its llama-server children run in `inference.slice`. Snapshot files live in the configured `/dev/shm` directory and must be writable by the `lemonade` user. The backend checks both workstation headroom and the inference-slice allowance before admitting model or snapshot allocations.
@@ -26,11 +26,11 @@ A completion request is a bounded GPU step. `backend_llama.prefill` streams prom
 
 The installed llama-server build is `b10723-010be9683`. Its text stream suppresses tokens inside incomplete UTF-8 characters, and even native completions pass isolated output through a chat parser that rejects leading continuation bytes. Token steps therefore supply a no-op epsilon `chat_parser` and restrict response fields to token/state metadata. This is a raw-token boundary: Qwen message/tool interpretation remains in `backend_llama.read` over the whole thought. Trailing detokenizer replacement characters are withheld during outward streaming until the character is complete. A real work-model test split 🦦 into `[9008, 99, 99]` and preserved all three IDs across one-token steps. A zero-token, nonterminal generation result is rejected; the lane clears unknown state and ends that thought rather than replaying it.
 
-The configured Qwen models are hybrid recurrent/attention models. A saved state is reusable only when its tokens are a prefix of the next prompt. Prompt preparation stops one token short. Cache verification then submits the full real prompt, extending the retained prefix by that pending token. An equal-length check after restoring recurrent state would require an unavailable earlier checkpoint and discard the cache; the strict extension creates the checkpoint needed for the following buffered generation to reevaluate its last token without a full reread. After generation, the backend derives the exact known retained prefix from `tokens_cached` and the complete prompt/output token vector; the lane never fabricates this prefix from output count. MTP may retain draft tokens beyond a finished reply: an unreturned tail is marked cold while the valid complete reply is delivered. A connection cut mid-generation can leave an unseen token in server state, so an abandoned in-flight thought resumes from its committed checkpoint rather than assuming the cut state is exact.
+The configured Qwen model is a hybrid recurrent/attention model. A saved state is reusable only when its tokens are a prefix of the next prompt. Prompt preparation stops one token short. Cache verification then submits the full real prompt, extending the retained prefix by that pending token. An equal-length check after restoring recurrent state would require an unavailable earlier checkpoint and discard the cache; the strict extension creates the checkpoint needed for the following buffered generation to reevaluate its last token without a full reread. After generation, the backend derives the exact known retained prefix from `tokens_cached` and the complete prompt/output token vector; the lane never fabricates this prefix from output count. MTP may retain draft tokens beyond a finished reply: an unreturned tail is marked cold while the valid complete reply is delivered. A connection cut mid-generation can leave an unseen token in server state, so an abandoned in-flight thought resumes from its committed checkpoint rather than assuming the cut state is exact.
 
 ## Active model policy
 
-`config/cointos.json` is authoritative for model names, context, lanes, arguments and admission estimates. The current work model is Qwen3.8-27B with one 131,072-token lane and MTP speculative decoding; the front model is Qwen3.5-4B with two 32,768-token lanes, one reserved for Coin. Lane count and total context are load-time model shape: changing either requires a model reload and is incompatible with live daemon-only installation.
+`config/cointos.json` is authoritative for model names, context, lanes, arguments and admission estimates. The only configured model is Qwen3.8-27B, serving agents and Coin with one 131,072-token lane and MTP speculative decoding. Lane count, total context and the model set are load-time shape: changing them needs a paused full installation.
 
 CointOS retains Qwen3.8-27B as the minimum work model unless the user chooses a different quality point. Published alternative quantizations and runtimes are leads, not evidence of equal agent quality or a drop-in speedup. Any comparison must hold weights/quality target, sampling, occupied context and task success constant, then verify the exact installed runtime. No alternative currently has that evidence.
 

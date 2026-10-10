@@ -26,7 +26,6 @@
       "xhigh": 1024
     }
   },
-  "front_model": "Qwen3.5-4B-GGUF",
   "models": {
     "Qwen3.8-27B-GGUF": {
       "ctx_size": 131072,
@@ -34,13 +33,6 @@
       "memory_gb": 39,
       "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0",
       "weights_gb": 17.5
-    },
-    "Qwen3.5-4B-GGUF": {
-      "ctx_size": 65536,
-      "lanes": 2,
-      "memory_gb": 7,
-      "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --cache-ram 0",
-      "weights_gb": 2.9
     }
   },
   "classes": [
@@ -48,15 +40,7 @@
     "user",
     "background"
   ],
-  "reserved_lanes": [
-    {
-      "model": "Qwen3.5-4B-GGUF",
-      "lane": 1,
-      "classes": [
-        "coin"
-      ]
-    }
-  ],
+  "reserved_lanes": [],
   "scheduler": {
     "chunk_tokens": 96,
     "read_chunk_tokens": 1024,

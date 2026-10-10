@@ -294,7 +294,7 @@ class Handler(BaseHTTPRequestHandler):
         if keys.ended(key):
             return self.reply(410, {"error": {"message": "this agent run has ended"}})
         agent, klass, conversation = identity(key)
-        model = {"work": CONFIG["work_model"], "front": CONFIG["front_model"]}.get(body.get("model"), body.get("model"))
+        model = {"work": CONFIG["work_model"]}.get(body.get("model"), body.get("model"))
         if model not in CONFIG["models"]:
             return self.reply(404, {"error": {"message": f"unknown model {model!r}"}})
         with LOCK:
