@@ -1,36 +1,30 @@
 ---
 status: green
-revised_at: "2026-10-02T04:07:48+10:00"
+revised_at: "2026-10-10T15:19:52+11:00"
 ---
 
-Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env`:
+Coin is the separate Telegram control service in `cointos/coin.py`. Credentials remain outside the repository in the configured `~/.config/agent-ecosystem/telegram.env` (`AGENT_TELEGRAM_BOT_TOKEN`, `AGENT_TELEGRAM_ALLOWED_USER_IDS`).
 
-- `AGENT_TELEGRAM_BOT_TOKEN`
-- `AGENT_TELEGRAM_ALLOWED_USER_IDS`
+Coin long-polls `getUpdates`, accepts allow-listed text and replies with `sendMessage`. It persists the next update offset before processing an update: no ordinary replay, but a crash after persistence may lose that update.
 
-Coin long-polls `getUpdates`, accepts allow-listed text and sends replies with `sendMessage`. It persists the next update offset before processing an update, preventing ordinary replay but not providing exactly-once delivery: a crash after offset persistence may lose that update. Assistant history is recorded before sending and therefore does not prove Telegram delivery.
+## Turns
 
-## Routing
+- `status` and `/status` are answered mechanically from the control surface, so they work while the work model is down.
+- Every other message goes straight to the work model at Coin class, which pre-empts background agents on its lane. There is no front-desk model. One worker runs one turn at a time; messages from the same user that arrive mid-turn join the running turn at its next round.
+- The system prompt (`roles/_control-plane.md`) and tools are fixed: no live state or per-turn text. The gateway marks the end of Coin's system message as a shared start, exempt from `scheduler.shared_prefix_tokens`, so each turn restores it instead of reading it cold (`gateway.render_request`). All rounds use the same template options: turning thinking off for one round changes the rendering from its first tokens and destroys reuse.
+- The first call should be `send` with a few words as proof of life. Besides the prompt, `PROOF_OF_LIFE` is appended to the newest user message of the live turn; stored history keeps the user's words. The model then uses tools, `send`s results and calls `done`; plain content is sent and ends the turn.
+- Budget: `coin.max_tool_rounds` (8) plus `coin.finishing_rounds` (3), in which only `send` and `done` run (other calls get an out-of-steps error; the tool list never changes). Each model call is capped by `coin.model_seconds` (600). A failed turn tells the user why in plain words and that `status` still works.
 
-- `status` and `/status` use the control surface directly without inference.
-- Every other message shares `coin.reply_seconds` (currently 12 seconds) between its control-state lookup and front-model call. The lookup is capped by the lesser of that budget and the API timeout; the model gets only the remaining time. If none remains, Coin acknowledges without starting inference. It first sends a short front-model reply through the gateway at Coin priority on its reserved lane. A deterministic formatter removes a trailing engagement question from a multi-sentence fast reply; it preserves a single-question reply.
-- Every non-status message then enters the serial work-model deep-turn queue. The deep turn may send a useful follow-up or finish silently.
-- Daemon alerts are forwarded separately to allowed users. A self-check sends one alert per incident; only 30 seconds of sustained recovery rearms that check. The daemon persists notification incident state across replacement, while the dashboard retains current details.
+## Tools
 
-## Alert delivery frontier
+Typed tools cover status, agents, jobs, checks, queue/hold/revise, project registry, scoped operator launch, scout, pause/resume, kill/resume task, halt/start and the reply-draining `restart`; CLI refusals return as tool errors. Killing an agent is run-only control: unfinished work is held uncharged until explicit resume. Of the kt tools Coin sees only `kt_lookup`, `kt_find`, `kt_grep`, `kt_read`, `kt_add`, `kt_rewrite` and `kt_renew`; the kt server's instructions are not injected. Each result answers its exact request ID and name; identical repeated calls reuse their result within a turn. Requests carry the default reasoning effort (low, 256-token cap) and are request-owned, so a disconnected caller's thought is cancelled.
 
-Inspect pending alert forwarding by comparing the ledger's retained alert IDs with the integer cursor in `state/coin/alerts-seen.json`. The alert records themselves have no per-event acknowledgement field; retained old events are not an unread backlog. `alert_forwarder` selects IDs greater than its cursor and advances the saved cursor after forwarding the batch to the configured users. With no saved cursor, startup begins after the retained events rather than replaying them. This cursor is forwarding state, not exactly-once delivery evidence; partial delivery followed by a failure can cause a retry.
+## History and alerts
 
-Coin model requests explicitly carry the configured default reasoning effort (currently low) unless that call overrides it. The gateway therefore applies the same uninterrupted reasoning cap (256 tokens at low) as it does for managed tasks; deep control turns cannot silently fall back to uncapped model-default reasoning. The front reply still disables thinking.
+Per-user history (`state/coin/conversation-*.jsonl`, last `coin.history_messages`) holds user messages, everything Coin sent and forwarded daemon alerts (prefixed ⚠️), so a reply to an alert is intelligible. Tool calls are not kept across turns. Recording precedes sending and does not prove delivery.
 
-Coin's JSON model requests are request-owned: the gateway detects peer EOF while waiting, cancels disconnected callers and releases an in-flight thought at its step boundary. Coin thoughts are included in the 60-second no-progress check. Backend token steps preserve UTF-8 fragments without allowing text-parser errors or truncated replies to become a lane replay loop.
-
-The deep turn uses typed tools for status, agents, jobs, checks, queue/task controls, project registry, lifecycle controls, scoped operator launch and knowledge-tree access. Its `restart` tool uses the CLI's reply-draining daemon replacement, preserving agent sessions and loaded models; CLI refusals are returned as tool errors rather than terminating Coin's deep worker. Each model tool request is answered with a `tool` message carrying that exact request ID and tool name. Repeated identical calls reuse their result within the turn. The configured round budget is eight ordinary tool rounds plus up to three terminal finishing rounds.
-
-Killing an agent through Coin is run-only control: unfinished work is held uncharged with artifacts preserved until explicit task resume. Coin does not infer task completion from processes or text.
-
-Recent per-user conversation history is stored under `state/coin/` and limited by `coin.history_messages`. Update offsets are stored there too.
+`alert_forwarder` records and sends ledger alerts above the integer cursor in `state/coin/alerts-seen.json`, then advances it; with no cursor, startup begins after retained events. Partial delivery then failure can repeat a batch. The daemon owns incident lifetime: one alert per incident, rearmed after 30 seconds of sustained recovery.
 
 ## Availability boundary
 
-First-reply preparation has one configured 12-second budget for lookup plus inference, with a fallback acknowledgement. Status-only requests use the same capped control lookup. This removes the former sequential 10-second lookup plus 12-second model allowance. Network calls and Telegram retries can still exceed the MVP's visible-reply target; an active service alone is not proof. The deep tool/result identity path is unit-covered and installed, but a real post-fix Telegram deep-tool exchange and ten-message under-load latency measurement remain unproved in `what/is/the/plan.md`.
+Measured live through the real gateway with Telegram stubbed: proof of life arrived 11 seconds after the message with the lane free and the shared start restored, about 23–30 seconds when read cold or pre-empting an agent. Whole turns that use tools took 40–150 seconds. Each Coin round on the single work lane saves and later restores an agent's context. While the memory guard has the work model unloaded, only `status` answers. The 15-second target is not reliably met (`what/is/broken.md`).

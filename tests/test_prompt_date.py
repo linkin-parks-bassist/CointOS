@@ -125,6 +125,17 @@ class PromptDate(unittest.TestCase):
         self.assertEqual(rendered["shared"][-1], len((system + "|" + prompts.shared_launch_prefix(task)).encode()))
         self.assertEqual(renderer.call_count, 4)
 
+    def test_coins_fixed_prompt_and_tools_are_a_shared_start(self):
+        body = {"messages": [{"role": "system", "content": "You are Coin."}, {"role": "user", "content": "hi"}]}
+
+        def render(config, model, conversation):
+            text = "|".join(str(message.get("content", "")) for message in conversation["messages"])
+            return {"tokens": list(text.encode()) + [999], "reader": {}}
+
+        with patch.object(gateway.BACKEND, "render", side_effect=render):
+            rendered = gateway.render_request(body, "coin", state.CONFIG["work_model"], {})
+        self.assertEqual(rendered["shared"], [len("You are Coin.".encode())])
+
     def test_continuation_is_rendered_only_once(self):
         state.L["tasks"][self.tid]["session"] = "session"
         body = {"messages": self.messages("Sun Sep 27 2026")}

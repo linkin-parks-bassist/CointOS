@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-09T01:05:13+11:00"
+revised_at: "2026-10-10T15:19:24+11:00"
 ---
 
 # CointOS architecture
@@ -27,7 +27,7 @@ Stable identities and explicit relations connect these representations. Session 
 
 - **cointosd:** one Python daemon and the only ledger writer. It hosts the OpenAI-compatible gateway, control/dashboard API, scheduler, lane workers, spawner, lifecycle/recovery, model reconciliation, memory guard, journal and self-check.
 - **Agent unit:** one transient `cointos-agent-<id>.service` containing a private OpenCode server and client in the task worktree. It carries explicit run/task identities and a memory cap.
-- **Coin:** a separate Telegram service using the same gateway and control API. One front-model lane is reserved for it. Control lookup and front inference share the configured 12-second first-reply preparation budget; a slow lookup reduces the model's remaining allowance and exhaustion produces a fallback acknowledgement.
+- **Coin:** a separate Telegram service over the same gateway and control API; it sends every non-status message to the work model (`how/does/telegram/reach/cointos.md`).
 - **Lemonade/llama-server:** machine-level model service outside CointOS. `backend_llama.py` is the sole adapter for its literal API and token/tool representation.
 
 The ledger is plain JSON guarded by one in-process lock and saved atomically. The API and CLI call domain functions; they do not implement parallel state machines. A request made from inside an agent run names its `caller` (task and run) and is checked once by `api.caller`/`api.running`.

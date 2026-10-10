@@ -78,7 +78,8 @@ def guard() -> None:
     once things are calm (`what/is/the/architecture/of/cointos.md`, *Memory*). Headroom is the
     leading signal: while it stays negative after saved contexts have left memory, climb a rung
     and let the effect show before the next. Sustained pressure is a shortcut to the top. The
-    core (daemon, front-desk model, Coin) stays. Caller holds LOCK."""
+    daemon and Coin's service stay, though at the top rung Coin can answer only `status`.
+    Caller holds LOCK."""
     measured, server = memory.measure(), BACKEND.budget(CONFIG)
     L["memory"] = {**measured, "server": server, "headroom_gb": memory.headroom_gb(CONFIG, measured, server)}
     snapshots.room(0.0)  # bound caches before general pressure reaches the desktop

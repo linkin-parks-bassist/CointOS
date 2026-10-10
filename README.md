@@ -29,9 +29,9 @@ or even having the daemon replaced underneath them.
   them, integrators update them as work lands, the runtime publishes its live queues into one, and
   gardeners and tree auditors keep them verified.
 - **Tells you what is going on.** A live dashboard, a CLI, and a Telegram assistant ("Coin")
-  over the same control API. Coin shares one 12-second preparation budget between status
-  lookup and its front-model reply, then acknowledges if that budget runs out. Telegram
-  delivery time is separate.
+  over the same control API. Coin sends every message straight to the work model with a short,
+  fixed prompt whose cached state is restored each turn; the model's first tool call sends a few
+  words as proof of life, then it looks things up and acts. `status` answers without a model.
 
 ## Requirements
 
@@ -40,7 +40,7 @@ CointOS is a personal system built for one machine and is shared as-is. It expec
 - Linux with systemd user services and Python 3.
 - [Lemonade](https://github.com/lemonade-sdk/lemonade) / llama.cpp serving GGUF models on
   localhost. The reference setup is a 128 GB unified-memory AMD workstation running
-  Qwen3.8-27B for agents and Qwen3.5-4B for chat.
+  Qwen3.8-27B for agents and Coin.
 - [OpenCode](https://opencode.ai) as the agent harness.
 - [knowledgetrees](https://github.com/linkin-parks-bassist/knowledgetrees) (`kt` and its MCP
   server), which agents use for orientation, specs, plans and runtime state.

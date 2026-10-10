@@ -1,21 +1,21 @@
 ---
 status: green
-revised_at: "2026-10-02T00:57:52+10:00"
+revised_at: "2026-10-10T15:21:53+11:00"
 ---
 
 **Qwen3.8-27B-GGUF: the work model.**
-- User policy: this is the minimum competent model for agent work. 4B- and 8B-class models are not used for agent work.
+- User policy: this is the minimum competent model for agent work. 4B- and 8B-class models are not used for agent work. Coin also runs on it.
 - Weights about 17.5 GB.
 - Current work shape: `ctx_size` 131,072 with `--parallel 1` (one lane of 131,072 tokens). Normal two-lane shape is 262,144 total; the per-agent context allowance is preserved.
 - Launch arguments: `--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0` (MTP speculative decoding), plus `--slot-save-path` from the backend for context snapshots. No `--reasoning-budget`. Two-lane calibration was about 38.5 GB; the 4B about 6.6 GB. The one-lane shape has not been separately memory-benchmarked; its configured 39 GB admission estimate remains conservative.
 - Calibration evidence, not a current benchmark: about 20–25 visible tokens/s for one request with MTP, and about 13 tokens/s aggregate across two concurrent requests. Prefill runs at about 170 tokens/s, so an uncached 20k-token agent prompt costs about 2 minutes of lane time, and generation on the other lane drops to about 1–3 tokens/s meanwhile.
-- A hybrid (recurrent plus attention) model: prompt reuse needs a saved state, not merely a shared prefix (`how/does/lemonade/serve/models.md`).
+- A hybrid (recurrent plus attention) model: prompt reuse needs a saved state, not merely a shared prefix (`how/does/lemonade/serve/models.md`). With its chat template, `enable_thinking: false` changes the rendering from about the third token, so a request toggling it shares no reusable state with the same conversation rendered with thinking on.
 - Supports tool calling.
 
-**Qwen3.5-4B-GGUF: the front desk.**
+**Qwen3.5-4B-GGUF: the former front desk, now unused.**
 - Weights about 2.9 GB; kept loaded (pinned).
-- Shape: `ctx_size` 65,536 with `--parallel 2` (2 lanes of 32,768 tokens).
-- Fast first replies for Coin. Its configured arguments also include `--cache-ram 0`; the server's extra RAM prompt cache is disabled for both models, while CointOS retains its own slot snapshots.
+- Shape: `ctx_size` 65,536 with `--parallel 2` (2 lanes of 32,768 tokens); lane 1 is still reserved for Coin in `reserved_lanes`.
+- Coin no longer calls it; nothing else in CointOS does. Removing it changes model topology and needs a paused full installation (`what/is/broken.md`). Its arguments include `--cache-ram 0`, like the work model's.
 
 **Size provenance.** The configured whole-model admission sizes (`memory_gb`: 39 for Qwen3.8 and 7 for Qwen3.5) round up live loaded-memory observations of about 38.5 GB and 6.6 GB recorded during the 2026-09-26 scheduler rebuild. The configured weight estimates (17.5 and 2.9) originated in this model-facts leaf when the fresh CointOS base was created, then were copied into config by the later dashboard commit. No underlying file-size measurement or external source was retained for those weight figures, and the Lemonade-owned GGUF paths are not stat-readable by the current account. Treat them as inherited estimates until measured through Lemonade or another authorized interface.
 

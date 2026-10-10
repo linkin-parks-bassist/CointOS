@@ -156,6 +156,15 @@ def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
                     "reasoning_budget": CONFIG.get("reasoning", {}).get("budgets", {}).get(
                         template.get("reasoning_effort"))}
     rendered = BACKEND.render(CONFIG, model, conversation)
+    if agent == "coin" and messages and messages[0].get("role") == "system":
+        # Coin's system prompt and tools never change. A snapshot ending exactly where they end
+        # lets every turn restore them instead of reading them cold; however short, it is worth
+        # keeping, because the user is waiting.
+        start = BACKEND.render(CONFIG, model, {**conversation, "messages": messages[:1]})
+        shared = lanes.common(rendered["tokens"], start["tokens"])
+        if 0 < shared < len(rendered["tokens"]):
+            rendered["shared"] = [shared]
+        return rendered
     with LOCK:
         owner = L["agents"].get(agent)
         task = L["tasks"].get(owner["task"]) if owner else None
