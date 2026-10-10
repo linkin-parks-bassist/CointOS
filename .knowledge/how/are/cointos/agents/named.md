@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-05T18:48:14+11:00"
+revised_at: "2026-10-11T02:07:57+11:00"
 ---
 
-Every task gets a personal name when it is created (`tasks.create` → `names.invent`), unique among all tasks and kept for the task's whole life, so a paused and resumed agent keeps its name while a new task gets a new one. Live tasks created before names existed are named when the daemon starts (`state.fresh`). Agent ids such as `worker-0b23e3` remain the internal run keys.
+Every task gets a personal name when it is created (`tasks.create` → `names.invent`), unique among all tasks and kept for the task's whole life, so a paused and resumed agent keeps its name while a new task gets a new one. Agent ids such as `worker-0b23e3` remain the internal run keys.
 
 Names are generated, never chosen from a list of names (the user's requirement from the original ecosystem design): `cointos/names.py` assembles two or three syllables from weighted inventories of onsets, vowels and codas drawn from many languages' sound systems, with plain sounds common and exotic ones rare, no consonant pile-ups where syllables join, and a filter for unpronounceable clusters. Results range from familiar to alien, such as Gartan, Virta, Xorzak, Rakhi, Zozu or Zedritek; a few clunky ones are accepted.
 
