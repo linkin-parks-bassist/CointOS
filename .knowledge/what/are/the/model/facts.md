@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-10T16:58:17+11:00"
+revised_at: "2026-10-12T01:25:20+11:00"
 ---
 
 **Qwen3.8-27B-GGUF: the only model.** It runs agents and Coin.
@@ -9,7 +9,7 @@ revised_at: "2026-10-10T16:58:17+11:00"
 - Current work shape: `ctx_size` 131,072 with `--parallel 1` (one lane of 131,072 tokens). Normal two-lane shape is 262,144 total; the per-agent context allowance is preserved.
 - Launch arguments: `--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0` (MTP speculative decoding), plus `--slot-save-path` from the backend for context snapshots. No `--reasoning-budget`. Two-lane calibration was about 38.5 GB. The one-lane shape has not been separately memory-benchmarked; its configured 39 GB admission estimate remains conservative.
 - Calibration evidence, not a current benchmark: about 20–25 visible tokens/s for one request with MTP, and about 13 tokens/s aggregate across two concurrent requests. Prefill runs at about 170 tokens/s, so an uncached 20k-token agent prompt costs about 2 minutes of lane time, and generation on the other lane drops to about 1–3 tokens/s meanwhile.
-- A hybrid (recurrent plus attention) model: prompt reuse needs a saved state, not merely a shared prefix (`how/does/lemonade/serve/models.md`). With its chat template, `enable_thinking: false` changes the rendering from about the third token, so a request toggling it shares no reusable state with the same conversation rendered with thinking on.
+- A hybrid (recurrent plus attention) model: prompt reuse needs a saved state, not merely a shared prefix (`how/does/lemonade/serve/models.md`), so a reused saved state applies only when its tokens are a prefix of the next prompt; a prompt whose rendering diverges from a saved one reuses none of that state. (The earlier note that Qwen's chat template drops a `enable_thinking: false` render at "about the third token" was not established by the code, the referenced leaf or the runtime tree and is withdrawn; next check: measure it through Lemonade.)
 - Supports tool calling.
 
 **Size provenance.** The configured admission size (`memory_gb` 39) rounds up a live loaded-memory observation of about 38.5 GB recorded during the 2026-09-26 scheduler rebuild. The configured weight estimate (17.5) originated in this model-facts leaf when the fresh CointOS base was created, then was copied into config by the later dashboard commit. No underlying file-size measurement or external source was retained, and the Lemonade-owned GGUF paths are not stat-readable by the current account. Treat it as an inherited estimate until measured through Lemonade or another authorized interface.
