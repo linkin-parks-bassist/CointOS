@@ -1,0 +1,1 @@
+**Launch failures.** A run becomes assignment-engaged only when its first model request reaches the gateway. A process that exits earlier is refunded and counted separately; after two consecutive launch failures its waiting task is durably held for independently funded Operator recovery instead of spending assignment attempts or respawning forever.

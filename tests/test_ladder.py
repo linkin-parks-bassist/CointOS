@@ -8,8 +8,8 @@ LIMITS = state.CONFIG["memory"]
 
 
 class Ladder(unittest.TestCase):
-    """Memory is given back a rung at a time while headroom stays negative, straight to the top
-    under sustained pressure, and taken again only after calm (and when the model fits)."""
+    """Short headroom sheds memory; pressure yields background work without reload thrashing.
+    Recovery waits for calm and enough room for the model."""
 
     def setUp(self):
         previous = copy.deepcopy(state.L)
@@ -20,6 +20,7 @@ class Ladder(unittest.TestCase):
         self.available, self.psi = 100.0, 0.0
         self.stopped, self.killed = [], []
         patches = [
+            mock.patch.object(state.journal, "write"),
             mock.patch.object(daemon, "now", lambda: self.clock),
             mock.patch.object(state, "now", lambda: self.clock),
             mock.patch.object(daemon.memory, "measure",
@@ -48,10 +49,37 @@ class Ladder(unittest.TestCase):
         self.assertEqual(self.tick(LIMITS["shed_step_seconds"])["rung"], 3)
         self.assertEqual(self.killed, [state.CONFIG["work_model"]])
 
-    def test_sustained_pressure_goes_straight_to_the_top(self):
+    def test_sustained_pressure_stops_background_without_unloading_a_model_that_fits(self):
         self.psi = LIMITS["max_psi"] + 2
         self.assertEqual(self.tick()["rung"], 0)
+        self.assertEqual(self.tick(LIMITS["distress_seconds"])["rung"], 2)
+        self.assertEqual(self.stopped, ["w"])
+        self.assertEqual(self.tick(LIMITS["calm_seconds"] * 2)["rung"], 2)
+        self.assertFalse(state.L["guard"]["killed"])
+        self.assertTrue(state.L["guard"]["blocked"])
+        self.assertEqual(self.killed, [])
+
+    def test_pressure_does_not_skip_the_effect_of_stopping_background_before_unloading(self):
+        self.psi = LIMITS["max_psi"] + 2
+        self.tick()
+        self.available = LIMITS["reserve_gb"] - 5
+        self.assertEqual(self.tick(LIMITS["distress_seconds"])["rung"], 2)
+        self.available = LIMITS["reserve_gb"] + 10  # the first shedding step restored headroom
+        self.assertEqual(self.tick(LIMITS["shed_step_seconds"])["rung"], 2)
+        self.assertEqual(self.killed, [])
+
+    def test_persistent_shortage_still_unloads_under_pressure(self):
+        self.psi = LIMITS["max_psi"] + 2
+        self.available = LIMITS["reserve_gb"] - 5
+        self.tick()
         self.assertEqual(self.tick(LIMITS["distress_seconds"])["rung"], 3)
+        self.assertEqual(self.killed, [state.CONFIG["work_model"]])
+
+    def test_positive_machine_headroom_does_not_hide_a_full_server_allowance(self):
+        with mock.patch.object(daemon.BACKEND, "budget", return_value={"limit_gb": 77, "used_gb": 80}):
+            self.assertEqual(self.tick()["rung"], 2)
+            self.assertEqual(self.tick(LIMITS["shed_step_seconds"])["rung"], 3)
+        self.assertEqual(self.killed, [state.CONFIG["work_model"]])
 
     def test_calm_comes_back_only_when_the_model_fits(self):
         self.available = LIMITS["reserve_gb"] - 5

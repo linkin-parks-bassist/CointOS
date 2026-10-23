@@ -8,6 +8,7 @@ reconciles models, looks after agents, spawns work, checks invariants and saves 
 from __future__ import annotations
 
 import faulthandler
+import os
 import signal
 import subprocess
 import threading
@@ -15,9 +16,9 @@ import time
 import traceback
 
 from cointos import (checks, gateway, keys, messages, lanes, lifecycle, memory, opencode, queues, recovery, runs, settings,
-                     snapshots, spawner, viewers)
-from cointos.config import LEDGER, read_json
-from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, fresh, log, now, save
+                     snapshots, snapshot_cleanup, spawner, startup, viewers)
+from cointos.config import LEDGER, read_owned_json
+from cointos.state import BACKEND, CONFIG, LOCK, L, STARTUP, STOPPING, alert, fresh, flush_journal, log, now, save
 
 
 # ---------------------------------------------------------------- models
@@ -77,7 +78,8 @@ def guard() -> None:
     """Give memory back while the machine needs it, one rung at a time, and take it again only
     once things are calm (`what/is/the/architecture/of/cointos.md`, *Memory*). Headroom is the
     leading signal: while it stays negative after saved contexts have left memory, climb a rung
-    and let the effect show before the next. Sustained pressure is a shortcut to the top. The
+    and let the effect show before the next. Sustained pressure stops background work, but
+    does not prove the loaded model cannot fit: unloading still requires negative headroom. The
     daemon and Coin's service stay, though at the top rung Coin can answer only `status`.
     Caller holds LOCK."""
     measured, server = memory.measure(), BACKEND.budget(CONFIG)
@@ -91,9 +93,10 @@ def guard() -> None:
     if short or distress:
         state["calm_since"] = None
         top = len(RUNGS) - 1
-        rung = top if urgent else min(top, max(state["rung"], 1) + 1) if short else state["rung"]
+        rung = min(top, max(state["rung"], 1) + 1) if short else max(state["rung"], 2) if urgent else state["rung"]
         if rung > state["rung"] and now() - state["rung_at"] >= limits["shed_step_seconds"]:
-            climb(rung, "; ".join(distress) or f"headroom {L['memory']['headroom_gb']} GB")
+            why = [f"headroom {L['memory']['headroom_gb']} GB"] if short else []
+            climb(rung, "; ".join(why + distress))
     else:
         state["calm_since"] = state["calm_since"] or now()
         work_model = CONFIG["models"][CONFIG["work_model"]]
@@ -154,7 +157,6 @@ def tick(timers: dict) -> None:
         messages.pending()
         recovery.enforce()
         spawner.refresh()
-        snapshots.forget_untracked()
         if CONFIG["viewers"]["max_viewers"]:
             viewers.look_after(windows)
         if now() - timers["spawn"] >= CONFIG["spawner"]["interval_seconds"]:
@@ -190,6 +192,7 @@ def shutdown() -> None:
     if stopping:
         steps.append(("persist snapshots", snapshots.persist))
     steps.append(("save final ledger", save))
+    steps.append(("flush final journal", flush_journal))
     for name, step in steps:
         try:
             step()
@@ -205,21 +208,61 @@ def system_stopping() -> bool:
     return state == "stopping"
 
 
-def main() -> None:
-    faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1` shows every thread's stack
-    previous = read_json(LEDGER, {}) or {}
+def restore(previous: dict) -> None:
+    """Restore durable acceptance before any surviving run can report its end.
+
+    Adoption starts follower threads; their budget/end reports must not fail
+    work whose verified publication already advanced main.
+    """
+    STARTUP.clear()
+    absent = object()
+    prior_keys = read_owned_json(keys.KEYS, absent)
+    missing_keys = prior_keys is absent
+    if missing_keys:
+        prior_keys = {}
+    keys._validate(prior_keys)
+    expected = startup.authority(previous, CONFIG['projects'], prior_keys)
     L.update(fresh(previous))
     keys.load()
     with LOCK:
+        loaded_keys = keys.stored()
+        if 'coin' not in loaded_keys or keys.owner(loaded_keys['coin']) != ('coin', 'coin'):
+            raise ValueError('startup did not restore fixed Coin gateway ownership')
+        startup.verify(expected, L, CONFIG['projects'], loaded_keys, bootstrap_coin=missing_keys)
+        units = startup.unit_witness(loaded_keys)
+        recovered = lifecycle.recover_landings()
+    if recovered:
+        save()  # adoption may immediately report exhaustion; acceptance must survive it
+    with LOCK:
         runs.adopt(previous)
-        snapshots.forget_transfers()
+        snapshots.recover_transfers()
         snapshots.forget_orphans()
-        snapshots.forget_untracked()
         log("daemon started")
+    snapshots.forget_untracked()  # inventory/accounting only; unlinking belongs to cleanup workers
     save()
     queues.publish()
+    with LOCK:
+        STARTUP.update(pid=os.getpid(), authority=startup.fingerprint(expected), units=units)
+
+
+def observe_trees() -> None:
+    """Read-only health observation cannot delay scheduling or control transactions."""
+    while not STOPPING.is_set():
+        try:
+            spawner.refresh_trees()
+        except Exception:
+            traceback.print_exc()
+        STOPPING.wait(CONFIG['tick_seconds'])
+
+
+def main() -> None:
+    faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1` shows every thread's stack
+    restore(read_owned_json(LEDGER, {}))
     gateway.serve()
+    for tier in ('memory', 'disk'):
+        threading.Thread(target=snapshot_cleanup.run, args=(tier,), daemon=True, name=f'cache-{tier}-cleanup').start()
     lanes.start()
+    threading.Thread(target=observe_trees, daemon=True, name='tree-health').start()
 
     def on_signal(signum, frame):
         STOPPING.set()

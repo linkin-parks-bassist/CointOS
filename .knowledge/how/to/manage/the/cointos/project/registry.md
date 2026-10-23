@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-08T18:30:01+11:00"
+revised_at: "2026-10-12T10:34:13+11:00"
 ---
 
 Use `cointos project list` to inspect enrollment. `cointos project add PATH [--name NAME]` enrolls an existing Git repository. `cointos project new NAME [--path PATH]` creates a repository whose initial commit contains orientation, spec, plan and known-defects leaves before enrollment. The known-defects answer starts with no established defects, so every route named by the generated orientation exists. Both commands accept `--main-branch`, integer `--priority`, `--disabled` and test-policy options shown by CLI help. Lower priorities run first within a lifecycle class. Disabled projects admit no new product work, and their knowledge trees get no gardening or tree audits (`spawner.tree_work`).
@@ -9,7 +9,7 @@ New repositories inherit `project_defaults.test_policy` from operational config 
 
 `cointos project set NAME` accepts `--main-branch`, `--priority`, `--enable|--disable` and test-policy options. Disabling stops the project's current agents uncharged and retains their tasks. `cointos project remove NAME` removes enrollment, never the repository; the daemon refuses removal while that project has waiting, running, review or queued work. Inspect and settle its frontier first. Creating a repository can leave its directory behind if initialization or enrollment fails; correct the reported Git/tree problem before enrolling it again. Failed initial tree construction does not enroll the project.
 
-Enrollment is the installed runtime's separate `config/projects.json`, not the source operational config. Installation preserves this user-managed file. The control API exposes `project-list`, `project-add`, `project-new`, `project-set` and `project-remove`; Coin and the dashboard use those same owners. Add/new bodies carry project fields directly; set uses `{"project": "NAME", "settings": {"enabled": true}}` and remove uses `{"project": "NAME"}`. Queue intake refuses disabled projects; enable them before submitting work.
+Enrollment is the installed runtime's separate `config/projects.json`, not the source operational config. Installation preserves this user-managed file. Loading requires a regular, non-symlink JSON object with a projects list and string name/path entries; malformed, unreadable or duplicate-field files fail rather than silently unenrolling projects. Only absence supplies an empty registry. Existing entries need not name present repositories at load time. The control API exposes `project-list`, `project-add`, `project-new`, `project-set` and `project-remove`; Coin and the dashboard use those same owners. Add/new bodies carry project fields directly; set uses `{"project": "NAME", "settings": {"enabled": true}}` and remove uses `{"project": "NAME"}`. Queue intake refuses disabled projects; enable them before submitting work.
 
 `cointos/projects.py` validates repository-root identity, project-name and path uniqueness, integer priority and supported fields, then writes a sorted candidate registry atomically before replacing the shared in-memory list. Failed persistence leaves both projections unchanged. Updates replace the affected record only after the write succeeds. The CLI/control boundary owns active-work removal checks and stopping disabled runs.
 

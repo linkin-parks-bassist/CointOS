@@ -1,0 +1,40 @@
+Experimental prototype only; not deployed. Keeps native role/tool history for
+summary input. Native wire prompts differ; CointOS already pins system text.
+Summary tool definitions still need rendering-only retention for cache reuse. Native stub
+fixtures verify summary consumption and completed-tool execution once; real
+summary quality, window fit, prefix reuse and throughput remain unverified.
+
+--- a/packages/opencode/src/session/compaction.ts
++++ b/packages/opencode/src/session/compaction.ts
+@@ -383,7 +383,7 @@
+         [
+           buildPrompt({
+             previousSummary,
+-            context: [conversation],
++            context: [],
+           }),
+           ...compacting.context,
+         ]
+@@ -429,20 +429,8 @@
+         tools: {},
+         system: [],
+         messages: [
+-          {
+-            role: "user",
+-            content: [
+-              {
+-                type: "text",
+-                text: [
+-                  nextPrompt,
+-                  ...(compacting.prompt ? ["The following is the conversation history:", conversation] : []),
+-                ]
+-                  .filter(Boolean)
+-                  .join("\n\n"),
+-              },
+-            ],
+-          },
++          ...(yield* MessageV2.toModelMessagesEffect(msgs, model)),
++          { role: "user", content: [{ type: "text", text: nextPrompt }] },
+         ],
+         model,
+       })

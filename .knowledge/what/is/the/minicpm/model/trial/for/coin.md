@@ -1,0 +1,18 @@
+---
+status: green
+revised_at: "2026-10-19T06:20:42+11:00"
+---
+
+MiniCPM-V 4.7 35B-A3B Q4_K_M is unloaded and removed from the selected configuration at the user's request. Coin now shares construction Qwen3.8-27B's existing Gufo lane. The user reported an OS memory-related application stop during two-engine diagnostics. Sampled MemAvailable was 44 GB before unload and about 69 GB afterwards; the exact kill cause/victim is unestablished. The model-facts and reply-reliability owners hold current selection and acceptance.
+
+The official openbmb/MiniCPM-V-4.7-35B-A3B-gguf Q4_K_M file is 21,166,255,008 bytes, SHA-256 bf3d1c67f7843193e4483aebd26c5dea6b6d1f6a06ffa03c2387a6f3cc6d7df5, revision 1e04eae556a075a1e78808a50266ed0b11de9bf1. Trial health matched that checkpoint. Its header reports qwen35moe and 262,144-token training context. There are 35B total/3B active parameters; active count does not describe storage. Provenance: [official card](https://huggingface.co/openbmb/MiniCPM-V-4.7-35B-A3B-gguf), Hugging Face API/header and Lemonade health.
+
+The previous recipe used one 65,536-token lane without speculation, batch 512/ubatch 128, poll 0, priority -1, cache-ram 0, unchanged reasoning caps and a twenty-message history threshold with seven-message trims. how/does/coin/retain/history/for/prefix/reuse.md owns current retention/cache behavior. Its 34 GB admission estimate is conservative, not occupied-context measurement. Final observation with background agents active had PSI 0, guard rung 0 and 4.2 GB above the 24 GB reserve. A prior two-model 131k attempt caused severe transient pressure and Lemonade reload; that shape is not selected.
+
+Installed native probes used the existing 20-message conversation (3,792 characters), with Telegram/history isolated. A cold short reply took 25.74 seconds; read-only status plus answer took 19.52 seconds; a forced closing reply took 14.19 seconds and advertised only send/done. No unrelated tools executed. These verify real-history transport and closing behavior, not sub-15-second general responsiveness. The 95 focused tests pass against source and installed modules.
+
+Clock guidance preserves the requested wall clock and offset together, leaving UTC conversion to the service. It addresses a concrete double-conversion error: a UTC clock was emitted with the original +12 offset. With clarified instructions, explicit NZST/NZDT probes selected correct instants in 6.80/7.78 seconds. No reminder was scheduled. This is narrow evidence, not universal timezone correctness. The earlier local_at/Pacific/Auckland fixture also confused Qwen3.8 and used an interface since removed.
+
+Earlier matched full-prompt 256-token samples measured 61.301 raw tokens/s versus construction Qwen's 21.082 (2.91×); prompt lengths were 5,689/5,715. Cached five-tip totals were 6.01–7.26 seconds. Those 131k measurements do not predict current cold/history-heavy replies or construction suitability. Earlier manager/reviewer failures keep MiniCPM out of coding roles. Native typed Boolean/tool continuation and budgeted rendering passed; shared-prefix probes use empty-user conversations because MiniCPM rejects system-only prompts.
+
+Historical trial evidence: /tmp/cointos-minicpm-selected-dbuppjjt/{native-checks.json,health-after.json,final-state.json}. Prior speed evidence remains /tmp/cointos-minicpm-*-evidence.json. Later real-history trials showed delayed replies, archive/current confusion and unsupported completion claims. Short fixtures did not establish sustained judgment or latency. Model-set changes require paused installation; removed pinned models require explicit unloading.

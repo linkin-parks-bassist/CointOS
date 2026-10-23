@@ -1,0 +1,49 @@
+Experimental, not installed. Requires CointOS structured-v1 summary support.
+The environment flag must match the native chat.headers plugin. Default input is
+unchanged; the gateway owns exact token-window fallback and disables tool calls.
+
+--- a/packages/opencode/src/session/compaction.ts
++++ b/packages/opencode/src/session/compaction.ts
+@@ -389,6 +389,17 @@
+         ]
+           .filter(Boolean)
+           .join("\n\n")
++      // CointOS keeps declarations for cache rendering, never tool execution.
++      // Preserve native flattened input when disabled or when the gateway falls back.
++      const structured = process.env.COINTOS_STRUCTURED_COMPACTION === "1"
++      const summaryText = [
++        nextPrompt,
++        ...(compacting.prompt ? ["The following is the conversation history:", conversation] : []),
++      ].filter(Boolean).join("\n\n")
++      const summaryInstructions = compacting.prompt ?? [
++        buildPrompt({ previousSummary, context: [] }),
++        ...compacting.context,
++      ].filter(Boolean).join("\n\n")
+       const ctx = yield* InstanceState.context
+       const msg: SessionV1.Assistant = {
+         id: MessageID.ascending(),
+@@ -429,19 +440,13 @@
+         tools: {},
+         system: [],
+         messages: [
++          ...(structured ? (yield* MessageV2.toModelMessagesEffect(msgs, model)) : []),
+           {
+             role: "user",
+-            content: [
+-              {
+-                type: "text",
+-                text: [
+-                  nextPrompt,
+-                  ...(compacting.prompt ? ["The following is the conversation history:", conversation] : []),
+-                ]
+-                  .filter(Boolean)
+-                  .join("\n\n"),
+-              },
+-            ],
++            content: [{
++              type: "text",
++              text: structured ? JSON.stringify({ c: summaryInstructions, f: summaryText }) : summaryText,
++            }],
+           },
+         ],
+         model,

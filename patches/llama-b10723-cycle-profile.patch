@@ -1,0 +1,134 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -2763,7 +2763,20 @@
+     };
+ #endif
+ 
++    const bool profile_cycles = std::getenv("LLAMA_CYCLE_PROFILE") != nullptr;
++    bool profile_cycle = false;
++    int64_t p_pre = 0, p_draft = 0, p_decode = 0, p_submit = 0, p_sync = 0;
++    int64_t p_catchup = 0, p_post = 0, p_sample = 0;
++    int p_drafted = 0, p_accepted = 0;
++
+     void update_slots() {
++        // Single-slot decode only. Timers do not add synchronization.
++        profile_cycle = profile_cycles && slots.size() == 1 && slots[0].state == SLOT_STATE_GENERATING;
++        const int64_t profile_start = profile_cycle ? ggml_time_us() : 0;
++        const int profile_task = profile_cycle ? slots[0].task->id : -1;
++        const int profile_context = profile_cycle ? slots[0].prompt.n_tokens() : 0;
++        p_pre = p_draft = p_decode = p_submit = p_sync = p_catchup = p_post = p_sample = 0;
++        p_drafted = p_accepted = 0;
+ #ifdef DEBUG_TIMINGS
+         static int64_t t_prev = 0;
+         int64_t t_start = ggml_time_us();
+@@ -2805,6 +2818,7 @@
+         }
+ 
+         try {
++            common_time_meas profile(p_pre, !profile_cycle);
+             scoped_timer t(t_pre_decode, n_pre_decode);
+             pre_decode();
+             batch.render();
+@@ -2843,6 +2857,7 @@
+         for (int32_t off = 0; off < batch.size(); off = off_next) {
+             const int32_t n_tokens = std::min(n_batch, batch.size() - off);
+             try {
++                common_time_meas profile(p_decode, !profile_cycle);
+                 scoped_timer t(t_decode, n_decode);
+                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
+ 
+@@ -2869,6 +2884,7 @@
+             }
+ 
+             try {
++                common_time_meas profile(p_post, !profile_cycle);
+                 scoped_timer t(t_post_decode, n_post_decode);
+                 post_decode(n_tokens, off, batch_view);
+             } catch (const std::exception & e) {
+@@ -2876,6 +2892,18 @@
+                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
+                 break; // stop any further processing
+             }
++        }
++        if (profile_cycle) {
++            const json record = {
++                {"task", profile_task}, {"context", profile_context},
++                {"total_us", ggml_time_us() - profile_start},
++                {"pre_us", p_pre}, {"draft_us", p_draft},
++                {"decode_us", p_decode}, {"target_submit_us", p_submit},
++                {"target_sync_us", p_sync}, {"draft_catchup_us", p_catchup},
++                {"post_us", p_post}, {"sample_us", p_sample},
++                {"drafted", p_drafted}, {"accepted", p_accepted},
++            };
++            SRV_INF("cycle_profile %s\n", record.dump().c_str());
+         }
+     }
+ 
+@@ -3016,6 +3044,7 @@
+         // generate the actual drafts (if any)
+         if (!drafting.empty()) {
+             queue_tasks.yield_to_queue([&]() {
++                common_time_meas profile(p_draft, !profile_cycle);
+                 common_speculative_draft(spec.get());
+             });
+         }
+@@ -3026,6 +3055,7 @@
+             auto & ckpt  = slot.spec_ckpt;
+ 
+             slot.stats.n_draft_tokens += draft.size();
++            if (profile_cycle) { p_drafted += draft.size(); }
+ 
+             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+             const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+@@ -3652,8 +3682,12 @@
+         // note: the sync is done here too, so that the wait is also covered by the yield
+         int ret = 0;
+         queue_tasks.yield_to_queue([&]() {
+-            ret = llama_decode(ctx_tgt, batch_view);
++            {
++                common_time_meas profile(p_submit, !profile_cycle);
++                ret = llama_decode(ctx_tgt, batch_view);
++            }
+             if (ret == 0 && has_output) {
++                common_time_meas profile(p_sync, !profile_cycle);
+                 llama_synchronize(ctx_tgt);
+             }
+         });
+@@ -3717,6 +3751,7 @@
+         if (spec) {
+             bool ok = true;
+             queue_tasks.yield_to_queue([&]() {
++                common_time_meas profile(p_catchup, !profile_cycle);
+                 ok = common_speculative_process(spec.get(), batch_view);
+             });
+ 
+@@ -3825,6 +3860,7 @@
+ 
+             llama_token id;
+             {
++                common_time_meas profile(p_sample, !profile_cycle);
+                 scoped_timer timer(t_sampl, n_sampl);
+                 id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+             }
+@@ -3885,11 +3921,13 @@
+ 
+                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
+                 const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
++                const int64_t sample_start = profile_cycle ? ggml_time_us() : 0;
+                 auto accepted = synth_probs.empty()
+                     ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
+                     : server_sample_and_accept_synth(
+                             slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
+                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
++                if (profile_cycle) { p_sample += ggml_time_us() - sample_start; }
+                 slot.spec_i_batch.clear();
+ 
+                 GGML_ASSERT(accepted.size() >= 1);
+@@ -3951,6 +3989,7 @@
+ 
+             // update how many tokens out of those tested were accepted
+             slot.stats.n_draft_accepted += n_accepted;
++            if (profile_cycle) { p_accepted += n_accepted; }
+             slot.stats.n_draft_verif_steps += 1;
+ 
+             auto & n_accepted_per_pos = slot.n_accepted_per_pos;

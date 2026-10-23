@@ -1,0 +1,1 @@
+**Task history.** The dashboard's Clear finished history control (pressed twice) removes only unreferenced terminal task and queue records. It retains evidence, sessions and branch metadata for the unfinished queue frontier and its transitive prerequisites, recovery work and workers of waiting integrators. Telegram conversation history and Git/OpenCode artifacts are separate.

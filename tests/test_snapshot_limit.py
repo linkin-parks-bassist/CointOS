@@ -1,11 +1,14 @@
 import copy
 import unittest
 from unittest.mock import patch
-from cointos import snapshots, state
+from cointos import snapshots, snapshot_cleanup, state
 
 
 class SnapshotLimit(unittest.TestCase):
     def setUp(self):
+        transfers = set(snapshots.TRANSFERS)
+        self.addCleanup(lambda: (snapshots.TRANSFERS.clear(), snapshots.TRANSFERS.update(transfers)))
+        snapshots.TRANSFERS.clear()
         old = copy.deepcopy(state.L)
         self.addCleanup(lambda: (state.L.clear(), state.L.update(old)))
         state.L.clear(); state.L.update(state.fresh({}))
@@ -14,11 +17,11 @@ class SnapshotLimit(unittest.TestCase):
         self.thread = self.enterContext(patch.object(snapshots.threading, 'Thread'))
         self.disk_room_original = snapshots.disk_room
         self.enterContext(patch.object(snapshots, 'disk_room', return_value=True))
-        self.forget = self.enterContext(patch.object(snapshots.BACKEND, 'forget'))
+        self.forget = self.enterContext(patch.object(snapshots.BACKEND, 'delete_snapshot_file', side_effect=lambda config, entry: entry['bytes']))
 
     def add(self, name, size, owner='shared', tier='memory', last=0):
         state.L['snapshots'][name] = {'bytes': size * 10**9, 'tier': tier,
-                                      'owner': owner, 'last_run': last}
+                                      'owner': owner, 'last_run': last, 'model': state.CONFIG['work_model']}
 
     def test_review_spills_before_running_and_does_not_credit_pending_bytes(self):
         state.L['tasks']['active'] = {'status': 'running'}
@@ -48,6 +51,9 @@ class SnapshotLimit(unittest.TestCase):
     def test_full_disk_forgets_cache_instead_of_exceeding_ram_limit(self):
         self.add('old', 9)
         with patch.object(snapshots, 'disk_room', return_value=False):
+            self.assertFalse(snapshots.room(3))
+            self.forget.assert_not_called()
+            snapshot_cleanup.drain('memory')
             self.assertTrue(snapshots.room(3))
         self.forget.assert_called_once()
         self.assertNotIn('old', state.L['snapshots'])
@@ -75,4 +81,5 @@ class SnapshotLimit(unittest.TestCase):
         self.add('retired', 2, tier='moving')
         with patch.object(snapshots.BACKEND, 'spill', side_effect=lambda *args: state.L['snapshots'].pop('retired')):
             snapshots.spill('retired')
-        self.forget.assert_called_once_with(state.CONFIG, 'retired')
+        snapshot_cleanup.drain('disk')
+        self.assertEqual(self.forget.call_args.args[1]['name'], 'retired')

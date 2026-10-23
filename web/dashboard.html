@@ -19,18 +19,36 @@
 body { margin: 0; color: var(--ink); font-size: 15px; line-height: 1.5; font-variant-numeric: tabular-nums;
   background: radial-gradient(circle at 88% 5%, #ffd8d8, transparent 25%), var(--bg); min-height: 100vh; }
 main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
-.topline { display: flex; justify-content: space-between; gap: 16px; align-items: baseline; flex-wrap: wrap;
+/* The header: the name and freshness on the left; on the right, what the user can start, and the
+   one switch that pauses or resumes everything. */
+.topline { display: flex; justify-content: space-between; gap: 14px 24px; align-items: center; flex-wrap: wrap;
   border-bottom: 2px solid var(--dark); padding-bottom: 14px; }
+.brandbox { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
 .brand { margin: 0; font-size: clamp(40px, 5vw, 64px); line-height: .92; letter-spacing: -.07em; font-weight: 900; }
 .brand em { font-style: normal; color: var(--accent-bright); }
+.global-ctl { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.runstate { display: flex; align-items: center; gap: 12px; padding: 9px 16px 9px 13px; cursor: pointer; text-align: left;
+  font: inherit; color: var(--dark-text); background: var(--dark); border: 2px solid var(--dark); box-shadow: 4px 4px 0 var(--pink-shadow); }
+.runstate i { width: 16px; height: 16px; flex: none; background: var(--accent-bright); animation: pulse 2.4s ease-in-out infinite; }
+.runstate b { display: block; font-size: 17px; font-weight: 900; letter-spacing: -.03em; line-height: 1.1; }
+.runstate small { display: block; font-size: 12px; color: var(--dark-soft); }
+.runstate:hover { box-shadow: 4px 4px 0 var(--accent-bright); }
+.runstate:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--pink-shadow); }
+.runstate:disabled { opacity: .6; cursor: default; }
+/* Paused, the switch turns to the one thing to do next: resume. */
+.runstate.paused { background: var(--accent); border-color: var(--accent); }
+.runstate.paused i { background: transparent; border: 3px solid var(--dark-text); border-width: 0 5px; width: 14px; animation: none; }
+.runstate.paused small { color: #ffdfe4; }
+@media (max-width: 640px) { .global-ctl { width: 100%; } .runstate { order: -1; flex: 1 1 100%; } }
 .scheduler-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin: 4px 0 14px; }
 .scheduler-control { display: grid; gap: 3px; }
 .scheduler-control label { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
 .scheduler-control small { font-size: 11px; line-height: 1.3; color: var(--ink-faint); }
-.scheduler-control select { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--line); padding: 6px 10px; }
+.scheduler-control small:empty { display: none; }
+.scheduler-control select { width: 100%; }
+.scheduler-control .switch { min-height: 36px; }
 .stamp { color: var(--ink-faint); font-size: 13px; }
-.alert { margin-top: 18px; padding: 13px 18px; border-left: 5px solid var(--accent-bright); background: var(--accent-wash); }
-.alert:empty { display: none; }
+.stamp.bad { color: var(--accent); font-weight: 700; }
 .agents { display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); --capacity: 1; }
 /* Cards pair up once the agents column itself is wide enough, whatever the window does. */
 #agents { container-type: inline-size; }
@@ -50,6 +68,7 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .agent .state.thinking { background: var(--c); animation: pulse 2.4s ease-in-out infinite; }
 .agent .state.tools { background: var(--dark-text); border-color: var(--dark-text); }
 .agent .state.starting { border-style: dashed; }
+.agent .state.idle { opacity: .4; }
 @keyframes pulse { 50% { opacity: .45; } }
 .agent .id { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
 .agent .work { font-size: 20px; font-weight: 900; letter-spacing: -.04em; line-height: 1.15; overflow-wrap: anywhere; }
@@ -59,7 +78,7 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .agent .by span { color: var(--dark-soft); font-size: 12.5px; }
 .agent .sum { font-size: 13px; line-height: 1.35; color: var(--dark-text); opacity: .85; }
 .agent .sum:empty { display: none; }
-/* Uptime, tokens written, and speed while writing: three fixed lines in a fixed width, so ticking
+/* Wall time, GPU time, tokens written, and speed: fixed lines in a fixed width, so ticking
    numbers never move the title beside them. */
 .agent .stats { min-width: 6.5em; text-align: right; font-size: 12px; line-height: 1.35; color: var(--dark-soft); white-space: nowrap; }
 .agent .stats b { display: block; font: 900 20px/1.05 ui-sans-serif, system-ui, sans-serif; letter-spacing: -.03em; color: var(--dark-text); }
@@ -91,7 +110,8 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 /* Along the card's bottom edge, out of the layout: showing it moves nothing. */
 .agent .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--dark-2); }
 .agent .progress span { display: block; height: 100%; background: var(--c); transition: width 1.5s linear; }
-.empty { padding: 26px; border: 2px dashed var(--line); color: var(--ink-soft); font-size: 18px; }
+.empty { padding: 26px; border: 2px dashed var(--line); color: var(--ink-soft); font-size: 18px;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
 /* Two columns: what agents are doing and what waits for them; beside it, the machine they share. */
 .cols { display: grid; gap: 22px; margin-top: 22px; align-items: start; }
 .col-main, .col-side { display: grid; gap: 22px; min-width: 0; align-content: start; }
@@ -103,7 +123,8 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 18px; }
 .tile { background: var(--paper); border: 1px solid var(--line); box-shadow: 3px 3px 0 var(--shadow); padding: 10px 14px 9px; min-width: 0; }
 .tile span { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
-.tile b { display: block; font: 900 28px/1.05 ui-sans-serif, system-ui, sans-serif; letter-spacing: -.05em; margin: 3px 0 1px; }
+.tile b { display: block; font: 900 clamp(22px, 1.9vw, 28px)/1.05 ui-sans-serif, system-ui, sans-serif; letter-spacing: -.05em; margin: 3px 0 1px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile small { display: block; font-size: 12px; color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tile.dark { background: var(--dark); border-color: var(--dark); color: var(--dark-text); box-shadow: 3px 3px 0 var(--pink-shadow); }
 .tile.dark span, .tile.dark small { color: var(--dark-soft); } .tile.dark b { color: var(--accent-bright); }
@@ -116,33 +137,6 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 h2 { font-size: clamp(21px, 2vw, 25px); line-height: 1; letter-spacing: -.055em; margin: 0 0 12px; font-weight: 900; }
 .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
 .panel-heading h2 { margin-bottom: 12px; }
-.scout-control { display: flex; align-items: center; gap: 10px; margin-left: auto; }
-.scout-control button { font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent); background: var(--paper);
-  border: 1px solid var(--accent); padding: 7px 11px; cursor: pointer; box-shadow: 2px 2px 0 var(--pink-shadow); }
-.scout-control button:hover:not(:disabled) { background: var(--accent-wash); }
-.scout-control button:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--pink-shadow); }
-.scout-control button:disabled { color: var(--ink-faint); border-color: var(--line); box-shadow: none; cursor: default; }
-.scout-control small { color: var(--ink-faint); }
-.project-list { display: grid; gap: 0; }
-.project-row { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(260px, 1.4fr) auto; gap: 8px 18px;
-  align-items: center; padding: 11px 0; border-top: 1px solid var(--line-soft); }
-.project-row:first-child { border-top: 0; }
-.project-name { font-weight: 900; font-size: 17px; }
-.project-path { color: var(--ink-faint); overflow-wrap: anywhere; }
-.project-controls { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
-.project-controls input[type=number] { width: 72px; }
-.project-controls button, .project-form button { font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent);
-  background: var(--paper); border: 1px solid var(--accent); padding: 7px 10px; cursor: pointer; }
-.project-form { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 13px; }
-.project-form summary { cursor: pointer; font-weight: 900; color: var(--accent); }
-.project-fields { display: grid; grid-template-columns: 150px minmax(180px, 1fr) minmax(220px, 2fr) 100px auto;
-  gap: 10px; align-items: end; margin-top: 12px; }
-.project-fields label { display: grid; gap: 3px; color: var(--ink-faint); font-size: 12px; }
-.project-fields input, .project-fields select { min-width: 0; width: 100%; font: inherit; padding: 6px 8px;
-  color: var(--ink); background: var(--paper); border: 1px solid var(--line); }
-@media (max-width: 900px) { .project-row, .project-fields { grid-template-columns: 1fr; } .project-controls { justify-content: flex-start; } }
-.col-side .project-row { grid-template-columns: 1fr; gap: 4px; } .col-side .project-controls { justify-content: flex-start; }
-.col-side .project-fields { grid-template-columns: 1fr 1fr; }
 h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); margin: 14px 0 3px; }
 .row { display: grid; grid-template-columns: 5px 1fr auto; gap: 1px 12px; padding: 7px 0; border-top: 1px solid var(--line-soft); }
 .row .bar { grid-row: 1 / 3; background: var(--line-soft); border: 1px solid var(--dark); }
@@ -175,14 +169,16 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .legend i { width: 12px; height: 12px; border-radius: 2px; }
 .legend b { font-variant-numeric: tabular-nums; } .legend em { font-style: normal; color: var(--ink-faint); text-align: right; }
 .memfacts { margin-top: 6px; font-size: 13px; color: var(--ink-faint); }
-.check { margin-top: 16px; padding: 8px 12px; font-size: 14px; border: 1px solid var(--line); }
-.check.ok { color: var(--ink); font-weight: 900; background: var(--paper); }
-.check.no { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); } .check.no + .check.no { margin-top: 6px; }
+.diagnostics { margin-top: 18px; border-top: 1px solid var(--line-soft); padding-top: 12px; font-size: 13px; }
+.diagnostics > summary { color: var(--ink-faint); cursor: pointer; }
+.check { margin-top: 14px; }
+.check h3 { margin: 0 0 6px; font-size: 14px; }
+.check ul { margin: 6px 0; padding-left: 18px; }
+.check li { margin: 8px 0; }
+.check a { color: var(--accent); text-decoration: underline; cursor: pointer; }
+.check li span { display: block; color: var(--ink-faint); }
+.check pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 ui-monospace, monospace; }
 .meta.one { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* Finished work, folded away; opened, a bounded list that keeps its scroll through updates. */
-.done summary { cursor: pointer; list-style: none; } .done summary::-webkit-details-marker { display: none; }
-.done summary h3 { display: inline-block; } .done summary h3::before { content: "▸ "; } .done[open] summary h3::before { content: "▾ "; }
-.done-list { max-height: 420px; overflow: auto; }
 .history { font-size: 13px; max-height: 320px; overflow: auto; }
 .history div { display: flex; gap: 12px; padding: 4px 0; border-top: 1px solid var(--line-soft); }
 .history .when { color: var(--ink-faint); flex: none; font-variant-numeric: tabular-nums; }
@@ -191,8 +187,10 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 /* Each role has its own colour, shared by its agent cards, its pipeline step and its badge. */
 .agent.r-worker { --c: var(--accent-bright); } .agent.r-integrator { --c: #8fc7b5; } .agent.r-manager { --c: #f2c46b; }
 .agent.r-steward, .agent.r-gardener, .agent.r-tree-auditor, .agent.r-test-auditor, .agent.r-operator { --c: #c9b3e0; }
+.agent.r-coin { --c: #8ab8e6; cursor: default; } .agent.r-coin .ctl { display: none; }
 /* The pipeline: work items flow left to right; a blocked item waits at the far left. */
-.flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr) 22px) minmax(0, 1fr); align-items: stretch; }
+/* Each step is as tall as its own chips: an empty step stays a header, not a tall empty box. */
+.flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr) 22px) minmax(0, 1fr); align-items: start; }
 .step { min-width: 0; border: 2px solid var(--dark); background: var(--paper); box-shadow: 3px 3px 0 var(--shadow); display: flex; flex-direction: column; }
 .step header { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; padding: 6px 9px; border-bottom: 2px solid var(--dark);
   background: var(--sc, var(--bg)); }
@@ -214,7 +212,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .tchip.held { border-left-color: var(--accent); }
 .tchip.more { display: block; font-weight: 500; color: var(--ink-faint); border-style: dashed; text-align: center; }
 /* An arrow between steps; its dashes march while anything is moving into the next step. */
-.arrow { align-self: center; height: 12px; position: relative; margin: 0 2px; }
+.arrow { align-self: start; height: 12px; position: relative; margin: 17px 2px 0; }
 .arrow::before { content: ""; position: absolute; left: 0; right: 6px; top: 5px; height: 2px;
   background: repeating-linear-gradient(90deg, var(--dark) 0 5px, transparent 5px 9px); }
 .arrow::after { content: ""; position: absolute; right: 0; top: 0; border: 6px solid transparent; border-left: 7px solid var(--dark); border-right: 0; }
@@ -222,9 +220,6 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
   background-size: 9px 2px; animation: march .6s linear infinite; }
 .arrow.moving::after { border-left-color: var(--accent-bright); }
 @keyframes march { to { background-position: 9px 0; } }
-.flow-foot { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 12px; align-items: center; font-size: 13px; }
-.flow-foot h3 { margin: 0; } .flow-foot .tchip { width: auto; display: inline-block; max-width: 280px; }
-.flow-foot .group { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
 @media (max-width: 820px) { .flow { grid-template-columns: 1fr; } .arrow { transform: rotate(90deg); width: 22px; justify-self: center; margin: 4px 0; } }
 .row { cursor: pointer; } .row:hover { background: var(--accent-wash); }
 .row .meta.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -238,7 +233,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .pcard:hover { box-shadow: 4px 4px 0 var(--accent-bright); }
 .pcard h4 { margin: 0; font-size: 22px; font-weight: 900; letter-spacing: -.05em; display: flex; justify-content: space-between; align-items: baseline; }
 .pcard h4 small { font-size: 12px; font-weight: 700; letter-spacing: 0; color: var(--ink-faint); }
-.pcard p, .phead p { margin: 0; color: var(--ink-soft); font-size: 13.5px; line-height: 1.4; }
+.pcard p { margin: 0; color: var(--ink-soft); font-size: 13.5px; line-height: 1.4; }
 .pcard p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .pcard.off { opacity: .55; }
 .pbar { display: flex; height: 22px; border: 2px solid var(--dark); background: var(--bg); }
@@ -269,7 +264,19 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .pnow .chip { flex: none; line-height: 1.3; }
 .pnow div span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .back { color: var(--accent); font-weight: 800; text-decoration: none; font-size: 14px; }
-.phead { margin: 6px 0 4px; } .phead h2 { font-size: 34px; margin: 0 0 4px; }
+/* A project page's head: its name, purpose and repository on the left; its settings on the right,
+   made of the same switches and segmented choices as every other control. */
+.phead { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 14px 32px; margin: 6px 0 20px; }
+.phead .about { flex: 1 1 460px; min-width: 0; }
+.phead h2 { font-size: 34px; margin: 0 0 6px; }
+.phead p { margin: 0; color: var(--ink-soft); font-size: 13.5px; line-height: 1.45; max-width: 100ch; cursor: pointer;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.phead p.open { display: block; }
+.where { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 10px; font-size: 12px; color: var(--ink-faint); }
+.where code { font: 12px ui-monospace, monospace; color: var(--ink); background: var(--bg); border: 1px solid var(--line-soft); padding: 1px 6px; margin-left: 4px; }
+.settings { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 22px; padding-top: 8px; }
+.group { display: inline-flex; align-items: center; gap: 8px; }
+.ctl-label { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
 .tchip .sum { font-weight: 500; font-size: 11.5px; line-height: 1.4; color: var(--ink-soft); margin-top: 2px;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .drawer .lead { font-size: 16px; margin: 6px 0 0; }
@@ -277,20 +284,97 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .btn { font: 800 12.5px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent); background: var(--paper); border: 1px solid var(--accent);
   padding: 6px 9px; cursor: pointer; box-shadow: 2px 2px 0 var(--pink-shadow); }
 .btn:hover:not(:disabled) { background: var(--accent-wash); } .btn:disabled { opacity: .45; cursor: default; }
-.btn.danger { color: var(--paper); background: var(--accent); } .btn.danger:hover:not(:disabled) { background: #85304a; }
-.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 12px 0 4px; padding: 10px 0; border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft); }
-.actions select { font: inherit; font-size: 13px; padding: 4px 6px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
-.actions .sep { width: 1px; align-self: stretch; background: var(--line-soft); }
-.row .move { display: inline-flex; gap: 3px; margin-left: 8px; } .row .move .btn { padding: 2px 6px; box-shadow: none; }
+/* The one thing to do next is filled; an armed button (an action that cannot be undone, waiting
+   for its second click) fills too. */
+.btn.go, .btn.armed { color: var(--paper); background: var(--accent); } .btn.go:hover:not(:disabled), .btn.armed:hover { background: #85304a; }
+.btn:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--pink-shadow); }
+.linkish.armed { color: var(--accent); font-weight: 800; }
+.global-ctl > .btn { padding: 10px 13px; font-size: 13.5px; }
+/* Segmented choices: a few buttons joined, the current one pressed. */
+.seg { display: inline-flex; border: 1px solid var(--accent); background: var(--paper); box-shadow: 2px 2px 0 var(--pink-shadow); }
+.seg button { font: 800 12.5px/1 ui-sans-serif, system-ui, sans-serif; color: var(--accent); background: none; border: 0;
+  border-left: 1px solid var(--accent); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.seg button:first-child, .seg button[hidden] + button { border-left: 0; }
+.seg button:hover:not([aria-pressed=true]):not(:disabled) { background: var(--accent-wash); }
+.seg button[aria-pressed=true] { color: var(--paper); background: var(--accent); }
+.seg button[data-act][aria-pressed=true] { cursor: default; }
+.seg button b { font-weight: 900; margin-left: 3px; }
+/* An on/off switch: a square that slides across, lit when on. */
+.switch { display: inline-flex; align-items: center; gap: 9px; font: 800 13px/1 ui-sans-serif, system-ui, sans-serif; color: var(--ink);
+  background: none; border: 0; padding: 0; cursor: pointer; white-space: nowrap; }
+.switch i { position: relative; flex: none; width: 36px; height: 20px; border: 2px solid var(--dark); background: var(--line-soft);
+  box-shadow: 2px 2px 0 var(--pink-shadow); transition: background .15s; }
+.switch i::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; background: var(--dark); transition: transform .15s; }
+.switch[aria-checked=true] i { background: var(--accent-bright); }
+.switch[aria-checked=true] i::after { transform: translateX(16px); background: var(--paper); }
+.switch:hover i { border-color: var(--accent); } .switch:disabled { opacity: .5; cursor: default; }
+.switch.small { font-size: 12.5px; font-weight: 600; color: var(--ink-faint); gap: 7px; }
+.switch.small i { width: 30px; height: 17px; box-shadow: none; } .switch.small i::after { width: 9px; height: 9px; }
+.switch.small[aria-checked=true] i::after { transform: translateX(13px); }
+/* Every drop-down shares one face: square, the page's paper, a rose chevron. */
+select { appearance: none; -webkit-appearance: none; font: inherit; font-size: 14px; color: var(--ink); border: 1px solid var(--line); padding: 6px 28px 6px 10px;
+  background: var(--paper) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%239f3b52' stroke-width='2'/%3E%3C/svg%3E") no-repeat right 10px center; cursor: pointer; }
+select:disabled { opacity: .55; cursor: default; }
+/* The drawer's controls: what to do, with Cancel set apart at the end; below, how it is queued and how hard it thinks. */
+.actions { display: grid; gap: 12px; margin: 14px 0 6px; padding: 12px 0; border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.actions .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.actions .line .group + .group { margin-left: 14px; }
+.actions .spacer { flex: 1; }
+.row .acts { display: inline-flex; gap: 4px; margin-left: 10px; vertical-align: 1px; }
+.row .acts .btn { padding: 3px 7px; box-shadow: none; font-size: 11.5px; }
+.row .tag { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin-left: 6px; }
+/* Finished work: two pressable counts that open their list below; clearing sits apart at the end. */
+.history-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 14px; padding-top: 12px;
+  border-top: 1px solid var(--line-soft); }
+.history-foot .seg button { font-weight: 700; } .history-foot .spacer { flex: 1; }
+.hist-list { max-height: 420px; overflow: auto; margin-top: 8px; } .hist-list > p { margin: 4px 0 8px; font-size: 13px; }
+.linkish { font: inherit; font-size: 12.5px; color: var(--ink-faint); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; }
+.linkish:hover { color: var(--accent); } .linkish:disabled { opacity: .5; cursor: default; }
 .lane-free { font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
 .lane-free b { opacity: .45; margin-left: 2px; } .lane-free:hover b { opacity: 1; } .lane-free:hover { background: var(--accent); color: var(--paper); }
 /* Per-item controls stay out of sight until the pointer is on their card or row; touch screens always show them. */
 @media (hover: hover) {
-  .agent .ctl, .row .move { opacity: 0; transition: opacity .15s; }
-  .agent:hover .ctl, .agent:focus-within .ctl, .row:hover .move, .row:focus-within .move { opacity: 1; }
+  .agent .ctl, .row .acts .quiet { opacity: 0; transition: opacity .15s; }
+  .agent:hover .ctl, .agent:focus-within .ctl, .row:hover .acts .quiet, .row:focus-within .acts .quiet { opacity: 1; }
+  .agent .ctl:has(.armed), .row .acts .quiet.armed { opacity: 1; }
 }
-.global-ctl { display: flex; gap: 10px; align-items: baseline; }
+/* Messages agents sent the user, newest first; a question waits here for a reply. */
+.badge { display: inline-block; vertical-align: 4px; font: 800 12px/1 ui-sans-serif, system-ui, sans-serif; letter-spacing: 0;
+  color: var(--paper); background: var(--accent); padding: 4px 7px; margin-left: 6px; }
+.badge:empty { display: none; }
+.messages { display: grid; grid-template-columns: minmax(0, 1fr); max-height: 520px; overflow: auto; }
+.msg { min-width: 0; padding: 9px 0 10px; border-top: 1px solid var(--line-soft); font-size: 13.5px; }
+.msg:first-child { border-top: 0; }
+.msg header { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.msg header b { font-weight: 900; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; cursor: pointer; }
+.msg header b:hover { color: var(--accent); }
+.msg header span { color: var(--ink-faint); font-size: 12px; white-space: nowrap; }
+.msg header .btn { margin-left: auto; padding: 3px 8px; box-shadow: none; font-size: 11.5px; }
+.msg.new header b::before { content: "● "; color: var(--accent-bright); }
+.msg p { margin: 4px 0 0; color: var(--ink-soft); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+.msg.open p { display: block; -webkit-line-clamp: unset; }
+/* Forms that start or change work open in one modal sheet. */
+.sheet { border: 2px solid var(--dark); background: var(--paper); color: var(--ink); box-shadow: 8px 8px 0 var(--pink-shadow);
+  padding: 20px 22px 18px; width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 40px); }
+.sheet::backdrop { background: color-mix(in oklab, var(--dark) 30%, transparent); }
+.sheet h2 { margin: 0 0 4px; } .sheet .hint { margin: 0 0 12px; color: var(--ink-faint); font-size: 13px; }
+.sheet form { display: grid; gap: 11px; }
+.sheet .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 11px; }
+@media (max-width: 560px) { .sheet .pair { grid-template-columns: 1fr; } }
+.sheet label, .sheet .label { display: grid; gap: 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
+.sheet label small, .sheet .label small { text-transform: none; letter-spacing: 0; font-weight: 500; margin-left: 4px; }
+.sheet input, .sheet select, .sheet textarea { font: inherit; font-size: 14px; text-transform: none; letter-spacing: 0; font-weight: 400;
+  color: var(--ink); background-color: var(--bg); border: 1px solid var(--line); padding: 7px 9px; min-width: 0; width: 100%; }
+.sheet select { padding-right: 28px; }
+.sheet textarea { min-height: 130px; resize: vertical; font: 13px/1.5 ui-monospace, monospace; }
+.sheet input:focus, .sheet select:focus, .sheet textarea:focus { outline: 2px solid var(--accent-bright); outline-offset: -1px; }
+.sheet .seg { justify-self: start; } .sheet .seg button { padding: 10px 14px; font-size: 13.5px; letter-spacing: 0; text-transform: none; }
+.sheet .buttons { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 4px; }
+.sheet .buttons small { margin-right: auto; color: var(--accent); font-size: 13px; }
+.sheet .buttons .btn { padding: 8px 14px; font-size: 13.5px; }
+.sheet .quote { margin: 0 0 4px; padding: 8px 10px; background: var(--bg); border-left: 4px solid var(--line); font-size: 13px;
+  color: var(--ink-soft); max-height: 150px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .toast { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); background: var(--dark); color: var(--dark-text); padding: 10px 16px;
   border-left: 5px solid var(--accent-bright); z-index: 20; font-size: 14px; max-width: min(640px, calc(100vw - 32px)); }
 .toast[hidden] { display: none; } .toast.bad { border-left-color: #ff4d5e; }
@@ -316,32 +400,28 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 </head>
 <body>
 <main>
-  <div class="topline"><h1 class="brand">Coint<em>OS</em></h1><div class="global-ctl"><button class="btn" id="pause-all" type="button">Pause all</button><span class="stamp" id="stamp">connecting…</span></div></div>
-  <div class="strip" id="strip"></div>
-  <div class="alert" id="alert"></div>
+  <header class="topline"><div class="brandbox"><h1 class="brand">Coint<em>OS</em></h1><span class="stamp" id="stamp">connecting…</span></div>
+    <div class="global-ctl">
+      <button class="btn" id="open-queue" type="button" title="Add a work item or planning request to a project's queue">＋ Queue work</button>
+      <button class="btn" id="open-operator" type="button" title="Start one ad-hoc operator with a brief of your own">Run operator</button>
+      <button class="btn" id="scout-now" type="button" title="Schedule a scout to look for loose ends now">Spawn scout</button>
+      <button class="runstate" id="pause-all" type="button"><i></i><span><b>Running</b><small>connecting…</small></span></button>
+    </div></header>
+  <div class="strip" id="strip" aria-label="System at a glance"></div>
   <div class="cols">
   <div class="col-main">
   <div id="agents"></div>
-  <section class="panel" id="home"><h2>Projects</h2><div class="pcards" id="pcards"></div><div id="add-project"><details class="project-form"><summary>Add or create project</summary>
-        <div class="project-fields">
-          <label>Action<select id="project-action"><option value="add">Add existing</option><option value="new">Create new</option></select></label>
-          <label>Name <input id="project-name" placeholder="derived from folder for existing"></label>
-          <label>Path <input id="project-path" placeholder="~/Projects/name"></label>
-          <label>Priority <input id="project-priority" type="number" value="100"></label>
-          <button id="project-submit" type="button">Add project</button>
-        </div><small id="project-status" role="status" aria-live="polite"></small>
-      </details></div></section>
+  <section class="panel" id="home"><div class="panel-heading"><h2>Projects</h2><button class="btn" id="add-project" type="button">＋ Add project</button></div><div class="pcards" id="pcards"></div></section>
   <section class="panel" id="project-page" hidden><a class="back" href="#/">← All projects</a>
-    <div class="phead"><h2 id="pp-name"></h2><p id="pp-about"></p></div><div class="project-list" id="projects"></div>
-    <h3>Pipeline</h3><div class="flow" id="flow"></div><div class="flow-foot" id="flow-foot"></div></section>
-    <section class="panel"><div class="panel-heading"><h2>Work</h2>
-      <div class="scout-control"><small id="scout-status" role="status" aria-live="polite"></small><button id="scout-now" type="button">Spawn scout</button></div>
-    </div><div id="work"></div>
-      <details class="done" id="done"><summary><h3>Done <span id="done-count"></span></h3></summary><div class="done-list" id="done-list"></div></details>
-      <details class="done" id="failed"><summary><h3>Gave up <span id="failed-count"></span></h3></summary><div class="done-list" id="failed-list"></div></details>
-      <div class="scout-control"><button id="clear-task-history" type="button">Clear task history</button><small id="clear-task-status" role="status" aria-live="polite"></small></div></section>
+    <div class="phead" id="phead"></div>
+    <h3>Pipeline</h3><div class="flow" id="flow"></div></section>
+    <section class="panel"><h2>Work</h2><div id="work"></div>
+      <div class="history-foot" id="history-foot"><div class="seg" id="hist-tabs"><button type="button" data-hist="done" aria-pressed="false">Done<b id="done-count"></b></button><button type="button" data-hist="failed" aria-pressed="false">Failed<b id="failed-count"></b></button></div>
+        <span class="spacer"></span><small class="muted" id="clear-task-status" role="status" aria-live="polite"></small><button class="linkish" id="clear-task-history" type="button">Clear finished history</button></div>
+      <div class="hist-list" id="hist-list" hidden></div></section>
   </div>
   <aside class="col-side">
+    <section class="panel" id="messages-panel"><h2>Messages <span class="badge" id="msg-new"></span></h2><div class="messages" id="messages"></div></section>
     <section class="panel machine"><h2>Machine</h2>
       <div class="scheduler-controls">
       <div class="scheduler-control"><label for="slice">GPU time slice</label>
@@ -359,81 +439,87 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
           <option value="128">128 tokens</option><option value="256">256 tokens</option>
         </select><small id="chunk-status" role="status" aria-live="polite">Connecting…</small>
       </div>
+      <div class="scheduler-control"><label for="viewers">Viewer windows</label>
+        <button type="button" class="switch" id="viewers" role="switch" aria-checked="false" disabled
+          title="Pop-up OpenCode windows on this desktop that follow the active agents"><i></i><span>Off</span></button>
+        <small id="viewers-status" role="status" aria-live="polite"></small>
+      </div>
       </div><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
-      <div id="checks"></div></section>
-    <section class="panel"><h2>Recently</h2><div class="history" id="history"></div></section>
+      <details class="diagnostics"><summary id="checks-summary">Diagnostics</summary><div id="checks"></div></details></section>
+    <section class="panel"><div class="panel-heading"><h2>Recently</h2>
+      <button type="button" class="switch small" id="history-all" role="switch" aria-checked="false"
+        title="Also list lane switches, snapshots, tool-history and budget notices"><i></i><span>Machine events</span></button></div>
+      <div class="history" id="history"></div></section>
 </aside>
   </div>
 </main>
+<dialog class="sheet" id="sheet"><form method="dialog" id="sheet-form"></form></dialog>
 <div class="scrim" id="scrim" hidden></div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Task details"><button class="close" id="drawer-close" type="button" aria-label="Close">×</button><div id="drawer-body"></div></aside>
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
-const ago = t => { const s = Math.max(0, Date.now() / 1000 - t) | 0;
+const duration = seconds => { const s = Math.floor(Math.max(0, seconds));
   return s < 120 ? s + "s" : s < 7200 ? (s / 60 | 0) + "m" : (s / 3600 | 0) + "h"; };
+const ago = t => duration(Date.now() / 1000 - t);
 
 const short = model => model.replace(/-GGUF$/, "");
 
-async function projectAction(action, body) {
-  const response = await fetch(`/api/project-${action}`, {method: "POST", headers: {"Content-Type": "application/json"},
-                                                           body: JSON.stringify(body)});
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || `Project ${action} failed`);
-  return result;
+// A project's priority, as three plain choices; lower numbers run first and 100 is the default.
+const PRIORITIES = [["high", "High", 50], ["normal", "Normal", 100], ["low", "Low", 200]];
+const priorityLevel = n => n < 100 ? "high" : n > 100 ? "low" : "normal";
+const homePath = path => String(path || "").replace(/^\/(home|Users)\/[^/]+/, "~");
+
+// The open project's head: what it is (three lines, the rest on a click), where it lives, and its settings.
+let ABOUT_OPEN = false;
+$("phead").addEventListener("click", e => { if (e.target.closest(".about p")) { ABOUT_OPEN = !ABOUT_OPEN; if (LAST.L) renderProjectHead(LAST.L); } });
+function renderProjectHead(L) {
+  const p = (L.projects || []).find(p => p.name === ROUTE.project), about = L.project_about?.[ROUTE.project] || "";
+  if (!p) { setHTML($("phead"), `<div class="about"><h2>${esc(word(ROUTE.project))}</h2><p>Not a registered project.</p></div>`); return; }
+  const on = p.enabled !== false, level = priorityLevel(p.priority ?? 100), name = esc(p.name);
+  setHTML($("phead"), `<div class="about"><h2>${esc(word(p.name))}</h2>${about ? `<p class="${ABOUT_OPEN ? "open" : ""}" title="${ABOUT_OPEN ? "" : "Show all"}">${esc(about)}</p>` : ""}` +
+    `<div class="where"><span>Branch<code>${esc(p.main_branch)}</code></span><span>Repository<code title="${esc(p.path)}">${esc(homePath(p.path))}</code></span></div></div>` +
+    `<div class="settings"><button type="button" class="switch" role="switch" aria-checked="${on}" data-act="project-enable" data-project="${name}" data-on="${!on}" ` +
+    `title="${on ? "Disable: its agents stop and no new work starts here" : "Enable: its work may start again"}"><i></i><span>${on ? "Enabled" : "Disabled"}</span></button>` +
+    `<span class="group"><span class="ctl-label">Priority</span><span class="seg">${PRIORITIES.map(([k, label, n]) =>
+      `<button type="button" data-act="project-priority" data-project="${name}" data-priority="${n}" aria-pressed="${k === level}" ` +
+      `title="${k === level ? `Priority ${esc(p.priority ?? 100)}` : `Set priority ${n}`}; lower runs first">${label}</button>`).join("")}</span></span>` +
+    `<button type="button" class="btn" data-act="project-remove" data-project="${name}" title="Unregister it; the repository is left alone">Remove</button></div>`);
 }
 
-async function setProject(name, settings) {
-  try { await projectAction("set", {project: name, settings}); }
-  catch (error) { $("project-status").textContent = error.message; }
+function projectSheet() {
+  openSheet({title: "Add a project", hint: "Register a repository for CointOS to work on, or create a new one.",
+    fields: [field("How", choice("action", [["add", "Add an existing repository"], ["new", "Create a new repository"]])),
+      `<div class="pair">${field("Path", input("path", 'placeholder="~/Projects/name"'), "to add")}` +
+      field("Name", input("name", 'placeholder="from the folder"'), "to create") + `</div>`,
+      field("Priority", choice("priority", PRIORITIES.map(([, label, n]) => [n, label]), 100))],
+    label: "Add project",
+    submit: async value => {
+      const action = value("action"), body = {priority: Number(value("priority"))};
+      if (value("name")) body.name = value("name");
+      if (value("path")) body.path = value("path");
+      if (action === "new" && !body.name) throw new Error("A new project needs a name.");
+      if (action === "add" && !body.path) throw new Error("An existing project needs its path.");
+      await api(`project-${action}`, body);
+      return action === "new" ? "Project created" : "Project added";
+    }});
 }
-async function removeProject(name) {
-  try { await projectAction("remove", {project: name}); }
-  catch (error) { $("project-status").textContent = error.message; }
-}
-// The open project's registry settings, on its page.
-function renderProjects(L) {
-  const projects = (L.projects || []).filter(p => p.name === ROUTE.project);
-  setHTML($("projects"), projects.length ? projects.map(p => `<div class="project-row">` +
-    `<div><span class="chip">${esc(p.main_branch)}</span></div>` +
-    `<div class="project-path">${esc(p.path)}</div><div class="project-controls">` +
-    `<label>Priority <input type="number" value="${esc(p.priority ?? 100)}" onchange='setProject(${JSON.stringify(p.name)}, {priority:Number(this.value)})'></label>` +
-    `<label><input type="checkbox" ${p.enabled === false ? "" : "checked"} onchange='setProject(${JSON.stringify(p.name)}, {enabled:this.checked})'> enabled</label>` +
-    `<button type="button" onclick='confirm("Remove ${esc(p.name)} from CointOS? Its repository is left alone.") && removeProject(${JSON.stringify(p.name)})'>Remove</button></div></div>`).join("")
-    : "");
-}
-
-$("project-action").addEventListener("change", event => {
-  $("project-submit").textContent = event.target.value === "new" ? "Create project" : "Add project";
-});
-$("project-submit").addEventListener("click", async event => {
-  const action = $("project-action").value, name = $("project-name").value.trim(), path = $("project-path").value.trim();
-  if (action === "new" && !name) { $("project-status").textContent = "A new project needs a name."; return; }
-  if (action === "add" && !path) { $("project-status").textContent = "An existing project needs its path."; return; }
-  event.target.disabled = true; $("project-status").textContent = action === "new" ? "Creating…" : "Adding…";
-  try {
-    const body = {priority: Number($("project-priority").value)};
-    if (name) body.name = name;
-    if (path) body.path = path;
-    await projectAction(action, body);
-    $("project-name").value = ""; $("project-path").value = ""; $("project-status").textContent = "Saved";
-  } catch (error) { $("project-status").textContent = error.message; }
-  finally { event.target.disabled = false; }
-});
 
 // What an agent is doing right now, from its thoughts.
 function phase(L, a) {
   const mine = Object.values(L.thoughts).filter(t => t.agent === a.id);
   const running = mine.find(t => t.lane !== null), queued = mine.find(t => t.lane === null);
-  if (a.state === "starting") return ["starting", "Starting", `for ${ago(a.started_at)}`];
+  if (a.state === "starting") return ["starting", "Starting", "", undefined, a.started_at];
   if (running && a.state === "reading") {
     const share = Math.min(1, (running.held || 0) / Math.max(1, running.prompt));
-    return ["thinking", "Reading", `${Math.round(share * 100)}% of ${running.prompt.toLocaleString()} tokens`, share];
+    return ["thinking", "Reading", `${Math.round(share * 100)}% of ${running.prompt.toLocaleString()} tokens`, share, running.activity_since];
   }
-  if (running) return ["thinking", (a.live || {}).phase === "writing" ? "Writing" : "Reasoning", `for ${ago(running.since)} on ${short(running.model)} · ${running.generated} tokens so far`];
-  if (queued) return ["waiting", "Waiting", `for a lane, ${ago(queued.waiting_since)}`];
-  return ["tools", "Running", "its tools"];
+  if (running) return ["thinking", (a.live || {}).phase === "writing" ? "Writing" : "Reasoning", `on ${short(running.model)} · ${running.generated} tokens so far`, undefined,
+    Math.max(running.activity_since || 0, a.live?.phase_since || 0) || undefined];
+  if (queued) return ["waiting", "Waiting", "for a lane", undefined, queued.waiting_since];
+  if (a.role === "coin" && !a.busy) return ["idle", "Idle", "until a message arrives"];
+  return ["tools", "Running", a.doing || "its tools", undefined, a.doing_since];
 }
 
 // Agent cards are built once and then updated in place (the live stream updates them ten
@@ -448,13 +534,24 @@ function agentRowSizes(count, capacity) {
   return Array.from({length: rows}, (_, i) => small + (i >= rows - larger ? 1 : 0));
 }
 
+// Coin as an agent card, first while active: it holds no task and answers direct
+// requests at top priority on its configured model.
+function coinAgent(S) {
+  const c = S.coin, thought = Object.values(S.thoughts).find(t => t.agent === "coin");
+  return {id: "coin", role: "coin", busy: c.busy || !!thought, doing: c.doing, live: c.live, since: c.since,
+          doing_since: c.doing_since, gpu_seconds: c.gpu_seconds, gpu_since: c.gpu_since,
+          last: c.last_turn_at, started_at: -Infinity, generated: thought?.generated || 0, rate: thought?.rate,
+          state: thought?.lane != null && thought.reading ? "reading" : "thinking"};
+}
+
 function renderAgents(S) {
   // Agents share one machine and its lanes, so every page shows all of them, matching the
   // header's count; project pages filter only their pipeline and Work list.
-  const agents = Object.values(S.agents).sort((a, b) => a.started_at - b.started_at);
+  const coin = S.coin && coinAgent(S);
+  const agents = [...(coin?.busy ? [coin] : []), ...Object.values(S.agents).sort((a, b) => a.started_at - b.started_at)];
   let grid = $("agents").querySelector(".agents");
   if (!agents.length) {
-    setHTML($("agents"), `<div class="empty">${S.paused ? "Agents are paused. <b>cointos go</b> lets them run again."
+    setHTML($("agents"), `<div class="empty">${S.paused ? `Agents are paused: nothing new starts. <button type="button" class="btn go" data-act="go">Resume agents</button>`
       : "No agents right now. They start as work appears in the queues."}</div>`);
     return;
   }
@@ -468,8 +565,8 @@ function renderAgents(S) {
       card = document.createElement("article");
       card.dataset.id = a.id;
       card.innerHTML = `<div class="head"><div class="state"></div><div class="id"><div class="work"></div><div class="by"></div><div class="sum"></div>` +
-        `</div><div class="stats"><b></b><span></span><span></span></div></div><div class="track"></div><div class="live"><div></div></div><div class="foot"><div class="now"></div><div class="ctl"><button type="button" class="btn" data-act="pause-agent">Pause</button>` +
-        `<button type="button" class="btn" data-act="cancel-item">Cancel task</button></div></div><div class="progress"><span></span></div>`;
+        `</div><div class="stats"><b></b><span></span><span></span><span></span></div></div><div class="track"></div><div class="live"><div></div></div><div class="foot"><div class="now"></div><div class="ctl"><button type="button" class="btn" data-act="message">Message</button>` +
+        `<button type="button" class="btn" data-act="pause-agent">Pause</button><button type="button" class="btn" data-act="cancel-item">Cancel</button></div></div><div class="progress"><span></span></div>`;
     }
     if (card.className !== `agent r-${a.role}`) card.className = `agent r-${a.role}`;
     card.dataset.key = a.task;
@@ -477,37 +574,67 @@ function renderAgents(S) {
     if (grid.children[index] !== card) grid.insertBefore(card, grid.children[index] || null);
     cards.delete(a.id);
     card.style.gridColumn = `span ${spans[index]}`;
-    const [kind, label, detail, share] = phase(S, a), q = selector => card.querySelector(selector);
+    const [kind, label, detail, share, since] = phase(S, a), q = selector => card.querySelector(selector);
     const state = q(".state");
     if (state.className !== `state ${kind}`) state.className = `state ${kind}`;
-    const [uptime, written, rate] = q(".stats").children;
-    setText(uptime, ago(a.started_at));
+    const [uptime, gpu, written, rate] = q(".stats").children;
+    const gpuSeconds = (a.gpu_seconds || 0) + (a.gpu_since ? Math.max(0, Date.now() / 1000 - a.gpu_since) : 0);
+    setText(gpu, `${duration(gpuSeconds)} GPU`);
     setText(written, `${a.generated.toLocaleString()} tok`);
-    setText(rate, a.rate && a.state === "thinking" && kind === "thinking" && share === undefined ? `${a.rate.toFixed(1)} tok/s` : "idle");
-    const task = S.tasks?.[a.task];
-    const step = FLOW?.items.get(a.role === "integrator" ? task?.worker : a.task)?.step;
-    setHTML(q(".track"), trackHTML(step, a.role));
-    const trackClass = step ? "track" : "track upkeep";
-    if (q(".track").className !== trackClass) q(".track").className = trackClass;
-    const n = named(a.title, a.place), stage = task?.stage || a.stage;
-    setText(q(".sum"), summaryOf(S, a.task) || "");
-    const context = [n.context, stage && stageName(stage)].filter(Boolean).join(" · ");
-    setHTML(q(".work"), `${esc(n.head)}${context ? `<small>${esc(context)}</small>` : ""}`);
-    setHTML(q(".by"), `being ${esc(BY_VERB[a.role] || "carried out")} by <b>${esc(task?.name || a.id)}</b> <span>(${esc(a.role)})</span>`);
-    const effort = Object.values(S.thoughts).find(t => t.agent === a.id && t.reasoning_effort)?.reasoning_effort
-      || task?.reasoning_effort || a.reasoning_effort;
-    const tip = [a.id, effort && `reasoning ${effort}`].filter(Boolean).join(" · ");
-    if (card.title !== tip) card.title = tip;
+    (a.role === "coin" ? coinIdentity : agentIdentity)(S, a, card, q, uptime, rate,
+      a.rate && a.state === "thinking" && kind === "thinking" && share === undefined);
     const live = a.live || {};
     const words = (live.reasoning ? `<i>${esc(live.reasoning)}</i>` : "") + (live.content ? `<p>${esc(live.content)}</p>` : "") +
       ((kind === "tools" || !(live.reasoning || live.content)) && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
     setHTML(q(".live > div"), words);
-    setHTML(q(".now"), `<b>${label}</b> ${esc(detail)}`);
+    const shown = words || a.role !== "coin" ? "" : "none";  // an idle Coin with nothing to show is just its header
+    if (q(".live").style.display !== shown) q(".live").style.display = shown;
+    const thought = Object.values(S.thoughts).find(t => t.agent === a.id);
+    const activityKey = JSON.stringify([kind, label, thought?.id, kind === "tools" ? a.doing : null]);
+    if (card.dataset.activityKey !== activityKey) {
+      card.dataset.activityKey = activityKey;
+      card.dataset.activitySince = Date.now() / 1000;
+    }
+    const elapsed = Math.floor(Math.max(0, Date.now() / 1000 - (since ?? Number(card.dataset.activitySince))));
+    setHTML(q(".now"), `<b>${label}</b> ${esc(detail)} (${duration(elapsed)})`);
     const bar = q(".progress");
     bar.style.display = share === undefined ? "none" : "";
     if (share !== undefined) q(".progress span").style.width = `${(share * 100).toFixed(1)}%`;
   });
   cards.forEach(card => card.remove());
+}
+
+// A card's identity: what the agent works on, who it is, where its task stands.
+function agentIdentity(S, a, card, q, uptime, rate, writing) {
+  setText(uptime, `${ago(a.started_at)} wall`);
+  setText(rate, writing ? `${a.rate.toFixed(1)} tok/s` : "idle");
+  const task = S.tasks?.[a.task];
+  const step = FLOW?.items.get(a.role === "integrator" ? task?.worker : a.task)?.step;
+  setHTML(q(".track"), trackHTML(step, a.role));
+  const trackClass = step ? "track" : "track upkeep";
+  if (q(".track").className !== trackClass) q(".track").className = trackClass;
+  const n = named(a.title, a.place), stage = task?.stage || a.stage;
+  setText(q(".sum"), summaryOf(S, a.task) || "");
+  const context = [n.context, stage && stageName(stage)].filter(Boolean).join(" · ");
+  setHTML(q(".work"), `${esc(n.head)}${context ? `<small>${esc(context)}</small>` : ""}`);
+  setHTML(q(".by"), `being ${esc(BY_VERB[a.role] || "carried out")} by <b>${esc(task?.name || a.id)}</b> <span>(${esc(a.role)})</span>`);
+  const effort = Object.values(S.thoughts).find(t => t.agent === a.id && t.reasoning_effort)?.reasoning_effort
+    || task?.reasoning_effort || a.reasoning_effort;
+  const tip = [a.id, effort && `reasoning ${effort}`].filter(Boolean).join(" · ");
+  if (card.title !== tip) card.title = tip;
+}
+
+// Coin's identity: no task or pipeline, just whether it is answering the user, for how long.
+function coinIdentity(S, a, card, q, uptime, rate, writing) {
+  setText(uptime, `${ago(a.since)} wall`);
+  setText(rate, writing ? `${a.rate.toFixed(1)} tok/s` : a.busy ? "answering" : "idle");
+  setHTML(q(".track"), a.busy ? "Answering the user" : "On call");
+  if (q(".track").className !== "track upkeep") q(".track").className = "track upkeep";
+  setText(q(".sum"), a.last && !a.busy ? `Last answered ${ago(a.last)} ago.` : "");
+  setHTML(q(".work"), `${a.busy ? "Answering a message" : "Waiting for a message"}<small>Telegram</small>`);
+  setHTML(q(".by"), `carried out by <b>Coin</b> <span>(remote control)</span>`);
+  const tip = "coin · top priority on its configured model";
+  if (card.title !== tip) card.title = tip;
 }
 
 // The pipeline a work item moves through, left to right. Blocked items wait before Ready.
@@ -539,7 +666,8 @@ const BY_VERB = {worker: "carried out", integrator: "reviewed", manager: "planne
 const ROLE_VERB = {worker: "building", integrator: "reviewing & landing", manager: "planning", steward: "tidying loose ends",
   gardener: "gardening knowledge", "tree-auditor": "auditing knowledge", "test-auditor": "auditing tests", operator: "operating"};
 const KIND_LABEL = {steward: "loose ends", garden: "garden", "tree-audit": "tree audit", "test-audit": "test audit",
-  decompose: "decompose", breakdown: "breakdown", operator: "operator"};
+  decompose: "planning", breakdown: "planning", operator: "operator"};
+const capital = s => s ? s[0].toUpperCase() + s.slice(1) : "";
 const pretty = s => String(s || "").replace(/-/g, " ");
 // A work item's slug as a headline plus its context: "elastic-rtl-task-5-test-contract-fix-s6" in pigen
 // becomes "Test Contract Fix §6" with context "Pigen · Elastic RTL Task 5".
@@ -555,6 +683,15 @@ function named(slug, project) {
           context: [project ? word(project) : "", parent.map(word).join(" ")].filter(Boolean).join(" · ")};
 }
 const KIND_NAME = {item: "Worker task", queued: "Worker task", integrate: "Integration review", command: "Command"};
+// What to call a task: a worker's or integrator's by its work item; any other by its own name, with
+// its kind as context ("Dr Guide Finish", "Operator · System"), or by its kind when it has no name of its own.
+function taskName(t) {
+  if (t.kind === "item" || t.kind === "integrate") return named(t.title, t.place);
+  const kind = capital(KIND_LABEL[t.kind] || pretty(t.kind)), place = t.place && t.place !== "system" ? word(t.place) : "System";
+  const own = String(t.title || "").replace(/^operator-/, "");
+  return !own || own === t.kind || own === "loose-ends" ? {head: kind, context: place, where: place}
+    : {head: named(own).head, context: `${kind} · ${place}`, where: place};
+}
 const stageName = s => s ? s.split("-").map(word).join(" ") : "";
 
 // The dependencies of a queue record that have not landed yet.
@@ -613,28 +750,25 @@ function renderFlow(L) {
   for (const it of FLOW.items.values()) if (it.project === ROUTE.project) by[it.step].push(it);
   by.landed.sort((a, b) => b.updated - a.updated);
   for (const s of ["blocked", "ready"]) by[s].sort((a, b) => a.priority - b.priority);
-  const LIMIT = 6;
+  const LIMIT = 6, LANDED_LIMIT = 4;
   const sub = (it, s) => [named(it.title).context, s === "landed" ? LANDED_KINDS.find(([k]) => k === landedKind(it))[1] : stageName(it.stage),
     s === "blocked" && it.blockers.length ? `needs ${it.blockers.map(b => named(b).head).join(", ")}` : "",
     s === "building" && it.task?.agent ? it.task.agent : "",
     s === "integrating" ? it.integrator.agent : "",
     s === "landed" && it.updated ? `${ago(it.updated)} ago` : ""].filter(Boolean).join(" · ");
   setHTML($("flow"), FLOW_STEPS.map(([s, label, hint], i) => {
-    const list = by[s], shown = list.slice(0, LIMIT);
+    const list = by[s], limit = s === "landed" ? LANDED_LIMIT : LIMIT, shown = list.slice(0, limit);
     const live = s === "building" || s === "integrating";
     const step = `<div class="step s-${s}${list.length ? "" : " empty-step"}"><header><span>${label}<small>${hint}</small></span><b>${list.length}</b></header>` +
       (s === "landed" ? landedMix(list) : "") +
       `<div class="chips">${shown.map(it => chip(it.key, named(it.title).head, sub(it, s),
-        live ? "live" : s === "blocked" ? "held" : s === "landed" ? `landed k-${landedKind(it)}` : "", it.record?.summary)).join("")}` +
-      `${list.length > LIMIT ? `<button type="button" class="tchip more" data-step="${s}">+${list.length - LIMIT} more</button>` : ""}</div></div>`;
+        live ? "live" : s === "blocked" ? "held" : s === "landed" ? `landed k-${landedKind(it)}` : "", s === "landed" ? "" : it.record?.summary)).join("")}` +
+      `${list.length > limit ? `<button type="button" class="tchip more" data-step="${s}">+${list.length - limit} more</button>` : ""}</div></div>`;
     // Blocked feeds Ready; each arrow marches while the step after it holds live work.
     const next = FLOW_STEPS[i + 1]?.[0];
     const arrow = next ? `<div class="arrow${(next === "building" || next === "integrating") && by[next].length ? " moving" : ""}"></div>` : "";
     return step + arrow;
   }).join(""));
-  const failed = by.failed.sort((a, b) => b.updated - a.updated)
-    .map(it => chip(it.key, named(it.title).head, [named(it.title, it.project).context, stageName(it.stage)].filter(Boolean).join(" · "), "held"));
-  setHTML($("flow-foot"), (failed.length ? `<div class="group"><h3>Gave up · ${failed.length}</h3>${failed.slice(0, 8).join("")}</div>` : ""));
 }
 
 // One card per registered project: what it is, how its work is spread along the pipeline, who is on it.
@@ -646,14 +780,12 @@ function renderHome(L) {
     const total = steps.reduce((n, s) => n + count(s), 0);
     const agents = Object.values(L.agents).filter(a => a.place === p.name);
     const landed = items.filter(it => it.step === "landed").sort((a, b) => b.updated - a.updated)[0];
-    const failed = count("failed");
     return `<a class="pcard${p.enabled === false ? " off" : ""}" href="#/${encodeURIComponent(p.name)}">` +
       `<h4>${esc(word(p.name))}<small>${p.enabled === false ? "disabled" : `${total - count("landed")} open`}</small></h4>` +
       `<p>${esc(L.project_about?.[p.name] || "")}</p>` +
       (total ? `<div class="pbar">${steps.filter(count).map(s => `<span class="s-${s}" style="flex:${s === "landed" ? Math.min(count(s), Math.max(3, total - count(s))) : count(s)}" ` +
         `title="${FLOW_STEPS.find(([x]) => x === s)[1]}: ${count(s)}">${count(s)}</span>`).join("")}</div>` +
-        `<div class="pkey">${steps.filter(count).map(s => `<span><b>${count(s)}</b> ${FLOW_STEPS.find(([x]) => x === s)[1].toLowerCase()}</span>`).join("")}` +
-        `${failed ? `<span><b>${failed}</b> gave up</span>` : ""}</div>` +
+        `<div class="pkey">${steps.filter(count).map(s => `<span><b>${count(s)}</b> ${FLOW_STEPS.find(([x]) => x === s)[1].toLowerCase()}</span>`).join("")}</div>` +
         landedMix(items.filter(it => it.step === "landed")) : "") +
       `<div class="pnow">${agents.length ? agents.map(a => `<div><span class="chip held">${esc(a.role)}</span><span>${esc(named(a.title).head)}</span></div>`).join("")
         : `<span class="muted">${landed ? `Last landed ${ago(landed.updated)} ago: ${esc(named(landed.title).head)}` : "No agents on it now"}</span>`}</div></a>`;
@@ -661,14 +793,13 @@ function renderHome(L) {
 }
 
 function renderProjectPage(L) {
-  setText($("pp-name"), word(ROUTE.project));
-  setText($("pp-about"), L.project_about?.[ROUTE.project] || "");
+  renderProjectHead(L);
   renderFlow(L);
 }
 
 function trackHTML(step, role) {
   if (!step) return `◆ upkeep: ${esc(ROLE_VERB[role] || role)}`;
-  if (step === "blocked" || step === "failed") return `<span class="here">${step === "failed" ? "gave up" : "blocked"}</span>`;
+  if (step === "blocked" || step === "failed") return `<span class="here">${step}</span>`;
   const at = TRACK.findIndex(([s]) => s === step);
   return TRACK.map(([s, label], i) => `<span data-s="${s}" class="${i < at ? "past" : i === at ? "here" : ""}">${label}</span>`).join("<i></i>");
 }
@@ -696,23 +827,30 @@ document.addEventListener("click", e => {
   if (hit && hit.dataset.key) openDetail(hit.dataset.key);
 });
 
-// What the user can do to this task right now, as buttons that call the daemon's control API.
+// What the user can do to this task right now, as buttons that call the daemon's control API: first what
+// to do, with Cancel set apart at the end; then where it sits in the queue and how hard it reasons.
+const EFFORTS = [["low", "Low"], ["medium", "Medium"], ["xhigh", "Extra high"]];
 function actionsHTML(L, t, it, r) {
-  const b = (act, label, data = {}, cls = "") => `<button type="button" class="btn ${cls}" data-act="${act}" ` +
-    Object.entries(data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ") + `>${label}</button>`;
-  const key = r ? `${r.project}:${r.item}` : null, out = [];
-  if (t?.agent && L.agents[t.agent]) out.push(b("pause-agent", "Pause run", {agent: t.agent}));
-  if (t?.admission_hold && t.status === "waiting") out.push(b("resume-task", "Resume", {task: t.id}));
-  if (r && r.status !== "done") {
-    out.push(r.held_by ? b("unhold", "Release hold", {item: key}) : b("hold", "Hold", {item: key}));
-    out.push(`<span class="sep"></span>` + ["top", "up", "down", "bottom"].map(to =>
-      b("move", {top: "⇈ Top", up: "↑ Up", down: "↓ Down", bottom: "⇊ Bottom"}[to], {item: key, to})).join(""));
-    out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: key}, "danger"));
-  }
-  if (!r && t && !["done", "failed"].includes(t.status)) out.push(`<span class="sep"></span>` + b("cancel-item", "Cancel task", {item: t.id}, "danger"));
-  if (t && (t.status === "waiting" || t.status === "running")) out.push(`<span class="sep"></span><label>Reasoning <select data-act="reasoning" data-task="${esc(t.id)}">` +
-    ["low", "medium", "xhigh"].map(e => `<option${e === t.reasoning_effort ? " selected" : ""}>${e}</option>`).join("") + `</select></label>`);
-  return out.length ? `<div class="actions">${out.join("")}</div>` : "";
+  const b = (act, label, data = {}, cls = "", title = "") => `<button type="button" class="btn ${cls}" data-act="${act}" ` +
+    Object.entries(data).map(([k, v]) => `data-${k}="${esc(v)}"`).join(" ") + (title ? ` title="${esc(title)}"` : "") + `>${label}</button>`;
+  const key = r ? `${r.project}:${r.item}` : null, open = r && r.status !== "done", main = [], tune = [];
+  if (t?.admission_hold && t.status === "waiting") main.push(b("resume-task", "Resume", {task: t.id}, "go", `Held: ${t.admission_hold}`));
+  if (t?.agent && L.agents[t.agent]) main.push(b("pause-agent", "Pause", {agent: t.agent}, "", "Stop its agent; the task waits until you resume it"));
+  if (t && ["waiting", "running", "review"].includes(t.status)) main.push(b("message", "Message", {item: t.id}));
+  if ((t && ["waiting", "running"].includes(t.status) && !t.validating) || (!t && open)) main.push(b("budget", "Budget", {item: t?.id || key}));
+  if (open && !r.replaced_by) main.push(b("revise", "Revise brief", {item: key}));
+  if (open) main.push(r.held_by ? b("unhold", "Release hold", {item: key}, "", `Held by ${r.held_by}`) : b("hold", "Hold", {item: key}, "", "Keep it from starting"));
+  const cancel = open ? key : t && !["done", "failed"].includes(t.status) ? t.id : null;
+  if (open) tune.push(`<span class="group"><span class="ctl-label">Queue</span><span class="seg">` +
+    [["top", "⇈", "To the top"], ["up", "↑", "Up one"], ["down", "↓", "Down one"], ["bottom", "⇊", "To the bottom"]].map(([to, label, title]) =>
+      `<button type="button" data-act="move" data-item="${esc(key)}" data-to="${to}" title="${title}">${label}</button>`).join("") + `</span></span>`);
+  if (t && (t.status === "waiting" || t.status === "running")) tune.push(`<span class="group"><span class="ctl-label">Reasoning</span><span class="seg">` +
+    EFFORTS.map(([e, label]) => `<button type="button" data-act="reasoning" data-task="${esc(t.id)}" data-effort="${e}" aria-pressed="${e === t.reasoning_effort}">${label}</button>`).join("") +
+    `</span></span>`);
+  if (!main.length && !cancel && !tune.length) return "";
+  return `<div class="actions">${main.length || cancel ? `<div class="line">${main.join("")}<span class="spacer"></span>` +
+    (cancel ? b("cancel-item", "Cancel task", {item: cancel}, "", "Stop it for good and take it off the queue") : "") + `</div>` : ""}` +
+    (tune.length ? `<div class="line">${tune.join("")}</div>` : "") + `</div>`;
 }
 
 function renderDrawer(L) {
@@ -726,19 +864,24 @@ function renderDrawer(L) {
       `<div class="chips" style="display:grid;gap:4px">${list.map(it => chip(it.key, named(it.title).head, [named(it.title, it.project).context, stageName(it.stage)].filter(Boolean).join(" · "))).join("")}</div>`);
     return;
   }
-  const t = L.tasks[SELECTED], it = FLOW.items.get(SELECTED) || FLOW.items.get(t?.worker), r = it?.record;
+  const t = L.tasks[SELECTED], it = FLOW.items.get(SELECTED) || FLOW.items.get(t?.worker) || FLOW.items.get(t?.repair_origin?.task), r = it?.record;
   if (!t && !it) { setHTML($("drawer-body"), `<h2>Gone</h2><p class="muted">${esc(SELECTED)} is no longer in the ledger.</p>`); return; }
   const agent = t?.agent && L.agents[t.agent];
   const integrations = Object.values(L.tasks).filter(x => x.kind === "integrate" && x.worker === (it?.key || SELECTED));
+  const progress = (L.work_frontier || []).find(row => row.item === (it?.key || SELECTED));
   const facts = [
     ["Step", it ? (FLOW_STEPS.find(([s]) => s === it.step)?.[1] || it.step) : null],
-    ["Project", t?.place || it?.project], ["Kind", KIND_NAME[t?.kind || r?.kind] || KIND_LABEL[t?.kind] || t?.kind || r?.kind], ["Stage", stageName(t?.stage || r?.stage)],
+    ["Project", t?.place || it?.project], ["Kind", KIND_NAME[t?.kind || r?.kind] || capital(KIND_LABEL[t?.kind]) || t?.kind || r?.kind], ["Stage", stageName(t?.stage || r?.stage)],
     ["Role", t?.role], ["Task status", t?.status], ["Queue status", r?.status], ["Priority", r?.priority],
-    ["Agent", agent ? `${agent.id} · ${agent.state}${agent.doing ? " · " + agent.doing : ""}` : t?.agent],
+    ["Agent", agent ? `${agent.id} · ${agent.state}${agent.doing ? " · " + (agent.doing.length > 90 ? agent.doing.slice(0, 90) + "…" : agent.doing) : ""}` : t?.agent],
     ["Reasoning", t?.reasoning_effort || r?.reasoning_effort], ["Runs", t?.runs],
     ["Budget", t?.budget ? `${t.budget.generation_tokens.toLocaleString()} tokens / ${t.budget.generation_seconds / 60 | 0} min` : null],
     ["Depends on", r?.depends?.length ? r.depends.map(d => esc(d) + (it.blockers.includes(d) ? " ⏳" : " ✓")).join(", ") : null, true],
     ["Problem", L.dependency_problems?.[SELECTED]], ["Held", t?.admission_hold || r?.held_by],
+    ["Recovery owner", progress?.recovery ? link(progress.recovery) : null, true],
+    ["Continuation", progress?.continuations?.length ? progress.continuations.map(link).join(", ") : null, true],
+    ["Corrects tests", r?.correction ? link(r.correction.packet) : null, true],
+    ["Corrected tests", r?.corrected_by ? link(r.corrected_by) : null, true],
     ["Reviews worker", t?.worker ? link(t.worker) : null, true],
     ["Integrations", integrations.length ? integrations.map(x => `${link(x.id)} (${esc(x.status)})`).join(", ") : null, true],
     ["Replaced by", t?.replaced_by ? `${t.replaced_by.map(link).join(", ")} · ${esc(t.replacement_reason)}` : null, true],
@@ -749,11 +892,10 @@ function renderDrawer(L) {
   ].filter(([, v]) => v !== null && v !== undefined && v !== "");
   const block = (title, text) => text ? `<div class="block"><h3>${title}</h3><pre>${esc(text)}</pre></div>` : "";
   const receipt = t?.receipt;
-  const DN = !t || t.kind === "item" || t.kind === "integrate" ? named(t?.title || it.title, t?.place || it?.project)
-    : {head: stageName(KIND_LABEL[t.kind] || t.kind), context: word(t.place || "")};
+  const DN = t ? taskName(t) : named(it.title, it.project);
   setHTML($("drawer-body"),
-    `<div class="kicker">${esc([KIND_NAME[t?.kind || r?.kind] || KIND_LABEL[t?.kind] || "Task", stageName(t?.stage || r?.stage)].filter(Boolean).join(" · "))}</div>` +
-    `<h2>${esc(DN.head)}</h2><div class="context">${esc(DN.context)}</div>` +
+    `<div class="kicker">${esc([KIND_NAME[t?.kind || r?.kind] || capital(KIND_LABEL[t?.kind]) || "Task", stageName(t?.stage || r?.stage)].filter(Boolean).join(" · "))}</div>` +
+    `<h2>${esc(DN.head)}</h2><div class="context">${esc(DN.where || DN.context)}</div>` +
     (summaryOf(L, SELECTED) || it?.record?.summary ? `<p class="lead">${esc(summaryOf(L, SELECTED) || it.record.summary)}</p>` : "") +
     actionsHTML(L, t, it, r) +
     `<dl class="facts">${facts.map(([k, v, raw]) => `<dt>${k}</dt><dd>${raw ? v : esc(v)}</dd>`).join("")}</dl>` +
@@ -765,7 +907,6 @@ function renderDrawer(L) {
 }
 
 function renderWork(L) {
-  const groups = [["running", "In progress"], ["review", "Waiting for the integrator"], ["waiting", "Up next"]];
   const here = place => !ROUTE.project || place === ROUTE.project;
   // Active system tasks (scouts, auditors, operators) work across projects, so project pages list
   // them too; their history stays on the home page.
@@ -777,47 +918,69 @@ function renderWork(L) {
       (r.status === "blocked" && L.tasks[`${r.project}:${r.item}`].status === "done")))
     .sort((a, b) => a.priority - b.priority);
   const queuedIds = new Set(queued.map(r => `${r.project}:${r.item}`));
+  const act = (name, label, data, cls = "quiet", title = "") => `<button type="button" class="btn ${cls}" data-act="${name}"` +
+    Object.entries(data).map(([k, v]) => ` data-${k}="${esc(v)}"`).join("") + (title ? ` title="${esc(title)}"` : "") + `>${label}</button>`;
   const queueRows = queued.map(r => {
-    const needed = unmet(L, r);
-    const problem = L.dependency_problems?.[`${r.project}:${r.item}`];
+    const key = `${r.project}:${r.item}`, needed = unmet(L, r), task = L.tasks[key];
+    const problem = L.dependency_problems?.[key];
     const status = problem || (needed.length ? `blocked (depends on ${needed.join(", ")})`
       : r.status === "blocked" ? "blocked" : "waiting");
-    return `<div class="row ${needed.length || r.status === "blocked" ? "failed" : "waiting"}" data-key="${esc(r.project + ":" + r.item)}"><div class="bar"></div>` +
-      `<div class="who">${esc(named(r.item).head)} <span class="ctx">${esc(named(r.item, r.project).context)}</span></div>` +
-      `<div class="state">Status: ${esc(status)}<span class="move"><button type="button" class="btn" data-act="move" data-to="up" data-item="${esc(r.project + ":" + r.item)}" title="Move up">↑</button>` +
-      `<button type="button" class="btn" data-act="move" data-to="down" data-item="${esc(r.project + ":" + r.item)}" title="Move down">↓</button></span></div>` +
-      `<div class="meta clamp">${esc(r.kind === "command" ? "Command" : "Worker task")}${r.stage ? ` · ${esc(r.stage)}` : ""}` +
-      `${r.depends?.length ? ` · Depends on: ${esc(r.depends.join(", "))}` : ""}` +
+    const acts = (task?.admission_hold ? act("resume-task", "Resume", {task: key}, "go") : "") +
+      (r.held_by ? act("unhold", "Release", {item: key}, "go", `Held by ${r.held_by}`) : act("hold", "Hold", {item: key})) +
+      act("move", "↑", {item: key, to: "up"}, "quiet", "Move up") + act("move", "↓", {item: key, to: "down"}, "quiet", "Move down");
+    return `<div class="row ${needed.length || r.status === "blocked" ? "failed" : "waiting"}" data-key="${esc(key)}"><div class="bar"></div>` +
+      `<div class="who">${esc(named(r.item).head)} <span class="ctx">${esc(named(r.item, r.project).context)}</span>` +
+      `${r.held_by || task?.admission_hold ? `<span class="tag">held</span>` : ""}</div>` +
+      `<div class="state">${esc(status)}<span class="acts">${acts}</span></div>` +
+      `<div class="meta clamp">${esc(r.summary || (r.kind === "command" ? "Planning request" : "Worker task"))}${r.stage ? ` · ${esc(stageName(r.stage))}` : ""}` +
       `${r.blocker ? ` · ${esc(r.blocker)}` : ""}</div></div>`;
   }).join("");
-  const taskLabel = t => t.kind === "steward" ? "System: loose ends" : t.kind === "item" || t.kind === "integrate"
-    ? `${named(t.title).head}${t.kind === "integrate" ? " (review)" : ""}` : `${stageName(KIND_LABEL[t.kind] || t.kind)}`;
-  const taskContext = t => named(t.title, t.place).context;
+  const taskLabel = t => taskName(t).head + (t.kind === "integrate" ? " (review)" : "");
+  const taskContext = t => taskName(t).context;
+  const taskActs = t => t.admission_hold && t.status === "waiting" ? act("resume-task", "Resume", {task: t.id}, "go", `Held: ${t.admission_hold}`)
+    : t.status === "running" && t.agent && L.agents[t.agent] ? act("message", "Message", {item: t.id}) + act("pause-agent", "Pause", {agent: t.agent})
+    : ["waiting", "review"].includes(t.status) ? act("message", "Message", {item: t.id}) : "";
   const rows = (status, some) => some.map(t => `<div class="row ${status}" data-key="${esc(t.id)}"><div class="bar"></div>` +
-    `<div class="who">${esc(taskLabel(t))} <span class="ctx">${esc(taskContext(t))}</span></div>` +
-    `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago</div>` +
+    `<div class="who">${esc(taskLabel(t))} <span class="ctx">${esc(taskContext(t))}</span>${t.admission_hold && t.status === "waiting" ? `<span class="tag">held</span>` : ""}</div>` +
+    `<div class="state">${esc(t.role)} · run ${t.runs} · ${ago(t.updated_at)} ago${(status === "done" || status === "failed") ? "" : `<span class="acts">${taskActs(t)}</span>`}</div>` +
     `<div class="meta one" title="${esc(status === "done" && t.result ? t.result : t.note || "")}">${esc(status === "done" && t.result ? t.result : t.note || "")}</div>` +
     `${t.replaced_by ? `<div class="meta">Replaced by: ${esc(t.replaced_by.join(", "))} · ${esc(t.replacement_reason)}</div>` : ""}` +
     `${t.acceptance ? `<div class="meta">Accepted via ${esc(t.acceptance.via)} · ${esc(t.acceptance.commit.slice(0, 12))}</div>` : ""}` +
     `${t.fresh_retries ? `<div class="meta">Fresh recoveries: ${esc(t.fresh_retries)}</div>` : ""}</div>`).join("");
-  setHTML($("work"), groups.map(([status, title]) => {
-    const queueSection = status === "review" ? `<h3>Queue</h3>${queueRows || '<p class="muted">No queued tasks.</p>'}` : "";
-    const some = tasks.filter(t => t.status === status && !queuedIds.has(t.id));
-    return queueSection + (some.length ? `<h3>${title}</h3>` + rows(status, some) : "");
-  }).join(""));
-  const done = tasks.filter(t => t.status === "done");
-  const failed = tasks.filter(t => t.status === "failed" && !t.cancelled);
-  $("done").style.display = done.length ? "" : "none";
-  setText($("done-count"), `· ${done.length}`);
-  setHTML($("done-list"), rows("done", done));
-  $("failed").style.display = failed.length ? "" : "none";
-  setText($("failed-count"), `· ${failed.length}`);
-  setHTML($("failed-list"), rows("failed", failed));
-  $("clear-task-history").disabled = CLEARING || !(done.length + failed.length);
+  // In pipeline order: what runs now, what waits for review, what starts next, then the queue behind it.
+  const section = (title, html) => html ? `<h3>${title}</h3>${html}` : "";
+  const some = status => tasks.filter(t => t.status === status && !queuedIds.has(t.id));
+  setHTML($("work"), section("In progress", rows("running", some("running"))) +
+    section("Waiting for the integrator", rows("review", some("review"))) +
+    section("Up next", rows("waiting", some("waiting"))) +
+    section("Queued work", queueRows) ||
+    `<p class="muted">Nothing running or queued${ROUTE.project ? " here" : ""}. <b>＋ Queue work</b> adds some.</p>`);
+  const lists = {done: tasks.filter(t => t.status === "done"), failed: tasks.filter(t => t.status === "failed" && !t.cancelled)};
+  if (HIST && !lists[HIST].length) HIST = null;
+  for (const button of $("hist-tabs").children) {
+    const list = lists[button.dataset.hist];
+    button.hidden = !list.length;
+    button.setAttribute("aria-pressed", String(HIST === button.dataset.hist));
+  }
+  setText($("done-count"), String(lists.done.length)); setText($("failed-count"), String(lists.failed.length));
+  $("history-foot").hidden = !(lists.done.length + lists.failed.length) && !$("clear-task-status").textContent;
+  $("hist-list").hidden = !HIST;
+  setHTML($("hist-list"), HIST ? (HIST === "failed" ? `<p class="muted">Includes old and superseded tasks. A failed manager's child work may still be running.</p>` : "") +
+    rows(HIST, lists[HIST]) : "");
+  $("clear-task-history").disabled = CLEARING || !(lists.done.length + lists.failed.length);
   const scouting = tasks.some(t => t.kind === "steward" && (t.status === "waiting" || t.status === "running"));
   $("scout-now").disabled = scouting || L.paused || SCOUTING;
-  if (!SCOUTING) $("scout-status").textContent = scouting ? "Scout scheduled" : L.paused ? "Paused" : "";
+  $("scout-now").title = scouting ? "A scout is already scheduled" : L.paused ? "Resume agents to spawn a scout"
+    : "Schedule a scout to look for loose ends now";
 }
+
+let HIST = null;  // the finished list open under Work: "done", "failed" or none
+$("hist-tabs").addEventListener("click", e => {
+  const button = e.target.closest("[data-hist]");
+  if (!button) return;
+  HIST = HIST === button.dataset.hist ? null : button.dataset.hist;
+  if (LAST.L) renderWork(LAST.L);
+});
 
 // The control layer: every button names an action; each runs one daemon API call and reports in a toast.
 let toastTimer;
@@ -831,77 +994,242 @@ async function api(action, body) {
   if (!response.ok) throw new Error(result.error || `${action} failed`);
   return result;
 }
+
+// One modal sheet holds every form. A form declares its fields; submitting runs its call, and an
+// error stays in the sheet beside the button so nothing typed is lost.
+const field = (label, control, note = "") => `<label><span>${label}${note ? ` <small>${note}</small>` : ""}</span>${control}</label>`;
+const input = (name, attrs = "") => `<input name="${name}" ${attrs}>`;
+const area = (name, value = "", attrs = "") => `<textarea name="${name}" ${attrs}>${esc(value)}</textarea>`;
+const choice = (name, options, chosen = "") => `<select name="${name}">` +
+  options.map(([v, l]) => `<option value="${esc(v)}"${String(v) === String(chosen) ? " selected" : ""}>${esc(l)}</option>`).join("") + `</select>`;
+const EFFORT_CHOICES = [["", "Default"], ["low", "Low"], ["medium", "Medium"], ["xhigh", "Extra high"]];
+function openSheet({title, hint = "", quote = "", fields, label, submit}) {
+  const form = $("sheet-form");
+  form.innerHTML = `<h2>${esc(title)}</h2>${hint ? `<p class="hint">${hint}</p>` : ""}${quote ? `<div class="quote">${esc(quote)}</div>` : ""}` +
+    fields.join("") + `<div class="buttons"><small id="sheet-error" role="alert"></small>` +
+    `<button type="button" class="btn" id="sheet-cancel">Cancel</button><button type="submit" class="btn go">${esc(label)}</button></div>`;
+  $("sheet-cancel").onclick = () => $("sheet").close();
+  form.onclick = e => {  // a pressable choice in a form toggles; it never submits
+    const toggle = e.target.closest("[data-ability]");
+    if (toggle) toggle.setAttribute("aria-pressed", String(toggle.getAttribute("aria-pressed") !== "true"));
+  };
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]'), value = name => (form.elements[name]?.value ?? "").trim();
+    button.disabled = true; $("sheet-error").textContent = "";
+    try { toast(await submit(value, form)); $("sheet").close(); }
+    catch (error) { $("sheet-error").textContent = error.message; }
+    finally { button.disabled = false; }
+  };
+  $("sheet").showModal();
+  (form.querySelector("[autofocus]") || form.querySelector("input, textarea"))?.focus();
+}
+const projectChoices = (L, none) => [...(none ? [["", none]] : []),
+  ...(L?.projects || []).map(p => [p.name, word(p.name) + (p.enabled === false ? " (disabled)" : "")])];
+const pausedNote = () => LAST.paused ? " <b>CointOS is paused:</b> it starts once you resume." : "";
+
+function queueSheet() {
+  const L = LAST.L, project = ROUTE.project || (L?.projects || []).find(p => p.enabled !== false)?.name;
+  openSheet({title: "Queue work", hint: "A work item goes to a worker, then review and landing. A planning request asks the project's manager to break the goal into items." + pausedNote(),
+    fields: [`<div class="pair">${field("Project", choice("project", projectChoices(L), project))}` +
+      field("Kind", choice("kind", [["queued", "Work item"], ["urgent", "Urgent work item"], ["command", "Planning request"]])) + `</div>`,
+      `<div class="pair">${field("Name", input("name", 'required autofocus placeholder="fix-lexer-crash"'), "becomes its ID")}` +
+      field("Summary", input("summary", 'placeholder="One line for the dashboard"'), "optional") + `</div>`,
+      `<div class="pair">${field("Stage", choice("stage", [["", "Implementation"], ["skeleton", "Skeleton"], ["test-contract", "Test contract"], ["integration", "Integration"]]), "work items")}` +
+      field("Reasoning", choice("reasoning", EFFORT_CHOICES)) + `</div>`,
+      field("Brief", area("brief", "", 'required placeholder="What to do, and how to tell it is done."'))],
+    label: "Queue it",
+    submit: async value => {
+      const body = {project: value("project"), kind: value("kind"), name: value("name"), brief: value("brief")};
+      if (value("summary")) body.summary = value("summary");
+      if (value("stage") && body.kind !== "command") body.stage = value("stage");
+      if (value("reasoning")) body.reasoning_effort = value("reasoning");
+      return `Queued ${body.project}:${(await api("queue", body)).item}`;
+    }});
+}
+
+function operatorSheet() {
+  const L = LAST.L;
+  openSheet({title: "Run an operator", hint: "An operator is one ad-hoc agent with your brief. It lands its own work without review, so scope it carefully." + pausedNote(),
+    fields: [`<div class="pair">${field("Name", input("name", 'required autofocus pattern="[A-Za-z0-9][A-Za-z0-9._-]*" placeholder="tidy-readme"'), "letters, digits, . _ -")}` +
+      field("Where", choice("project", projectChoices(L, "System (CointOS runtime)"), ROUTE.project || "")) + `</div>`,
+      `<div class="pair"><div class="label"><span>Abilities <small>any of</small></span><span class="seg" id="abilities">` +
+      [["standard", "Standard", true, "Its usual tools"], ["control", "Control", false, "May manage CointOS queues"], ["network", "Network", false, "May reach the network"]].map(([v, l, on, tip]) =>
+        `<button type="button" data-ability="${v}" aria-pressed="${on}" title="${tip}">${l}</button>`).join("") + `</span></div>` +
+      field("Reasoning", choice("reasoning", EFFORT_CHOICES)) + `</div>`,
+      field("Brief", area("brief", "", 'required placeholder="What to do, its limits, and how to tell it is done."'))],
+    label: "Start operator",
+    submit: async (value, form) => {
+      const body = {name: value("name"), brief: value("brief"), abilities: [...form.querySelectorAll('[data-ability][aria-pressed="true"]')].map(b => b.dataset.ability)};
+      if (value("project")) body.project = value("project");
+      if (value("reasoning")) body.reasoning_effort = value("reasoning");
+      return `Operator ${(await api("run-agent", body)).task} requested`;
+    }});
+}
+
+function messageSheet(to, quote = "") {
+  const t = LAST.L?.tasks?.[to], n = t ? taskName(t) : named(to);
+  openSheet({title: `Message ${n.head}`, hint: `To ${esc(to)}'s inbox; the agent reads it on its next turn.`, quote,
+    fields: [field("Message", area("text", "", "required autofocus"))], label: "Send",
+    submit: async value => { await api("send", {to, text: value("text")}); return "Sent to its inbox"; }});
+}
+
+function budgetSheet(id) {
+  const L = LAST.L, t = L?.tasks?.[id], b = t?.budget || L?.queue?.[id]?.budget || {};
+  openSheet({title: "Generation budget", hint: `For ${esc(id)}. ` + (t?.status === "running"
+      ? "A running task's limits can only grow; what it has spent is kept." : "Applies to its next run."),
+    fields: [`<div class="pair">${field("Tokens", input("tokens", `type="number" min="1" step="1000" required value="${esc(b.generation_tokens ?? "")}"`))}` +
+      field("Minutes", input("minutes", `type="number" min="1" step="1" required value="${b.generation_seconds ? Math.round(b.generation_seconds / 60) : ""}"`)) + `</div>`],
+    label: "Set budget",
+    submit: async value => {
+      await api("budget", {task: id, budget: {generation_tokens: Number(value("tokens")), generation_seconds: Number(value("minutes")) * 60}});
+      return "Budget set";
+    }});
+}
+
+function reviseSheet(key) {
+  const r = LAST.L?.queue?.[key];
+  openSheet({title: "Revise brief", hint: `${esc(key)} starts afresh on the new brief; a reviewed item goes back to its worker. Its branch keeps earlier work.`,
+    fields: [field("Brief", area("brief", r?.brief || "", 'required style="min-height:220px"')),
+      field("Why", input("reason", 'required placeholder="What changed"'))],
+    label: "Revise",
+    submit: async value => { await api("revise", {item: key, brief: value("brief"), reason: value("reason")}); return "Revised"; }});
+}
+
+// Each control gives [arm, action, body, done, after]: with arm set, the first click only arms the button
+// (showing arm as its label) and a second click within a few seconds runs it.
 const CONTROLS = {
-  "pause-agent": d => [`Pause ${d.agent}? Its task is held until you resume it.`, "kill-agent", {agent: d.agent}, `Paused ${d.agent}`],
+  "go": () => [null, "go", {}, "Resumed: agents start as work is available"],
+  "pause-agent": d => [null, "kill-agent", {agent: d.agent}, `Paused ${d.agent}; its task waits until you resume it`],
   "resume-task": d => [null, "resume-task", {task: d.task}, "Released; it will be scheduled again"],
   "hold": d => [null, "hold", {item: d.item}, "Held"],
   "unhold": d => [null, "unhold", {item: d.item}, "Hold released"],
   "move": d => [null, "move", {item: d.item, to: d.to}, `Moved ${d.to}`],
-  "cancel-item": d => {
-    const reason = prompt(`Cancel ${d.item} for good? Its run stops and it leaves the queue.\nReason:`);
-    return reason === null ? null : [false, "cancel", {items: [d.item], reason: reason.trim() || "cancelled from the dashboard"}, "Cancelled"];
-  },
+  "cancel-item": d => ["Really cancel?", "cancel", {items: [d.item], reason: "cancelled from the dashboard"}, "Cancelled"],
+  "reasoning": d => [null, "reasoning", {task: d.task, effort: d.effort}, `Reasoning ${EFFORTS.find(([e]) => e === d.effort)?.[1].toLowerCase()} from its next reply`],
+  "project-enable": d => [null, "project-set", {project: d.project, settings: {enabled: d.on === "true"}},
+    d.on === "true" ? `${word(d.project)} enabled` : `${word(d.project)} disabled: its agents stop and nothing new starts there`],
+  "project-priority": d => [null, "project-set", {project: d.project, settings: {priority: Number(d.priority)}}, `${word(d.project)} priority set`],
+  "project-remove": d => ["Really remove?", "project-remove", {project: d.project}, `Removed ${word(d.project)}; its repository is left alone`,
+    () => { location.hash = "#/"; }],
+  "message": d => messageSheet(d.item, d.quote),
+  "budget": d => budgetSheet(d.item),
+  "revise": d => reviseSheet(d.item),
 };
+// Arming: the first click swaps the label and fills the button; it disarms itself after a few seconds.
+function arm(button, label) {
+  if (button.dataset.armed !== undefined) { disarm(button); return true; }
+  button.dataset.armed = button.innerHTML;
+  button.classList.add("armed"); button.textContent = label;
+  button.armTimer = setTimeout(() => disarm(button), 4000);
+  return false;
+}
+function disarm(button) {
+  if (button.dataset.armed === undefined) return;
+  clearTimeout(button.armTimer); button.innerHTML = button.dataset.armed; delete button.dataset.armed; button.classList.remove("armed");
+}
 document.addEventListener("click", async e => {
   const button = e.target.closest("button[data-act]");
   if (!button) return;
   e.stopPropagation(); e.preventDefault();
+  if (button.getAttribute("aria-pressed") === "true") return;  // already the current choice
   const card = button.closest(".agent"), data = {...button.dataset};
   if (card) { data.agent ??= card.dataset.agent; data.item ??= card.dataset.key; }  // controls name the task
   const plan = CONTROLS[data.act]?.(data);
   if (!plan) return;
-  const [question, action, body, done] = plan;
-  if (question && !confirm(question)) return;
+  const [armLabel, action, body, done, after] = plan;
+  if (armLabel && !arm(button, armLabel)) return;
   button.disabled = true;
-  try { await api(action, body); toast(done); }
+  try { await api(action, body); toast(done); after?.(); }
   catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
 }, true);
-document.addEventListener("change", async e => {
-  const select = e.target.closest('select[data-act="reasoning"]');
-  if (!select) return;
-  try { await api("reasoning", {task: select.dataset.task, effort: select.value}); toast(`Reasoning ${select.value} from the next reply`); }
+$("open-queue").addEventListener("click", queueSheet);
+$("open-operator").addEventListener("click", operatorSheet);
+$("add-project").addEventListener("click", projectSheet);
+
+// The run switch: pausing stops every agent and returns its work to waiting; resuming lets them start again.
+function renderRunstate(L) {
+  const button = $("pause-all");
+  button.classList.toggle("paused", !!L.paused);
+  setText(button.querySelector("b"), L.paused ? "Paused" : "Running");
+  setText(button.querySelector("small"), L.paused ? "Resume agents" : "Pause everything");
+  button.title = L.paused ? "Let agents start again" : "Stop every agent; their work returns to waiting";
+}
+$("pause-all").addEventListener("click", async event => {
+  const paused = LAST.paused, button = event.currentTarget;
+  button.disabled = true;
+  try { await api(paused ? "go" : "stop", {}); renderRunstate({paused: !paused}); LAST.paused = !paused; toast(paused ? "Resumed" : "Paused all agents"); }
   catch (error) { toast(error.message, true); }
-});
-$("pause-all").addEventListener("click", async () => {
-  const paused = LAST.paused;
-  if (!paused && !confirm("Pause all agents? Running work returns to waiting.")) return;
-  try { await api(paused ? "go" : "stop", {}); toast(paused ? "Resumed" : "Paused all agents"); }
-  catch (error) { toast(error.message, true); }
+  finally { button.disabled = false; }
 });
 
 let SCOUTING = false;
 $("scout-now").addEventListener("click", async event => {
   SCOUTING = true;
-  event.target.disabled = true;
-  $("scout-status").textContent = "Scheduling…";
-  try {
-    const response = await fetch("/api/scout", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not schedule scout");
-    $("scout-status").textContent = result.created ? "Scout scheduled" : "Already scheduled";
-  } catch (error) {
-    $("scout-status").textContent = error.message;
-  } finally {
-    SCOUTING = false;
-  }
+  event.currentTarget.disabled = true;
+  try { toast((await api("scout", {})).created ? "Scout scheduled" : "A scout is already scheduled"); }
+  catch (error) { toast(error.message, true); }
+  finally { SCOUTING = false; }
 });
 
 let CLEARING = false;
 $("clear-task-history").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  if (!arm(button, "Really clear? Finished records go for good")) return;
   CLEARING = true;
-  event.target.disabled = true;
+  button.disabled = true;
   $("clear-task-status").textContent = "Clearing…";
-  try {
-    const response = await fetch("/api/clear-task-history", {method: "POST", headers: {"Content-Type": "application/json"}, body: "{}"});
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not clear task history");
-    $("clear-task-status").textContent = `${result.removed} removed`;
-  } catch (error) {
-    $("clear-task-status").textContent = error.message;
-  } finally {
-    CLEARING = false;
-  }
+  try { $("clear-task-status").textContent = `${(await api("clear-task-history", {})).removed} removed`; }
+  catch (error) { $("clear-task-status").textContent = error.message; }
+  finally { CLEARING = false; }
+});
+
+let VIEWERS_SAVING = false;
+$("viewers").addEventListener("click", async event => {
+  const button = event.currentTarget, show = button.getAttribute("aria-checked") !== "true";
+  VIEWERS_SAVING = button.disabled = true;
+  try { await api("viewers", {show}); renderViewers(show); $("viewers-status").textContent = ""; }
+  catch (error) { $("viewers-status").textContent = error.message; }
+  finally { VIEWERS_SAVING = button.disabled = false; }
+});
+function renderViewers(showing) {
+  const button = $("viewers");
+  button.setAttribute("aria-checked", String(!!showing));
+  setText(button.querySelector("span"), showing ? "Following agents" : "Off");
+}
+
+// Per-viewer conveniences, kept in this browser only: which messages were seen, and the history filter.
+const stored = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
+const store = (key, value) => { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} };
+
+// Messages agents sent the user (also relayed by Coin), newest first; Reply goes to the sender's inbox while its task is active.
+let MESSAGES_SEEN = stored("cointos.messagesSeen", null);
+const OPEN_MESSAGES = new Set();
+function renderMessages(L) {
+  const mine = (L.messages || []).filter(m => m.to === "user").slice(-40).reverse();
+  if (MESSAGES_SEEN === null) store("cointos.messagesSeen", MESSAGES_SEEN = L.updated_at - 86400);  // a first visit flags only the last day
+  const fresh = mine.filter(m => m.at > MESSAGES_SEEN).length;
+  setText($("msg-new"), fresh ? `${fresh} new` : "");
+  setHTML($("messages"), mine.map(m => {
+    const t = L.tasks[m.from], live = t && tasks_active(t), n = t ? taskName(t) : named(m.from.split(":").pop(), m.from.split(":")[0]);
+    const who = m.from === "user" ? "CointOS" : n.head;
+    const when = new Date(m.at * 1000), today = when.toDateString() === new Date(Date.now()).toDateString();
+    return `<div class="msg${m.at > MESSAGES_SEEN ? " new" : ""}${OPEN_MESSAGES.has(m.at) ? " open" : ""}" data-at="${m.at}">` +
+      `<header><b ${t ? `data-key="${esc(m.from)}"` : ""} title="${esc(m.from)}">${esc(who)}</b><span>${esc([m.from === "user" ? "" : n.context].filter(Boolean).concat("").join(" · "))}` +
+      `${today ? when.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : when.toLocaleDateString([], {month: "short", day: "numeric"})}</span>` +
+      (live ? `<button type="button" class="btn" data-act="message" data-item="${esc(m.from)}" data-quote="${esc(m.text.slice(0, 600))}">Reply</button>` : "") +
+      `</header><p>${esc(m.text)}</p></div>`;
+  }).join("") || `<p class="muted">No messages yet. Agents write here when they need you.</p>`);
+}
+const tasks_active = t => ["waiting", "running", "review"].includes(t.status);
+$("messages").addEventListener("click", e => {
+  const msg = e.target.closest(".msg");
+  if (!msg || e.target.closest("button, [data-key]")) return;
+  const at = Number(msg.dataset.at);
+  OPEN_MESSAGES.has(at) ? OPEN_MESSAGES.delete(at) : OPEN_MESSAGES.add(at);
+  msg.classList.toggle("open");
+  if (at > MESSAGES_SEEN) { MESSAGES_SEEN = at; store("cointos.messagesSeen", at); if (LAST.L) renderMessages(LAST.L); }
 });
 
 const short_task = t => String(t || "").replace(/^[^:]+:/, "").replace(/^what\/is\/\w+\//, "").replace(/\.md$/, "");
@@ -922,23 +1250,27 @@ function renderMachine(L) {
 const MEMORY_COLOURS = [["Operating System", "#28262b"], ["Model weights", "#9f3b52"], ["KV-cache", "#e9687e"],
                         ["Saved contexts", "#ec98a5"], ["Free", "#ece3e0"]];
 
-function renderMemory(M) {
-  // The operating system in ink, CointOS's parts in steps of the site's rose (validated as an
-  // ordinal ramp), free memory as pale paper; clockwise from midnight. Built once, then updated.
-  const m = M.memory || {};
-  if (m.physical_gb === undefined) return;
+function memoryValues(M) {
+  const m = M.memory;
   const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
   const loaded = Object.entries(M.models).filter(([, model]) => model.up).map(([name]) => M.model_memory[name]);
   const weights = loaded.reduce((n, x) => n + x.weights_gb, 0);
   const kv = loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0);
   const saved = M.saved_bytes / 2 ** 30, physical = gib(m.physical_gb);
-  // MemAvailable includes reclaimable model-weight pages, so it cannot itself be the chart's Free
-  // segment without counting those weights twice. Use it to find real non-reclaimable use, remove
-  // CointOS's KV and snapshots, then make Free the remainder of the physical partition.
+  // Gufo's anonymous weights already reduce MemAvailable; file-backed llama weights can be
+  // reclaimed. Remove only non-reclaimable weights from used RAM before labelling the rest OS.
+  const residentWeights = loaded.reduce((n, x) => n + (x.weights_reclaimable === false ? x.weights_gb : 0), 0);
   const used = Math.max(0, physical - gib(m.available_gb));
-  const system = Math.max(0, used - kv - saved);
+  const system = Math.max(0, used - residentWeights - kv - saved);
   const free = Math.max(0, physical - system - weights - kv - saved);
-  const values = [system, weights, kv, saved, free];
+  return [system, weights, kv, saved, free];
+}
+
+function renderMemory(M) {
+  // The operating system in ink, CointOS's parts in steps of the site's rose, free as pale paper.
+  const m = M.memory || {};
+  if (m.physical_gb === undefined) return;
+  const values = memoryValues(M);
   MEMORY_PARTS = MEMORY_COLOURS.map(([name, colour], i) => [name, values[i], colour]);
   if (!$("membar")) {
     $("memory").innerHTML = `<h3>Memory</h3><div class="memhead"><b id="mem-value"></b><span id="mem-label"></span></div>` +
@@ -950,7 +1282,7 @@ function renderMemory(M) {
   }
   const total = values.reduce((n, v) => n + v, 0);
   document.querySelectorAll("#membar .seg").forEach((seg, i) => seg.style.width = `${total ? values[i] / total * 100 : 0}%`);
-  const inUse = total - free;
+  const inUse = total - values[4];
   if ($("tile-mem")) {
     setText($("tile-mem").querySelector("b"), `${total ? Math.round(inUse / total * 100) : 0}%`);
     setText($("tile-mem").querySelector("small"), `${inUse.toFixed(0)} of ${total.toFixed(0)} GB`);
@@ -979,11 +1311,41 @@ function focusPart(i) {
 
 function renderChecks(L) {
   const failing = L.checks.filter(c => !c.ok);
-  $("checks").innerHTML = !L.checks.length ? "" : failing.length
-    ? failing.map(c => `<div class="check no"><b>${esc(c.name)}</b> ${esc(c.detail)}</div>`).join("")
-    : `<div class="check ok">✓ All ${L.checks.length} self-checks pass</div>`;
+  const labels = {
+    "no lane idle while an agent waits": "A GPU lane is idle while work is waiting",
+    "higher classes pre-empt": "Higher-priority work is waiting",
+    "no agent starves": "An agent is overdue for GPU time",
+    "no silent agent": "An agent has stopped reporting",
+    "no looping agent": "An agent is repeating the same output",
+    "no stalled thought": "A model request has stopped progressing",
+    "no stray agent processes": "Unmanaged agent processes remain",
+    "no item waits on a dead dependency": "Work is blocked by a dependency",
+    "blocked work has a recovery owner": "Blocked work has no active recovery",
+    "event journal writable": "The event journal cannot be written",
+    "memory within bounds": "Memory pressure exceeds limits",
+  };
+  setText($("checks-summary"), failing.length ? `Diagnostics · ${failing.length} ${failing.length === 1 ? "issue" : "issues"}`
+    : L.checks.length ? "Diagnostics · all checks pass" : "Diagnostics · waiting for checks");
+  setHTML($("checks"), failing.map(c => {
+    const rows = c.name === "no item waits on a dead dependency"
+      ? Object.keys(L.dependency_problems || {}).map(item => ({item, blocker: "Waiting for its dependency. Open the work item to inspect it."}))
+      : c.name === "blocked work has a recovery owner"
+        ? (L.work_frontier || []).filter(row => !L.paused && row.status === "blocked" && !row.held_by
+          && !row.admission_hold && !row.owner && !row.continuations?.length) : [];
+    const items = rows.map(row => {
+      const r = L.queue?.[row.item], title = r?.summary || named(row.item.split(":").slice(1).join(":"), r?.project).head;
+      return `<li><a data-key="${esc(row.item)}" href="#/${encodeURIComponent(r?.project || "")}/${encodeURIComponent(row.item)}">${esc(title || row.item)}</a>` +
+        `<span>${esc(row.blocker || "No active recovery or corrective work.")}</span></li>`;
+    }).join("");
+    return `<section class="check"><h3>${esc(labels[c.name] || `Check failed: ${c.name}`)}</h3>` +
+      (items ? `<ul>${items}</ul>` : "") + `<details><summary>Technical details</summary><pre>${esc(c.detail)}</pre></details></section>`;
+  }).join(""));
 }
 
+// Low-level machine events: lane switches, snapshots and notices. Recently hides them unless asked.
+const MACHINE_EVENTS = new Set(["switch", "shared prefix saved", "snapshot forgotten", "snapshot evicted", "snapshot spilled",
+  "snapshot transfer recovered", "saved on stop", "snapshots moved to disk for shutdown", "viewer", "divergence",
+  "tool history preserved", "reasoning budget reached", "reasoning changed"]);
 function sentence(h) {
   const lane = h.model ? `${short(h.model)} lane ${h.lane}` : `lane ${h.lane}`;
   switch (h.event) {
@@ -992,8 +1354,18 @@ function sentence(h) {
     case "agent adopted": return `${h.agent} carried on through a daemon restart`;
     case "task created": return `new task: ${short_task(h.task)}`;
     case "receipt": return `${short_task(h.task)} finished: ${h.disposition}`;
+    case "queued": return `queued ${h.project}:${h.item}`;
+    case "item revised": return `${short_task(h.item)} revised by ${h.by}`;
+    case "paused": return "paused: agents stopped";
+    case "resumed": return "resumed: agents may start";
+    case "scout requested": return h.created ? "scout scheduled" : "scout already scheduled";
+    case "operator requested": return `operator requested: ${short_task(h.task)}`;
+    case "daemon started": return "daemon started";
+    case "daemon stopped": return "daemon stopped";
     case "switch": return `${lane}: ${h.out ? short_task(h.out) : "empty"} → ${short_task(h.into)}` +
       (h.restored ? ` (restored ${h.restored.toLocaleString()} tokens)` : " (cold)") + (h.saved ? ", saved the outgoing" : "");
+    case "reasoning budget reached": return `${h.agent} reached its reasoning cap (${h.tokens} tokens) and moved on to answer`;
+    case "tool history preserved": return `${h.agent}: tool history kept through compaction`;
     case "shared prefix saved": return `shared start saved: ${h.tokens.toLocaleString()} tokens`;
     case "snapshot forgotten": return `forgot a snapshot of ${short_task(h.owner)}: ${h.reason}`;
     case "saved on stop": return `${lane}: saved ${short_task(h.owner)} as the daemon stopped`;
@@ -1006,6 +1378,20 @@ function sentence(h) {
       return `${event}${Object.keys(rest).length ? ": " + Object.entries(rest).map(([k, v]) => `${k} ${typeof v === "object" ? JSON.stringify(v) : v}`).join(", ") : ""}`;
     }
   }
+}
+let HISTORY_ALL = stored("cointos.historyAll", false);
+$("history-all").setAttribute("aria-checked", String(HISTORY_ALL));
+$("history-all").addEventListener("click", e => {
+  HISTORY_ALL = !HISTORY_ALL; store("cointos.historyAll", HISTORY_ALL);
+  e.currentTarget.setAttribute("aria-checked", String(HISTORY_ALL));
+  if (LAST.L) renderHistory(LAST.L);
+});
+function renderHistory(L) {
+  const shown = L.history.filter(h => HISTORY_ALL || !MACHINE_EVENTS.has(h.event)).slice(-60).reverse();
+  setHTML($("history"), shown.map(h =>
+    `<div class="${h.event === "alert" ? "alert-line" : ""}"><span class="when">${new Date(h.at * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>` +
+    `<span class="what" title="${esc(sentence(h))}">${esc(sentence(h))}</span></div>`).join("") ||
+    `<p class="muted">Nothing but machine events lately.</p>`);
 }
 
 const schedulerControls = [
@@ -1021,8 +1407,9 @@ function renderScheduler(L) {
     if (!control.saving && document.activeElement !== input) input.value = String(value);
     input.disabled = control.saving;
     $(control.id + "-status").textContent = control.saving ? "Saving…" :
-      control.error || L.config_error || `${value} ${control.unit} active · changes apply live`;
+      control.error || L.config_error || "";
   }
+  if (!VIEWERS_SAVING) { renderViewers(L.viewers_showing); $("viewers").disabled = false; }
 }
 for (const control of schedulerControls) $(control.id).addEventListener("change", async event => {
   control.saving = true;
@@ -1036,7 +1423,7 @@ for (const control of schedulerControls) $(control.id).addEventListener("change"
       body: JSON.stringify({[control.key]: Number(event.target.value)})});
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Could not save scheduler setting");
-    status.textContent = `${result[control.key]} ${control.unit} active · changes apply live`;
+    status.textContent = "";
   } catch (error) {
     control.error = error.message;
     status.textContent = control.error;
@@ -1047,55 +1434,97 @@ for (const control of schedulerControls) $(control.id).addEventListener("change"
   }
 });
 
+// The strip: model speed, then the work and the machine at a glance, in one row of tiles.
+const STRIP = ["perf-generation", "perf-prefill", "perf-mtp", "tile-agents", "tile-queue", "tile-landed", "tile-mem"];
+function ensureStrip() {
+  if (!$("tile-mem")) $("strip").innerHTML = STRIP.map(id =>
+    `<div class="tile" id="${id}"><span></span><b></b><small></small>${id === "tile-mem" ? `<div class="meter"><i></i></div>` : ""}</div>`).join("");
+}
+
+function renderPerformance(S) {
+  const p = S.performance || {};
+  const entries = [
+    ['generation', 'Generation', p.generation_tps, 'tok/s', 'Output tokens ÷ generation time; includes reasoning tokens.'],
+    ['prefill', 'Prefill', p.prefill_tps, 'tok/s', 'Newly processed input tokens ÷ prefill call time; cached tokens and snapshot I/O excluded.'],
+    ['mtp', 'MTP acceptance', p.mtp_acceptance, '%', 'Accepted draft tokens ÷ proposed draft tokens; not the proportion of output tokens.']
+  ];
+  for (const [id, label, value, unit, help] of entries) {
+    const tile = $(`perf-${id}`);
+    const valid = typeof value === 'number' && Number.isFinite(value);
+    setText(tile.querySelector('span'), label);
+    setText(tile.querySelector('b'), valid ? `${value.toLocaleString(undefined, {maximumFractionDigits: 1})}${unit === '%' ? '%' : ' tok/s'}` : '—');
+    setText(tile.querySelector('small'), valid ? (id === 'mtp' ? 'of drafted tokens' : 'smoothed over ~10 s') : 'Waiting for phase samples');
+    tile.title = help + ' One-pole exponential smoothing across completed steps, with a 10-second active-time constant per phase. Inactive phases hold their values.';
+  }
+}
+
 function render(L) {
-  const agents = Object.values(L.agents), failing = L.checks.filter(c => !c.ok);
-  const count = s => Object.values(L.tasks).filter(t => t.status === s).length;
-  $("stamp").textContent = "updated " + new Date(L.updated_at * 1000).toLocaleTimeString();
-  if (!$("tile-mem")) $("strip").innerHTML = ["state", "agents", "lanes", "queue", "done", "mem", "checks"].map(id =>
-    `<div class="tile" id="tile-${id}"><span></span><b></b><small></small>${id === "mem" ? `<div class="meter"><i></i></div>` : ""}</div>`).join("");
+  ensureStrip();
+  renderPerformance(L);
+  const agents = Object.values(L.agents);
+  const stamp = $("stamp");
+  stamp.className = "stamp";
+  stamp.textContent = "updated " + new Date(L.updated_at * 1000).toLocaleTimeString();
   const tile = (id, label, value, note, kind = "") => {
     const el = $(`tile-${id}`);
     if (el.className !== `tile ${kind}`.trim()) el.className = `tile ${kind}`.trim();
     setText(el.querySelector("span"), label); setText(el.querySelector("b"), String(value)); setText(el.querySelector("small"), note);
   };
-  const held = L.lanes.filter(l => L.thoughts[l.holder]).length;
-  tile("state", "CointOS", L.paused ? "Paused" : "Running", L.paused ? "cointos go resumes" : "autonomy on", L.paused ? "bad" : "dark");
-  tile("agents", "Agents", agents.length, `${held} on the GPU now`);  // the lanes are the one truth
-  tile("lanes", "GPU lanes", `${held}/${L.lanes.length}`, "held by agents");
-  tile("queue", "Up next", count("waiting"), `${count("review")} awaiting integrator`);
-  tile("done", "Done", count("done"), `${count("failed")} gave up`);
-  setText($("tile-mem").querySelector("span"), "Memory");
-  tile("checks", "Self-checks", failing.length ? `${failing.length} red` : "✓", failing.length ? failing[0].name : `all ${L.checks.length} pass`, failing.length ? "bad" : "");
-  $("alert").innerHTML = failing.map(c => esc(c.name + ": " + c.detail)).join("<br>");
   LAST = {paused: L.paused, guard: L.guard, tasks: L.tasks, queue: L.queue, L};
-  setText($("pause-all"), L.paused ? "Resume agents" : "Pause all");
   FLOW = computeFlow(L);
+  const items = [...FLOW.items.values()], dayAgo = Date.now() / 1000 - 86400;
+  const at = s => items.filter(it => it.step === s).length;
+  const held = L.lanes.filter(l => L.thoughts[l.holder]).length;  // the lanes are the one truth
+  const waiting = Object.values(L.thoughts).filter(t => t.lane === null).length;
+  tile("agents", "Agents", agents.length, L.paused ? "paused" : `${held}/${L.lanes.length} on GPU${waiting ? ` · ${waiting} waiting` : ""}`, L.paused ? "bad" : "dark");
+  tile("queue", "Queue", at("ready") + at("blocked"), `${at("ready")} ready · ${at("blocked")} blocked`);
+  const landed = items.filter(it => it.step === "landed" && it.updated > dayAgo).length;
+  tile("landed", "Landed · 24 h", landed, `${at("landed")} in all`);
+  setText($("tile-mem").querySelector("span"), "Memory");
+  renderRunstate(L);
   $("home").hidden = !!ROUTE.project; $("project-page").hidden = !ROUTE.project;
   document.querySelector(".cols").classList.toggle("wide", !!ROUTE.project);
   if (ROUTE.project) renderProjectPage(L); else renderHome(L);
   renderAgents(L);
   renderWork(L);
-  renderProjects(L);
+  renderMessages(L);
   renderMachine(L);
   renderScheduler(L);
   renderChecks(L);
   renderDrawer(L);
-  $("history").innerHTML = L.history.slice(-60).reverse().map(h =>
-    `<div class="${h.event === "alert" ? "alert-line" : ""}"><span class="when">${new Date(h.at * 1000).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</span>` +
-    `<span class="what">${esc(sentence(h))}</span></div>`).join("");
+  renderHistory(L);
 }
 
 let LAST = {paused: false, guard: {}};
 readRoute();
 async function poll() {
-  try { render(await (await fetch("/api/ledger", {cache: "no-store"})).json()); }
-  catch (e) { $("stamp").textContent = "daemon unreachable"; }
+  const controller = new AbortController();
+  const deadline = setTimeout(() => controller.abort(), 30000);
+  let snapshot;
+  try {
+    const response = await fetch("/api/ledger", {cache: "no-store", signal: controller.signal});
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    snapshot = await response.json();
+  } catch (e) {
+    $("stamp").className = "stamp bad";
+    $("stamp").textContent = `Connection to ${location.host} failed: ${e.name === "AbortError" ? "timed out" : e.message} · retrying`;
+    console.error("Dashboard snapshot request failed", e);
+  } finally { clearTimeout(deadline); }
+  if (snapshot) {
+    try { render(snapshot); }
+    catch (e) {
+      $("stamp").textContent = `Dashboard display failed: ${e.message}`;
+      console.error("Dashboard rendering failed", e);
+    }
+  }
   setTimeout(poll, 1000);
 }
 poll();
 // Agent cards and memory, ten times a second.
 new EventSource("/api/live").onmessage = event => {
   const F = JSON.parse(event.data);
+  ensureStrip();
+  renderPerformance(F);
   renderAgents({...F, tasks: LAST.tasks, queue: LAST.queue, paused: LAST.paused});
   renderMemory({...F, guard: LAST.guard});
 };

@@ -1,19 +1,19 @@
 ---
 status: green
-revised_at: "2026-10-07T19:53:54+11:00"
+revised_at: "2026-10-15T23:47:49+11:00"
 ---
 
 How CointOS is built and changed:
 
-1. **One number, one place.** Every default limit, threshold, lane count, context size, priority and interval lives once, in `config/cointos.json`. Code derives everything else from it. Explicit task-budget overrides live in daemon-owned task metadata; configuration owns their defaults.
-2. **One writer per fact.** The daemon alone writes the ledger (`state/cointos.json`); everything else reads it through the daemon's local API.
-3. **Act on physics.** Work is admitted whenever there is a free lane. Physical resource pressure governs resource shedding. Separately, measured generation time/tokens bound an agent run under its configured work budget; waiting, prefill and tools do not spend it.
-4. **Recovery is simple. A run ends; the assignment does not.** When an agent run dies, stalls or spends its generation budget, it is killed, logged, and its task goes back in the queue to be resumed with its branch and files. Ordinary interruption retains its session; exhaustion starts a fresh session from a bounded evidence packet, at most `recovery.fresh_retries` times for every kind. Only an assignment's own run can submit its work, so the end of a run is never a verdict on that work. Failed worker items receive one bounded manager pass with their assignment, receipt evidence and last recovery packet. An unresolved or exhausted manager escalates for intervention. Recovery preserves bounded verified leads from outward text, tool results and Git state, never hidden reasoning. The run budget is the only per-run limit: the work model typically spends long silent stretches before writing, so no earlier progress checkpoint stops a run.
-5. **Done means working live.** A change is done when `cointos check` stays green through its scenario on the real machine. Unit tests cover pure functions.
-6. **Changes go to the owning concept.** A fix belongs where the concept it concerns is defined. Deleting code is as good a fix as adding it.
-7. **No patches.** Every bug fix starts by asking what in the current design allowed the bug: two sources of truth, a missing bound, a proxy measured instead of the real thing, a concept without an owner. The fix changes that design, and the architecture leaf with it. A new state, flag, special case or retry that only covers a symptom is not a fix. (User requirement: "No patches... This will not become a swamp again.")
+1. **One number, one place.** Every default limit, threshold, lane count, context size, priority and interval lives once in config/cointos.json. Explicit task-budget overrides live in daemon-owned metadata; configuration owns defaults.
+2. **One writer per fact.** The daemon alone writes state/cointos.json; everything else reads its API.
+3. **Act on physics.** Admit work when a lane is free. Physical pressure governs shedding. Measured generation time/tokens separately bound runs; waiting, prefill and tools do not spend generation budgets.
+4. **Recovery preserves work and bounds roles.** Retain sessions, branches, files and outward evidence. recovery.role_fresh_retries overrides fresh_retries; workers, managers, integrators and Operators default to zero budget refills. Each canonical assignment/version has one capable recovery Operator with checked handback, deferred while valid children progress. Recovery does not create another manager-to-Operator chain. Role budgets come from recovery.role_budgets; task overrides win. Identical revisions cannot refill budgets. User holds stop related execution and recovery; a controller may continue only its own hold.
+5. **Done means autonomous live behaviour.** Green checks and tests are necessary evidence, not proof that CointOS builds unattended. Acceptance requires agents to plan, validate, recover and progress without the supervising Codex writing product briefs or repairing product logic for them. Pigen is a test workload, not Codex's build objective. Direct intervention in managed projects is for undoing damage caused by CointOS defects; otherwise observe failures, reproduce them in CointOS fixtures, fix their system cause and verify unassisted continuation.
+6. **Changes go to the owning concept.** Fix the concept where defined; deleting code can be the best fix.
+7. **No patches.** Ask what design allowed the bug: duplicate truth, missing bound, proxy measurement or ownerless concept. Change that design and its architecture answer. A symptom-specific state, flag or retry is not a fix. User requirement: “No patches... This will not become a swamp again.”
 8. **Small core.** Daemon, gateway, scheduler, spawner, guard and self-check together stay around 3,000 lines or fewer.
-9. **Functions over data.** Plain data and plain functions (`global:how/to/approach/architecture-design.md`).
-10. **Leaves state current truth.** Each fact lives in its owning leaf and is updated in place. Code and leaves agree.
-11. **Report plainly.** Say what was done and what was seen live.
-12. **No unrequested limits.** Limits exist to stop a confused, scope-creeping agent from spending hours on nothing of value. A new limit, checkpoint or kill condition on agent work needs the user's explicit approval and evidence that it catches that failure without stopping normal runs.
+9. **Functions over data.** Plain data and functions; global:how/to/approach/architecture-design.md owns guidance.
+10. **Leaves state current truth.** Each fact has one owner; code and answers agree.
+11. **Report plainly.** Say what changed and what worked live, including remaining acceptance limits.
+12. **No unrequested limits.** New limits, checkpoints or kill conditions need explicit user approval and evidence that they catch wasted work without stopping normal runs.

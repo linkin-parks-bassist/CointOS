@@ -6,6 +6,92 @@ from cointos import backend_llama as backend
 from cointos.state import CONFIG
 
 
+class Rendering(unittest.TestCase):
+    def test_leading_instruction_messages_render_as_one_without_mutating_history(self):
+        messages = [{'role': 'system', 'content': 'System instructions'},
+                    {'role': 'developer', 'content': 'Developer instructions'},
+                    {'role': 'system', 'content': 'Project orientation'},
+                    {'role': 'user', 'content': 'Work'}, {'role': 'assistant', 'content': 'Partial'}]
+        def request(model, path, body, timeout):
+            if path == '/apply-template':
+                self.assertEqual(body['messages'], [
+                    {'role': 'system', 'content': 'System instructions\n\nDeveloper instructions\n\nProject orientation'},
+                    *messages[3:]])
+                return {'prompt': 'rendered'}
+            return {'tokens': [1, 2]}
+        with patch.object(backend, '_server', side_effect=request):
+            backend.render(CONFIG, 'm', {'messages': messages})
+        self.assertEqual(len(messages), 5)
+        self.assertEqual(messages[1]['role'], 'developer')
+    def test_native_boolean_tool_parameters_keep_their_schema_types(self):
+        native = ('<tool_call>\n<function=jobs>\n'
+                  '<parameter=project>\nFalse\n</parameter>\n'
+                  '<parameter=all>\nFalse\n</parameter>\n'
+                  '</function>\n</tool_call>')
+        reader = {'thinking': False, 'tools': [{'type': 'function', 'function': {
+            'name': 'jobs', 'parameters': {'type': 'object', 'properties': {
+                'project': {'type': 'string'}, 'all': {'type': 'boolean'}}}}}]}
+        with patch.object(backend, '_server', return_value={'content': native}):
+            self.assertEqual(backend.read(CONFIG, 'm', reader, [1], False)['tool_calls'], [])
+            result = backend.read(CONFIG, 'm', reader, [1], True)
+        arguments = json.loads(result['tool_calls'][0]['function']['arguments'])
+        self.assertEqual(arguments, {'project': 'False', 'all': False})
+        self.assertIs(arguments['all'], False)
+
+    def test_empty_resume_step_opens_an_assistant_without_rewriting_history(self):
+        messages = [{'role': 'user', 'content': 'Work'},
+                    {'role': 'assistant', 'reasoning_content': 'Partial reasoning', 'content': ''},
+                    {'role': 'assistant', 'content': None}]
+        def request(model, path, body, timeout):
+            if path == '/apply-template':
+                self.assertEqual(body['messages'], messages)
+                self.assertIs(body['continue_final_message'], False)
+                self.assertIs(body['add_generation_prompt'], True)
+                return {'prompt': '<|im_start|>assistant\n<think>\n'}
+            return {'tokens': [1, 2]}
+        with patch.object(backend, '_server', side_effect=request):
+            self.assertTrue(backend.render(CONFIG, 'm', {'messages': messages})['reader']['thinking'])
+
+    def test_resumed_reasoning_is_hidden_and_charged_to_its_existing_budget(self):
+        opening = '<think>\n'
+        assistant = opening + 'Partial reasoning'
+        prompt = '<|im_start|>assistant\n<think>\nDone</think>\nEarlier answer<|im_end|>\n<|im_start|>assistant\n' + assistant
+        tokenized = {prompt: [1, 2, 3], '</think>': [99],
+                     '\n</think>\n\n': [10, 99, 10], opening: [98, 10],
+                     assistant: [98, 10, 4, 5, 6]}
+        def request(model, path, body, timeout):
+            return {'prompt': prompt} if path == '/apply-template' else {'tokens': tokenized[body['content']]}
+        with patch.object(backend, '_server', side_effect=request):
+            reader = backend.render(CONFIG, 'm', {'messages': [], 'reasoning_budget': 4})['reader']
+        self.assertTrue(reader['thinking'])
+        self.assertEqual(reader['reasoning_used'], 3)
+        with patch.object(backend, '_server', return_value={'content': 'More reasoning'}):
+            result = backend.read(CONFIG, 'm', reader, [4], False)
+        self.assertEqual(result['phase'], 'reasoning')
+        self.assertEqual(result['content'], '')
+
+    def test_completed_reasoning_does_not_reopen_on_literal_marker_in_answer(self):
+        prompt = '<|im_start|>assistant\n<think>\nDone</think>\nThe literal marker is <think>\n'
+        with patch.object(backend, '_server', side_effect=[{'prompt': prompt}, {'tokens': [1, 2]}]):
+            reader = backend.render(CONFIG, 'm', {'messages': [], 'reasoning_budget': 4})['reader']
+        self.assertFalse(reader['thinking'])
+        self.assertNotIn('reasoning_budget', reader)
+
+    def test_interrupted_assistant_continuation_preserves_history(self):
+        messages = [{'role': 'user', 'content': 'Work'},
+                    {'role': 'assistant', 'content': 'Completed step'},
+                    {'role': 'assistant', 'content': 'Partial next step'}]
+        def request(model, path, body, timeout):
+            if path == '/apply-template':
+                self.assertEqual(body['messages'], messages)
+                self.assertTrue(body['continue_final_message'])
+                self.assertFalse(body['add_generation_prompt'])
+                return {'prompt': 'continued'}
+            return {'tokens': [1, 2]}
+        with patch.object(backend, '_server', side_effect=request):
+            self.assertEqual(backend.render(CONFIG, 'm', {'messages': messages})['tokens'], [1, 2])
+
+
 class FakeConnection:
     """Streams the given events as llama-server would, and records whether it was closed."""
     lines: list[bytes] = []

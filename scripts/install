@@ -4,15 +4,19 @@ import argparse
 import atexit
 import json
 import os
+import runpy
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.request
 
 source = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(source))
 from cointos import config as configuration, kt  # noqa: E402  (standalone: only subprocess)
+dependency_aliases = runpy.run_path(str(source / 'scripts/upgrade-ledger'),
+                                   run_name='cointos_install_migrations')['dependency_aliases']
 target = Path.home() / '.CointOS'
 units = Path.home() / '.config/systemd/user'
 
@@ -28,43 +32,74 @@ def api(url, action, body=None):
         return json.load(response)
 
 
-# The daemon runs these; anything else (prompts, dashboard, CLI, runtime knowledge) is read fresh
-# from disk, so a change confined to it installs without replacing the daemon.
+def require_compatible_frontier(ledger, live):
+    if live and ledger and ledger.get('frontier_version') != 1:
+        raise SystemExit('Live installation refused: recovery ownership changed; use a paused full installation.')
+
+
+# CLI code is imported by clients/Coin, not the daemon. Existing client processes
+# retain imported code; new processes can receive it without replacing the daemon.
 DAEMON_PARTS = ('cointos', 'config', 'systemd')
+CLIENT_FILES = (Path('cointos/cli.py'),)
 COPIED = ('cointos', 'roles', 'web', 'bin', 'systemd', 'config')
 
 
 def files(root):
-    return {path.relative_to(root): path for path in root.rglob('*')
+    return {path.relative_to(root): path for part in DAEMON_PARTS for path in (root / part).rglob('*')
             if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc'
-            and path.relative_to(root) != Path('config/projects.json')}
+            and path.relative_to(root) not in (*CLIENT_FILES, Path('config/projects.json'))}
 
 
 def daemon_changed():
     """Whether the candidate differs from the installed runtime in anything the daemon runs."""
-    mine = {k: v for part in DAEMON_PARTS for k, v in files(source).items() if k.parts[0] == part}
-    theirs = {k: v for part in DAEMON_PARTS for k, v in files(target).items() if k.parts[0] == part}
+    mine, theirs = files(source), files(target)
     return mine.keys() != theirs.keys() or any(mine[k].read_bytes() != theirs[k].read_bytes() for k in mine)
+
+
+def copy_client_files():
+    """Publish complete modules for fresh imports; loaded client modules stay intact."""
+    for relative in CLIENT_FILES:
+        origin, destination = source / relative, target / relative
+        content = origin.read_bytes()
+        if destination.exists() and destination.read_bytes() == content:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.' + destination.name + '.',
+                                             delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            shutil.copystat(origin, temporary)
+            os.replace(temporary, destination)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
 
 
 def copy_runtime(names):
     projects_registry = target / 'config/projects.json'
-    saved_projects = projects_registry.read_bytes() if projects_registry.exists() else None
+    saved_projects = configuration.read_owned_text(projects_registry)
+    if saved_projects is not None:
+        registry = json.loads(saved_projects, object_pairs_hook=configuration._fields)
+        configuration.project_entries(registry.get('projects') if isinstance(registry, dict) else registry)
     for name in names:
         dest = target / name
         if dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     if saved_projects is not None:
-        projects_registry.write_bytes(saved_projects)
+        projects_registry.write_bytes(saved_projects.encode('utf-8'))
 
 
 def write_runtime_knowledge():
     orientation = (source / 'runtime/where-am-i.md').read_text()
     if not (target / '.knowledge').exists():
         run('kt', 'init', orientation, cwd=target)
-    kt.write(target, 'where am i', orientation)
-    kt.write(target, 'what is cointos', (source / 'runtime/what-is-cointos.md').read_text())
+    for template in sorted((source / 'runtime').glob('*.md')):
+        kt.write(target, template.stem.replace('-', ' '), template.read_text())
 
 
 def install(live=False):
@@ -72,11 +107,17 @@ def install(live=False):
         raise SystemExit('Run scripts/install from the source repository.')
     if target.exists() and not (target / '.runtime-install').exists():
         raise SystemExit('Archive the previous ~/.CointOS installation before installing.')
-    config = json.loads((source / 'config/cointos.json').read_text())
+    config = configuration.load(source / 'config/cointos.json')
+    rendered_units = {template.name: (template.read_text().replace('@ROOT@', str(target))
+                      .replace('@HOME@', str(Path.home()))
+                      .replace('@SERVICE_RESTART_SECONDS@', str(config['service_restart_seconds'])))
+                      for template in (source / 'systemd').glob('*.service')}
     installed_config = target / 'config/cointos.json'
     if live:
         try:
-            previous = json.loads(installed_config.read_text())
+            previous = configuration.read_owned_json(installed_config)
+            if not isinstance(previous, dict):
+                raise ValueError('invalid installed configuration')
         except (OSError, ValueError):
             raise SystemExit('Live installation refused: installed runtime configuration is unavailable.')
         incompatible = configuration.live_incompatibilities(previous, config)
@@ -85,12 +126,39 @@ def install(live=False):
                              ', '.join(incompatible) + '); use a paused full installation.')
     else:
         previous = config
+    # Check authority before stopping services or replacing their readers. A damaged
+    # file must survive an unsuccessful installation unchanged, never become defaults.
+    retained = configuration.validate_ledger(configuration.read_owned_json(target / 'state/cointos.json', {}))
+    dependency_aliases(retained)  # pure preflight before daemon contact, stops or copy
+    require_compatible_frontier(retained, live)
+    from cointos.keys import _validate
+    _validate(configuration.read_owned_json(target / 'state/keys.json', {}))
+    registry = configuration.read_owned_json(target / 'config/projects.json', {'projects': []})
+    entries = registry.get('projects') if isinstance(registry, dict) else registry
+    configuration.project_entries(entries)  # the upgrader also accepts the legacy list
+    from cointos.repair import ownership
+    if not target.exists():
+        # Establish the normal source marker before creating the persistent lock
+        # namespace; failed first contact leaves a resumable, marked installation.
+        target.mkdir(parents=True, mode=0o700)
+        (target / '.runtime-install').write_text(str(source) + '\n')
+    with ownership(target) as acquired:
+        if not acquired:
+            raise SystemExit('Installation refused: independent repair owns this runtime; no installation started.')
+        install_owned(config, previous, rendered_units, live)
+
+
+def install_owned(config, previous, rendered_units, live):
     # A live installer talks to the process that exists now. Compatibility above guarantees
     # that its endpoint is also the endpoint the candidate daemon will retain.
     url = f"http://127.0.0.1:{previous['port']}/api/ledger"
+    needs_migration = False
     try:
         with urllib.request.urlopen(url, timeout=config['timeouts']['api_seconds']) as response:
             ledger = json.load(response)
+        configuration.validate_ledger(ledger)
+        needs_migration = bool(dependency_aliases(ledger))
+        require_compatible_frontier(ledger, live)
         if not live and (ledger['agents'] or not ledger['paused']):
             raise SystemExit('Pause CointOS and wait until no agents are running before installation.')
     except OSError:
@@ -100,15 +168,32 @@ def install(live=False):
                  '--no-legend', '--no-pager', capture_output=True).stdout.strip()
     if active and not live:
         raise SystemExit('Agent units are still running; installation refused.')
-    if live and not daemon_changed():
+    if live and not needs_migration and not daemon_changed():
         copy_runtime([name for name in COPIED if name not in DAEMON_PARTS])
+        copy_client_files()
         write_runtime_knowledge()
         print(f'Updated {target} in place; nothing the daemon runs changed, so it kept running.')
         return
+    if live and any(task.get('validating') for task in ledger.get('tasks', {}).values()):
+        raise SystemExit('Live installation refused during packet or landing validation; '
+                         'retry after it completes. No daemon replacement started.')
+    from cointos.replacement import lease
+    with lease(target) as acquired:
+        if not acquired:
+            raise SystemExit('Installation refused: validation or receipt settlement is in progress; '
+                             'no daemon replacement started.')
+        replace_runtime(config, rendered_units, live)
+
+
+def replace_runtime(config, rendered_units, live):
+    """Caller owns both installation/repair and exclusive replacement leases."""
+    # A stopped/waiting old repair must not wake against a deliberately replaced
+    # runtime. A running repair cannot coexist with our ownership lease.
+    run('systemctl', '--user', 'stop', 'cointos-repair.service')
     if live:
         # No waiting for agents: stopping cointosd ends the GPU step in flight, saves every lane's
-        # state and cuts the replies; OpenCode discards a cut reply and retries the same request,
-        # which the new daemon resumes from that saved state.
+        # state and cuts the replies. OpenCode retains partial output; backend rendering
+        # must accept its explicit continuation without rewriting conversation history.
         run('systemctl', '--user', 'stop', 'cointosd.service')
         restart_needed = [True]
         def restore_daemon():
@@ -118,24 +203,29 @@ def install(live=False):
     else:
         restart_needed = [False]
         run('systemctl', '--user', 'stop', 'cointos-coin.service', 'cointosd.service')
+    # The stopped daemon may have saved between the first check and shutdown.
+    retained = configuration.validate_ledger(configuration.read_owned_json(target / 'state/cointos.json', {}))
+    dependency_aliases(retained)
+    require_compatible_frontier(retained, live)
     target.mkdir(parents=True, exist_ok=True)
     os.chmod(target, 0o700)
     # Project enrollment is user-managed runtime configuration. Source projects.json is
     # only the first-install seed; upgrades must not erase projects added through the CLI.
-    copy_runtime(COPIED)
     (target / '.runtime-install').write_text(str(source) + '\n')
+    copy_runtime(COPIED)
     run(str(source / 'scripts/upgrade-ledger'), str(target / 'state/cointos.json'))
     write_runtime_knowledge()
     units.mkdir(parents=True, exist_ok=True)
-    for template in (source / 'systemd').glob('*.service'):
-        rendered = template.read_text().replace('@ROOT@', str(target)).replace('@HOME@', str(Path.home()))
-        (units / template.name).write_text(rendered)
+    for name, rendered in rendered_units.items():
+        (units / name).write_text(rendered)
     executable = Path.home() / '.local/bin/cointos'
     executable.parent.mkdir(parents=True, exist_ok=True)
     executable.unlink(missing_ok=True)
     executable.symlink_to(target / 'bin/cointos')
     run('systemctl', '--user', 'daemon-reload')
     run('systemctl', '--user', 'enable', 'cointosd.service', 'cointos-coin.service')
+    from cointos.repair import supersede_installation
+    supersede_installation(target)
     if live:
         run('systemctl', '--user', 'start', 'cointosd.service')
         restart_needed[0] = False

@@ -80,7 +80,8 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         return now - max(t["waiting_since"], h["since"] + slice_seconds, slot(config, now) * slice_seconds)
 
     def beaten(h, t):  # h holds on past its slice although t won this slot's draw against it
-        return (h["class"] == t["class"] and not h["reading"] and draw(config, t, now) > draw(config, h, now)
+        return (h["class"] == t["class"] and (not h["reading"] or h.get("read_checkpoint"))
+                and draw(config, t, now) > draw(config, h, now)
                 and overdue(h, t) > limits["preempt_seconds"])
 
     check("no agent starves", [
@@ -107,6 +108,10 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
 
     check("no item waits on a dead dependency", [f"{item}: {problem}" for item, problem
                                                   in (ledger.get("dependency_problems") or {}).items()])
+    check('blocked work has a recovery owner', [f"{row['item']}: no active recovery or corrective handoff"
+          for row in ledger.get('work_frontier', [])
+          if not ledger.get('paused') and row['status'] == 'blocked' and not row.get('held_by')
+          and not row.get('admission_hold') and not row.get('owner') and not row.get('continuations')])
     check("event journal writable", [ledger["journal_error"]] if ledger.get("journal_error") else [])
 
     measured = ledger.get("memory") or {}

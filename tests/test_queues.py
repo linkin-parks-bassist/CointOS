@@ -32,17 +32,16 @@ class Queue(unittest.TestCase):
         return queues.records()[f"p:{name}"]
 
     def failed(self, name, brief=None):
-        """A record whose worker item failed: it awaits its one managerial recovery pass."""
+        """A record whose worker item failed: it awaits its one recovery controller."""
         record = self.add(name, brief)
         task = tasks.create("item", self.project, name, record["brief"], [4], item=name, record_version=record["version"])
         lifecycle.fail(task, "worker gave up")
         return record
 
     def stuck(self, name, brief=None):
-        """A failed item whose manager also gave up: blocked for good."""
+        """A failed item whose controller also gave up: blocked at this assignment version."""
         record = self.failed(name, brief)
-        manager = tasks.create("decompose", self.project, f"decompose-{name}", "Fix it", [3], item=name,
-                               record_version=record["version"])
+        manager, _ = tasks.request_repair(state.L["tasks"][queues.key(record)])
         lifecycle.fail(manager, "manager gave up")
         return record
 
@@ -51,16 +50,16 @@ class State(Queue):
     """Where a record stands is derived from its tasks; only `done` is stored."""
 
     def test_a_new_record_is_queued(self):
-        self.assertEqual(queues.state(self.add("a")), {"status": "queued", "blocker": None, "decompose": False})
+        self.assertEqual(queues.state(self.add("a")), {"status": "queued", "blocker": None, "recoverable": False})
 
     def test_a_failed_item_awaits_its_manager_then_a_failed_manager_blocks_it(self):
         record = self.failed("a")
         found = queues.state(record)
-        self.assertEqual((found["status"], found["decompose"]), ("blocked", True))
+        self.assertEqual((found["status"], found["recoverable"]), ("blocked", True))
         self.assertIn("worker gave up", found["blocker"])
         self.stuck("b")
         found = queues.state(queues.records()["p:b"])
-        self.assertEqual((found["status"], found["decompose"], found["blocker"]), ("blocked", False, "manager gave up"))
+        self.assertEqual((found["status"], found["recoverable"], found["blocker"]), ("blocked", False, "manager gave up"))
 
     def test_a_revision_makes_the_failed_task_history(self):
         record = self.failed("a")
@@ -80,8 +79,41 @@ class State(Queue):
     def test_the_served_view_carries_each_records_state(self):
         self.failed("a")
         view = queues.view()["p:a"]
-        self.assertEqual((view["status"], view["decompose"]), ("blocked", True))
+        self.assertEqual((view["status"], view["recoverable"]), ("blocked", True))
         self.assertNotIn("status", queues.records()["p:a"], "the stored record holds no state")
+
+    def test_new_queue_record_cannot_claim_existing_maintenance_task_identity(self):
+        for kind, base in (("garden", "garden"), ("tree-audit", "tree-audit")):
+            with self.subTest(kind=kind):
+                maintenance = tasks.create(kind, self.project, base, "Maintain the owned tree", [6])
+                name = maintenance["id"].partition(":")[2]
+                with self.assertRaisesRegex(ValueError, "already|used|task|identity"):
+                    self.add(name, "A new product assignment")
+                self.assertNotIn(maintenance["id"], queues.records())
+                self.assertIs(state.L["tasks"][maintenance["id"]], maintenance)
+
+    def test_identical_queue_retry_and_revision_reuse_their_owned_task_identity(self):
+        worker = support.queued(self.project, "owned", "Original concern")
+        record = queues.records()[worker["record"]]
+        before = copy.deepcopy(record)
+        self.assertEqual(queues.add(self.project, "queued", "owned", "Original concern"), "owned")
+        self.assertEqual(record, before)
+        lifecycle.revise(worker["id"], "user", "Corrected the concern", "Corrected assignment")
+        self.assertEqual(record["version"], 2)
+        self.assertIs(queues.current(record), worker)
+        self.assertEqual((worker["id"], worker["brief"], worker["record_version"]),
+                         ("p:owned", "Corrected assignment", 2))
+        self.assertEqual(queues.add(self.project, "queued", "owned", "Corrected assignment"), "owned")
+
+    def test_cancelled_task_history_cannot_be_requeued_as_a_fresh_version_one(self):
+        worker = support.queued(self.project, "old", "Old concern")
+        lifecycle.cancel([worker["record"]], "user", "User withdrew the old concern")
+        self.assertNotIn(worker["record"], queues.records())
+        self.assertTrue(worker.get("cancelled"))
+        with self.assertRaisesRegex(ValueError, "already|used|task|identity"):
+            self.add("old", "Different new concern")
+        self.assertNotIn(worker["record"], queues.records())
+        self.assertIs(state.L["tasks"][worker["id"]], worker)
 
 
 class Readiness(Queue):
@@ -105,31 +137,48 @@ class Readiness(Queue):
         self.add("b", "Depends on: a\nB")
         self.assertIn("blocked", self.ready()["b"])
 
+    def test_dependency_alert_survives_restart_and_rearms_after_resolution(self):
+        record = self.add("b", "Depends on: missing\nB")
+        spawner.refresh()
+        alerts = copy.deepcopy(state.L["alerts"])
+        restarted = state.fresh(copy.deepcopy(state.L))
+        state.L.clear()
+        state.L.update(restarted)
+        record = queues.records()["p:b"]
+        spawner.refresh()
+        self.assertEqual(state.L["alerts"], alerts)
+        queues.revise(record, "B without prerequisites.")
+        spawner.refresh()
+        self.assertEqual(state.L["dependency_problems"], {})
+        queues.revise(record, "Depends on: missing\nB")
+        spawner.refresh()
+        self.assertEqual(len(state.L["alerts"]), len(alerts) + 1)
+
     def test_a_cycle_is_a_problem(self):
         self.add("a", "Depends on: b\nA")
         self.add("b", "Depends on: a\nB")
         self.assertIn("cycle", self.ready()["a"])
         self.assertIn("cycle", self.ready()["b"])
 
-    def test_a_dependency_awaiting_decomposition_keeps_dependents_waiting(self):
+    def test_a_dependency_awaiting_recovery_keeps_dependents_waiting(self):
         self.failed("a")
         self.add("b", "Depends on: a\nB")
         self.assertEqual(self.ready()["b"], "waiting")
 
 
 class Admission(Queue):
-    """Queue order is priority, and a failed worker item dispatches one manager."""
+    """Queue order is priority, and a failed worker item dispatches one controller."""
 
     def test_the_first_entry_runs_first(self):
         self.add("urgent", "Now.")
         self.add("later", "Later.")
         self.assertEqual(spawner.next_task()["id"], "p:urgent")
 
-    def test_a_failed_item_dispatches_a_manager_once(self):
+    def test_a_failed_item_dispatches_a_controller_once(self):
         self.failed("big", "Big.")
         self.add("after", "Depends on: big\n\nAfter.")
         task = spawner.next_task()
-        self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("decompose", "manager", "big", "p:big"))
+        self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("operator", "operator", "big", None))
         self.assertIn("worker gave up", task["brief"])
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
         task["status"] = "running"
@@ -168,18 +217,18 @@ class Admission(Queue):
         queues.add(self.project, "queued", "bad", "Relies on: pigen_present, pigen_pres, other.h::pigen_presently, nope.h\nTest.",
                    "test-contract")
         task = spawner.next_task()
-        self.assertEqual((task["kind"], task["item"]), ("decompose", "bad"), "the refused item's manager runs next")
+        self.assertEqual((task["kind"], task["item"]), ("operator", "bad"), "the refused item's manager runs next")
         refused = state.L["tasks"]["p:bad"]
         self.assertEqual((refused["status"], refused["runs"]), ("failed", 0), "no worker run was spent")
         found = queues.state(state.L["queue"]["p:bad"])
-        self.assertEqual((found["status"], found["decompose"]), ("blocked", True))
+        self.assertEqual((found["status"], found["recoverable"]), ("blocked", True))
         self.assertIn("pigen_pres, nope.h, absent on main", found["blocker"])
 
     def test_a_brief_relying_on_present_apis_dispatches(self):
         (self.repo / "api.h").write_text("int pigen_present(void);\n")
         support.commit(self.repo, "api")
         queues.add(self.project, "queued", "good",
-                   "Relies on: pigen_present, wrong/file.c::pigen_present, api.h\nTest.", "test-contract")
+                   "Relies on: pigen_present., `wrong/file.c::pigen_present`; , `api.h`.\nTest.", "test-contract")
         self.assertEqual(spawner.next_task()["id"], "p:good")
 
     def test_api_queue_is_durable_on_restart_and_never_writes_project(self):
@@ -226,11 +275,10 @@ class Admission(Queue):
         with self.assertRaisesRegex(ValueError, "not running"):
             api.dispatch("replace", {"caller": support.caller(task, "someone"), "children": ["small"]})
         support.running(task, "manager-1")
-        api.dispatch("replace", {"caller": support.caller(task, "manager-1"), "children": ["small"]})
+        result = api.dispatch("replace", {"caller": support.caller(task, "manager-1"), "children": ["small"]})
         self.assertEqual(state.L["queue"]["p:after"]["depends"], ["small"])
         self.assertEqual(queues.status(state.L["queue"]["p:big"]), "replaced")
-        task["branch"] = None
-        lifecycle.submit(task["id"], "manager-1", "complete", "Split into small")
+        self.assertEqual((task['status'], result['receipt']['disposition']), ('done', 'complete'))
         self.assertEqual(queues.landed("p"), set(), "replaced, never accepted")
 
     def test_a_child_naming_its_parent_inherits_the_parents_dependencies(self):
@@ -242,6 +290,49 @@ class Admission(Queue):
         self.assertEqual(state.L["queue"]["p:a"]["depends"], ["base"])
         self.assertEqual(state.L["queue"]["p:b"]["depends"], ["a"])
         self.assertEqual(state.L["queue"]["p:after"]["depends"], ["a", "b"])
+
+    def test_replacement_keeps_dependency_metadata_and_dispatched_briefs_consistent(self):
+        queues.finish(self.add("base"))
+        parent = self.failed("big", "Depends on: base\nBig")
+        child = self.add("small", "Summary: Implements a smaller slice of the requested behavior.\n"
+                         "**Depends on:** `big`\nRelies on: existing_api\nKeep this narrative.")
+        after = self.add("after", "Depends on: big\nAfter")
+        changed = queues.replace(parent, ["small"], "split")
+        self.assertEqual(set(changed), {"p:small", "p:after"})
+        self.assertEqual(child["version"], 2)
+        self.assertEqual(queues.depends(child["brief"]), ["base"])
+        self.assertIn("Relies on: existing_api\nKeep this narrative.", child["brief"])
+        worker = spawner.dispatch("item", self.project, child, [4])
+        self.assertEqual((worker["brief"], worker["record_version"]), (child["brief"], 2))
+        queues.revise(after, after["brief"])
+        self.assertEqual(after["depends"], ["small"])
+        self.assertEqual(queues.readiness(queues.live("p"), queues.landed("p"))["after"], "waiting")
+
+    def test_replacement_preserves_terminal_history_and_explicit_holds(self):
+        parent = self.failed("big")
+        self.add("small")
+        accepted = self.add("old", "Depends on: big\nOld")
+        queues.finish(accepted)
+        held = self.add("after", "Depends on: big\nAfter")
+        held["held_by"] = "user"
+        before = copy.deepcopy(accepted)
+        self.assertEqual(queues.replace(parent, ["small"], "split"), ["p:after"])
+        self.assertEqual(accepted, before)
+        self.assertEqual(held["held_by"], "user")
+
+    def test_replacement_preflight_rejection_changes_no_records(self):
+        parent = self.failed("big")
+        self.add("small")
+        self.add("after", "Depends on: big\nAfter")
+        before = copy.deepcopy(queues.records())
+
+        def reject(changed):
+            self.assertEqual(changed, ["p:after"])
+            raise ValueError("an integration is reviewing the affected assignment")
+
+        with self.assertRaisesRegex(ValueError, "integration"):
+            queues.replace(parent, ["small"], "split", preflight=reject)
+        self.assertEqual(queues.records(), before)
 
     def test_the_user_supersedes_blocked_work_without_accepting_it(self):
         self.stuck("old")

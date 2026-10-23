@@ -136,6 +136,12 @@ class Checks(unittest.TestCase):
                                             thought("b", "background", waiting_since=0)])
         self.assertNotIn("no agent starves", self.failing(state, now=500))
 
+    def test_checkpointed_reader_must_apply_a_winning_peer_draw(self):
+        now = self.slot_where(lambda b, a: b > a)
+        reader = {**thought("a", "background", lane=0, reading=True), "read_checkpoint": True}
+        state = ledger([lane(holder="a")], [reader, thought("b", "background", waiting_since=0)])
+        self.assertIn("no agent starves", self.failing(state, now=now))
+
     def test_a_lane_kept_for_an_agent_is_not_idle(self):
         kept = {**lane(), "held_for": "x", "held_class": "background", "held_until": 110}
         self.assertEqual(self.failing(ledger([kept], [thought("a", "background", waiting_since=90)])), set())

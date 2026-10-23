@@ -3,8 +3,8 @@
 The policy (`what/is/the/architecture/of/cointos.md`, *The scheduler is pre-emptive*):
 - classes are strict: a higher class takes a lane at once, from a generating holder before a
   reading one (a cold read is displaced only when there is no other lane);
-- among equals, a thought still reading its context keeps its lane until the read is done;
-  a generating holder keeps its lane for `slice_seconds`; after that it and its waiting equals
+- among equals, a reader without a reusable checkpoint keeps its lane; otherwise a holder
+  keeps its lane for `slice_seconds`, counting reads and generation; after that it and its waiting equals
   draw lots each slot (a global `slice_seconds` clock), weighted by their role's
   `scheduler.weights`, and the winner holds the lane for the slot;
 - a tool call yields the lane, but it stays held for its agent for `yield_grace_seconds`, so
@@ -48,14 +48,14 @@ def held_for(lane: dict, now: float) -> str | None:
 
 
 def order(config: dict, thought: dict, lanes: list[dict], now: float) -> tuple:
-    """Earlier is more entitled to a lane: class first; within a class, holders that are reading
-    or inside their slice and agents returning to a lane kept for them, then waiting thoughts and
+    """Earlier is more entitled to a lane: class first; within a class, readers without checkpoints
+    or holders inside their slice and agents returning to a lane kept for them, then waiting thoughts and
     holders whose slice is over, by this slot's draw."""
     klass = rank(config, thought["class"])
     if thought["lane"] is None:
         returning = any(held_for(lane, now) == thought["agent"] for lane in lanes)
         return (klass, 0, 0) if returning else (klass, 1, -draw(config, thought, now))
-    in_slice = thought["reading"] or now - thought["since"] < config["scheduler"]["slice_seconds"]
+    in_slice = (thought["reading"] and not thought.get("read_checkpoint")) or now - thought["since"] < config["scheduler"]["slice_seconds"]
     return (klass, 0, thought["since"]) if in_slice else (klass, 1, -draw(config, thought, now))
 
 

@@ -1,15 +1,17 @@
 [Unit]
 Description=CointOS Coin: the user's Telegram remote control
 After=network-online.target cointosd.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 WorkingDirectory=@ROOT@
 Environment=PYTHONUNBUFFERED=1
+Environment=KT_ACTOR=cointos-coin
 Environment=PATH=@ROOT@/bin:@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/python3 -m cointos.coin
 Restart=always
-RestartSec=3
+RestartSec=@SERVICE_RESTART_SECONDS@
 
 [Install]
 WantedBy=default.target

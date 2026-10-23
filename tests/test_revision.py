@@ -1,9 +1,10 @@
 """Holding and revising queued work: an owner can stop an item from starting while deciding, and
 change what it asks for at any point before acceptance."""
 from pathlib import Path
+import copy
 import unittest
 
-from cointos import api, lifecycle, prompts, queues, spawner, state, tasks
+from cointos import frontier, api, lifecycle, prompts, queues, spawner, state, tasks
 from tests import support
 
 SUMMARY = "\nSummary: Explains this revised task in a few plain words."
@@ -28,6 +29,30 @@ class Revision(unittest.TestCase):
         if start:
             support.running(worker, "worker-1")
         return worker
+
+    def test_agent_repair_cannot_discard_accepted_test_dependencies(self):
+        queues.add(self.project, "queued", "contract", "Test A\nRelies on: a", "test-contract")
+        queues.finish(state.L['queue']['p:contract'], commit='accepted-tests', via='tests')
+        worker = self.worker(brief="Depends on: contract\nImplement A")
+        state.L['queue']['p:impl']['held_by'] = 'user'
+        before = copy.deepcopy(state.L)
+        with self.assertRaisesRegex(ValueError, "discard accepted test packets: contract"):
+            self.as_manager('revise', item='p:impl', brief='Depends on: none\nBuild repaired; resume A',
+                            reason='repair linker setup', dependencies=[])
+        self.assertEqual(state.L, before, 'refusal preserves version, hold, run and artifacts')
+        self.as_manager('revise', item='p:impl', brief='Build repaired; resume A',
+                        reason='repair linker setup', dependencies=['contract'])
+        self.assertEqual(state.L['queue']['p:impl']['depends'], ['contract'])
+        self.assertEqual(state.L['queue']['p:impl']['held_by'], 'user')
+        self.assertEqual(worker['status'], 'waiting')
+
+    def test_user_can_explicitly_withdraw_test_dependency(self):
+        queues.add(self.project, "queued", "contract", "Test A\nRelies on: a", "test-contract")
+        queues.finish(state.L['queue']['p:contract'], commit='accepted-tests', via='tests')
+        self.worker(brief="Depends on: contract\nImplement A", start=False)
+        api.dispatch('revise', {'item': 'p:impl', 'brief': 'Different user-approved contract',
+                               'dependencies': [], 'reason': 'withdraw old requirement'})
+        self.assertEqual(state.L['queue']['p:impl']['depends'], [])
 
     # ------------------------------------------------ cancelling
 
@@ -123,9 +148,55 @@ class Revision(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already held by user"):
             self.as_manager("hold", item="p:impl")
         self.as_manager("revise", item="p:impl", brief="Implement it differently", reason="interface changed")
-        self.assertIsNone(state.L["queue"]["p:impl"]["held_by"], "a revision releases the hold")
+        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
+        self.assertFalse(spawner.next_task(), "a manager revision cannot release user-held work")
+        api.dispatch("revise", {"item": "p:impl", "brief": "A further correction", "reason": "clarify"})
+        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
+        with self.assertRaisesRegex(ValueError, "held by user"):
+            self.as_manager("unhold", item="p:impl")
+        api.dispatch("unhold", {"item": "p:impl"})
+        self.assertEqual(spawner.next_task()["id"], "p:impl")
 
     # ------------------------------------------------ revising
+
+    def test_revision_preserves_another_tasks_hold(self):
+        queues.add(self.project, "queued", "impl", "Implement it")
+        record = state.L["queue"]["p:impl"]
+        record["held_by"] = "p:other-manager"
+        self.as_manager("revise", item="p:impl", brief="Corrected implementation", reason="clarify")
+        self.assertEqual(record["held_by"], "p:other-manager")
+
+    def test_origin_revision_stops_stale_recovery_and_preserves_its_work(self):
+        worker = self.worker(start=False)
+        lifecycle.fail(worker, 'Original assignment blocked')
+        manager, _ = tasks.request_repair(worker)
+        support.running(manager, 'repair-run')
+        artifact = Path(manager['worktree']) / 'preserved-investigation.txt'
+        artifact.write_text('unfinished investigation\n')
+        api.dispatch('revise', {'item': worker['id'], 'brief': 'Corrected assignment', 'reason': 'False premise'})
+        self.assertEqual(manager['status'], 'failed')
+        self.assertTrue(manager.get('cancelled'))
+        self.assertNotIn('repair-run', state.L['agents'])
+        self.assertEqual(artifact.read_text(), 'unfinished investigation\n')
+        self.assertEqual(state.L['queue'][worker['id']]['version'], 2)
+        self.assertEqual(worker['status'], 'waiting')
+        self.assertEqual(spawner.next_task()['id'], worker['id'])
+
+    def test_recovery_can_finish_its_own_revision_but_legacy_foreign_revision_expires(self):
+        worker = self.worker(start=False)
+        lifecycle.fail(worker, 'Original assignment blocked')
+        manager, _ = tasks.request_repair(worker)
+        support.running(manager, 'repair-run')
+        api.dispatch('revise', {'item': worker['id'], 'brief': 'Corrected assignment' + SUMMARY,
+                               'reason': 'Verified correction', 'caller': support.caller(manager, 'repair-run')})
+        self.assertEqual(manager['status'], 'running')
+        self.assertFalse(frontier.obsolete(manager))
+        # A retained authority written by an older daemon can contain the same stale relation.
+        state.L['queue'][worker['id']]['revised_by'] = 'user'
+        self.assertFalse(spawner.runnable(manager, {}))
+        lifecycle.reconcile()
+        self.assertEqual(manager['status'], 'failed')
+        self.assertTrue(manager.get('cancelled'))
 
     def test_brief_revision_preserves_construction_metadata_unless_explicitly_changed(self):
         worker = support.queued(self.project, "contract", "Write tests\nRelies on: code.py", stage="test-contract",
@@ -231,6 +302,51 @@ class Revision(unittest.TestCase):
                 self.as_manager("revise", item="p:impl", **body)
         self.assertEqual(state.L["queue"]["p:impl"]["brief"], "Implement it")
 
+    def test_superseding_rebases_existing_assignments_and_preserves_work_and_holds(self):
+        parent = support.queued(self.project, "old", "Old")
+        parent.update(status="failed", note="needs replacement")
+        queues.add(self.project, "queued", "new", "Replacement")
+        worker = self.worker("after", "Depends on: old\nKeep this work" + SUMMARY)
+        path = Path(worker["worktree"]) / "artifact.txt"
+        path.write_bytes(b"uncommitted work\0")
+        worker["session"] = "old-session"
+        record = state.L["queue"][worker["record"]]
+        record["held_by"] = "user"
+        worker["admission_hold"] = "explicit kill"
+        integration = tasks.create("integrate", self.project, "integrate-after", worker["brief"], [2],
+                                   worker=worker["id"])
+        integration.update(session="old-review", admission_hold="review paused")
+        api.dispatch("supersede", {"task": parent["id"], "replacements": ["new"], "reason": "repair dependency"})
+        self.assertEqual(record["depends"], ["new"])
+        self.assertEqual(queues.depends(worker["brief"]), ["new"])
+        self.assertEqual(worker["record_version"], record["version"])
+        self.assertEqual((worker["status"], worker["session"], worker["runs"]), ("waiting", None, 0))
+        self.assertNotIn("worker-1", state.L["agents"])
+        self.assertEqual(path.read_bytes(), b"uncommitted work\0")
+        self.assertEqual((record["held_by"], worker["admission_hold"]), ("user", "explicit kill"))
+        self.assertEqual((integration["brief"], integration["session"], integration["admission_hold"]),
+                         (record["brief"], None, "review paused"))
+        version = record["version"]
+        api.dispatch("supersede", {"task": parent["id"], "replacements": ["new"], "reason": "repair dependency"})
+        self.assertEqual(record["version"], version, "lost-reply retry must not reset it again")
+
+    def test_replacement_refuses_active_validation_before_any_graph_change(self):
+        import copy
+        parent = support.queued(self.project, "old", "Old")
+        parent.update(status="failed", note="needs replacement")
+        queues.add(self.project, "queued", "new", "Replacement")
+        worker = self.worker("after", "Depends on: old\nKeep this work" + SUMMARY, start=False)
+        for mode in ("validation", "integration"):
+            with self.subTest(mode=mode):
+                worker["validating"] = mode == "validation"
+                integration = tasks.create("integrate", self.project, "review-after-" + mode,
+                                           worker["brief"], [2], worker=worker["id"])
+                integration["status"] = "running" if mode == "integration" else "waiting"
+                before = copy.deepcopy(state.L["queue"])
+                with self.assertRaisesRegex(ValueError, "no records changed"):
+                    api.dispatch("supersede", {"task": parent["id"], "replacements": ["new"], "reason": "repair"})
+                self.assertEqual(state.L["queue"], before)
+
     # ------------------------------------------------ rights
 
     def test_only_the_owning_projects_manager_or_user_decides(self):
@@ -248,6 +364,68 @@ class Revision(unittest.TestCase):
             api.dispatch("hold", {"item": "impl"})
         api.dispatch("hold", {"item": "p:impl"})  # the user
         self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
+
+    def test_same_project_qualified_dependencies_normalize_brief_metadata_and_retry_aliases(self):
+        queues.add(self.project, 'queued', 'base', 'Build the base')
+        qualified = 'Depends on: p:base, base, p:later, later\nImplement after both prerequisites.' + SUMMARY
+        result = self.as_manager('queue', project='p', kind='queued', name='qualified', brief=qualified)
+        record = state.L['queue']['p:' + result['item']]
+        self.assertEqual(record['depends'], ['base', 'later'])
+        self.assertEqual(queues.line(record['brief'], 'Depends on'), 'base, later')
+        self.assertNotIn('p:base', record['brief'])
+        # Equivalent caller spelling is one proposal, including lost-response retries.
+        repeated = self.as_manager('queue', project='p', kind='queued', name='qualified',
+                                   brief=qualified.replace('p:base, base, p:later, later', 'base, later'))
+        self.assertEqual(repeated, result)
+        self.assertEqual(record['version'], 1)
+        self.assertEqual(record['proposed_by'], self.manager['id'])
+        readiness = lambda: queues.readiness(queues.live('p'), queues.landed('p'))['qualified']
+        self.assertEqual(readiness(), 'depends on unknown later')
+        queues.add(self.project, 'queued', 'later', 'Build the forward prerequisite')
+        self.assertEqual(readiness(), 'waiting')
+        queues.finish(state.L['queue']['p:base'])
+        queues.finish(state.L['queue']['p:later'])
+        self.assertEqual(readiness(), 'ready')
+
+    def test_revising_running_item_normalizes_same_project_dependencies_in_task_and_record(self):
+        worker = self.worker()
+        queues.add(self.project, 'queued', 'base', 'Build the base')
+        self.as_manager('revise', item='p:impl', reason='Use the corrected prerequisite',
+                        brief='Depends on: p:base, base, p:later\nImplement the corrected brief.')
+        record = state.L['queue']['p:impl']
+        self.assertEqual(record['depends'], ['base', 'later'])
+        self.assertEqual(queues.line(record['brief'], 'Depends on'), 'base, later')
+        self.assertEqual(worker['brief'], record['brief'])
+        self.assertEqual(worker['record_version'], 2)
+        self.assertEqual(record['version'], 2)
+        self.assertEqual(worker['status'], 'waiting')
+        self.assertNotIn('worker-1', state.L['agents'])
+
+    def test_foreign_and_malformed_qualified_dependencies_refuse_before_any_mutation(self):
+        worker = self.worker()
+        source = Path(worker['worktree']) / 'preserved-source.txt'
+        source.write_bytes(b'Uncommitted fixture work must survive refusal.\n')
+        original_bytes = source.read_bytes()
+        rejected = ('q:base', ':base', 'p:', 'p::base', 'p:base:extra', 'p:none', 'p:base/item', 'p:base name')
+        for held in (False, True):
+            if held:
+                self.as_manager('hold', item='p:impl')
+            for dependency in rejected:
+                for action in ('queue', 'revise'):
+                    with self.subTest(held=held, dependency=dependency, action=action):
+                        before = copy.deepcopy(state.L)
+                        body = {'brief': 'Depends on: ' + dependency + '\nDo the checked work.' + SUMMARY}
+                        if action == 'queue':
+                            body.update(project='p', kind='queued', name='refused')
+                        else:
+                            body.update(item='p:impl', reason='Check prerequisite identity before revising')
+                        with self.assertRaises(ValueError):
+                            self.as_manager(action, **body)
+                        self.assertEqual(state.L, before, 'refusal changed a hold, run, brief, version or queue record')
+                        self.assertEqual(source.read_bytes(), original_bytes)
+            self.assertEqual(worker['status'], 'waiting' if held else 'running')
+            self.assertEqual(state.L['queue']['p:impl']['held_by'], self.manager['id'] if held else None)
+
 
 
 if __name__ == "__main__":

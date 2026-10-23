@@ -3,6 +3,23 @@ from __future__ import annotations
 
 import re
 import subprocess
+import hashlib
+from pathlib import Path
+
+
+def prepare(root) -> None:
+    """Register an existing checkout tree before its tools enter the write boundary.
+
+    kt add registers unregistered local trees. That administrative write belongs to
+    the launcher, not the confined author. Registration keeps ask policy and grants
+    no access to other projects; existing policy is left intact by kt.
+    """
+    root = Path(root).resolve()
+    tree = root / '.knowledge'
+    if tree.is_dir():
+        name = 'root-' + hashlib.sha256(str(tree).encode()).hexdigest()[:12]
+        subprocess.run(['kt', 'register', name, str(tree)], cwd=root,
+                       check=True, capture_output=True, text=True)
 
 
 def write(root, question: str, body: str) -> bool:

@@ -1,14 +1,16 @@
 import json
 import socket
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from unittest.mock import patch
 
-from cointos import api, checks, cli, daemon, gateway, spawner, state
+from cointos import api, checks, cli, daemon, gateway, git, landing, lifecycle, recovery, spawner, state
 from tests import support
+from tests.test_landing import Project
 
 
 class LiveRestart(unittest.TestCase):
@@ -58,6 +60,11 @@ class LiveRestart(unittest.TestCase):
             client.join(10)
         pending.join(10)
         self.assertEqual(result, [{'finished': True}, {'finished': True}])
+        # Receiving the bytes precedes the server's finally block which releases
+        # its request count. Wait for that distinct boundary before testing drain.
+        deadline = time.monotonic() + 2
+        while state.ACTIVE['chats'] and time.monotonic() < deadline:
+            time.sleep(.001)
         self.assertTrue(api.dispatch('prepare-restart', {})['ready'])
         self.assertFalse(state.fresh(state.L)['restarting'])
         api.dispatch('cancel-restart', {})
@@ -116,6 +123,74 @@ class LiveRestart(unittest.TestCase):
             daemon.shutdown()
         self.assertEqual(calls, ['persist', 'save'])
         self.assertEqual(state.L['history'][-1]['event'], 'shutdown step failed')
+
+
+class PublishedRestart(Project):
+    def test_published_receipt_settles_before_exhausted_surviving_run_is_adopted(self):
+        integration, candidate, submitted = self.landing()
+        integration['fresh_retries'] = state.CONFIG['recovery']['fresh_retries']
+        agent = state.L['agents']['integrator-1']
+        agent['generation_tokens'] = integration['budget']['generation_tokens']
+        durable = []
+        publish = git.publish
+        class ProcessLoss(BaseException):
+            pass
+        def interrupted(*args):
+            publish(*args)
+            raise ProcessLoss()
+        with patch.object(landing, 'save', side_effect=lambda: durable.append(json.loads(json.dumps(state.L)))), \
+                patch.object(git, 'publish', side_effect=interrupted):
+            with self.assertRaises(ProcessLoss):
+                landing.land(integration['id'], candidate, 'integrator-1')
+        previous = durable[-1]
+        self.assertEqual(previous['tasks'][self.worker['id']]['status'], 'review')
+        self.assertEqual(self.main(), candidate)
+        observed = []
+        def adopt(recorded):
+            # A surviving follower may report exhaustion as soon as adoption
+            # starts. Acceptance must already be durable at this boundary.
+            observed.append(state.L['tasks'][self.worker['id']]['status'])
+            state.L['agents'].update(recorded['agents'])
+            for run, restored in recorded['agents'].items():
+                daemon.keys.adopt(run, restored['class'], daemon.keys.recorded()[run])
+            recovery.enforce()
+        saved = []
+        state.L.clear()
+        import tempfile
+        from pathlib import Path
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        keyfile = Path(directory) / 'keys.json'
+        keyfile.write_text(json.dumps({'coin': 'fixture-coin', 'agents': {run: 'fixture-' + run for run in previous['agents']}}))
+        import subprocess
+        real_run = subprocess.run
+        def native(command, **options):
+            if command[0] != 'systemctl':
+                return real_run(command, **options)
+            self.assertEqual(command[:3], ['systemctl', '--user', 'show'])
+            run = command[3].removeprefix('cointos-agent-').removesuffix('.service')
+            self.assertIn(run, previous['agents'])
+            return subprocess.CompletedProcess(command, 0,
+                'ActiveState=active\nMainPID=202\nInvocationID=fixture-'+run+'\nLoadState=loaded\n', '')
+        with patch.object(daemon.keys, 'KEYS', keyfile), \
+                patch.object(subprocess, 'run', side_effect=native), \
+                patch.dict(daemon.keys.ISSUED, {}, clear=True), \
+                patch.dict(daemon.keys.OWNERS, {}, clear=True), \
+                patch.object(daemon.runs, 'adopt', side_effect=adopt), \
+                patch.object(daemon.snapshots, 'recover_transfers'), patch.object(daemon.snapshots, 'forget_orphans'), \
+                patch.object(daemon.snapshots, 'forget_untracked'), \
+                patch.object(lifecycle, 'save', side_effect=lambda: saved.append(json.loads(json.dumps(state.L)))), \
+                patch.object(daemon, 'save', side_effect=lambda: saved.append(json.loads(json.dumps(state.L)))), \
+                patch.object(recovery, 'packet', return_value='exhausted surviving run'):
+            daemon.restore(previous)
+        self.assertEqual(observed, ['done'])
+        worker = state.L['tasks'][self.worker['id']]
+        settled = state.L['tasks'][integration['id']]
+        self.assertEqual(worker['acceptance']['commit'], candidate)
+        self.assertEqual(worker['acceptance']['worker_commit'], submitted)
+        self.assertEqual(settled['receipt']['run'], 'integrator-1')
+        self.assertEqual(settled['receipt']['disposition'], 'complete')
+        self.assertEqual(saved[0]['queue'][worker['record']]['done']['commit'], candidate)
+        self.assertEqual(lifecycle.recover_landings(), 0)
 
 
 class Silence(unittest.TestCase):

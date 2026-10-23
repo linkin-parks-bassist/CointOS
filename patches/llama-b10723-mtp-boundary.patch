@@ -1,0 +1,50 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -4057,8 +4057,6 @@
+                     SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
+                 }
+ 
+-                common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+-
+                 slot.spec_draft = std::move(accepted);
+             }
+ 
+@@ -4110,6 +4108,7 @@
+                     // can occur before all of it is returned. Keep the final
+                     // returned token pending, exactly as non-speculative decoding
+                     // does, so the next request can extend this reusable state.
++                    size_t n_keep_accepted = ids.size() - 1;
+                     const size_t n_tail = ids.size() - 1 - i;
+                     const size_t n_rollback = n_draft + 1 - ids.size() + n_tail;
+                     auto can_remove = [&](llama_context * ctx, common_context_seq_rm_type type) {
+@@ -4119,8 +4118,10 @@
+                     if (n_tail > 0 && can_remove(slot.ctx_tgt, ctx_tgt_seq_rm_type) &&
+                             (!slot.ctx_dft || can_remove(slot.ctx_dft, ctx_dft_seq_rm_type))) {
+                         slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_tail);
++                        n_keep_accepted = i;
+                         SLT_DBG(slot, "removed %zu speculative tokens after stopping\n", n_tail);
+                     }
++                    common_speculative_accept(spec.get(), slot.id, n_keep_accepted);
+                     slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+                     slot.print_timings();
+                     send_final_response(slot);
+@@ -4130,6 +4131,7 @@
+                 }
+             }
+ 
++            common_speculative_accept(spec.get(), slot.id, ids.size() - 1);
+             slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+             slot.print_timings_tg();
+ 
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1537,6 +1537,9 @@
+                     continue;
+                 }
+ 
++                if (batch_in.pos[i_batch_beg[seq_id]] == 0) {
++                    std::fill(pending_h[seq_id].begin(), pending_h[seq_id].end(), 0.0f);
++                }
+                 set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
+             }
+ 

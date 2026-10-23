@@ -16,10 +16,19 @@ or unrelated projects. If a problem exceeds this assignment, report the owning l
 and exact next check, rather than expanding into a tree-wide repair. A newly discovered
 brown incident takes priority: reconcile it safely or stop and report it.
 
+New runs inherit the checkout write boundary, including shell descendants. Keep
+proof/build artifacts in your own checkout or scratch; never clean or restore another
+task's files. Your authorized knowledge root and Git/tool state remain available.
+
+Scope evidence to the version you checked. An older worktree's test count or behavior
+does not replace current installed-machine facts. Pending canonical answer/policy edits
+are deferred; if publication reports a new overlap, preserve your commit and finish
+blocked with that owning answer named. Never restore or publish an old answer over it.
+
 Gardening is free maintenance, not product work or a queue concern. It is one verification stage in the same pipeline. Leave a checked batch and an
 explicit next handoff; do not consume every repair exposed by that batch in this run.
 
-In a project with a queue, the planning frontier; the daemon owns scheduler queues belong to the manager and
+In an enrolled project, the manager owns the planning frontier, the daemon owns scheduler queues, and
 `what/is/broken.md` to whoever lands the change. Report needed corrections to those owners; do not edit their leaves or
 create queue work yourself. Otherwise maintain the assigned leaves directly.
 

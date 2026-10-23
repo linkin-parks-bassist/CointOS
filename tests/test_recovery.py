@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cointos import api, journal, lifecycle, opencode, prompts, queues, recovery, state, tasks
+from cointos import api, config, journal, lifecycle, opencode, prompts, queues, recovery, schema, spawner, state, tasks
 from tests import support
 
 
@@ -57,12 +57,14 @@ class Replacement(unittest.TestCase):
 
 
 class Budgets(unittest.TestCase):
-    """Generation alone is charged; exhaustion ends the run, and the assignment continues fresh a
-    bounded number of times."""
+    """Generation is charged; fresh budget funding is explicit role policy."""
 
     def setUp(self):
         support.fresh_ledger(self)
         support.quiet(self)
+        # Exercise the opt-in bounded retry policy independently of production defaults.
+        self.enterContext(patch.dict(state.CONFIG['recovery']['role_fresh_retries'],
+                                    worker=state.CONFIG['recovery']['fresh_retries']))
         self.project = support.project(self, support.repository(self))
         self.task = support.running(support.queued(self.project, "item"), "worker-1")
         self.task["session"] = "old"
@@ -91,6 +93,28 @@ class Budgets(unittest.TestCase):
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
 
+    def test_production_worker_default_preserves_work_and_hands_exhaustion_to_manager(self):
+        configured = config.load()['recovery']['role_fresh_retries']
+        self.assertEqual(schema.fresh_limit({'recovery': {'role_fresh_retries': configured,
+                                                        'fresh_retries': 2}}, self.task), 0)
+        with patch.dict(state.CONFIG['recovery']['role_fresh_retries'], configured):
+            artifact = Path(self.task['worktree']) / 'partial.c'
+            artifact.write_text('preserved unfinished work\n')
+            self.spend(seconds=self.task['budget']['generation_seconds'])
+            self.assertEqual(self.task['status'], 'failed')
+            self.assertEqual(self.task['session'], 'old')
+            self.assertIsNone(self.task['receipt'])
+            self.assertFalse(self.task.get('fresh_retries'))
+            self.assertEqual(artifact.read_text(), 'preserved unfinished work\n')
+            self.assertIn('partial.c', self.task['recovery_context'])
+            self.assertTrue(queues.state(state.L['queue']['p:item'])['recoverable'])
+            state.L['paused'] = False
+            with patch.object(spawner, 'periodic', return_value=[]), patch.object(spawner, 'tree_work', return_value=[]):
+                manager = spawner.next_task()
+            self.assertEqual(manager['kind'], 'operator')
+            self.assertEqual(manager['repair_origin']['task'], self.task['record'])
+            self.assertEqual(self.task['runs'], 1, 'no second worker run was funded')
+
     def test_an_overrunning_worker_item_continues_and_its_finished_work_can_still_be_submitted(self):
         (Path(self.task["worktree"]) / "done.txt").write_text("finished, never committed\n")
         self.spend(seconds=self.task["budget"]["generation_seconds"])
@@ -111,7 +135,7 @@ class Budgets(unittest.TestCase):
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
         found = queues.state(state.L["queue"][f"{self.project['name']}:item"])
-        self.assertTrue(found["decompose"])
+        self.assertTrue(found["recoverable"])
         self.assertIn("the memo owns fire identity", found["blocker"])
         self.assertIn(self.task["branch"], found["blocker"])
 
@@ -219,6 +243,7 @@ class Journal(unittest.TestCase):
         with patch.object(journal, "STATE", root):
             for i in range(30):
                 journal.write({"at": i, "event": "test", "task": "p:t", "prompt": "private"}, 300)
+            journal.flush()
         files = list(root.iterdir())
         self.assertEqual(len(files), 2)
         for path in files:

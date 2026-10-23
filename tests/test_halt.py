@@ -35,10 +35,38 @@ class Halt(unittest.TestCase):
         api.dispatch("halt", {})  # a repeated request cannot refund the same run twice
         self.assertEqual(task["runs"], 4)
 
+    def test_coin_reports_its_turns_for_its_card(self):
+        from cointos import gateway
+        api.dispatch("coin", {"busy": True, "doing": "status"})
+        gateway.show("coin", {"reasoning": "checking", "content": "", "phase": "reasoning"})
+        coin = self.saved()["coin"] | {"live": state.L["coin"]["live"]}
+        self.assertEqual((coin["busy"], coin["doing"], coin["live"]["reasoning"]), (True, "status", "checking"))
+        api.dispatch("coin", {"busy": False})
+        coin = self.saved()["coin"]
+        self.assertEqual((coin["busy"], coin["doing"], coin["live"]["reasoning"]), (False, None, "checking"))
+        self.assertIsNotNone(coin["last_turn_at"])
+        api.dispatch("coin", {"busy": True})
+        self.assertEqual(self.saved()["coin"]["live"], {})
+
     def test_halt_preserves_an_existing_pause(self):
         state.L["paused"] = True
         api.dispatch("halt", {})
         self.assertTrue(self.saved()["paused"])
+
+    def test_coin_activity_clock_changes_only_with_activity_and_gpu_resets_per_turn(self):
+        with patch.object(api, 'now', return_value=100):
+            api.dispatch('coin', {'busy': True, 'doing': 'status'})
+        state.L['coin']['gpu_seconds'] = 7
+        with patch.object(api, 'now', return_value=110):
+            api.dispatch('coin', {'busy': True, 'doing': 'status'})
+        self.assertEqual(state.L['coin']['doing_since'], 100)
+        self.assertEqual(state.L['coin']['gpu_seconds'], 7)
+        with patch.object(api, 'now', return_value=120):
+            api.dispatch('coin', {'busy': True, 'doing': 'jobs'})
+        self.assertEqual(state.L['coin']['doing_since'], 120)
+        api.dispatch('coin', {'busy': False})
+        api.dispatch('coin', {'busy': True})
+        self.assertEqual(state.L['coin']['gpu_seconds'], 0)
 
     def test_halt_prevents_a_tick_from_admitting_more_work(self):
         api.dispatch("halt", {})

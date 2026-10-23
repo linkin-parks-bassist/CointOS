@@ -1,0 +1,30 @@
+#!/usr/bin/env python3
+"""Create an experimental CointOS-only compaction CLI; never overwrite input.
+
+This copy always emits structured-v1 compaction envelopes. It MUST be paired
+with the CointOS gateway and COINTOS_STRUCTURED_COMPACTION=1 native header hook.
+It is unsuitable as the global OpenCode executable. The guarded source patch
+is patches/opencode-1.18.35-guarded-compaction.patch; this bounded compiled
+prototype is for isolated acceptance until that source is built.
+"""
+import hashlib
+import os
+from pathlib import Path
+import sys
+
+if len(sys.argv) != 3:
+    raise SystemExit("usage: patch-opencode-compaction-prototype INPUT NEW_OUTPUT")
+source, output = map(Path, sys.argv[1:])
+data = source.read_bytes()
+expected = "5f361846b3bab83359e7e71afabf98677252ae07f04bfaae64fe144fe11ac406"
+if hashlib.sha256(data).hexdigest() != expected:
+    raise SystemExit("Executable differs from the inspected attach-fixed 1.18.35; refusing")
+old = b'"compaction",agent:"compaction",variant:a.model.variant,summary:!0,path:{cwd:c.directory,root:c.worktree},cost:0,tokens:{output:0,input:0,reasoning:0,cache:{read:0,write:0}},modelID:q.id,providerID:q.providerID,time:{created:Date.now()}};yield*o.updateMessage(N);let T=yield*h.create({assistantMessage:N,sessionID:w.sessionID,model:q}),v=yield*T.process({user:a,agent:m,sessionID:w.sessionID,tools:{},system:[],messages:[{role:"user",content:[{type:"text",text:[to,...Ve.prompt?["The following is the conversation history:",ze]:[]].filter(Boolean).join(`\n\n`'
+new = b'm.name,agent:m.name,variant:a.model.variant,summary:!0,path:{cwd:c.directory,root:c.worktree},cost:0,tokens:{output:0,input:0,reasoning:0,cache:{read:0,write:0}},modelID:q.id,providerID:q.providerID,time:{created:Date.now()}};yield*o.updateMessage(N);let T=yield*h.create({assistantMessage:N,sessionID:w.sessionID,model:q}),v=yield*T.process({user:a,agent:m,sessionID:w.sessionID,tools:{},system:[],messages:[...(yield*Me.toModelMessagesEffect(xe,q)),{role:"user",content:[{type:"text",text:JSON.stringify({c:to.replace(ze,""),f:to+(Ve.prompt?"\\n\\n"+ze:"")}'
+if data.count(old) != 1 or len(old) != len(new):
+    raise SystemExit("Expected one length-preserving compaction change; refusing")
+patched = data.replace(old, new)
+with output.open("xb") as stream:
+    stream.write(patched)
+os.chmod(output, source.stat().st_mode & 0o777)
+print(hashlib.sha256(patched).hexdigest())

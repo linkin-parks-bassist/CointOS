@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Create a patched copy of the inspected 1.18.35 executable; never overwrite input.
+
+The source change is patches/opencode-1.18.35-attach-events.patch. This bounded
+equivalent edits only its embedded JS, preserving the ELF and bundle offsets.
+An upgrade requires a new source/build review, not a fuzzy pattern replacement.
+"""
+import hashlib
+import os
+from pathlib import Path
+import sys
+
+if len(sys.argv) != 3:
+    raise SystemExit("usage: patch-opencode-attach-events INPUT NEW_OUTPUT")
+source, output = map(Path, sys.argv[1:])
+data = source.read_bytes()
+expected = "77b2cfe4b97df6f15c3673b22100b9f79c711f25ecb9bf513bb82526b15d24fa"
+if hashlib.sha256(data).hexdigest() != expected:
+    raise SystemExit("Executable differs from the inspected 1.18.35 build; refusing")
+old = b"async function K(){if(j.attach)return;if(await _)process.exitCode=1}"
+new = old.replace(b"if(j.attach)return;", b" " * len(b"if(j.attach)return;"))
+if data.count(old) != 1 or len(old) != len(new):
+    raise SystemExit("Expected one length-preserving finish-loop change; refusing")
+patched = data.replace(old, new)
+with output.open("xb") as stream:
+    stream.write(patched)
+os.chmod(output, source.stat().st_mode & 0o777)
+print(hashlib.sha256(patched).hexdigest())

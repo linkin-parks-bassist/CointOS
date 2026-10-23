@@ -36,19 +36,11 @@ class OperatorTasks(unittest.TestCase):
         self.assertIn("cointos stop*", standard["bash"])
         self.assertNotIn("cointos stop*", powerful["bash"])
 
-    def test_private_directories_come_from_a_machine_local_file_and_survive_every_ability(self):
-        import tempfile
-        from pathlib import Path
-        with tempfile.TemporaryDirectory() as tmp:
-            listing = Path(tmp) / "private-paths"
-            listing.write_text("# comment\n\n/srv/secret/\n")
-            with patch.object(opencode, "PRIVATE_PATHS", listing):
-                for abilities in (["standard"], ["control", "network"]):
-                    permission = opencode.settings(state.CONFIG, "key", {"abilities": abilities}, [])["permission"]
-                    for kind in ("external_directory", "read", "edit"):
-                        self.assertEqual(permission[kind]["/srv/secret/**"], "deny")
-            with patch.object(opencode, "PRIVATE_PATHS", Path(tmp) / "absent"):
-                self.assertEqual(opencode.private_paths(), [])
+    def test_no_machine_local_directory_blacklist_is_injected(self):
+        for abilities in (["standard"], ["control", "network"]):
+            permission = opencode.settings(state.CONFIG, "key", {"abilities": abilities}, [])["permission"]
+            self.assertEqual(permission['read'], {'*': 'allow', '*.env': 'deny'})
+            self.assertEqual(permission['edit'], {'*': 'allow'})
 
     def spawner(self, kind: str = "steward") -> dict:
         task = tasks.create(kind, tasks.SYSTEM, kind, "Scout.", [6], budget={"generation_tokens": 1000,

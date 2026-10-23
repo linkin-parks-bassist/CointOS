@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 
-from cointos import scheduler, snapshots
+from cointos import scheduler, snapshots, snapshot_cleanup, performance
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, log, now
 
 RUNS: dict[str, dict] = {}  # thought id -> its tokens and plumbing (kept out of the ledger)
@@ -29,9 +29,8 @@ PROMPTS: dict[str, list[int]] = {}  # task -> the tokens of its last rendered pr
 
 
 def begins(held: list[int] | None, tokens: list[int]) -> bool:
-    """Whether a state holding `held` can go on into `tokens`: the model cannot roll back, so
-    `tokens` must extend it by at least one token."""
-    return bool(held) and len(held) < len(tokens) and tokens[:len(held)] == held
+    """Token-prefix identity, including equality; decode readiness belongs to the backend."""
+    return bool(held) and len(held) <= len(tokens) and tokens[:len(held)] == held
 
 
 def common(a: list[int], b: list[int]) -> int:
@@ -78,16 +77,18 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
                                      "read": 0, "progress_at": now()}
         RUNS[thought_id] = {"prompt": rendered["tokens"], "reader": rendered["reader"], "sampling": sampling,
                             "max": max_new, "generated": [], "queue": queue.Queue(), "cancelled": False,
-                            "shared": rendered.get("shared", [])}
+                            "shared": rendered.get("shared", []),
+                            "retained_prefix": rendered.get('retained_prefix')}
         if klass == "user":
             L["user_last_thought"] = now()
         if owner in L["tasks"]:
             previous, PROMPTS[owner] = PROMPTS.get(owner), rendered["tokens"]
-            # The prompt-end checkpoint holds all but the last token; it is reusable only if the
-            # next prompt begins with it.
+            # Report literal prompt changes; an earlier checkpoint can remain
+            # reusable even when closing template tokens change.
             if previous and not begins(previous[:-1], rendered["tokens"]):
                 threading.Thread(target=report_rewrite, args=(owner, model, previous, rendered["tokens"]),
                                  daemon=True).start()
+        if owner in L["tasks"] or snapshots.coin_conversation(owner):
             snapshots.forget_diverged(owner, model, rendered["tokens"])
         for gone in [task for task in PROMPTS if not snapshots.live(task)]:
             del PROMPTS[gone]
@@ -96,8 +97,10 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
 
 
 def report_rewrite(owner: str, model: str, previous: list[int], tokens: list[int]) -> None:
-    """A task's conversation changed before its last prompt's end, so none of its saved states
-    can be restored: record where, and the text on both sides. Runs outside LOCK."""
+    """Record where a rendered task prompt changed and the text on both sides.
+
+    Shorter compatible snapshots can still be restored. Runs outside LOCK.
+    """
     at = common(previous, tokens)
     try:
         text = {key: BACKEND.text(CONFIG, model, part) for key, part in
@@ -165,15 +168,20 @@ def schedule() -> None:
     for thought_id, thought in L["thoughts"].items():
         tokens = tokens_of(thought_id)
         thought["warm"] = [p for p, held in HELD.items()
-                           if L["lanes"][p]["model"] == thought["model"] and begins(held, tokens)]
+                           if L["lanes"][p]["model"] == thought["model"]
+                           and BACKEND.can_continue(CONFIG, thought["model"], held, tokens)]
         # Reading: no lane holds (nearly) all of its context yet, so the model is still reading it.
         reading = not any(len(HELD[p]) >= len(tokens) - 1 for p in thought["warm"])
         # How much of its context the lane it holds has read (for progress).
         thought["held"] = len(HELD.get(thought["lane"]) or []) if thought["lane"] is not None else 0
-        if thought["reading"] and not reading and thought["lane"] is not None and thought["opens_turn"]:
-            # The turn's opening read is done: its slice counts from now. A thought continuing the
-            # turn (after a quick tool call) reads only the tool's result, and its slice runs on.
-            L["lanes"][thought["lane"]]["turn_since"] = thought["since"] = now()
+        checkpoint = L["snapshots"].get(RUNS[thought_id].get("read_checkpoint"))
+        thought["read_checkpoint"] = bool(
+            reading and thought["lane"] in thought["warm"] and checkpoint
+            and checkpoint["model"] == thought["model"]
+            and checkpoint["tokens"] == thought["held"]
+            and checkpoint["tier"] != "moving" and not checkpoint.get("discard"))
+        if thought["reading"] != reading:
+            thought["activity_since"] = now()
         thought["reading"] = reading
     contenders = list(L["thoughts"].values())
     wanted = scheduler.assign(CONFIG, L["lanes"], contenders, now(), blocked())
@@ -197,8 +205,41 @@ def schedule() -> None:
             lane.update(turn_agent=thought["agent"], turn_since=lane["turn_since"] if returning else now(),
                         held_for=None, held_until=0)
             thought.update(lane=position, since=lane["turn_since"], waiting_since=None, opens_turn=not returning,
-                           progress_at=now())
+                           progress_at=now(), activity_since=now())
     LOCK.notify_all()
+
+
+def checkpoint_read(position: int, thought_id: str, held: list[int]) -> None:
+    """Save a partial read only when an equal would win its expired slice.
+
+    The lane worker still owns BUSY and the native state. Failed admission keeps
+    the reader protected, avoiding repeated cold reads when snapshots cannot fit.
+    """
+    with LOCK:
+        thought = L["thoughts"][thought_id]
+        if now() - thought["since"] < CONFIG["scheduler"]["slice_seconds"]:
+            return
+        candidates = [dict(t, read_checkpoint=True) if t["id"] == thought_id else t
+                      for t in L["thoughts"].values()]
+        winner = scheduler.assign(CONFIG, L["lanes"], candidates, now(), blocked()).get(position)
+        if winner in (None, thought_id) or L["thoughts"][winner]["class"] != thought["class"]:
+            return
+    try:
+        if not snapshots.keep(position, held, thought["owner"], "suspended"):
+            return
+    except BACKEND.Lost:
+        raise  # native state loss still requires the worker's recovery
+    except Exception as error:
+        with LOCK:
+            log("read checkpoint failed", model=thought["model"], lane=position,
+                owner=thought["owner"], detail=f"{type(error).__name__}: {error}")
+        return  # optional fairness save must not discard a successful read
+    with LOCK:
+        wanted = snapshots.digest(held)
+        RUNS[thought_id]["read_checkpoint"] = next(
+            (name for name, saved in L["snapshots"].items()
+             if saved["model"] == thought["model"] and saved["digest"] == wanted
+             and saved["tier"] != "moving" and not saved.get("discard")), None)
 
 
 def switch(position: int, tokens: list[int], owner: str) -> str | None:
@@ -206,12 +247,14 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
     that conversation goes on and it fits; then restore the longest snapshot that begins
     `tokens`. Without one the context is cold and the model reads it. Returns the name of the
     snapshot restored, if any."""
+    started = time.monotonic()
     with LOCK:
         lane = dict(L["lanes"][position])
         held = HELD.get(position) or []
         # A task's conversation is one line: when the lane holds the same task's conversation
         # but not the start of where it goes on, that state has diverged and is of no use.
-        diverged = bool(held) and lane["resident"] == owner and owner in L["tasks"] and not begins(held, tokens)
+        single_history = owner in L["tasks"] or snapshots.coin_conversation(owner)
+        diverged = bool(held) and lane["resident"] == owner and single_history and not begins(held, tokens)
         worth = bool(held) and snapshots.live(lane["resident"]) and not diverged
     if diverged:  # where the conversation stopped reproducing what the lane holds
         at = common(held, tokens)
@@ -222,27 +265,49 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
             text = {"text_unavailable": f"{type(error).__name__}: {error}"}
         with LOCK:
             log("divergence", owner=owner, held=len(held), next=len(tokens), common=at, **text)
+    saving = time.monotonic()
     saved = worth and snapshots.keep(position, held, lane["resident"], "suspended")
+    save_seconds = time.monotonic() - saving
     with LOCK:
-        best = max(((s["tokens"], name) for name, s in L["snapshots"].items()
-                    if s["model"] == lane["model"] and s["tier"] != "moving" and s["tokens"] < len(tokens)
-                    and snapshots.digest(tokens[:s["tokens"]]) == s["digest"]), default=None)
+        candidates = sorted(((s["tokens"], name) for name, s in L["snapshots"].items()
+                    if s["model"] == lane["model"] and s["tier"] != "moving"
+                    and BACKEND.can_continue(CONFIG, lane["model"], tokens[:s["tokens"]], tokens)
+                    and s["tokens"] <= len(tokens)
+                    and snapshots.digest(tokens[:s["tokens"]]) == s["digest"]), reverse=True)
     restored, broken = None, None
-    if best is not None and snapshots.bring_back(best[1]):
-        if BACKEND.restore(CONFIG, lane["model"], lane["index"], best[1]):
-            restored = best[1]
-        else:
-            broken = best[1]  # it would not restore: it is of no further use
+    restored_tokens = 0
+    restore_tier = None
+    transfer_seconds = restore_seconds = 0.0
+    for length, name in candidates:
+        with snapshot_cleanup.pin(name) as pinned:
+            if not pinned:
+                continue
+            with LOCK:
+                restore_tier = L["snapshots"].get(name, {}).get("tier")
+            bringing = time.monotonic()
+            ready = snapshots.bring_back(name)
+            transfer_seconds += time.monotonic() - bringing
+            if not ready:
+                continue
+            restoring = time.monotonic()
+            valid = BACKEND.restore(CONFIG, lane["model"], lane["index"], name)
+            restore_seconds += time.monotonic() - restoring
+            if valid:
+                restored, restored_tokens = name, length
+                break
+            broken = name  # it would not restore: try the next compatible prefix
+            with LOCK:
+                snapshots.drop(broken)
     with LOCK:
-        if broken is not None:
-            snapshots.drop(broken)
-        elif restored is not None:
+        if restored is not None and restored in L['snapshots']:
             L["snapshots"][restored]["last_run"] = now()
-        HELD[position] = tokens[:best[0]] if restored else []
+        HELD[position] = tokens[:restored_tokens]
         L["lanes"][position].update(resident=owner)
         log("switch", model=lane["model"], lane=lane["index"], out=lane["resident"], saved=bool(saved),
-            into=owner, restored=best[0] if restored else 0, prompt_tokens=len(tokens), diverged=diverged,
-            broken_snapshot=broken)
+            into=owner, restored=restored_tokens, prompt_tokens=len(tokens), diverged=diverged,
+            broken_snapshot=broken, restore_tier=restore_tier,
+            save_seconds=save_seconds, transfer_seconds=transfer_seconds,
+            restore_seconds=restore_seconds, seconds=time.monotonic() - started)
     return restored
 
 
@@ -272,14 +337,15 @@ def reasoning_step(thought: dict, run: dict, chunk: int) -> int:
     if budget is None or reader["think_end"] in generated:
         return min(chunk, remaining)
     close = reader["think_close"]
-    limit = min(budget, max(0, run["max"] - len(close) - 1))
+    used = reader.get("reasoning_used", 0)
+    limit = min(max(0, budget - used), max(0, run["max"] - len(close) - 1))
     if len(generated) < limit:
         return min(chunk, remaining, limit - len(generated))
     if remaining > len(close):
         arrived(thought, run, close)
         generated.extend(close)
         thought["reasoning_budget_reached"] = True
-        log("reasoning budget reached", agent=thought["agent"], tokens=limit)
+        log("reasoning budget reached", agent=thought["agent"], tokens=used + limit)
     return min(chunk, run["max"] - len(generated))
 
 
@@ -298,32 +364,66 @@ def worker(position: int) -> None:
             chunk = CONFIG["scheduler"]["chunk_tokens"]  # fixed for this step, refreshed at the next boundary
             chunk = reasoning_step(thought, run, chunk)
             BUSY[position] = thought_id
+            timing = L["coin"] if thought["agent"] == "coin" else L["agents"].get(thought["agent"])
+            if timing is not None:
+                timing["gpu_since"] = now()
+            gpu_started = time.monotonic()
             model, index, tokens = lane["model"], lane["index"], tokens_of(thought_id)
-            warm = begins(HELD.get(position), tokens)
+            warm = BACKEND.can_continue(CONFIG, model, HELD.get(position), tokens)
             discovered = shared_prefix(thought_id, model) if not warm or len(HELD[position]) < len(tokens) - 1 else 0
             boundaries = sorted(set(run.get("shared", [])) | ({discovered} if discovered else set()))
         restored = None
         generating = False
         generation_started = None
+        prefill_measurement = None
         try:
             if not warm:
                 restored = switch(position, tokens, thought["owner"])
             held = len(HELD.get(position) or [])
-            # Reading stops one token short: generating then extends the lane by exactly one token.
-            # (Holding the whole context would make the model roll back one token to generate,
-            # which it cannot do; it would read everything again.)
+            # Stop initial reading one token short for buffered backends. A backend
+            # retaining the complete decoded vector can continue directly from equality.
             if held < len(tokens) - 1:  # still reading its context: one more piece
                 end = min(len(tokens) - 1, held + read_chunk)
+                # Retain the existing checkpoint slightly before a long prompt's tail.
+                # Closing template tokens and small tail edits then need only a short
+                # extension, rather than making the sole checkpoint incompatible.
+                checkpoint_at = len(run["prompt"]) - 1
+                if len(run["prompt"]) > read_chunk:
+                    checkpoint_at -= 32
+                # A warm lane may already extend beyond the preferred boundary.
+                # Advance once instead of rewinding hybrid state; freeze this
+                # boundary so subsequent pieces do not save each tail token.
+                checkpoint_at = run.setdefault("checkpoint_at", min(len(run["prompt"]) - 1,
+                    held + 1 if held > checkpoint_at else checkpoint_at))
+                # A resumed exhausted reasoning block may already have synthetic
+                # closing tokens in generated before its prompt is read. The
+                # native position, not that output buffer, owns checkpoint timing.
+                if held < checkpoint_at < end:
+                    end = checkpoint_at
                 # The first unsaved shared start this piece reaches: read to it exactly and save it.
                 shared = next((b for b in boundaries if held < b <= end and not snapshots.shared(model, tokens[:b])), None)
+                prefix = run.get('retained_prefix')
+                if prefix is not None and not (held < prefix <= end and not snapshots.retain_prefix(
+                        model, tokens[:prefix], thought['owner'])):
+                    prefix = None
+                if prefix is not None and (shared is None or prefix < shared):
+                    end, shared = prefix, None
+                else:
+                    prefix = None
                 keep_shared = shared is not None
                 upto = tokens[:shared if keep_shared else end]
+                prefill_started = time.monotonic()
                 BACKEND.prefill(CONFIG, model, index, upto, held)
+                prefill_measurement = (len(upto) - held, time.monotonic() - prefill_started)
                 if keep_shared:  # the start other contexts share: save it once, for all of them
                     snapshots.keep_shared(position, upto)
-                elif len(upto) == len(tokens) - 1 and not run["generated"] and snapshots.live(thought["owner"]):
-                    snapshots.keep(position, upto, thought["owner"], "checkpoint")  # the conversation as committed
+                elif prefix is not None:
+                    snapshots.keep(position, upto, thought['owner'], 'prefix')
+                elif len(upto) == checkpoint_at and snapshots.live(thought["owner"]):
+                    snapshots.keep(position, upto, thought["owner"], "checkpoint")
                 result, holds = {"tokens": [], "done": False}, upto
+                if len(upto) < len(tokens) - 1:
+                    checkpoint_read(position, thought_id, upto)
             else:
                 generating = True
                 generation_started = time.monotonic()
@@ -344,6 +444,16 @@ def worker(position: int) -> None:
             result, holds, failure = {"tokens": [], "done": False}, [], f"{type(error).__name__}: {error}"
         with LOCK:
             BUSY.pop(position, None)
+            if prefill_measurement is not None:
+                performance.record("prefill", *prefill_measurement)
+            if generating and failure is None:
+                performance.record("generation", len(result["tokens"]),
+                    result.get("generation_seconds", time.monotonic() - generation_started),
+                    draft_tokens=result.get("draft_tokens", 0),
+                    accepted_tokens=result.get("draft_accepted_tokens", 0))
+            if timing is not None:
+                timing["gpu_seconds"] = timing.get("gpu_seconds", 0) + time.monotonic() - gpu_started
+                timing["gpu_since"] = None
             run["generated"] += result["tokens"]
             thought["generated"] = len(run["generated"])
             HELD[position] = holds
@@ -354,12 +464,26 @@ def worker(position: int) -> None:
                 thought.update(read=max(read, thought["read"]), progress_at=now())
             L["lanes"][position]["resident"] = thought["owner"]
             agent = L["agents"].get(thought["agent"])
+            if generating and failure is None and 'draft_rounds' in result:
+                # Native counters describe this completed step, including rejected drafts.
+                # Keep totals with their own time/token denominator, never older run spend.
+                measured = {key: result[key] for key in
+                            ('draft_rounds', 'draft_tokens', 'draft_accepted_tokens', 'generation_seconds')}
+                measured['generation_tokens'] = len(result['tokens'])
+                thought['decode'] = {**measured, 'at': now(), 'context_tokens': len(tokens),
+                                     'sampling': result.get('sampling', {}), 'chunk_tokens': chunk}
+                if timing is not None:
+                    totals = timing.setdefault('speculation', {})
+                    for key, value in measured.items():
+                        totals[key] = totals.get(key, 0) + value
             if agent is not None and generating:
                 agent["generation_seconds"] = agent.get("generation_seconds", 0) + result.get(
                     "generation_seconds", time.monotonic() - generation_started)
                 agent["generation_tokens"] = agent.get("generation_tokens", 0) + len(result["tokens"])
-            if agent is not None and result.get("rate"):
-                agent["rate"] = round(result["rate"], 1)  # the model's own speed on its last full step
+            if result.get("rate"):
+                thought["rate"] = round(result["rate"], 1)
+                if agent is not None:
+                    agent["rate"] = thought["rate"]  # the model's own speed on its last full step
             if failure and not lane["up"]:
                 pass  # its model went away; lanes_down made the thought wait for another lane
             elif failure:

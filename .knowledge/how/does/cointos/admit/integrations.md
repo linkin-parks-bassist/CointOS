@@ -1,16 +1,18 @@
 ---
 status: green
-revised_at: "2026-10-07T07:25:05+11:00"
+revised_at: "2026-10-16T06:38:24+11:00"
 ---
 
-`spawner.integrations` admits at most one integration per enabled project at a time, for the project's oldest reviewed worker (`status == "review"`, not held, no active integration of its own). The integration ranks with `schema.KINDS["integrate"]["rank"]` and the project's priority.
+New and retained admission through spawner.integrations/runnable admits at most one integration per enabled project at a time. A new reviewer takes the oldest eligible reviewed worker: status review, not held, with any owned queue item ready and no retained integration of its own. Readiness includes pending independently reviewed test corrections. Integration rank combines schema.KINDS["integrate"]["rank"] and project priority.
 
-An existing integration occupies its project's slot only while it can proceed: while it is running, or while it is waiting, not held (`spawner.held`: a kill hold or a held queue record) and its worker is in review. A held integration, or one waiting because its worker was revised or returned and is back at work, leaves the slot free for the project's other reviewed items, and its own worker never receives a second integration. When that worker returns to review, its existing integration resumes and refreshes its assignment for the new brief.
+An existing integration occupies its project's slot while running, or while waiting without an integration hold and its worker is review-ready. A held integration, a worker revised/returned to construction, or a waiting consumer review blocked on a test correction leaves the slot available to other eligible reviews. In particular, the consumer cannot prevent its correction from being reviewed. Existing running reviews retain ordinary lifecycle handling.
 
-This prevents one stalled integration from halting every landing in a project; on 2026-10-06 a held, stale integration did exactly that for about six hours with `cointos check` green.
+Retained integrations prevent duplicate reviewers for their workers even while ineligible. When the worker becomes review-ready again, its integration can resume, refreshing its assignment for a changed brief. Resuming a held integration waits while another review in the same project runs; other projects remain independent.
+
+This prevents stale reviews from halting a project. A held integration caused roughly six hours of blocked landings on 2026-10-06 despite green runtime checks. Production-function and real-Git regressions now cover held/revised workers, retained ownership, serialization and correction-first review eligibility.
 
 Proof:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_revision.Revision.test_a_stalled_integration_does_not_block_the_projects_other_reviewed_items tests.test_revision.Revision.test_a_held_reviewed_item_is_not_integrated tests.test_revision.Revision.test_a_reviewed_item_under_integration_must_wait
+cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_revision.Revision.test_a_stalled_integration_does_not_block_the_projects_other_reviewed_items tests.test_revision.Revision.test_a_held_reviewed_item_is_not_integrated tests.test_revision.Revision.test_a_reviewed_item_under_integration_must_wait tests.test_packet_corrections.Corrections.test_waiting_consumer_review_cannot_occupy_the_correction_review_slot tests.test_pipeline_simulator
 ```

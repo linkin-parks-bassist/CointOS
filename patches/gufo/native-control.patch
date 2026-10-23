@@ -1,0 +1,226 @@
+diff --git a/src/cli/serve/inference_backend.cpp b/src/cli/serve/inference_backend.cpp
+index e9c5b3c..14a6eed 100644
+--- a/src/cli/serve/inference_backend.cpp
++++ b/src/cli/serve/inference_backend.cpp
+@@ -510,14 +510,22 @@ public:
+     rollback_position_.reset();
+   }
+ 
+-  void PreparePrefixReuse(std::span<const TextRunnerToken> prefix) {
++  void PrepareContinuation(std::span<const TextRunnerToken> prefix) {
+     if (position_ != prefix.size() || !frontier_.has_value()) {
+       throw std::logic_error(
+           "Qwen retained prefix does not match its target state");
+     }
+     if (verifier_ != nullptr) {
+-      verifier_->BeginRequest();
+       sequence_.assign(prefix.begin(), prefix.end());
++    }
++    frontier_published_ = false;
++    rollback_position_.reset();
++  }
++
++  void PreparePrefixReuse(std::span<const TextRunnerToken> prefix) {
++    PrepareContinuation(prefix);
++    if (verifier_ != nullptr) {
++      verifier_->BeginRequest();
+       // Verification's frontier may be a sampled draw. A new request must
+       // select from its distribution again, including when it switches to
+       // greedy sampling or omits the previously published pending token.
+@@ -526,8 +534,6 @@ public:
+         frontier_ = greedy.Sample(frontier_logits_);
+       }
+     }
+-    frontier_published_ = false;
+-    rollback_position_.reset();
+   }
+ 
+   bool ResumeGeneratedToken(TextRunnerToken token, bool decode_ready) {
+@@ -537,6 +543,11 @@ public:
+       resume_tokens_.clear();
+       return false;
+     }
++    if (verifier_ != nullptr && sequence_.size() != position_ &&
++        (sequence_.size() != position_ + 1 || sequence_.back() != token)) {
++      throw std::logic_error(
++          "Qwen pending token does not match its retained sequence");
++    }
+     resume_tokens_.erase(resume_tokens_.begin());
+     // This token was already published by the previous request. Consume it
+     // with decode arithmetic, exactly as AR did, before chunking the new
+@@ -545,14 +556,23 @@ public:
+     frontier_ = verifier_ != nullptr
+                     ? verifier_->AdvanceCommittedToken(token, position)
+                     : executor_->ForwardToken(token, position);
+-    if (verifier_ != nullptr)
++    if (verifier_ != nullptr) {
++      // A continuing decode already published this token in sequence_. A
++      // restored/new-request prefix may end at the physical position instead.
++      // In both cases consume it exactly once in the logical token index.
++      sequence_.resize(position_);
+       sequence_.push_back(token);
++    }
+     ++position_;
+     frontier_logits_.clear();
+     if (decode_ready) {
+       const auto logits = executor_->CopyLastLogits();
+       frontier_logits_.assign(logits.begin(), logits.end());
+     }
++    // Consuming the published token creates a fresh, unpublished frontier.
++    // This is a decode boundary, not a new request/policy reset.
++    frontier_published_ = false;
++    rollback_position_.reset();
+     return true;
+   }
+ 
+@@ -1114,6 +1134,12 @@ public:
+     qwen.PreparePrefixReuse(prefix);
+   }
+ 
++  void PrepareContinuation(
++      TextRunnerState& state,
++      std::span<const TextRunnerToken> prefix) const override {
++    RequireQwenState(state).PrepareContinuation(prefix);
++  }
++
+   [[nodiscard]] TextPrefillStep Prefill(
+       TextRunnerState& state, std::span<const TextRunnerToken> prompt,
+       std::size_t offset, std::size_t max_input_tokens) const override {
+@@ -1407,7 +1433,10 @@ public:
+         qwen_snapshot->verifier_snapshot != nullptr
+             ? qwen_snapshot->verifier_snapshot->PersistentPayloadBytes()
+             : 0;
+-    std::fill(destination.begin(), destination.end(), std::uint8_t{0});
++    // Nested serializers and the logits copy overwrite the payload completely.
++    // Only this header has reserved bytes that need deterministic zeroing.
++    std::fill_n(destination.begin(), kQwenPersistentSnapshotHeaderBytes,
++                std::uint8_t{0});
+     std::copy(kQwenPersistentSnapshotMagic.begin(),
+               kQwenPersistentSnapshotMagic.end(), destination.begin());
+     PutLittleEndian<std::uint32_t>(destination, 8,
+@@ -3124,6 +3153,7 @@ struct InferenceBackend::Impl {
+ #if defined(ENGINE_ENABLE_HIP)
+   struct State {
+     std::shared_ptr<TextGenerationScheduler> scheduler;
++    std::shared_ptr<const TextModelRunner> external_runner;
+     std::string model_id;
+     SamplingDefaults sampling_defaults;
+     std::uint32_t max_context{0};
+@@ -3226,6 +3256,29 @@ InferenceBackend::InferenceBackend() : impl_(std::make_unique<Impl>()) {}
+ 
+ InferenceBackend::~InferenceBackend() = default;
+ 
++std::shared_ptr<const TextModelRunner> InferenceBackend::release_runner() {
++#if defined(ENGINE_ENABLE_HIP)
++  std::shared_ptr<const Impl::State> state;
++  {
++    const std::lock_guard<std::mutex> lock(impl_->state_mutex);
++    state = impl_->state;
++    if (!state || !state->external_runner)
++      throw std::logic_error(
++          "external control requires a loaded dense Qwen runner");
++    for (const auto& session : state->scheduler->SessionStates())
++      if (session.processing)
++        throw std::logic_error("cannot release an active runner");
++    impl_->state.reset();
++  }
++  auto runner = state->external_runner;
++  state.reset();  // Join scheduler and release its sessions before external
++                  // work.
++  return runner;
++#else
++  throw std::logic_error("external control requires a HIP build");
++#endif
++}
++
+ bool InferenceBackend::load(const std::string& model_path, std::string* error,
+                             std::uint32_t max_context,
+                             std::size_t session_count,
+@@ -3549,6 +3602,7 @@ bool InferenceBackend::load(std::shared_ptr<const hip::QwenGpuModel> model,
+         std::move(model), max_context, std::move(dflash_model),
+         speculative_options, disk_cache_config.model_artifact_fingerprint,
+         disk_cache_config.draft_model_artifact_fingerprint);
++    new_state->external_runner = runner;
+     new_state->model_id = runner->Descriptor().model_id;
+     new_state->max_context = max_context;
+     std::optional<TextRunnerDiskCacheOptions> runner_disk_cache;
+diff --git a/src/cli/serve/inference_backend.hpp b/src/cli/serve/inference_backend.hpp
+index 16415c9..bf041b6 100644
+--- a/src/cli/serve/inference_backend.hpp
++++ b/src/cli/serve/inference_backend.hpp
+@@ -116,6 +116,11 @@ public:
+             TextRunnerRamCacheOptions ram_cache_config = {});
+ #endif
+ 
++  /// Detach an idle dense-Qwen runner for an external single-owner scheduler.
++  /// The caller must not race this with requests or loading. Invalidates this
++  /// facade.
++  [[nodiscard]] std::shared_ptr<const TextModelRunner> release_runner();
++
+   /// Stable model identifier used in API responses.
+   [[nodiscard]] std::string model_id() const override;
+   [[nodiscard]] bool ready() const override;
+diff --git a/src/cli/serve/openai_chat.cpp b/src/cli/serve/openai_chat.cpp
+index d52e613..0776a05 100644
+--- a/src/cli/serve/openai_chat.cpp
++++ b/src/cli/serve/openai_chat.cpp
+@@ -3911,6 +3911,26 @@ HttpResponse CreateAnthropicMessage(const HttpRequest& request,
+       request, backend, chat, max_tokens, sampling, stream);
+ }
+ 
++std::optional<std::string> ParseControlChat(const json::Value& body,
++                                            ChatRequest* chat) {
++  const auto* messages = body.find("messages");
++  if (!messages || !messages->is_array() || messages->empty())
++    return "messages must be a nonempty array";
++  core::ImageReadBudget budget;
++  budget.accepts_images = false;
++  std::string error;
++  for (const auto& item : messages->items()) {
++    tokenization::ChatMessage message;
++    if (!ParseMessage(item, &message, budget, &error))
++      return error;
++    chat->messages.push_back(std::move(message));
++  }
++  if (!ParseTools(body.find("tools"), &chat->tools, &error) ||
++      !ParseReasoningOptions(body, &chat->reasoning, &error))
++    return error;
++  return std::nullopt;
++}
++
+ HttpResponse HandleOpenAiChat(const HttpRequest& request,
+                               TextGenerationBackend& backend) {
+   ParsedChatRequest parsed;
+diff --git a/src/cli/serve/openai_chat.hpp b/src/cli/serve/openai_chat.hpp
+index 376f70d..861c4aa 100644
+--- a/src/cli/serve/openai_chat.hpp
++++ b/src/cli/serve/openai_chat.hpp
+@@ -6,6 +6,11 @@
+ 
+ namespace gufo::server {
+ 
++/// Parse text-only native-control chat with the same history/tool/reasoning
++/// rules.
++std::optional<std::string> ParseControlChat(const json::Value& body,
++                                            ChatRequest* chat);
++
+ /// Handles the supported OpenAI Chat Completions subset. Streaming responses
+ /// consume scheduler-published token pieces from HttpResponse::streaming_body;
+ /// socket writes never own or execute model state.
+diff --git a/src/cli/serve/text_model_runner.hpp b/src/cli/serve/text_model_runner.hpp
+index e0db019..5837641 100644
+--- a/src/cli/serve/text_model_runner.hpp
++++ b/src/cli/serve/text_model_runner.hpp
+@@ -345,6 +345,12 @@ public:
+     (void)state;
+     (void)prefix;
+   }
++  /// Reattach this request's exact continuation without starting a new request
++  /// or resetting its learned speculative policy.
++  virtual void PrepareContinuation(
++      TextRunnerState& state, std::span<const TextRunnerToken> prefix) const {
++    PreparePrefixReuse(state, prefix);
++  }
+   /// Tells a request state that its next execution will use a multi-request
+   /// batch. Runners with request-local speculative state may discard work that
+   /// the batched path cannot consume.

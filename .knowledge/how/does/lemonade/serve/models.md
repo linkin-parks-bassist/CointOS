@@ -1,45 +1,18 @@
 ---
 status: green
-revised_at: "2026-10-10T16:58:55+11:00"
+revised_at: "2026-10-19T06:11:03+11:00"
 ---
 
-Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared by CointOS and other local clients. Its control API is `http://127.0.0.1:13305`; logs are in `journalctl -u lemond`. CointOS is a client, not its owner, and must tolerate another client reloading a model onto a different backend URL.
+Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared with other clients. Control: `http://127.0.0.1:13305`; logs: `journalctl -u lemond`. CointOS must tolerate another client changing the backend URL. MiniCPM was explicitly unloaded at the user's request. Coin and construction now select the separate Gufo Qwen process owned by what/is/the/gufo/backend/candidate/for/cointos.md.
 
-## Control contract
+`GET /api/v1/health` reports loaded state, backend URL, effective launch command, recipe options, PID and pin. CointOS refreshes this map during model checks. `POST /v1/load` accepts model name, context size, llama.cpp arguments, merge/save flags and pin. CointOS uses `merge_args: false`, `save_options: false`: operational config determines shape without rewriting saved recipes. Unload addresses one model; absence may return 404. Config removal does not unload pinned models.
 
-- `GET /api/v1/health` reports each model's loaded state, backend URL, effective launch command, recipe options, PID and pin state. CointOS refreshes this map during model checks.
-- `POST /v1/load` accepts the model name, context size, complete llama.cpp argument string, merge/save flags and pin state. CointOS uses `merge_args: false` and `save_options: false`, so its operational config determines the active shape without rewriting Lemonade's saved recipe.
-- `POST /v1/unload` unloads one named model; an absent model may answer 404. A pinned model dropped from config stays loaded until unloaded here.
-- Model files under `/var/lib/lemonade` are not readable by the user's account, so models are started through Lemonade rather than directly.
+Installed Lemonade rejects `--spec-draft-model`, `--model-draft` and their short aliases in custom arguments because it manages model paths. A custom-path rejection precedes native loading and says nothing about runtime compatibility or speed. Use registered `checkpoints.main`/`checkpoints.draft`: installed `lemonade pull --checkpoint TYPE CHECKPOINT` exposes this route. `/v1/pull` accepted `user.CointOS-DFlash2-Trial` with production main and DFlash2 Q4_K_M draft. Logs confirm `draft-dflash`, width 4 and matching weights. `/api/v1/downloads` tracks pulls. `subscribe: false` returns JSON job state despite `stream: true`; response completion does not establish download completion. Health reports its name as `CointOS-DFlash2-Trial`, omitting the `user.` namespace; normalize that prefix when matching registry names, and verify checkpoint/options. Adoption remains unverified. [Registration contract](https://lemonade-server.ai/docs/api/lemonade/) documents the draft checkpoint.
 
-Lemonade and its llama-server children run in `inference.slice`. Snapshot files live in the configured `/dev/shm` directory and must be writable by the `lemonade` user. The backend checks both workstation headroom and the inference-slice allowance before admitting model or snapshot allocations.
+Lemonade runs in `inference.slice`: high/max memory 72/80 GiB, swap cap 2 GiB and 20% oomd pressure protection. `ManagedOOMSwap=auto` disables host-swap-triggered inference kills; root also uses `auto`. A persistent systemctl drop-in overrides `kill`; live `oomctl` confirms pressure-only monitoring without service restart. Rollback: `sudo systemctl set-property inference.slice ManagedOOMSwap=kill`. Old swap occupancy alone is not current pressure. Snapshots use configured `/dev/shm`, writable by `lemonade`; admission checks host/slice headroom.
 
-## llama-server contract
+Operational configuration defines complete load arguments with merge_args:false and save_options:false. Model identity/shape changes require paused full installation; removing configuration never unloads pinned models. Model facts own current selection.
 
-The backend uses these model-server operations:
+Focused details: how/to/select/the/cointos/llama/server/build.md; how/does/the/cointos/llama/backend/preserve/generation/state.md; how/does/cointos/render/native/model/replies.md; what/is/the/cointos/model/sampling/policy.md. Model reasoning/stage policy is owned by what/is/the/cointos/construction/pipeline.md; low/medium/xhigh caps remain 256/384/1,024 and are not loosened for trials. XML Boolean arguments follow declared types case-insensitively.
 
-- `/apply-template`, `/tokenize` and `/detokenize` translate between structured conversation and tokens.
-- `/completion` prepares explicit token prefixes with streamed prompt-progress reports, then generates a bounded complete token vector with `cache_prompt` and `n_predict`.
-- `/slots/N?action=save|restore|erase` moves a slot state to or from the configured snapshot directory.
-
-A completion request is a bounded GPU step. `backend_llama.prefill` streams prompt progress, rejects an error or missing terminal event, and verifies the final cached token count. The first progress report reveals how much state the server retained; materially lost state raises `Lost` before an unbounded reread. `think` verifies cache retention by extending the prepared prefix with its pending real token, then requests a non-streaming, token-only bounded completion and checks terminal status, complete token count and cached-state length. Both calls use the configured server timeout. The generation duration is measured after prefix preparation and returned separately, so this extra cache verification does not spend an agent's generation budget.
-
-The installed llama-server build is `b10723-010be9683`. Its text stream suppresses tokens inside incomplete UTF-8 characters, and even native completions pass isolated output through a chat parser that rejects leading continuation bytes. Token steps therefore supply a no-op epsilon `chat_parser` and restrict response fields to token/state metadata. This is a raw-token boundary: Qwen message/tool interpretation remains in `backend_llama.read` over the whole thought. Trailing detokenizer replacement characters are withheld during outward streaming until the character is complete. A real work-model test split 🦦 into `[9008, 99, 99]` and preserved all three IDs across one-token steps. A zero-token, nonterminal generation result is rejected; the lane clears unknown state and ends that thought rather than replaying it.
-
-The configured Qwen model is a hybrid recurrent/attention model. A saved state is reusable only when its tokens are a prefix of the next prompt. Prompt preparation stops one token short. Cache verification then submits the full real prompt, extending the retained prefix by that pending token. An equal-length check after restoring recurrent state would require an unavailable earlier checkpoint and discard the cache; the strict extension creates the checkpoint needed for the following buffered generation to reevaluate its last token without a full reread. After generation, the backend derives the exact known retained prefix from `tokens_cached` and the complete prompt/output token vector; the lane never fabricates this prefix from output count. MTP may retain draft tokens beyond a finished reply: an unreturned tail is marked cold while the valid complete reply is delivered. A connection cut mid-generation can leave an unseen token in server state, so an abandoned in-flight thought resumes from its committed checkpoint rather than assuming the cut state is exact.
-
-## Active model policy
-
-`config/cointos.json` is authoritative for model names, context, lanes, arguments and admission estimates. The only configured model is Qwen3.8-27B, serving agents and Coin with one 131,072-token lane and MTP speculative decoding. Lane count, total context and the model set are load-time shape: changing them needs a paused full installation.
-
-CointOS retains Qwen3.8-27B as the minimum work model unless the user chooses a different quality point. Published alternative quantizations and runtimes are leads, not evidence of equal agent quality or a drop-in speedup. Any comparison must hold weights/quality target, sampling, occupied context and task success constant, then verify the exact installed runtime. No alternative currently has that evidence.
-
-## Reasoning and output
-
-Qwen3.8 accepts low, medium and xhigh `reasoning_effort` through its chat template. CointOS pins task effort, maps it into template options, and mechanically caps each uninterrupted reasoning block at 256, 384 or 1,024 tokens respectively. At the cap it appends the model's closing-think token on the same context and continues into answer or tool output. `max_thought_tokens` still bounds the complete reply. This is a per-reply bound, not a lifetime penalty. It is the user's deliberate design: Qwen's reasoning stops paying off after about 300 tokens, turning to self-doubt and repetition, and the model works markedly better when forced to act. Do not loosen it without the user.
-
-The template emits reasoning inside `<think>...</think>` and tool calls in its Qwen function-call markup; `backend_llama.read` is the sole decoder for that literal representation.
-
-## Remaining evidence
-
-Exact throughput varies with occupied context, simultaneous reads, model-server build and speculation acceptance. Current configuration has usable live performance, but no controlled local comparison proves the net benefit of MTP, a smaller maximum context, another quantization or another runtime. Those are performance experiments, not active operating claims; `what/is/the/plan.md` owns any future work that becomes approved.
+The model-backend benchmark owner routes experimental measurements. Native fixtures and declared loaded shapes do not establish sustained quality.

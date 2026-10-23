@@ -3,7 +3,7 @@
 A record holds what is asked for (brief, dependencies, stage, effort, budget, order, holds) and
 one terminal fact written once by the lifecycle: `done`. Everything else about its state is
 derived from its tasks by `state`, never stored: a record whose current task failed is blocked;
-a failed worker item awaits its one managerial recovery pass. `version` counts revisions of what
+a failed assignment has one recovery controller. `version` counts revisions of what
 is asked; a task made for an older version no longer speaks for the record. All mutations run
 under the daemon lock; the runtime tree's queue leaves are a readable projection.
 """
@@ -11,41 +11,25 @@ from __future__ import annotations
 import copy
 import json
 import re
-from cointos import git, kt, schema
+import threading
+from cointos import dependencies, frontier, git, kt, packets, schema
+from cointos.dependencies import line, depends, dependency_brief, slug, NO_DEPENDENCY
 from cointos.config import ROOT
-from cointos.state import CONFIG, L, log, now
+from cointos.state import CONFIG, LOCK, L, log, now
 
 # Queue item names that would collide with the ids of scheduler-created tasks in a project.
 RESERVED = ("garden", "tree-audit")
 RESERVED_PREFIXES = ("integrate-", "decompose-", "operator-", "loose-ends-", "test-audit-")
 
 
-def line(text: str, label: str) -> str | None:
-    """The value of a brief's `Label:` line, if it has one."""
-    for row in text.splitlines():
-        found = re.match(rf"\**{label}:\**\s*(.+)", row.strip(), re.IGNORECASE)
-        if found:
-            return found[1].strip()
-    return None
-
-
-NO_DEPENDENCY = {"none", "nothing", "n/a", "-"}
-
-
-def depends(text: str) -> list[str]:
-    """The items named on a brief's `Depends on:` line, comma-separated; `none` names nothing."""
-    names = []
-    for name in (line(text, "Depends on") or "").split(","):
-        name = name.strip().strip("`*()[]").strip().rstrip(".;").strip("`*()[]").strip()
-        if name and name.lower() not in NO_DEPENDENCY and name not in names:
-            names.append(name)
-    return names
-
 
 def relies_on(text: str) -> list[str]:
     """The owner APIs on a brief's `Relies on:` line: function or type names (a `path::name`
     citation or a file path is also accepted), comma-separated."""
-    return [n.strip().strip("`") for n in (line(text, "Relies on") or "").split(",") if n.strip().strip("`")]
+    # The line is prose: sentence punctuation outside a quoted citation is not its name.
+    names = [n.strip().rstrip(".;").strip().strip("`")
+             for n in (line(text, "Relies on") or "").split(",")]
+    return [name for name in names if name]
 
 
 def require_summary(brief: str) -> None:
@@ -54,6 +38,7 @@ def require_summary(brief: str) -> None:
     if not least <= words <= most:
         raise ValueError(f"a worker brief needs a `Summary:` line of {least}-{most} plain words "
                          f"saying what the task is for (it is shown on the dashboard){f'; this one has {words}' if words else ''}")
+
 
 
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -76,9 +61,6 @@ def missing_reliances(repo, commit: str, names: list[str]) -> list[str]:
     return missing
 
 
-def slug(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60] or "item"
-
 
 def records() -> dict:
     return L["queue"]
@@ -90,15 +72,14 @@ def key(record: dict) -> str:
 
 # ---------------------------------------------------------------- where a record stands
 
-def current(record: dict, kind_name: str | None = None) -> dict | None:
-    """The record's task (or its decomposition, given `decompose-`) made for its current version."""
-    task_id = f"{record['project']}:{kind_name or ''}{record['item']}"
-    task = L["tasks"].get(task_id)
+def current(record: dict) -> dict | None:
+    """The execution task made for this assignment version."""
+    task = L["tasks"].get(key(record))
     return task if task and task.get("record_version") == record["version"] else None
 
 
 def blocker(task: dict) -> str:
-    """What a failed task leaves for the manager who must decide about it."""
+    """The original evidence for the assignment's recovery controller."""
     receipt = task["receipt"] or {}
     report = (f"Assignment: {task['id']}\n\n{task['brief']}\n\n"
               f"Worker receipt: {receipt.get('summary', 'No completion receipt')}\n"
@@ -111,28 +92,20 @@ def blocker(task: dict) -> str:
 
 
 def state(record: dict) -> dict:
-    """Where a record stands, from its terminal fact and its current tasks:
-    {"status": "done" | "replaced" | "blocked" | "queued", "blocker": text or None,
-     "decompose": whether a failed worker item awaits its one managerial recovery pass}."""
-    if record.get("done"):
-        return {"status": "done", "blocker": None, "decompose": False}
-    if record.get("replaced_by"):
-        return {"status": "replaced", "blocker": None, "decompose": False}
+    """Desired work is settled, executable, or blocked with one recovery owner."""
+    if record.get('done'):
+        return {'status': 'done', 'blocker': None, 'recoverable': False}
+    if record.get('replaced_by'):
+        return {'status': 'replaced', 'blocker': None, 'recoverable': False}
     task = current(record)
-    if task is None:
-        return {"status": "queued", "blocker": None, "decompose": False}
-    if task["kind"] == "breakdown" and task["status"] == "done" and task["receipt"]["disposition"] == "blocked":
-        return {"status": "blocked", "blocker": task["receipt"]["summary"], "decompose": False}
-    if task["status"] != "failed":
-        return {"status": "queued", "blocker": None, "decompose": False}
-    if task["kind"] != "item":
-        return {"status": "blocked", "blocker": blocker(task), "decompose": False}
-    manager = current(record, "decompose-")
-    if manager and manager["status"] in schema.SETTLED:
-        receipt = manager["receipt"] or {}
-        return {"status": "blocked", "decompose": False,
-                "blocker": receipt.get("summary") or manager["note"] or "its manager gave up"}
-    return {"status": "blocked", "blocker": blocker(task), "decompose": True}
+    if task is None or (task['status'] != 'failed' and
+                        (task.get('receipt') or {}).get('disposition') != 'blocked'):
+        return {'status': 'queued', 'blocker': None, 'recoverable': False}
+    repair = frontier.controller(record)
+    failure = repair if repair and repair['status'] in schema.SETTLED else task
+    return {'status': 'blocked', 'blocker': (failure.get('receipt') or {}).get('summary') or
+            (failure.get('note') if failure is repair else blocker(task)),
+            'recoverable': repair is None or repair['status'] in schema.PENDING}
 
 
 def status(record: dict) -> str:
@@ -155,26 +128,73 @@ def landed(project_name: str) -> set[str]:
     return {r["item"] for r in records().values() if r["project"] == project_name and r.get("done")}
 
 
+def frontier_problems(project_name: str, *, owner=None, items=None) -> list[str]:
+    """Concrete dead edges only; ordinary dependency waits are valid handoffs."""
+    items = live(project_name) if items is None else items
+    ready = readiness(items, landed(project_name))
+    selected = {r["item"] for r in items if owner is None or owner in (r.get("proposed_by"), r.get("revised_by"))}
+    by_name = {r["item"]: r for r in items}
+    pending = list(selected)
+    while pending:
+        for name in by_name[pending.pop()].get("depends", []):
+            if name in by_name and name not in selected:
+                selected.add(name)
+                pending.append(name)
+    return [f"{project_name}:{r['item']}: {ready[r['item']]}" for r in items
+            if r["item"] in selected and
+            ready[r["item"]] not in ("ready", "waiting")]
+
+
+def preview(project: dict, kind: str, name: str, brief: str, stage=None,
+            reasoning_effort=None, budget=None, **metadata) -> dict:
+    """Validate a proposal and its graph without writing a record or starting a run."""
+    if kind not in schema.QUEUE_KINDS:
+        raise ValueError("kind must be urgent, queued or command")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name must not be empty")
+    item = slug(name)
+    if item in RESERVED or item.startswith(RESERVED_PREFIXES):
+        raise ValueError("name is reserved for scheduler tasks")
+    if f"{project['name']}:{item}" in records() or f"{project['name']}:{item}" in L["tasks"]:
+        raise ValueError("item already exists; hold/revise it instead of queueing a duplicate")
+    record_kind = "command" if kind == "command" else "queued"
+    candidate = {"project": project["name"], "item": item, "kind": record_kind, "version": 1,
+                 **contents(record_kind, brief, stage, reasoning_effort, budget, project=project["name"], **metadata)}
+    candidate["proposed_by"] = "preview"
+    items = live(project["name"]) + [candidate]
+    problems = frontier_problems(project["name"], items=items, owner="preview")
+    if candidate["stage"] == "test-contract":
+        head = git.head(project["path"], project.get("main_branch", "main"))
+        missing = missing_reliances(project["path"], head, relies_on(candidate["brief"]))
+        if missing:
+            problems.append(f"{key(candidate)}: declared APIs absent on main: {', '.join(missing)}")
+    return {"ok": not problems, "problems": problems, "item": item,
+            "readiness": readiness(items, landed(project["name"]))[item]}
+
+
 def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
     """Each live item's readiness from its dependencies: "ready" once every item it depends on is
     done; "waiting" while any is still wanted; otherwise the problem that keeps it from ever
     becoming ready (an unknown or blocked dependency, or a cycle). A blocked dependency awaiting
-    its manager keeps its dependents waiting: the manager replaces it and repoints them."""
+    its recovery controller keeps dependents waiting while that controller repairs the assignment.
+    Pending test corrections are admission prerequisites; the old acceptance stays immutable."""
     by_name = {item["item"]: item for item in items}
+    edges = {item['item']: list(dict.fromkeys([*item.get('depends', []),
+             *(r['item'] for r in packets.pending(item, items))])) for item in items}
 
     def stuck(name):
         found = state(by_name[name])
-        return found["status"] == "blocked" and not found["decompose"]
+        return found["status"] == "blocked" and not found["recoverable"]
 
     def reaches(start, target, seen):
-        for name in by_name[start].get("depends", []):
+        for name in edges[start]:
             if name == target or (name in by_name and name not in seen and reaches(name, target, seen | {name})):
                 return True
         return False
 
     result = {}
     for item in items:
-        needed = [name for name in item.get("depends", []) if name not in done]
+        needed = [name for name in edges[item['item']] if name not in done]
         unknown = [name for name in needed if name not in by_name]
         if unknown:
             result[item["item"]] = f"depends on unknown {', '.join(unknown)}"
@@ -189,7 +209,7 @@ def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
 
 # ---------------------------------------------------------------- changing what is wanted
 
-def add(project: dict, kind: str, name: str, brief: str, stage=None, reasoning_effort=None, budget=None) -> str:
+def add(project: dict, kind: str, name: str, brief: str, stage=None, reasoning_effort=None, budget=None, **metadata) -> str:
     """A new queued record, or the same one again for a retried identical proposal."""
     if kind not in schema.QUEUE_KINDS:
         raise ValueError("kind must be urgent, queued or command")
@@ -202,34 +222,55 @@ def add(project: dict, kind: str, name: str, brief: str, stage=None, reasoning_e
     priorities = [r["priority"] for r in records().values()]
     record = {"project": project["name"], "item": item, "kind": record_kind, "held_by": None, "version": 1,
               "priority": min(priorities, default=0) - 1 if kind == "urgent" else max(priorities, default=0) + 1,
-              **contents(record_kind, brief, stage, reasoning_effort, budget)}
+              **contents(record_kind, brief, stage, reasoning_effort, budget, project=project["name"], **metadata)}
     existing = records().get(key(record))
     if existing:
         if all(existing.get(k) == record.get(k) for k in ("kind", "brief", "stage", "reasoning_effort", "budget")):
             return item  # retry after a lost API response
         raise ValueError(f"{key(record)} already exists; choose another name")
+    if key(record) in L["tasks"]:
+        raise ValueError(f"{key(record)} already names a task; choose another name")
     records()[key(record)] = record
     return item
 
 
-def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=None) -> dict:
+def contents(kind: str, brief: str, stage=None, reasoning_effort=None, budget=None, *, project: str,
+             dependency_ids=None, summary=None, reliances=None) -> dict:
     """What a record asks for, validated: its brief and the metadata derived from or pinned to it."""
     if not isinstance(brief, str) or not brief.strip():
         raise ValueError("brief must not be empty")
+    for label, values in (("dependencies", dependency_ids), ("relies_on", reliances)):
+        if values is not None and (not isinstance(values, list) or
+                any(not isinstance(v, str) or not v.strip() for v in values)):
+            raise ValueError(f"{label} must be an array of nonempty strings")
+    if summary is not None:
+        if not isinstance(summary, str) or not summary.strip() or '\n' in summary or '\r' in summary:
+            raise ValueError("summary must be a nonempty single-line string")
+        brief = dependencies.metadata_brief(brief, "Summary", summary.strip())
+    if reliances is not None:
+        brief = dependencies.metadata_brief(brief, "Relies on", ", ".join(reliances))
     if budget is not None:
         schema.budget(CONFIG, budget)
     stage = schema.stage("implementation" if stage is None else stage) if kind == "queued" else None
     if stage == "test-contract" and not relies_on(brief):
         raise ValueError("a test-contract brief needs a `Relies on: name, ...` line naming the existing "
                          "functions and types its witnesses and assertions use; they are checked against main at dispatch")
-    fields = {"brief": brief.strip(), "summary": line(brief, "Summary"), "depends": depends(brief), "stage": stage,
+    names = depends(brief) if dependency_ids is None else dependency_ids
+    canonical = dependencies.canonical(project, names)
+    if any(name != slug(name) for name in canonical):
+        raise ValueError("Depends on must contain only item IDs separated by commas; "
+                         "put explanations on a separate line, not inside dependency names")
+    if canonical != names or dependency_ids is not None:
+        brief = dependency_brief(brief, canonical)
+    fields = {"brief": brief.strip(), "summary": line(brief, "Summary"), "depends": canonical, "stage": stage,
               "reasoning_effort": schema.effort(reasoning_effort)}
     if budget is not None:
         fields["budget"] = dict(budget)
     return fields
 
 
-def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=None) -> None:
+def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=None, *,
+           preserve_packets=False, **metadata) -> bool:
     """Replace what a record asks for: a new version, queued afresh. Omitted metadata is
     retained; supplied budget fields merge."""
     if budget is not None:
@@ -240,9 +281,23 @@ def revise(record: dict, brief: str, stage=None, reasoning_effort=None, budget=N
     revised = contents(record["kind"], brief,
                        record["stage"] if stage is None else stage,
                        record["reasoning_effort"] if reasoning_effort is None else reasoning_effort,
-                       budget)
+                       budget, project=record["project"], **metadata)
+    if preserve_packets and record.get("stage") in ("implementation", "integration"):
+        removed = [name for name in record.get("depends", []) if name not in revised["depends"]
+                   and (packet := records().get(f"{record['project']}:{name}"))
+                   and packet.get("stage") == "test-contract" and packet.get("done")]
+        if removed:
+            raise ValueError("revision would discard accepted test packets: " + ", ".join(removed) +
+                             "; retain these dependencies while repairing the assignment. "
+                             "Use correct-tests for an invalid accepted contract; an independent author and reviewer "
+                             "activate the corrected packet and update dependent assignments. "
+                             "repairing a build blocker does not withdraw acceptance tests.")
+    if all(record.get(k) == revised.get(k) for k in
+           ("brief", "stage", "reasoning_effort", "budget", "depends")):
+        return False  # replaying the same request cannot refill a failed assignment's budget
     record.pop("budget", None)
-    record.update(held_by=None, version=record["version"] + 1, **revised)
+    record.update(version=record["version"] + 1, **revised)
+    return True
 
 
 def finish(record: dict, **facts) -> None:
@@ -250,10 +305,12 @@ def finish(record: dict, **facts) -> None:
     record["done"] = {"at": now(), **facts}
 
 
-def replace(record: dict, replacements: list[str], reason: str) -> None:
+def replacement(record: dict, replacements: list[str], reason: str) -> tuple[dict, list[str]]:
     """Replace a record with existing same-project records: dependents of it depend on the
     replacements instead, except a replacement that depended on it, which inherits its
-    dependencies. Nothing changes if that would leave a new cycle."""
+    dependencies. Changed assignments get a new version and matching dependency metadata.
+    Return the proposed queue and changed keys without
+    mutating records, tasks, runs or the journal."""
     if not isinstance(replacements, list) or not replacements or not all(isinstance(n, str) for n in replacements):
         raise ValueError("name the replacement items")
     if not isinstance(reason, str) or not reason.strip():
@@ -267,7 +324,8 @@ def replace(record: dict, replacements: list[str], reason: str) -> None:
             raise ValueError(f"invalid same-project replacement: {name}")
     revised = copy.deepcopy(current_records)
     for other in revised.values():
-        if other["project"] == project and item in other["depends"]:
+        if (other["project"] == project and item in other["depends"]
+                and status(current_records[key(other)]) not in ("done", "replaced")):
             instead = record["depends"] if other["item"] in replacements else replacements
             other["depends"] = list(dict.fromkeys(n for dep in other["depends"]
                                                   for n in (instead if dep == item else [dep])))
@@ -277,10 +335,24 @@ def replace(record: dict, replacements: list[str], reason: str) -> None:
         return {n for n, s in readiness(mine, landed(project)).items() if "cycle" in s}
     if cycles(revised) - cycles(current_records):
         raise ValueError("replacement would leave a dependency cycle; no records changed")
-    for k, other in revised.items():
-        current_records[k]["depends"] = other["depends"]
-    record.update(replaced_by=replacements, replacement_reason=reason.strip())
-    log("item replaced", item=key(record), replacements=replacements, reason=reason.strip())
+    changed = [k for k, other in revised.items() if current_records[k]["depends"] != other["depends"]]
+    for k in changed:
+        other = revised[k]
+        other.update(brief=dependency_brief(other["brief"], other["depends"]),
+                     version=other["version"] + 1)
+    revised[key(record)].update(replaced_by=replacements, replacement_reason=reason.strip())
+    return revised, changed
+
+
+def replace(record: dict, replacements: list[str], reason: str, preflight=None) -> list[str]:
+    """Apply a valid replacement, preserving record identities. Preflight precedes mutation."""
+    revised, changed = replacement(record, replacements, reason)
+    if preflight:
+        preflight(changed)
+    for k in [*changed, key(record)]:
+        records()[k].update(revised[k])
+    log("item replaced", item=key(record), replacements=record['replaced_by'], reason=reason.strip())
+    return changed
 
 
 MOVES = ("top", "up", "down", "bottom")
@@ -317,14 +389,16 @@ def history_frontier(active_tasks: set[str]) -> set[str]:
     protected = set()
     for record_key, record in current_records.items():
         found = state(record)
-        if (found["status"] == "queued" or found["decompose"] or record_key in active_tasks
+        if (found["status"] == "queued" or found["recoverable"] or record_key in active_tasks
                 or record.get("proposed_by") in active_tasks):
             protected.add(record_key)
     pending = list(protected)
     while pending:
         record = current_records[pending.pop()]
-        for name in (*record.get("depends", []), *record.get("replaced_by", [])):
-            other = f"{record['project']}:{name}"
+        related = [f"{record['project']}:{name}" for name in
+                   (*record.get('depends', []), *record.get('replaced_by', []))]
+        related += [record.get('corrected_by'), (record.get('correction') or {}).get('packet')]
+        for other in related:
             if other in current_records and other not in protected:
                 protected.add(other)
                 pending.append(other)
@@ -341,26 +415,38 @@ def clear_history(active_tasks: set[str]) -> list[str]:
 
 
 PUBLISHED: dict[tuple[str, str], str] = {}  # the answer each runtime queue leaf last received
+PUBLISH_LOCK = threading.Lock()  # acquire outside LOCK; serializes derived file writes
 
 
 def publish() -> None:
-    """Refresh the derived runtime queue answers when they change; called only by the daemon."""
-    for kind, question in (("queued", "what is queued"), ("command", "what is the command queue")):
-        body = "The daemon alone owns this queue. Submit changes through its API.\n"
-        for r in sorted(records().values(), key=lambda r: r["priority"]):
-            found = state(r)
-            if r["kind"] != kind or found["status"] in ("done", "replaced"):
-                continue
-            body += (f"\n## {key(r)}\n\nStatus: {found['status']}\n"
-                     f"Stage: {r['stage'] or 'manager command'}\nReasoning effort: {r['reasoning_effort'] or 'stage default'}\n\n{r['brief']}\n")
-            body += "\nCurrent dependencies: " + (", ".join(r["depends"]) or "none") + "\n"
-            body += "Run budget metadata: " + json.dumps(r.get("budget", {})) + " (omitted limits use daemon defaults)\n"
-            if r["held_by"]:
-                body += f"Held by {r['held_by']}: it will not start until revised or released.\n"
-            if found["blocker"]:
-                body += f"\nCurrent blocker: {found['blocker']}\n"
-        if "\n## " not in body:
-            body += "\nThe queue is empty.\n"
-        if PUBLISHED.get((str(ROOT), question)) != body:
-            kt.write(ROOT, question, body)
-            PUBLISHED[(str(ROOT), question)] = body
+    """Capture under LOCK, then publish ordered derived answers without retaining it."""
+    with PUBLISH_LOCK:
+        with LOCK:
+            projections = [(question, projection(kind)) for kind, question in
+                           (("queued", "what is queued"), ("command", "what is the command queue"))]
+        for question, body in projections:
+            if PUBLISHED.get((str(ROOT), question)) != body:
+                kt.write(ROOT, question, body)
+                PUBLISHED[(str(ROOT), question)] = body
+
+
+def projection(kind: str) -> str:
+    """One queue answer from the caller's locked ledger view."""
+    body = "The daemon alone owns this queue. Submit changes through its API.\n"
+    for r in sorted(records().values(), key=lambda r: r["priority"]):
+        found = state(r)
+        if r["kind"] != kind or found["status"] in ("done", "replaced"):
+            continue
+        body += (f"\n## {key(r)}\n\nStatus: {found['status']}\n"
+                 f"Stage: {r['stage'] or 'manager command'}\nReasoning effort: {r['reasoning_effort'] or 'stage default'}\n\n{r['brief']}\n")
+        body += "\nCurrent dependencies: " + (", ".join(r["depends"]) or "none") + "\n"
+        if corrections := packets.pending(r):
+            body += "Waiting for independently reviewed test correction: " + ", ".join(key(c) for c in corrections) + ".\n"
+        body += "Run budget metadata: " + json.dumps(r.get("budget", {})) + " (omitted limits use daemon defaults)\n"
+        if r["held_by"]:
+            body += f"Held by {r['held_by']}: it will not start until revised or released.\n"
+        if found["blocker"]:
+            body += f"\nCurrent blocker: {found['blocker']}\n"
+    if "\n## " not in body:
+        body += "\nThe queue is empty.\n"
+    return body

@@ -18,6 +18,9 @@ def fresh_ledger(test, previous: dict | None = None) -> dict:
     state.STOPPING.clear()
     state.L.clear()
     state.L.update(state.fresh(previous or {}))
+    test.enterContext(patch.object(state, 'SAVED_VALUE', None))
+    if previous is None:
+        state.L['paused'] = False
     return state.L
 
 
@@ -53,6 +56,19 @@ def commit(worktree, message: str = "change") -> str:
     return git.head(worktree)
 
 
+def accepted_plan(repo, answer='No remaining approved work.\n'):
+    """A real Git plan artifact for tests exercising scout frontier review."""
+    leaf = Path(repo) / '.knowledge/what/is/the/plan.md'
+    leaf.parent.mkdir(parents=True, exist_ok=True)
+    leaf.write_text(answer)
+    return commit(repo, 'accepted plan fixture')
+
+
+def review_frontier(task):
+    from cointos import api
+    return api.dispatch('check-work', {'caller': caller(task, task['agent'])})
+
+
 def queued(where: dict, name: str, brief: str = "Do it", kind: str = "queued", **options) -> dict:
     """A task for a new queue record, as the spawner creates it."""
     item = queues.add(where, kind, name, brief, **options)
@@ -71,6 +87,7 @@ def running(task: dict, agent_id: str = "run-1", worktree: bool = True) -> dict:
     if worktree and task["branch"] is not None:
         where = tasks.place(task)
         git.add_worktree(where["path"], task["worktree"], task["branch"], where["main_branch"])
+        task.setdefault("base_commit", git.head(task["worktree"]))
     lifecycle.start(task, agent_id)
     state.L["agents"][agent_id] = {
         "id": agent_id, "role": task["role"], "place": task["place"], "task": task["id"], "title": task["title"],
