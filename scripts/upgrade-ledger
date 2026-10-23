@@ -10,9 +10,12 @@ Current schema, from the stored-status one:
   Its stored `status`, `decompose`, `report`, `hash` and `commit` go: where it stands is derived
   from its tasks. A record replaced by children keeps only `replaced_by`. Records gain
   `version` (1); tasks made for the current version gain `record_version` 1, stale ones 0, so a
-  failed item still awaits its manager and a finished decomposition still speaks for it.
+  legacy assignment evidence retains its version before recovery ownership is migrated.
 - A garden's `record_hash` (a tree-health identity) becomes `health_hash`; other tasks' go.
 - Dependency names are cleaned of markup; human `held_by` labels become "user".
+  Same-project qualified aliases become local names even in current versioned records;
+  matching brief metadata changes spelling, without revising assignments or task evidence.
+- Unscoped Coin snapshots are discarded: per-user cache owners replace them. History stays.
 - The worker's `.work-report.md` is retired (the receipt is its account): accepted hidden test
   packets that carry one get a child commit without it, recorded as the packet and kept under
   its archive ref; a worker branch that is not running gets a commit removing it, and a
@@ -20,10 +23,14 @@ Current schema, from the stored-status one:
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from cointos import config as configuration, dependencies
 
 REPORT = ".work-report.md"
 NO_DEPENDENCY = {"none", "nothing", "n/a", "-"}
@@ -97,6 +104,73 @@ def upgrade_records(ledger: dict) -> None:
         task.setdefault("record_version", None)
 
 
+def upgrade_recovery(ledger: dict) -> None:
+    """Work identity owns recovery; obsolete execution-task chains become history."""
+    if ledger.get('frontier_version') == 1:
+        return
+    tasks = ledger.get('tasks', {})
+    origins = {key: task.get('record') or key for key, task in tasks.items()}
+    for task in tasks.values():
+        if task['kind'] == 'decompose':
+            task['previous_kind'] = 'decompose'
+            owned = task.get('record') or f"{task['place']}:{task['item']}"
+            task.update(kind='operator', role='operator', abilities=['standard', 'control', 'network'],
+                        repair_origin={'task': owned, 'version': task.get('record_version')},
+                        record=None, rank=[1, *task.get('rank', [3])[1:]])
+        if task.get('repair_origin'):
+            origin = task['repair_origin']
+            origin['task'] = origins.get(origin['task'], origin['task'])
+            if task['status'] in ('done', 'failed'):
+                task['former_repair_origin'] = task.pop('repair_origin')
+            else:
+                if task.get('session'):
+                    task.setdefault('previous_sessions', []).append(task['session'])
+                task.update(session=None, recovery_note='Recovery now has one controller with queue and infrastructure controls.')
+                task.pop('system_context', None)
+                task.pop('tool_context', None)
+    owners = {}
+    for task in sorted(tasks.values(), key=lambda t: (t.get('previous_kind') == 'decompose', t.get('created_at', 0))):
+        origin = task.get('repair_origin')
+        if not origin:
+            continue
+        key = (origin['task'], origin['version'])
+        if key in owners:
+            task.update(status='failed', agent=None, former_repair_origin=task.pop('repair_origin'),
+                        recovery_owner=owners[key], note='Recovery is owned by ' + owners[key])
+        else:
+            owners[key] = task['id']
+    ledger['frontier_version'] = 1
+
+
+def dependency_aliases(ledger: dict) -> list[tuple[dict, list[str], str]]:
+    """Preflight every record before mutation or Git effects; aliases change spelling, not work."""
+    changes = []
+    for record in ledger.get("queue", {}).values():
+        project, brief = record["project"], record["brief"]
+        names = record.get("depends", [])
+        canonical = dependencies.canonical(project, [n for n in (dependency(name) for name in names) if n])
+        rows = brief.splitlines(keepends=True)
+        metadata = [(index, row) for index, row in enumerate(rows)
+                    if re.match(r"\**Depends on:\**", row.strip(), re.IGNORECASE)]
+        written = [dependencies.canonical(project, dependencies.depends(row)) for _, row in metadata]
+        qualified = any(":" in name for name in names + [name for _, row in metadata
+                                                        for name in dependencies.depends(row)])
+        if not qualified:
+            continue
+        if any(set(named) != set(canonical) for named in written):
+            raise ValueError("qualified dependency metadata disagrees with its brief")
+        text = "Depends on: " + (", ".join(canonical) or "none")
+        for index, row in metadata:
+            ending = row[len(row.rstrip('\r\n')):]
+            rows[index] = text + ending
+        if not metadata:
+            ending = next((row[len(row.rstrip('\r\n')):] for row in rows
+                           if row.endswith(('\r', '\n'))), '\n')
+            rows.insert(0, text + ending)
+        changes.append((record, canonical, ''.join(rows)))
+    return changes
+
+
 def strip_reports(ledger: dict, registry: list[dict]) -> None:
     paths = {project["name"]: project["path"] for project in registry}
     tasks = ledger.get("tasks", {})
@@ -127,19 +201,49 @@ def strip_reports(ledger: dict, registry: list[dict]) -> None:
 
 
 def upgrade(ledger: dict, registry: list[dict]) -> dict:
+    aliases = dependency_aliases(ledger)
+    if not ledger.get('frontier_version') and any(
+            t['status'] == 'running' and (t['kind'] == 'decompose' or t.get('repair_origin'))
+            for t in ledger.get('tasks', {}).values()):
+        raise ValueError('pause construction agents before replacing recovery ownership')
     upgrade_records(ledger)
+    upgrade_recovery(ledger)
+    for record, names, brief in aliases:
+        record.update(depends=names, brief=brief)
     strip_reports(ledger, registry)
+    # Old blocked receipts waited for an integrator assessment. Route inactive
+    # assessments to their actual repair owner without discarding any artifacts.
+    # Preserve an assessment already running; its own receipt will finish it.
+    for worker in ledger.get("tasks", {}).values():
+        if (worker["kind"] != "item" or worker["status"] != "review"
+                or (worker.get("receipt") or {}).get("disposition") != "blocked"):
+            continue
+        integrations = [t for t in ledger["tasks"].values()
+                        if t["kind"] == "integrate" and t.get("worker") == worker["id"]
+                        and t["status"] in ("waiting", "running")]
+        if any(t["status"] == "running" for t in integrations):
+            continue
+        worker.update(status="failed", agent=None, note="blocked receipt awaits recovery controller")
+        for integration in integrations:
+            integration.update(status="failed", agent=None,
+                               note="blocked receipt routed directly to recovery controller")
     ledger.pop("incidents", None)
+    for name in [n for n, snapshot in ledger.get("snapshots", {}).items() if snapshot.get("owner") == "coin"]:
+        del ledger["snapshots"][name]
     return ledger
 
 
 def main(path: Path) -> None:
-    if not path.exists():
+    absent = object()
+    previous = configuration.read_owned_json(path, absent)
+    if previous is absent:
         return
+    configuration.validate_ledger(previous)
     registry_path = path.parent.parent / "config/projects.json"
-    registry = json.loads(registry_path.read_text()) if registry_path.exists() else []
-    registry = registry.get("projects", registry) if isinstance(registry, dict) else registry
-    ledger = upgrade(json.loads(path.read_text()), registry)
+    registry = configuration.read_owned_json(registry_path, [])
+    registry = registry.get("projects") if isinstance(registry, dict) else registry
+    registry = configuration.project_entries(registry)
+    ledger = upgrade(previous, registry)
     temporary = path.with_name(f".{path.name}.upgrade")
     temporary.write_text(json.dumps(ledger, indent=1, sort_keys=True) + "\n")
     os.replace(temporary, path)

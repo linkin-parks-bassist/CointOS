@@ -14,6 +14,7 @@ class Handoffs(unittest.TestCase):
         support.fresh_ledger(self)
         support.quiet(self)
         self.project = support.project(self, support.repository(self))
+        support.accepted_plan(self.project['path'])
         state.L["cadence"]["steward:system"] = state.now()
         self.task = support.running(support.queued(self.project, "build", "Plan the product", kind="command"), "manager-1")
 
@@ -74,6 +75,73 @@ class Handoffs(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "scout/auditor"):
                     self.propose(by, "queued", f"implementation-{kind}")
 
+    def test_steward_cannot_complete_a_declared_handoff_with_only_a_user_alert(self):
+        by = self.running_as('steward')
+        caller = support.caller(by, by['agent'])
+        api.dispatch('send', {'caller': caller, 'to': 'user', 'text': 'Manager should plan next work'})
+        body = {'caller': caller, 'outcome': 'complete', 'detail': 'Stalled work reported'}
+        with self.assertRaisesRegex(ValueError, 'require scout_result'):
+            api.dispatch('finish', body)
+        with self.assertRaisesRegex(ValueError, 'user alert is not a handoff'):
+            api.dispatch('finish', {**body, 'scout_result': {'kind': 'manager_handoff', 'handoff': 'p:missing'}})
+        self.assertEqual((by['status'], by['receipt']), ('running', None))
+        self.propose(by, 'command', 'next-step')
+        record = state.L['queue']['p:next-step']
+        record['held_by'] = 'user'
+        with self.assertRaisesRegex(ValueError, 'blocked or held'):
+            api.dispatch('finish', {**body, 'scout_result': {'kind': 'manager_handoff', 'handoff': 'p:next-step'}})
+        record['held_by'] = None
+        result = api.dispatch('finish', {**body, 'scout_result': {'kind': 'manager_handoff', 'handoff': 'p:next-step'}})
+        self.assertEqual(result['receipt']['evidence']['scout_result'],
+                         {'kind': 'manager_handoff', 'handoff': 'p:next-step'})
+        self.assertEqual(by['status'], 'done')
+
+    def test_clean_scout_declares_every_enabled_project_and_personal_question_is_explicit(self):
+        by = self.running_as('steward')
+        with self.assertRaisesRegex(ValueError, 'every enabled project'):
+            lifecycle.submit(by['id'], by['agent'], 'complete', 'Checked plans',
+                             {'scout_result': {'kind': 'no_action', 'checked_projects': []}})
+        with self.assertRaisesRegex(ValueError, 'call cointos_check_work'):
+            lifecycle.submit(by['id'], by['agent'], 'complete', 'Checked plans',
+                             {'scout_result': {'kind': 'no_action', 'checked_projects': ['p']}})
+        self.assertTrue(support.review_frontier(by)['ok'])
+        receipt = lifecycle.submit(by['id'], by['agent'], 'complete', 'Checked plans',
+                                   {'scout_result': {'kind': 'no_action', 'checked_projects': ['p']}})
+        self.assertEqual(receipt['evidence']['scout_result']['checked_projects'], ['p'])
+        other = support.running(tasks.create('steward', tasks.SYSTEM, 'decision', 'b', [6]),
+                                'decision-run', worktree=False)
+        with self.assertRaisesRegex(ValueError, 'personal authority'):
+            lifecycle.submit(other['id'], other['agent'], 'complete', 'Need decision',
+                             {'scout_result': {'kind': 'user_decision'}})
+        receipt = lifecycle.submit(other['id'], other['agent'], 'complete', 'Need decision',
+                                   {'scout_result': {'kind': 'user_decision', 'question': 'Choose the new product requirement'}})
+        self.assertEqual(receipt['evidence']['scout_result']['kind'], 'user_decision')
+        queued = [m for m in state.L['messages'] if m['to'] == 'user' and m['from'] == other['id']]
+        self.assertEqual([m['text'] for m in queued], ['Choose the new product requirement'])
+        self.assertFalse(queued[0]['read'])
+        lifecycle.submit(other['id'], receipt['run'], 'complete', 'Need decision',
+                         {'scout_result': {'kind': 'user_decision', 'question': 'Choose the new product requirement'}})
+        self.assertEqual(len([m for m in state.L['messages'] if m['from'] == other['id']]), 1)
+
+    def test_scout_reviews_accepted_plan_not_editor_branch_and_changed_frontier_refuses_no_action(self):
+        repo = Path(self.project['path'])
+        support.accepted_plan(repo, 'Approved next work remains.\n')
+        main = support.git.head(repo)
+        support.git.run(repo, 'checkout', '-qb', 'editor-draft')
+        support.accepted_plan(repo, 'Draft says nothing remains.\n')
+        by = self.running_as('steward')
+        result = support.review_frontier(by)
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['projects'][0]['main'], main)
+        self.assertEqual(result['projects'][0]['plan'], 'Approved next work remains.')
+        queues.add(self.project, 'command', 'new-owner', 'Plan approved work')
+        with self.assertRaisesRegex(ValueError, 'call cointos_check_work'):
+            lifecycle.submit(by['id'], by['agent'], 'complete', 'No further action',
+                             {'scout_result': {'kind': 'no_action', 'checked_projects': ['p']}})
+        self.assertTrue(support.review_frontier(by)['ok'])
+        lifecycle.submit(by['id'], by['agent'], 'complete', 'Work has an owner',
+                         {'scout_result': {'kind': 'no_action', 'checked_projects': ['p']}})
+
     def test_an_integrator_proposes_one_same_project_command_kind(self):
         integrator = self.running_as("integrate", "integrate-x")
         self.propose(integrator, "command", "follow-up")
@@ -85,7 +153,7 @@ class Handoffs(unittest.TestCase):
             api.dispatch("queue", {"project": "p", "kind": "queued", "name": "x", "brief": "X",
                                    "caller": support.caller(self.task, "someone-else")})
 
-    def test_any_running_task_reaches_the_user_through_coin(self):
+    def test_any_running_task_can_record_a_local_user_alert(self):
         for by in (self.running_as("steward"), self.task):
             api.dispatch("send", {"caller": support.caller(by, by["agent"]), "to": "user",
                                   "text": "Choose the recovery boundary"})
@@ -175,12 +243,13 @@ class PeriodicSteward(unittest.TestCase):
             self.assertFalse(steward(), "no repeat until project work settles again")
 
     def test_a_failed_command_blocks_its_record_and_does_not_suppress_the_steward(self):
-        state.L["cadence"]["steward:system"] = state.now() - 11
+        state.L["cadence"]["steward:system"] = state.now() - 21
         dead = support.queued(self.projects[0], "dead", "Old", kind="command")
         dead["status"] = "failed"
         with patch.dict(state.CONFIG, spawner={**state.CONFIG["spawner"], "steward_every_seconds": 10}):
             task = spawner.next_task()
-        self.assertEqual(task["kind"], "steward")
+            self.assertTrue(spawner.periodic(), "recovery ownership does not suppress periodic discovery")
+        self.assertEqual(task["kind"], "operator")
         found = queues.state(state.L["queue"]["p:dead"])
         self.assertEqual(found["status"], "blocked")
         self.assertIn("Task failed", found["blocker"])

@@ -1,19 +1,21 @@
 ---
 status: green
-revised_at: "2026-09-30T10:26:55+10:00"
+revised_at: "2026-10-19T17:11:41+11:00"
 ---
 
 The active runtime owns two scheduler settings that change without process replacement:
 
-- `scheduler.slice_seconds`: how long an equal-priority generating holder keeps its turn.
+- `scheduler.slice_seconds`: how long an equal-priority holder keeps its turn.
 - `scheduler.chunk_tokens`: the maximum generation tokens in one GPU step.
 
-Change them through the dashboard Machine panel or `POST /api/scheduler` with either or both fields. The API validates the complete resulting pair and persists it before applying it. Direct edits to the active runtime's `config/cointos.json` are also noticed each daemon tick. Editing the source checkout does not affect the installed runtime.
+Change them through the dashboard Machine panel or `POST /api/scheduler` with either or both fields. The API validates the complete resulting pair and persists it before applying it. Direct edits to the active runtime's `config/cointos.json` are noticed each daemon tick. Editing source does not affect installed runtime.
 
-`slice_seconds` must be finite and positive. `chunk_tokens` must be a positive integer and cannot be a boolean. Invalid or partially written configuration retains the last valid active pair and exposes `config_error` in the ledger/dashboard. The ledger's `scheduler` object is the authority for the effective values.
+`slice_seconds` must be finite and positive. `chunk_tokens` must be a positive integer, never a boolean. Invalid/partial configuration retains the last valid pair and exposes `config_error`. The ledger's `scheduler` object is the authority for effective values.
 
-An existing turn keeps its original clock. A shorter slice can make its holder yield at the next completed GPU step; no in-flight backend request is cut. Tool-call grace never extends past the current slice end. A lane worker reads `chunk_tokens` at each step start, so an in-flight step finishes at its old size and the next step uses the new one without losing generated tokens.
+The installed scheduler counts reads and generation from admission; a reader yields to equals only with a reusable partial checkpoint. Existing turns retain their clocks. A shorter slice takes effect at a completed GPU step; no in-flight request is cut. Tool grace never extends past the slice end. Workers read `chunk_tokens` at step start: an in-flight step finishes at its old size, and the next uses the new value without losing tokens.
 
-Step size and time slice are independent. Smaller generation steps improve pre-emption granularity but add HTTP, serialization and scheduling overhead. More frequent actual switches may also add snapshot save/restore cost. The throughput trade-off must be measured under representative load; configuration alone does not establish it.
+Current installed steps/slices are 96 tokens/60 seconds; source defaults remain 32/30. Preserve live user settings across compatible upgrades. Historically, at a 70k Qwen context under concurrent Coin load, 96-token steps reached about 25 seconds and triggered the existing 15-second overdue-preemption check; 32-token steps reduced that observed stall. This is not authority to reset the current pair. Verify waiting-agent progress and check recovery; token count cannot guarantee a wall-time bound.
 
-No model shape or weight reload is required. Older installed code needs one compatible live installation before these fields can reload; afterwards they are true live settings. `how/to/restart/cointos.md` owns larger replacement choices.
+Step size and slice are independent. Smaller steps improve pre-emption granularity but add transport, serialization, pending-token consumption and scheduling overhead. Actual switches can add snapshot costs. Measure the throughput trade-off under representative load; short benchmarks made with 96-token steps do not establish current live throughput.
+
+No model shape or weight reload is required. Older installed code needs compatible installation before these fields reload. `how/to/restart/cointos.md` owns larger replacement choices.

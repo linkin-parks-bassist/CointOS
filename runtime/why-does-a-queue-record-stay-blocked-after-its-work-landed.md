@@ -1,0 +1,7 @@
+A commit on main does not settle a queue record. Acceptance needs a complete worker receipt and exact reviewed landing, or incorporate with pinned worker/main receipts and already-landed packet tests. Only the daemon writes acceptance.
+
+A queued command cannot invoke integrator-only landing itself, but its manager can repair a blocked assignment. An authorized changed revision preserves branch/files, starts the worker on the new instruction and allows its complete receipt to summon independent review. An identical revision does not refill an exhausted allowance. The canonical recovery Operator can also repair the assignment or request independent test correction; an exhausted controller receives no recursive repair. Neither a manager/controller receipt nor removing a failed test can accept product work.
+
+A persisted verified publication intent pins candidate, worker, receipt run, assignment version and review run. Reconciliation recovers matching published work after restart without old worktrees. Arbitrary ancestry cannot authorize acceptance. Reviewed red test packets satisfy prerequisites while hidden off main; invalid execution/timeouts cannot authorize them.
+
+Inspect cointos_task and the work frontier for acceptance, holds, current recovery and runnable continuation. Never edit the ledger or projected queues. Report wording, process exits and commit messages do not decide completion.

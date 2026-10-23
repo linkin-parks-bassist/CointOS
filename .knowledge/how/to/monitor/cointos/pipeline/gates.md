@@ -1,21 +1,22 @@
 ---
 status: green
-revised_at: "2026-10-09T02:08:19+11:00"
-checked_at: "2026-10-09T01:22:08+11:00"
+revised_at: "2026-10-16T06:28:46+11:00"
+checked_at: "2026-10-16T01:06:07+11:00"
 expires_at: "2026-10-16T00:00:00+10:00"
 ---
 
-The pipeline's mechanical checks are the dispatch-time `Relies on:` check, the packet check when an implementer finishes, and the landing gate's full suite (mechanism in `what/is/the/shape/of/cointos/work.md`). They are judged by whether they cut wasted cycles without stalling the pipeline. Run `cointos metrics --hours 72` (reads `~/.CointOS/state/events.jsonl` and its one rotated file; the header shows how many hours the journal actually covers, often about three days). For longer trends, record its output here at each review rather than relying on the bounded journal.
+cointos metrics --hours 72 summarizes retained event-journal evidence. An earlier custom fixture runner polluted the live journal; its events remain for truthful history. Post-rebuild aggregate metrics therefore cannot be treated as native evidence without filtering to actual managed task/run identities and checked receipts. how/to/test/cointos.md owns prevention; the live-acceptance owner records scoped native outcomes. Task creation now records explicit kind/role and canonical repair origin; older events retain ID-based classification. Report direct recovery controllers separately from legacy manager passes. Recoveries per landing includes both; counts are assignments, not distinct defect causes. Agent-end events record generation seconds/tokens by role, excluding waits and tools; historical entries lacking counters do not imply zero cost.
 
-Baselines (Pigen only): 72 h ending 2026-10-02: 31 landings (test-contract 20, implementation 7, skeleton 3, integration 1), 70 worker items started, 11 manager recoveries, 0.35 recoveries per landing, implementation 23% of landings. 48 h ending 2026-10-06, under the former comparative implementation gate: 8 landings from 34 worker starts, 14 manager recoveries, no implementation landings. Failing packets wait to land with implementation; passing packets can land independently. 72 h ending 2026-10-09: 7 landings (implementation 2, skeleton 3, test-contract 2), 59 worker items started, 15 manager recoveries, 2.14 recoveries per landing, implementation 29% of landings, 6 infeasible briefs caught at dispatch, 4 packet test failures, 19 integrations, 53 complete and 7 blocked worker receipts.
+The pre-rebuild retained journal examined on 2026-10-15 covered about 260 hours: 47 landings, 81 manager-recovery creation events and 160 packet-test failures. The Oct15 portion had 117 packet failures and ten Operators. Recent native tool traces included 112 protected-Makefile finish refusals, 22 finish timeouts and 20 landing timeouts. Some repeated refusals predate the already-present three-identical-submissions bound. These establish wasted work and missing correction/control routes, not that every failure has one cause.
 
-Signals and what they mean:
+Earlier comparisons: the 72 hours ending Oct2 had 31 landings and 11 manager recoveries (0.35 per landing; 23% implementation). The checked 48 hours ending Oct11 had six landings and six manager recoveries (1.00; 17% implementation). Creation counts do not measure useful recovery.
 
-- **Infeasible briefs > 0** means the dispatch check caught a false premise before any worker spent generation; each one is a saved worker run. Read `infeasible ...` lines: a false positive (the symbol exists under another spelling, or `Relies on:` named a test-only helper) means the manager guidance or check needs tightening.
-- **Packet test failures** counts `packet tests failed` events: an implementer's finish refused because hidden tests failed. Repeated failures warrant inspecting the actual assertions and code: implementation errors, ambiguous briefs and tests beyond the contract require different remedies. Counts alone do not identify the cause.
-- **Gate returns (implementation)** counts landings that broke a test passing on main and returned with it bundled in. These should be rare; a high rate means implementers are not running the existing suite before finishing.
-- **Recoveries per landing** and **implementation share of landings** should improve on both baselines.
+Interpretation:
 
-Failure modes to watch: landing timeouts (the full suite shares `timeouts.command_seconds`, 300 s, which a growing suite can outrun); test packets that never land because no implementation item depends on them; red tests left on main, which enforce nothing because a failure main already has never blocks a landing; and a decomposition manager loop on one item (one automatic pass, then alert).
+- Dispatch refusal identifies missing declared APIs before worker generation; verify false positives against actual symbols.
+- Packet-test failures distinguish implementation defects from invalid accepted tests through contract evidence. Repeated identical refusal is not progress.
+- Candidate-caused gate returns identify regressions against passing main tests. Existing red-on-main tests do not gate a landing.
+- Work-frontier diagnostics show active ownership and runnable corrective children. A dead/circular child cannot mask ownerless blockage.
+- Compare useful accepted implementation and checked handoffs with recovery generation, failed attempts and elapsed time. A quiet runtime or all-green invariant checks alone cannot establish autonomy.
 
-Review again around 2026-10-16 with a fresh 72 h window and update this leaf's baselines.
+A native 53-command landing exhausted the old five-minute suite deadline near its last commands; the named compile-test took six seconds separately, and retry accepted the packet. The installed runtime separates each command's five-minute execution cap from a thirty-minute full-validation budget, with enclosing CLI/MCP deadlines and typed execution failures. Installed native fixtures pass, and a native corrected-contract recovery now reaches independently accepted implementation 438529d. Sustained throughput and judgment remain unproved. Watch suite timeouts, hidden packets without implementation dependents, repeated contract corrections and controller exhaustion. The rebuilt runtime is deployed; a 20,000-case seeded production-function campaign has no failures. Validation evidence owns current suite counts. Measure the new native window against this retained pre-rebuild baseline.

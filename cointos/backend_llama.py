@@ -21,11 +21,14 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+from . import backend_chat
 
 class Lost(Exception):
     """The server no longer holds the context the lane was known to hold, so this request
@@ -136,26 +139,17 @@ def kill(config: dict, name: str) -> None:
 def render(config: dict, model: str, conversation: dict) -> dict:
     """A conversation ({"messages", "tools", "template"}) as context tokens, plus what `read`
     needs to interpret the thought that follows them."""
-    body = {"messages": conversation["messages"]}
-    if conversation.get("tools"):
-        body["tools"] = conversation["tools"]
-    if conversation.get("template"):
-        body["chat_template_kwargs"] = conversation["template"]
-    text = _server(model, "/apply-template", body, config["timeouts"]["server_seconds"])["prompt"]
-    tokens = _server(model, "/tokenize", {"content": text, "add_special": False, "parse_special": True},
-                     config["timeouts"]["render_seconds"])["tokens"]
-    reader = {"thinking": text.endswith("<think>\n"), "tools": conversation.get("tools") or []}
-    if reader["thinking"] and conversation.get("reasoning_budget") is not None:
-        # Resolve model-specific tokens; never assume another tokenizer's special IDs.
-        def tokenize(value):
-            return _server(model, "/tokenize", {"content": value, "add_special": False, "parse_special": True},
-                           config["timeouts"]["render_seconds"])["tokens"]
-        marker = tokenize("</think>")
-        if len(marker) != 1:
-            raise ValueError("Reasoning budgets require a single closing-think special token")
-        reader.update(reasoning_budget=conversation["reasoning_budget"], think_end=marker[0],
-                      think_close=tokenize("\n</think>\n\n"))
-    return {"tokens": tokens, "reader": reader}
+    def tokenize(text):
+        return _server(model, "/tokenize", {"content": text, "add_special": False, "parse_special": True},
+                       config["timeouts"]["render_seconds"])["tokens"]
+    text = _server(model, "/apply-template", backend_chat.prepare(conversation),
+                   config["timeouts"]["server_seconds"])["prompt"]
+    return {"tokens": tokenize(text), "reader": backend_chat.reader(conversation, text, tokenize)}
+
+
+def can_continue(config: dict, model: str, held: list[int] | None, tokens: list[int]) -> bool:
+    """The buffered completion endpoint needs a pending real token to avoid rewind."""
+    return bool(held) and len(held) < len(tokens) and tokens[:len(held)] == held
 
 
 def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> None:
@@ -258,9 +252,14 @@ def spill(config: dict, name: str) -> None:
 
 def unspill(config: dict, name: str) -> None:
     """Move a snapshot from disk back to memory, where llama-server can restore it."""
+    copy_back(config, name)
+    os.remove(Path(config["disk_snapshots"]).expanduser() / _snapshot(name))
+
+
+def copy_back(config: dict, name: str) -> None:
+    """Copy into RAM; the snapshot owner retires the disk copy separately."""
     shutil.copyfile(Path(config["disk_snapshots"]).expanduser() / _snapshot(name), Path(config["snapshots"]) / _snapshot(name))
     os.chmod(Path(config["snapshots"]) / _snapshot(name), 0o644)
-    os.remove(Path(config["disk_snapshots"]).expanduser() / _snapshot(name))
 
 
 def forget(config: dict, name: str) -> None:
@@ -269,6 +268,77 @@ def forget(config: dict, name: str) -> None:
             os.remove(place / _snapshot(name))
         except FileNotFoundError:
             pass
+
+
+def cache_kind(config: dict, model: str | None) -> str:
+    return 'llama'
+
+
+def snapshot_path(config: dict, entry: dict) -> Path:
+    name, tier = entry['name'], entry['tier']
+    if not isinstance(name, str) or _snapshot(name) != name + '.bin':
+        raise ValueError('invalid cache cleanup name')
+    if tier not in ('memory', 'disk'):
+        raise ValueError('invalid cache cleanup tier')
+    return Path(config['snapshots' if tier == 'memory' else 'disk_snapshots']).expanduser() / _snapshot(name)
+
+
+def delete_snapshot_file(config: dict, entry: dict) -> int:
+    """Unlink one owned file; return its formerly allocated regular-file bytes."""
+    path = snapshot_path(config, entry)
+    try:
+        info = path.lstat()
+        os.remove(path)
+    except FileNotFoundError:
+        return 0
+    return info.st_blocks * 512 if stat.S_ISREG(info.st_mode) else 0
+
+
+def snapshot_files(config: dict, tier: str | None = None) -> list[dict]:
+    entries = []
+    for tier in (tier,) if tier else ('memory', 'disk'):
+        place = Path(config['snapshots' if tier == 'memory' else 'disk_snapshots']).expanduser()
+        try:
+            paths = list(place.iterdir())
+        except FileNotFoundError:
+            continue
+        for path in paths:
+            if not path.name.endswith('.bin'):
+                continue
+            name = path.name[:-4]
+            if _snapshot(name) != path.name:
+                continue
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                entries.append({'backend': 'llama', 'tier': tier, 'name': name,
+                                'bytes': info.st_size if stat.S_ISREG(info.st_mode) else 0})
+    return entries
+
+
+def recover_transfer(config: dict, name: str, expected_bytes: int) -> str | None:
+    """Recover a completed immutable copy after the copying process has exited.
+
+    Copy/move writes sequentially and removes its source only after completion.
+    The native restore still validates its opaque payload before using it.
+    """
+    if type(expected_bytes) is not int or expected_bytes <= 0:
+        return None
+    places = [(tier, Path(config[key]).expanduser() / _snapshot(name))
+              for tier, key in (('memory', 'snapshots'), ('disk', 'disk_snapshots'))]
+    for tier, path in places:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_size == expected_bytes:
+            for _, other in places:
+                if other != path:
+                    other.unlink(missing_ok=True)
+            return tier
+    return None
 
 
 def forget_untracked(config: dict, memory_names: set[str], disk_names: set[str]) -> list[str]:
@@ -290,65 +360,10 @@ def forget_untracked(config: dict, memory_names: set[str], disk_names: set[str])
 
 # ---------------------------------------------------------------- reading a thought
 
-MARKERS = ("</think>", "<tool_call>")
-END_OF_TURN = ("<|im_end|>", "<|endoftext|>")  # the model's end-of-turn tokens: the format, not the message
-
-
-def _withhold(text: str) -> str:
-    """Drop a trailing partial marker, which the next tokens may complete."""
-    for cut in range(min(len(text), max(map(len, MARKERS)) - 1), 0, -1):
-        if any(marker.startswith(text[-cut:]) for marker in MARKERS):
-            return text[:-cut]
-    return text
-
-
-def _value(raw: str, schema: dict):
-    if schema.get("type") == "string":
-        return raw
-    try:
-        return json.loads(raw)
-    except ValueError:
-        return raw
-
-
 def text(config: dict, model: str, tokens: list[int]) -> str:
     """The literal text of `tokens`."""
     return _server(model, "/detokenize", {"tokens": tokens}, config["timeouts"]["server_seconds"])["content"] if tokens else ""
 
 
 def read(config: dict, model: str, reader: dict, tokens: list[int], final: bool) -> dict:
-    """What a thought says so far: {"reasoning", "content", "tool_calls", "phase"}, phase being
-    "reasoning" while the model is still thinking, then "writing" (its message or tool calls).
-    Before the thought is final, text that may still turn into a marker is held back, and tool
-    calls are not given.
-
-    The split mirrors how the Qwen template renders an assistant turn, so that the next render
-    reproduces these tokens exactly and the lane state can be continued."""
-    text = _server(model, "/detokenize", {"tokens": tokens}, config["timeouts"]["server_seconds"])["content"] if tokens else ""
-    if not final:
-        text = text.rstrip("\ufffd")  # a UTF-8 fragment must not be streamed as irreversible replacement text
-    for end in END_OF_TURN:
-        text = text.removesuffix(end)
-    reasoning, rest = "", text
-    if reader["thinking"]:
-        if "</think>" in text:
-            reasoning, rest = text.split("</think>", 1)
-            rest = rest.lstrip("\n")
-        else:
-            reasoning, rest = (text if final else _withhold(text)), ""
-    content, calling, calls = rest.partition("<tool_call>")
-    if not final and not calling:
-        content = _withhold(content)
-    phase = "reasoning" if reader["thinking"] and "</think>" not in text else "writing"
-    thought = {"reasoning": reasoning.strip(), "content": content.rstrip("\n") if calling else content, "tool_calls": [],
-               "phase": phase}
-    if final and calling:
-        schemas = {tool["function"]["name"]: tool["function"].get("parameters", {}).get("properties", {})
-                   for tool in reader["tools"]}
-        for index, call in enumerate(re.findall(r"<function=([^>\n]+)>\n(.*?)</function>", "<tool_call>" + calls, re.S)):
-            name, body = call
-            arguments = {key: _value(raw, schemas.get(name, {}).get(key, {}))
-                         for key, raw in re.findall(r"<parameter=([^>\n]+)>\n(.*?)\n</parameter>", body, re.S)}
-            thought["tool_calls"].append({"id": f"call_{index}_{os.urandom(4).hex()}", "type": "function",
-                                          "function": {"name": name, "arguments": json.dumps(arguments)}})
-    return thought
+    return backend_chat.read(reader, text(config, model, tokens), final)

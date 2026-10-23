@@ -1,0 +1,20 @@
+---
+status: green
+revised_at: "2026-10-19T23:13:22+11:00"
+---
+
+The latest source suite passes 1,061 tests with three native-only skips (workflow-observation-20261019/snapshot-cleanup-suite.log). snapshot-cleanup-verified.json binds ten runtime modules. Its 117 focused checks cover blocked RAM/SSD deletion, charged capacity, concurrent TCP/token progress, restore pins, copy-back, inventory/deletion retry, restart and filename safety. Earlier qualified checks retain FIFO journal progress/ordering, usable-prefix fallback, twelve real copy-process deaths, exact-byte recovery, protected cache replacement, identical HTTP snapshots, delivered tool-cycle reuse and rejection of changed reasoning. Real-file persistence checks cover telemetry-only deduplication, immediate budget/receipt/snapshot/hold publication, target binding, failed-write retry, ordering and blocked-storage authority. Focused persistence/storage owners retain deployment and live-benefit bounds.
+
+Seventy-one focused tree/recovery/restart/fault-campaign checks pass. Blocked-observer TCP reads preserve dashboard access; changed configuration, newer observations and shutdown revoke stale results. Initial garden recovery waits for observation; completed read failures and started controllers retain prior eligibility. The managed-tree and dashboard owners hold live bounds.
+
+Real-Git regressions defer recovery for pending canonical answers and restore eligibility after owner commit and health refresh. Cases cover staging, deletion, untracked owners, policy, health stamps and independent editor branches. Phantom/empty batches and false gardener completion refuse without changing HEAD/index/files/refs or receipts. Proof sweeps do not certify semantic completeness.
+
+Native branch-publisher confinement/scratch/compaction/recovery qualification passes 59 checks. Operator/gardener/tree-auditor kernel cases deny direct/symlink writes, shell cp and Git restore into another checkout while permitting scoped commits. Native OpenCode 1.18.35 verifies summary-context persistence/consumption, unchanged ordinary replies and once-only tools. Snapshot fixtures separate actual manifests from hidden bindings, account for grants and expose unavailable authority. They do not prove model-summary accuracy.
+
+Mechanism coverage includes recovery ownership, restart deduplication, project serialization, atomic planning/handoff, exact replay, immutability and MCP flush before acknowledgment. Independently reviewed correction preserves implementation, holds and old acceptance until review activates bindings. Admission/review-slot ordering prevents consumers starving correction review. Migration preserves authority/artifacts. Review staging rejects staged, unstaged and untracked tampering. Fault campaigns exercise production functions through the current seeded/ordered-pair matrix and 20,000 previously qualified cases.
+
+Timeout and shell/direct OOM raise ExecutionError; ordinary exit 124 remains assertion evidence. Suites may outlast a command cap; lease wait does not consume it. Infrastructure failures escalate separately from product refusals. Packet-preserving revision refuses test removal. Distinct shared commands execute once. Landing exempts unrelated failures already on main; submission requires all selected bindings. Registered commands do not prove semantic adequacy.
+
+Native independently reviewed corrections, implementation landings and model-error retries have focused evidence in live acceptance; these observations do not certify sustained judgment or throughput.
+
+Process-owned flock covers validation orphans, but external builds can overwrite hardcoded executables. Checkout-owned outputs restore failure under interference. Earlier imports polluted journals/queue views; central initialization now isolates state/caches/publication/kt. Observer fixtures preserve diagnostics across failed queries, malformed events and confirmed-exit tails. Missing/ambiguous Coin keys refuse requests. Independent judgment and sustained throughput remain observational acceptance.

@@ -23,8 +23,6 @@ KINDS = {
              "receipts": ("complete", "blocked"), "lands": "review"},
     "integrate": {"role": "integrator", "rank": 2, "scope": "project", "record": False,
                   "receipts": ("blocked",), "lands": "gate"},
-    "decompose": {"role": "manager", "rank": 3, "scope": "project", "record": True,
-                  "receipts": ("complete", "blocked"), "lands": "merge"},
     "breakdown": {"role": "manager", "rank": 5, "scope": "project", "record": True,
                   "receipts": ("complete", "blocked"), "lands": "merge"},
     "garden": {"role": "gardener", "rank": None, "scope": "tree", "record": False,
@@ -73,11 +71,12 @@ def default_effort(config: dict, task: dict, *, reviewed: dict | None = None) ->
     return task.get("reasoning_effort") or config["reasoning"].get(key, config["reasoning"]["default"])
 
 
-def budget(config: dict, overrides=None) -> dict:
+def budget(config: dict, overrides=None, *, role=None) -> dict:
     """A run budget: configured defaults with validated overrides."""
     if overrides is not None and (not isinstance(overrides, dict) or set(overrides) - set(BUDGET_KEYS)):
         raise ValueError("budget must contain generation_seconds and/or generation_tokens")
     result = {key: config["recovery"][key] for key in BUDGET_KEYS}
+    result.update(config["recovery"].get("role_budgets", {}).get(role, {}))
     result.update(overrides or {})
     for key, value in result.items():
         whole = key == "generation_tokens"
@@ -85,6 +84,10 @@ def budget(config: dict, overrides=None) -> dict:
                 or value <= 0 or (whole and not isinstance(value, int))):
             raise ValueError(f"{key} must be a positive finite {'integer' if whole else 'number'}")
     return result
+
+
+def fresh_limit(config: dict, task: dict) -> int:
+    return config["recovery"].get("role_fresh_retries", {}).get(task["role"], config["recovery"]["fresh_retries"])
 
 
 def spent(agent: dict) -> dict:

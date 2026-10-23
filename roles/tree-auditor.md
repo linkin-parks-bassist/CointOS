@@ -15,6 +15,14 @@ the manager or the user. Do not rewrite the whole tree. Respect the manager's ow
 the planning frontier; the daemon owns scheduler queues. Never browse old installations
 or unrelated roots. Brown incidents take priority and must be reconciled or reported.
 
+New runs inherit the checkout write boundary, including shell descendants. Keep
+temporary checks in your own checkout or scratch; never clean or restore another
+task's files. Authorized knowledge maintenance and Git/tool state remain available.
+
+Keep evidence version-scoped. Do not replace current canonical facts with findings
+from an older checkout. If merge reports pending canonical answer/policy edits, preserve
+the correction commit and finish blocked naming its owner; do not overwrite that draft.
+
 Commit any correction, land with `cointos merge`, and end with one receipt:
 `cointos finish --complete "..."` describing the concern, evidence and unresolved owner
 decisions, or `cointos finish --blocked "..."`. A clean sample is a valid result.

@@ -16,13 +16,13 @@ import sys
 import time
 from pathlib import Path
 
-from cointos import config as configuration, git, metrics, opencode, queues, schema
+from cointos import config as configuration, contracts, frontier, git, metrics, opencode, queues, schema
 from cointos.client import Unreachable, call, ledger
 
 CONFIG = configuration.load()
 UNITS = ["cointosd.service", "cointos-coin.service"]
-LANDING_TIMEOUT = CONFIG["timeouts"]["command_seconds"] + CONFIG["timeouts"]["api_seconds"]
-TERMINAL_COMMANDS = frozenset({"finish", "land", "return", "incorporate"})
+LANDING_TIMEOUT = CONFIG["timeouts"]["validation_seconds"] + CONFIG["timeouts"]["api_seconds"]
+TERMINAL_COMMANDS = frozenset({"finish", "handoff", "replace", "correct-tests", "land", "return", "incorporate"})
 
 
 # ---------------------------------------------------------------- reports
@@ -43,6 +43,12 @@ def status_text(state: dict) -> str:
              f"{sum(a['state'] == 'waiting' for a in agents)} waiting, {sum(a['state'] == 'running' for a in agents)} running)",
              f"work     {count('running')} in progress  {count('waiting')} up next  {count('review')} in review  "
              f"{count('done')} done  {count('failed')} gave up"]
+    frontier = state.get('work_frontier', [])
+    if frontier:
+        blocked = [row for row in frontier if row['status'] == 'blocked' and not row.get('held_by')]
+        owned = sum(bool(row.get('owner') or row.get('continuations')) for row in blocked)
+        lines.append(f"wanted   {len(frontier)} open items  {len(blocked)} blocked  "
+                     f"{owned} with recovery/continuation  {len(blocked) - owned} without recovery/continuation")
     memory, guard = state["memory"], state["guard"]
     if memory:
         lines.append(f"memory   headroom {memory['headroom_gb']} GB  (available {memory['available_gb']} GB)  "
@@ -78,11 +84,21 @@ def agents_text(state: dict) -> str:
     return "\n".join(lines) or "no live agents"
 
 
-def jobs_text(state: dict, limit: int = 30) -> str:
+def jobs_text(state: dict, limit: int | None = 30, project: str | None = None) -> str:
     now = time.time()
-    newest = sorted(state["tasks"].values(), key=lambda t: t["updated_at"], reverse=True)[:limit]
+    newest = sorted((task for task in state["tasks"].values()
+                     if project is None or task.get("place") == project),
+                    key=lambda task: task["updated_at"], reverse=True)
+    if limit is not None:
+        settled = [task for task in newest if task["status"] in schema.SETTLED]
+        history = {task["id"] for task in settled[:limit]}
+        newest = [task for task in newest if task["status"] in schema.ACTIVE or task["id"] in history]
+    def note(task):
+        words = (task.get("note") or "").split()
+        count = CONFIG["summary_words"][-1]
+        return " ".join(words[:count]) + (" … (task for full note)" if len(words) > count else "")
     return "\n".join(f"{t['status']:8} {t['id']:45} {t['role']:12} runs {t['runs']}"
-                     f"  {ago(now - t['updated_at'])} ago  {t['note'] or ''}" for t in newest) or "no tasks yet"
+                     f"  {ago(now - t['updated_at'])} ago  {note(t)}" for t in newest) or "no tasks yet"
 
 
 def checks_text(state: dict) -> tuple[str, bool]:
@@ -213,20 +229,31 @@ def merge() -> str:
         if conflicted():
             resolve(conflicted(), again)
         here("merge", "--abort")
-        raise SystemExit(f"bringing your branch up to date with {main} failed; nothing has landed")
+        raise SystemExit(f"bringing your branch up to date with {main} failed")
     if lands == "gate":
         result = call("land", {"commit": git.head(".")}, timeout=LANDING_TIMEOUT)
-        return f"verified and landed {result['commit']} on {main}; this is your receipt."
-    checkout = Path(git.run(".", "rev-parse", "--path-format=absolute", "--git-common-dir")).parent
-    if git.result(checkout, "branch", "--show-current").stdout.strip() != main:
-        raise SystemExit(f"the main checkout {checkout} is not on {main} right now; nothing has landed. "
-                         "Try `cointos merge` again later.")
-    landed = git.result(checkout, "merge", "--ff-only", task["branch"])
-    if landed.returncode:
-        raise SystemExit("main could not take your branch; nothing has landed. If main moved meanwhile, run "
-                         "`cointos merge` again. Otherwise the main checkout has someone's uncommitted edits "
-                         "in the same files; try again later.\n" + landed.stderr.strip())
-    return f"landed {task['branch']} on {main}"
+        acceptance = result.get('acceptance') or {}
+        via, gate = acceptance.get('via'), acceptance.get('gate')
+        if via == 'tests':
+            outcome = f"accepted hidden test packet {result['commit']}; not published on {main}"
+        elif via == 'landing':
+            outcome = f"verified and landed {result['commit']} on {main}"
+        elif via == 'incorporation':
+            outcome = f"verified existing implementation {result['commit']} already on {main}"
+        else:
+            outcome = f"acceptance recorded for {result['commit']}; publication details not retained"
+        measured = (f"Suite: {gate['suite']} commands, {gate['failed']} failed "
+                    f"({gate['red_on_main']} already failed on {main})."
+                    if isinstance(gate, dict) and {'suite', 'failed', 'red_on_main'} <= gate.keys()
+                    else 'Suite result not retained; acceptance alone does not establish a green suite.')
+        return outcome + '; this is your receipt.\n' + measured
+    try:
+        publication = call('merge', {'commit': git.head('.')})
+    except ValueError as error:
+        raise SystemExit(f"publication refused: {error}") from error
+    preserved = (f"; local edits preserved on {publication['draft']} in {publication['workspace']}"
+                 if publication.get("draft") else "")
+    return f"landed {task['branch']} on {main}{preserved}"
 
 
 def integration() -> tuple[dict, dict, str]:
@@ -246,13 +273,22 @@ def review() -> str:
     if not (here("diff", "--cached", "--quiet").returncode or conflicted()):
         if not git.clean("."):
             raise SystemExit("commit or resolve existing review edits before staging another worker")
-        if here("merge", "--ff-only", main).returncode:
-            raise SystemExit("review branch cannot fast-forward to current main; preserve your edits and resolve before review")
+        if not git.contains(".", git.head(".", main), git.head(".")):
+            updated = here("merge", "--no-edit", main)
+            if conflicted():
+                resolve(conflicted(), "commit the resolution, then run cointos review again")
+            if updated.returncode:
+                raise SystemExit(updated.stderr.strip())
         for tests in worker["receipt"]["evidence"].get("tests", []):  # the packet's tests land with its code
             if here("merge-base", "--is-ancestor", tests, "HEAD").returncode == 0:
                 continue
             merged = here("merge", "--squash", tests)
-            if merged.returncode and not conflicted():
+            merge_conflicts = conflicted()
+            if merge_conflicts:
+                rules = next(p for p in CONFIG["projects"] if p["name"] == task["place"]).get("test_policy")
+                if rules:
+                    git.resolve_insertions(".", [p for p in merge_conflicts if contracts.protected(p, rules)])
+            if merged.returncode and not merge_conflicts:
                 raise SystemExit(merged.stderr.strip())
             if conflicted():
                 resolve(conflicted(), "commit the packet's tests with `git commit`, then run cointos review again")
@@ -261,10 +297,17 @@ def review() -> str:
         if squashed.returncode and not conflicted():
             raise SystemExit(squashed.stderr.strip())
     lines = [f"Worker receipt for {task['item']}:\n\n{worker['receipt']['summary']}\n",
-             here("diff", "--cached", "--stat").stdout]
+             here("diff", main, "--stat").stdout]
+    scratch = opencode.run_dir(worker['receipt']['run']) / 'scratch'
+    if scratch.is_dir():
+        lines.append(f"Submitting worker's retained diagnostic scratch: {scratch}\n"
+                     "For unresolved verification questions, inspect its sources before rebuilding probes. "
+                     "Copy useful probes into your own scratch and replay against this exact candidate; "
+                     "check assertions and command exit status. These mutable files are unverified diagnostics.")
     if conflicted():
         resolve(conflicted(), "carry on with review; cointos land commits it")
-    return "\n".join(lines + ['Check the diff and tests, maintain the project tree and plan, then cointos land "summary", '
+    return "\n".join(lines + [f'Review the full candidate with `git diff {main}` (committed and staged changes), '
+                              'check the contract and witness inputs; keep pending product state truthful, then cointos land "summary", '
                               'or cointos return "what must change".'])
 
 
@@ -280,8 +323,14 @@ def land(summary: str) -> str:
         committed = here("commit", "-q", "-m", message)
         if committed.returncode:
             raise SystemExit(committed.stderr.strip() or committed.stdout.strip())
-    elif here("log", "-1", "--format=%B").stdout.strip() != message:
-        raise SystemExit("nothing reviewed to land; run cointos review first")
+    elif (git.head(".") != git.head(".", main_branch(task))
+          and (worker.get("acceptance") or {}).get("commit") != git.head(".")
+          and here("log", "-1", "--format=%B").stdout.strip() != message):
+        # A recovered, committed candidate still carries the worker's account into the
+        # landing commit. This changes metadata, not its reviewed tree or authorization.
+        committed = here("commit", "-q", "--allow-empty", "-m", message)
+        if committed.returncode:
+            raise SystemExit(committed.stderr.strip() or committed.stdout.strip())
     return merge()
 
 
@@ -291,16 +340,18 @@ def send_back(notes: str) -> str:
     return f"sent {task['item']} back to its worker; this is your receipt."
 
 
-def finish(outcome: str, detail: str) -> str:
+def finish(outcome: str, detail: str, scout_result=None) -> str:
     task, run = run_here()
-    call("finish", {"outcome": outcome, "detail": detail}, timeout=LANDING_TIMEOUT)
-    return f"receipt accepted: {task['id']} {outcome}."
+    body = {"outcome": outcome, "detail": detail}
+    if scout_result is not None:
+        body['scout_result'] = scout_result
+    result = call("finish", body, timeout=LANDING_TIMEOUT)
+    actual = result.get('receipt', {}).get('disposition', outcome)
+    return f"receipt accepted: {task['id']} {actual}."
 
 
 def replace(children: list[str]) -> str:
-    task, run = run_here()
-    call("replace", {"children": children})
-    return f"dependents of {task['item']} now depend on {', '.join(children)}; finish when your plan has landed"
+    return json.dumps(call("replace", {"children": children}))
 
 
 # ---------------------------------------------------------------- live views
@@ -411,10 +462,14 @@ def parser() -> argparse.ArgumentParser:
     sub = top.add_subparsers(dest="command", required=True)
     for name in ("status", "agents", "check", "go", "up", "restart", "merge", "review"):
         sub.add_parser(name)
-    sub.add_parser("jobs").add_argument("--all", action="store_true")
+    jobs = sub.add_parser("jobs", help="show all unfinished work and recent terminal history")
+    jobs.add_argument("--all", action="store_true", help="include complete history")
+    jobs.add_argument("--project", help="show only tasks belonging to this exact project")
     sub.add_parser("metrics", help="pipeline effectiveness over a recent window, from the event journal").add_argument(
         "--hours", type=float, default=24.0)
-    sub.add_parser("task", help="show one exact task and queue record, including receipts and dependencies").add_argument("task")
+    task = sub.add_parser("task", help="show current work, binding tests, receipts and dependencies")
+    task.add_argument("task")
+    task.add_argument("--history", action="store_true", help="include full historical execution narratives")
     sub.add_parser("halt").add_argument("--keep-coin", action="store_true")
     sub.add_parser("stop", help="pause autonomous agents and return their unfinished work to waiting")
     sub.add_parser("kill", help="kill one run and hold unfinished work until explicitly resumed").add_argument("agent")
@@ -429,9 +484,14 @@ def parser() -> argparse.ArgumentParser:
     disposition = finishing.add_mutually_exclusive_group(required=True)
     disposition.add_argument("--complete", help="evidence the assigned concern is complete")
     disposition.add_argument("--blocked", help="specific blocker requiring intervention")
+    finishing.add_argument('--scout-result-json', type=json.loads,
+                           help='steward: typed no_action, manager_handoff or user_decision result')
+    handing = sub.add_parser('handoff', help='manager: atomically queue runnable children and finish planning')
+    handing.add_argument('summary')
+    handing.add_argument('--items-json', type=json.loads, required=True)
     sub.add_parser("land", help="integrator: land the reviewed item").add_argument("summary")
     sub.add_parser("return", help="integrator: send the item back to its worker").add_argument("notes")
-    sub.add_parser("replace", help="manager: replace an oversized item with queued children").add_argument("children", nargs="+")
+    sub.add_parser("replace", help="recovery Operator: hand off to existing items and complete atomically").add_argument("children", nargs="+")
     incorporated = sub.add_parser("incorporate", help="integrator: settle an implementation already present on main")
     incorporated.add_argument("task", help="project:task in review")
     incorporated.add_argument("--commit", required=True, help="exact current main commit SHA")
@@ -451,6 +511,26 @@ def parser() -> argparse.ArgumentParser:
     queue.add_argument("--stage", choices=schema.STAGES, help="construction stage (default: implementation)")
     queue.add_argument("--reasoning-effort", choices=schema.EFFORTS, help="override the stage's reasoning effort")
     budget_options(queue)
+    queue.add_argument("--dependencies-json", type=json.loads, help="structured array of prerequisite item IDs")
+    queue.add_argument("--relies-on-json", type=json.loads, help="structured array of existing API names")
+    queue.add_argument("--summary", help="short dashboard description")
+    correcting = sub.add_parser('correct-tests', help='request independent test correction; atomically completes recovery controllers')
+    for name in ('project', 'packet', 'name', 'brief'):
+        correcting.add_argument(name)
+    correcting.add_argument('--reason', required=True)
+    correcting.add_argument('--summary', required=True)
+    correcting.add_argument('--relies-on-json', type=json.loads, required=True)
+    checking = sub.add_parser("check-work", help="validate a proposal or your queued handoff without starting work")
+    checking.add_argument("--project", help="project name; defaults to the calling agent's project")
+    checking.add_argument("--name", help="new proposal name")
+    checking.add_argument("--brief", help="new proposal brief; omit to check queued work")
+    checking.add_argument("--kind", default="queued", choices=tuple(schema.QUEUE_KINDS))
+    checking.add_argument("--stage", choices=schema.STAGES)
+    checking.add_argument("--reasoning-effort", choices=schema.EFFORTS)
+    checking.add_argument("--dependencies-json", type=json.loads)
+    checking.add_argument("--relies-on-json", type=json.loads)
+    checking.add_argument("--summary")
+    budget_options(checking)
     holding = sub.add_parser("hold", help="keep a queue item from starting while you decide about it")
     holding.add_argument("item", help="PROJECT:ITEM")
     holding.add_argument("--release", action="store_true", help="release your hold without revising")
@@ -461,6 +541,9 @@ def parser() -> argparse.ArgumentParser:
     revising.add_argument("--stage", choices=schema.STAGES)
     revising.add_argument("--reasoning-effort", choices=schema.EFFORTS)
     budget_options(revising)
+    revising.add_argument("--dependencies-json", type=json.loads, help="structured array of prerequisite item IDs")
+    revising.add_argument("--relies-on-json", type=json.loads, help="structured array of existing API names")
+    revising.add_argument("--summary", help="short dashboard description")
     moving = sub.add_parser("move", help="reorder a queue item within its project")
     moving.add_argument("item", help="PROJECT:ITEM")
     moving.add_argument("to", choices=("top", "up", "down", "bottom"))
@@ -477,7 +560,7 @@ def parser() -> argparse.ArgumentParser:
     reasoning = sub.add_parser("reasoning", help="set a task's reasoning effort for its next reply")
     reasoning.add_argument("task", help="project:task ID")
     reasoning.add_argument("effort", choices=schema.EFFORTS)
-    budget = sub.add_parser("budget", help="set generation limits on waiting/undispatched work")
+    budget = sub.add_parser("budget", help="set waiting generation limits or increase a live task's allowance")
     budget.add_argument("task", help="project:task ID")
     budget_options(budget)
 
@@ -538,12 +621,11 @@ def show_check() -> str:
     return text
 
 
-def show_task(task_id: str) -> str:
-    state = ledger()
-    task, record = state["tasks"].get(task_id), state["queue"].get(task_id)
-    if task is None and record is None:
-        raise SystemExit(f"unknown task {task_id!r}; use cointos jobs --all for existing IDs")
-    return json.dumps({"task": task, "queue": record}, indent=2)
+def show_task(task_id: str, history: bool = False) -> str:
+    try:
+        return json.dumps(frontier.inspect(task_id, ledger(), history), indent=2)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
 
 def hold_command(args) -> str:
@@ -582,10 +664,10 @@ def view_command(args) -> str | None:
 COMMANDS = {
     "status": lambda args: status_text(ledger()),
     "agents": lambda args: agents_text(ledger()),
-    "jobs": lambda args: jobs_text(ledger(), limit=10_000 if args.all else 30),
+    "jobs": lambda args: jobs_text(ledger(), project=args.project, **({"limit": None} if args.all else {})),
     "check": lambda args: show_check(),
     "metrics": lambda args: metrics.report(args.hours),
-    "task": lambda args: show_task(args.task),
+    "task": lambda args: show_task(args.task, args.history),
     "go": lambda args: resume(),
     "stop": stop_command,
     "kill": lambda args: kill_command(args.agent),
@@ -595,8 +677,10 @@ COMMANDS = {
     "restart": lambda args: restart(),
     "watch": lambda args: watch(args.agent),
     "view": view_command,
-    "finish": lambda args: finish(*(("complete", args.complete) if args.complete is not None else ("blocked", args.blocked))),
+    "finish": lambda args: finish(*(("complete", args.complete) if args.complete is not None else ("blocked", args.blocked)),
+                                  scout_result=args.scout_result_json),
     "merge": lambda args: merge(),
+    'handoff': lambda args: json.dumps(call('handoff', {'summary': args.summary, 'items': args.items_json})),
     "review": lambda args: review(),
     "land": lambda args: land(args.summary),
     "return": lambda args: send_back(args.notes),
@@ -610,11 +694,21 @@ COMMANDS = {
                                        for m in call("inbox", {**({"mailbox": args.mailbox} if args.mailbox else {})})["messages"]) or "no unread messages",
     "queue": lambda args: call("queue", ({
         "project": args.project, "name": args.name, "brief": args.brief, "kind": args.kind, "stage": args.stage,
-        "reasoning_effort": args.reasoning_effort, "budget": limits(args)}))["item"],
+        "reasoning_effort": args.reasoning_effort, "budget": limits(args), "dependencies": args.dependencies_json,
+        "relies_on": args.relies_on_json, "summary": args.summary}))["item"],
     "hold": hold_command,
+    "correct-tests": lambda args: json.dumps(call('correct-tests', {
+        'project': args.project, 'packet': args.packet, 'name': args.name, 'brief': args.brief,
+        'reason': args.reason, 'summary': args.summary, 'relies_on': args.relies_on_json})),
+    "check-work": lambda args: json.dumps(call("check-work", {
+        **({"brief": args.brief} if args.brief is not None else {}), "project": args.project,
+        "name": args.name, "kind": args.kind, "stage": args.stage, "reasoning_effort": args.reasoning_effort,
+        "budget": limits(args), "dependencies": args.dependencies_json, "relies_on": args.relies_on_json,
+        "summary": args.summary}), indent=2),
     "revise": lambda args: call("revise", ({
         "item": args.item, "brief": args.brief, "reason": args.reason, "stage": args.stage,
-        "reasoning_effort": args.reasoning_effort, "budget": limits(args)}))["item"] + " revised",
+        "reasoning_effort": args.reasoning_effort, "budget": limits(args), "dependencies": args.dependencies_json,
+        "relies_on": args.relies_on_json, "summary": args.summary}))["item"] + " revised",
     "move": lambda args: json.dumps(call("move", {"item": args.item, "to": args.to})),
     "cancel": lambda args: json.dumps(call("cancel", ({"items": args.items, "reason": args.reason}))),
     "supersede": lambda args: json.dumps(call("supersede", {"task": args.task, "replacements": args.replacements,
@@ -652,21 +746,22 @@ def has_receipt_here() -> bool:
     return receipt.get("run") == run
 
 
-def main(argv=None) -> None:
+def main(argv=None, *, acknowledge=True) -> None:
     args = parser().parse_args(argv)
     try:
         output = COMMANDS[args.command](args)
     except ValueError as error:
         if args.command in TERMINAL_COMMANDS and has_receipt_here():
             print(str(error), file=sys.stderr, flush=True)
-            deliver_receipt()
+            if acknowledge:
+                deliver_receipt()
             return
         raise SystemExit(str(error))
     except Unreachable as error:
         raise SystemExit(str(error))
     if output:
         print(output, flush=args.command in TERMINAL_COMMANDS)
-    if args.command in TERMINAL_COMMANDS:
+    if acknowledge and args.command in TERMINAL_COMMANDS and has_receipt_here():
         deliver_receipt()
 
 

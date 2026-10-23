@@ -1,0 +1,150 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -11,6 +11,7 @@
+ #include "common.h"
+ #include "fit.h"
+ #include "llama.h"
++#include "../../src/llama-ext.h"
+ #include "log.h"
+ #include "sampling.h"
+ #include "speculative.h"
+@@ -2342,6 +2343,77 @@
+                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
+                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
++    }
++
++    bool paired_mtp_slots() const {
++        return std::getenv("LLAMA_MTP_SLOT_STATE") != nullptr && ctx_dft &&
++            llama_get_ctx_other(ctx_dft) != ctx_tgt &&
++            std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end() &&
++            std::all_of(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                [](common_speculative_type type) { return type == COMMON_SPECULATIVE_TYPE_NONE || type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP; });
++    }
++
++    // Experimental trailer after the native target state. Older readers ignore it.
++    static constexpr uint64_t mtp_slot_magic = 0x31544f4c5350544dULL;
++
++    size_t save_mtp_slot(const std::string & path, llama_seq_id id) {
++        std::vector<uint8_t> boundary;
++        if (!common_speculative_get_state(spec.get(), id, boundary) || boundary.empty()) {
++            throw std::runtime_error("MTP boundary state unavailable");
++        }
++        std::vector<uint8_t> draft(llama_state_seq_get_size(ctx_dft, id));
++        if (llama_state_seq_get_data(ctx_dft, draft.data(), draft.size(), id) != draft.size()) {
++            throw std::runtime_error("Cannot save MTP draft state");
++        }
++        const uint64_t header[] = { mtp_slot_magic, 1, draft.size(), boundary.size() };
++        std::ofstream file(path, std::ios::binary | std::ios::app);
++        file.exceptions(std::ios::failbit | std::ios::badbit);
++        file.write(reinterpret_cast<const char *>(header), sizeof(header));
++        file.write(reinterpret_cast<const char *>(draft.data()), draft.size());
++        file.write(reinterpret_cast<const char *>(boundary.data()), boundary.size());
++        file.close();
++        return sizeof(header) + draft.size() + boundary.size();
++    }
++
++    size_t restore_mtp_slot(const std::string & path, size_t target_bytes, llama_seq_id id) {
++        std::ifstream file(path, std::ios::binary | std::ios::ate);
++        file.exceptions(std::ios::failbit | std::ios::badbit);
++        const auto file_bytes = (uint64_t) file.tellg();
++        if (file_bytes < target_bytes) {
++            throw std::runtime_error("Truncated MTP slot state");
++        }
++        if (file_bytes == target_bytes) {
++            // Legacy snapshots have no draft history. Do not inherit another owner's state.
++            llama_memory_seq_rm(llama_get_memory(ctx_dft), id, -1, -1);
++            std::vector<uint8_t> boundary;
++            if (common_speculative_get_state(spec.get(), id, boundary)) {
++                std::fill(boundary.begin(), boundary.end(), 0);
++                common_speculative_set_state(spec.get(), id, boundary);
++            }
++            SRV_WRN("%s", "legacy target-only snapshot: MTP draft history is cold\n");
++            return 0;
++        }
++        uint64_t header[4];
++        if (file_bytes - target_bytes < sizeof(header)) {
++            throw std::runtime_error("Truncated MTP slot trailer");
++        }
++        file.seekg(target_bytes);
++        file.read(reinterpret_cast<char *>(header), sizeof(header));
++        const uint64_t payload_bytes = file_bytes - target_bytes - sizeof(header);
++        const uint64_t boundary_bytes = (uint64_t) llama_model_n_embd_out(llama_get_model(ctx_dft)) * sizeof(float);
++        if (header[0] != mtp_slot_magic || header[1] != 1 || header[3] != boundary_bytes ||
++                header[2] > payload_bytes || header[3] != payload_bytes - header[2]) {
++            throw std::runtime_error("Invalid MTP slot trailer");
++        }
++        std::vector<uint8_t> draft(header[2]), boundary(header[3]);
++        file.read(reinterpret_cast<char *>(draft.data()), draft.size());
++        file.read(reinterpret_cast<char *>(boundary.data()), boundary.size());
++        if (llama_state_seq_set_data(ctx_dft, draft.data(), draft.size(), id) != draft.size()) {
++            throw std::runtime_error("Cannot restore MTP draft state");
++        }
++        common_speculative_set_state(spec.get(), id, boundary);
++        return sizeof(header) + payload_bytes;
+     }
+ 
+     // returns false to decline the task, it is offered again after the decode is done
+@@ -2544,12 +2616,22 @@
+                     }
+ 
+                     GGML_ASSERT(packed.size() % sizeof(llama_token) == 0);
+-                    const size_t nwrite = llama_state_seq_save_file(
++                    size_t nwrite = llama_state_seq_save_file(
+                         ctx_tgt, filepath.c_str(), slot->id,
+                         reinterpret_cast<const llama_token *>(packed.data()), packed.size() / sizeof(llama_token));
+                     if (nwrite == 0) {
+                         send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
+                         break;
++                    }
++
++                    if (paired_mtp_slots()) {
++                        try {
++                            nwrite += save_mtp_slot(filepath, slot->id);
++                        } catch (const std::exception & err) {
++                            std::remove(filepath.c_str());
++                            send_error(task, err.what(), ERROR_TYPE_SERVER);
++                            break;
++                        }
+                     }
+ 
+                     const int64_t t_end = ggml_time_us();
+@@ -2609,6 +2691,9 @@
+                             throw std::runtime_error("Invalid tokens in slot save file");
+                         }
+ 
++                        if (paired_mtp_slots()) {
++                            nread += restore_mtp_slot(filepath, nread, slot->id);
++                        }
+                         slot->prompt.clear();
+                         slot->prompt.tokens = std::move(restored);
+                     } catch (const std::exception & err) {
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1744,6 +1744,25 @@
+         }
+     }
+ 
++    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
++        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
++            return false;
++        }
++        const auto & h = pending_h[seq_id];
++        data.resize(h.size() * sizeof(float));
++        std::memcpy(data.data(), h.data(), data.size());
++        return true;
++    }
++
++    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
++        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || data.size() != (size_t) n_embd * sizeof(float)) {
++            throw std::runtime_error("Invalid MTP boundary state");
++        }
++        std::memcpy(pending_h[seq_id].data(), data.data(), data.size());
++        verify_h[seq_id].clear();
++        verify_h_rows[seq_id] = 0;
++    }
++
+     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
+         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
+             return;

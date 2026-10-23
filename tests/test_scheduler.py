@@ -60,6 +60,14 @@ class Slices(unittest.TestCase):
         thoughts = [holding("cold", "background", 0, since=0, reading=True), waiting("b", "background", since=5)]
         self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now=500), {0: "cold"})
 
+    def test_checkpointed_reader_shares_expired_slices(self):
+        lanes = [lane("work", 0, holder="cold")]
+        for now in range(100, 400, 30):
+            thoughts = [{**holding("cold", "background", 0, since=0, reading=True), "read_checkpoint": True},
+                        waiting("b", "background", since=5)]
+            winner = max(thoughts, key=lambda t: scheduler.draw(CONFIG, t, now))["id"]
+            self.assertEqual(scheduler.assign(CONFIG, lanes, thoughts, now), {0: winner})
+
     def test_holder_past_its_slice_keeps_lane_when_nobody_waits(self):
         lanes = [lane("work", 0, holder="a")]
         self.assertEqual(scheduler.assign(CONFIG, lanes, [holding("a", "background", 0, since=0)], now=100), {0: "a"})

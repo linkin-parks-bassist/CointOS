@@ -1,35 +1,33 @@
 ---
 status: green
-revised_at: "2026-10-05T22:12:59+11:00"
+revised_at: "2026-10-18T22:33:50+11:00"
 ---
 
 Use the least disruptive level that can apply the change:
 
-1. **Live settings:** `scheduler.slice_seconds` and `scheduler.chunk_tokens` reload without process replacement.
-2. **Compatible daemon replacement:** `cointos restart` drains spawn admission and active request/landing boundaries, then replaces only cointosd while preserving Coin, agent units, sessions and models.
-3. **Compatible live installation:** `scripts/install --live` copies compatible code/config and replaces only cointosd at once around surviving processes, cutting replies in progress (`how/to/install/cointos.md`).
-4. **Full restart:** paused installation, halt/up or reboot is reserved for gateway/model-process identity, model shape or other incompatible changes.
+1. `scheduler.slice_seconds` and `scheduler.chunk_tokens` reload live.
+2. `cointos restart` drains admission/request/landing boundaries and replaces only cointosd, retaining Coin, units, sessions and models.
+3. `scripts/install --live` deploys compatible changes around surviving processes, cutting replies when daemon replacement is required. The installation procedure owns compatibility and authority preflight.
+4. Paused full installation, halt/up or reboot applies incompatible gateway/model identity or shape changes. The qualified Gufo backend-only migration has a separate stopped-daemon procedure in what/is/the/gufo/backend/candidate/for/cointos.md; it preserves frozen clients while invalidating incompatible native caches.
 
 ## Daemon restart
 
-`cointos restart` closes new-run spawning but continues admitting thoughts, landing validations and receipts from existing conversations until the daemon reaches a quiet boundary. `cancel-restart` reopens spawning without changing pause state. Actual daemon shutdown sets `STOPPING`; only then may a newly arriving thought receive a retryable rejection. Timeout or Ctrl-C cancels without stopping processes.
+`restart` stops new-run spawning while existing conversations can send thoughts, landings and receipts until quiet. `cancel-restart` reopens spawning without changing pause state. Actual shutdown sets STOPPING; only then may new thoughts receive retryable refusal. Timeout/Ctrl-C cancels without stopping processes.
 
-Stopping cointosd directly is safe for conversations: shutdown lets the GPU step in flight end, saves each lane's state, and cuts the replies; OpenCode keeps a cut reply's partial output as a finished step and continues, and the next daemon resumes from the saved state (`how/to/install/cointos.md`). Requests arriving while it is down get refused and retried with OpenCode's backoff ([retry policy](https://raw.githubusercontent.com/anomalyco/opencode/v1.18.33/packages/opencode/src/session/retry.ts)); after the 2-second replacement in a live installation, a cut agent was back within about 30 seconds with its whole context restored.
+Stopping cointosd saves lane state and cuts replies. OpenCode retains partial output. Nonempty consecutive assistants require explicit continuation; empty final assistants require the coupled adapter/native generation-opening fix. Native probes and managed continuations establish narrower behavior than sustained recovery. Prefer quiet drain when practical; acceptance owns outcomes.
 
-The replacement daemon adopts a run only when its persisted key/task identity and transient systemd unit are both live. A keyed run whose unit died returns to waiting uncharged. Adoption follows the existing unit and injects no message. Unknown units are stopped. Coin, agents and models keep running across replacement; Coin retains its imported code and startup settings, and changes to those require the separate quiet Coin refresh owned by `how/to/install/cointos.md`.
+Startup requires regular, non-symlink authority JSON, rejecting corruption, duplicate fields, unreadability and invalid retained ledger containers before mutation/adoption/save. Only absence initializes defaults. Preserve refused files for inspection/repair rather than deleting them to force startup. A managed Operator requires the daemon/gateway. Fatal Python exceptions exit 2 and trigger independent remote Codex through `cointos-repair.service`. It retains incident/thread evidence and checks native/API health, authority, sessions, enrollment and explicit holds. Native retries have no inherited start cap. Installation shares repair ownership; native repair waits through replacement. Acceptance owns deployment status and validation limits.
+
+Valid startup settles published verified intents before adoption/budgets. Adoption requires persisted exact task/current-receipt ownership and an active unit, injects nothing and stops unknown units. Dead keyed units requeue uncharged. Coin/agents/models survive compatible replacement. Gufo requires an independent systemd user scope; a new session still inherits daemon cgroup cleanup. Verify native PID survival. Coin retains imports/startup settings; refresh it separately only when quiet.
 
 ## Emergency containment
 
-For a Telegram alert flood or an abandoned thought that prevents drain, stop Coin first (`systemctl --user stop cointos-coin.service`), pause and requeue agents with `cointos stop`, then stop `cointosd.service` if the detached request remains. This clears in-memory gateway requests without unloading the shared models. It is an emergency shutdown, not a substitute for the ordinary drain handshake. Repair and verify the gateway while paused before starting Coin or releasing autonomous work.
+For a detached thought preventing drain, stop Coin first, then pause/requeue with `cointos stop`, then stop cointosd if necessary. This clears gateway requests without unloading models. Warm restored native state and settle host PSI/headroom before daemon adoption. Repair/verify while paused before starting Coin or releasing autonomy; it does not replace ordinary drain.
 
-## Full shutdown and reboot
+## Shutdown, reboot and resumed sessions
 
-Full machine shutdown orders cointosd before transient agent units. cointosd independently attempts lane-context saving, RAM-snapshot spill to the disk tier and final ledger saving, so one failed obligation does not suppress the others. Persistent services carry explicit runtime, user-local and system PATH.
+Machine shutdown orders cointosd before agent units. Context saving, RAM-to-disk spill and ledger saving are attempted independently. Services carry runtime/user-local/system PATH.
 
-At startup, caches whose conversations are unreachable are removed after run adoption. Interrupted transfer copies are discarded because their copying threads did not survive; completed disk/RAM states remain reusable. This can cause cold rereading, never loss of the durable conversation or branch.
+Startup removes unreachable conversation caches after adoption and discards interrupted transfers. Completed compatible states remain reusable; missing caches reread without deleting conversations/branches. Reboot destroys RAM snapshots/units. Disk reuse and uncharged recovery still require the next authorized reboot; never reboot merely to test them.
 
-A reboot destroys RAM snapshots and agent units. Startup may restore compatible disk snapshots and requeue dead runs, but warm reuse and uncharged dead-unit recovery after the current second-pass fixes still require the next explicitly authorized reboot. Never reboot merely to run that check.
-
-## Resumed sessions
-
-OpenCode 1.18.33 has no verified empty noninteractive session-resume invocation. A relaunched interruption under three hours therefore receives the real user turn `Continue.`; a longer gap receives one concise reorientation. OpenCode persists that turn in context. This handoff occurs only when a run is relaunched; daemon adoption and compatible live installation inject nothing.
+New units reuse unfinished short-gap turns, use Continue for completed replies and reorient longer gaps. Surviving servers keep captured configuration. Patched fixtures preserve metadata/tools/events; natural acceptance remains open. Pending compaction finishes through native summarize with auto:false; failure withholds continuation.

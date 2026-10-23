@@ -1,0 +1,12 @@
+---
+status: green
+revised_at: "2026-10-18T16:06:51+11:00"
+---
+
+NPU investigation is deferred at the user's direction; the active interest is upstream Gufo's GPU backend. The following are researched options, not deployed CointOS behavior. Distinguish three architectures: independent small NPU services beside GPU agents; cooperative GPU/NPU execution of one model; and full NPU prefill followed by GPU decoding. The third requires compatible weights, positions, attention/KV and hybrid recurrent-state handoff plus measured transfer cost; no existing CointOS adapter establishes it. Gufo's fork accelerates selected projection/shared-expert GEMMs while the GPU runs other parts of the same model; it does not remove prefill from the GPU.
+
+Independent helper services are the most useful first experiment: embedding/retrieval ranking or bounded classification could avoid waking a large GPU model for each small job. This is an architectural inference, not measured CointOS benefit. [Halogen's NPU documentation](https://github.com/peonist-ai/halogen-flash-server/blob/main/docs/NPU.md) describes these services beside its GPU Flash model, plus small text generation. Its small generation model has no tool calling. It also documents that concurrent NPU activity can reduce GPU speed through shared memory bandwidth and power, and requires holding the fabric clock to prevent hangs/corruption. Hardware concurrency is not resource isolation.
+
+[FastFlowLM v1.0.7](https://github.com/ROCm/FastFlowLM/releases/tag/v1.0.7) adds Qwen3.8-27B MTP on the NPU; older catalogue-absence claims cannot describe current upstream support. Its [published benchmark](https://fastflowlm.com/docs/benchmarks/qwen3.8_results/) is on Ryzen AI 5 340/Kraken Point, capped at 8k context, with about 105–113 prefill and 1.06–1.86 decode tokens/s. It is not a Strix Halo measurement or matched-quantization comparison. FLM's [MiniCPM benchmark](https://fastflowlm.com/docs/benchmarks/minicpm-v-4.7_results/) is the 1B model, not Coin's selected 35B-A3B model.
+
+Measure useful end-to-end work, GPU slowdown, host memory/power, correctness and user responsiveness. Preserve the existing NPU meeting-transcription stack and give foreground capture priority; its owner is global:what/is/the/max395/local/meeting/transcription/setup/on/ddriver.md. Model support, clocks or runtime packages must not silently replace that setup. Gufo GPU-only evidence and controlled backend comparisons retain their focused owners. No new runtime, model or clock/power setting has been applied.

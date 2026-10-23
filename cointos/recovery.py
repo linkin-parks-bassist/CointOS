@@ -48,9 +48,12 @@ def warn(task: dict, spent_seconds: float, spent_tokens: int) -> None:
     limits = task["budget"]
     text = (f"Budget warning: this run has used {spent_seconds / 60:.0f} of its {limits['generation_seconds'] / 60:.0f} "
             f"generation minutes ({spent_tokens:,} of {limits['generation_tokens']:,} tokens). Commit your work now. "
-            "If the assignment is done, finish --complete. If what remains will not fit in one more run, write "
-            "exactly what is done and what remains in your report and finish --blocked. At the limit this run ends "
-            "and a fresh run of this assignment continues from your branch and files.")
+            "If the assignment is done, finish --complete. If it cannot finish within this run's remaining budget, "
+            "preserve diagnostics separately, commit only the scoped artifact, report exactly what is done and "
+            "what remains, and finish --blocked. At the limit this run ends "
+            f"with branch/files preserved; this role permits {schema.fresh_limit(CONFIG, task)} fresh budget retries, "
+            "then unresolved work stays blocked unless an eligible canonical recovery or corrective handoff can advance it. "
+            "Exhausted recovery Operators receive no recursive repair.")
     L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": task["id"], "text": text, "read": False}]
     log("budget warning", task=task["id"], seconds=round(spent_seconds), tokens=spent_tokens)
 

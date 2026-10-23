@@ -1,10 +1,11 @@
 """What an agent run is told: its role, its assignment, and how its run ends.
 
 A first run gets `roles/_base.md`, its role file (`roles/<role>.md`) and the assignment built
-here. A short interruption continues its existing session with the smallest explicit handoff
-OpenCode accepts; after a long absence it gets one concise reorientation. Behaviour belongs in the role
+here. A short interruption continues its unfinished turn through the supervisor's resume hook,
+or gets the smallest explicit handoff after a completed reply; a long absence gets concise reorientation. Behaviour belongs in the role
 files; the assignment carries only this task's facts: where, what, and the exact receipt.
 Every real message ends with the run's daemon-managed budget.
+The run supervisor completes pending compaction before selecting recovery's turn boundary.
 """
 from __future__ import annotations
 
@@ -12,9 +13,9 @@ import json
 import time
 from pathlib import Path
 
-from cointos import queues, schema
+from cointos import frontier, queues, schema
 from cointos.config import ROOT
-from cointos.state import CONFIG
+from cointos.state import CONFIG, L
 
 ROLES = ROOT / "roles"
 
@@ -55,10 +56,12 @@ def shared_launch_tiers(task: dict) -> list[str]:
 
 def assignment(task: dict, where: dict) -> str:
     parts = [location(task, where), identity(task), what(task, where)]
+    if authority := queue_authority(task):
+        parts.insert(2, authority)
     if task["revision"]:
         parts.append(task["revision"] + "\nThis assignment replaces an earlier brief. Your branch may already hold "
                      "work done for that brief: keep what this brief still needs and remove what it does not.")
-    if task.get("recovery_note"):
+    if task.get("recovery_note") and not task.get('repair_origin'):
         parts.append("Fresh recovery: " + task["recovery_note"] +
                      "\nInspect existing branch/files and current main first. Preserve completed work. "
                      "Use the assignment, recovery packet and exact current failures; do not reconstruct prior deliberation. "
@@ -95,7 +98,11 @@ def location(task: dict, where: dict) -> str:
         return (f"Tree: {where['name']}, the knowledge root `{where['tree']}` of {repository}.\n"
                 f"Your worktree: {task['worktree']}, on branch `{task['branch']}`; your copy of the tree is "
                 f"`{Path(task['worktree']) / where['tree']}`.")
-    return f"Project: {where['name']}, {repository}.\nYour worktree: {task['worktree']}, on branch `{task['branch']}`."
+    return (f"Project: {where['name']}. Your active checkout for product reads, edits and commands: "
+            f"{task['worktree']}, on branch `{task['branch']}`.\n"
+            f"Shared Git metadata and accepted refs: {repository}. Its editor files may be stale or dirty; "
+            f"inspect accepted code with `git show {where['main_branch']}:PATH` from your worktree, "
+            "not by reading that editor checkout. Relative product paths refer to your active checkout.")
 
 
 def what(task: dict, where: dict) -> str:
@@ -105,16 +112,47 @@ def what(task: dict, where: dict) -> str:
                 f"Your task: {task['item']}\n\n{task['brief']}")
         if where.get("test_policy"):
             text += "\n\nProject test policy: " + json.dumps(where["test_policy"])
+        correction = (queues.records().get(task.get('record')) or {}).get('correction')
+        if correction:
+            text += ('\n\nYour branch starts at the accepted packet. Verify the reported contract defect, '
+                     'correct its assertions while preserving valid coverage, and submit normally. '
+                     'Independent review activates the replacement and resumes dependent implementations. '
+                     'Do not change production code or attempt to revise dependent assignments yourself.')
         return text
     if kind == "integrate":
         return f"Review task {task['item']} (worker task {task['worker']}):\n\n{task['brief']}"
-    if kind in ("breakdown", "decompose"):
-        return f"{'Decompose' if kind == 'decompose' else 'Command'} {task['item']}:\n\n{task['brief']}"
+    if kind == 'breakdown':
+        return f"Command {task['item']}:\n\n{task['brief']}"
     if kind == "garden":
         return f"Verify only these selected root-relative leaves (brown first when present):\n\n{task['brief']}"
     if kind == "operator":
+        if task.get('repair_origin'):
+            current = frontier.inspect(task['id'], L)
+            current.pop('task')
+            return ('Recover this current assignment with the declared Operator controls. '
+                    'Old execution evidence is retained separately; do not treat old repair briefs as authority.\n\n' +
+                    json.dumps(current, indent=2))
         return f"Ad-hoc operator assignment. Abilities: {', '.join(task['abilities'])}.\n\n{task['brief']}"
     return task["brief"] or "Choose one concern as your role describes."
+
+
+def queue_authority(task: dict) -> str:
+    """The same current contract facts for planners, authors and reviewers."""
+    if task['kind'] not in ('item', 'breakdown', 'integrate'):
+        return ''
+    owned = frontier.record(task)
+    if owned is None:
+        return ''
+    current = frontier.inspect(queues.key(owned), L)
+    authority = {'assignment': queues.key(owned), 'version': owned['version'],
+                 'depends': owned['depends'], 'binding_tests': current['binding_tests']}
+    text = ('Current queue authority: use these bindings when interpreting packet references in the brief. '
+            'Only independent acceptance of a typed correction changes a binding test contract.\n')
+    if owned.get('correction'):
+        authority['correction'] = owned['correction']
+        text += ('This assignment owns the pending correction below. Acceptance of another packet does not '
+                 'complete this correction; independent review of this assignment activates its replacement.\n')
+    return text + json.dumps(authority, indent=2)
 
 
 def ending(task: dict, where: dict) -> str:
@@ -132,6 +170,12 @@ def ending(task: dict, where: dict) -> str:
                        "A successful terminal command delivers the receipt and ends this managed run automatically.")
     if lands == "review":
         text += "Commit your work on this branch; your receipt is your account of it for the integrator.\n\n"
+    if task['role'] == 'manager':
+        text += 'Use `cointos handoff` to queue children and submit your complete receipt atomically.\n\n'
+    if task.get('repair_origin'):
+        text += ('Use `cointos replace` to hand this origin to existing items, or `cointos correct-tests` '
+                 'to request independent contract correction. Both check your handback and submit the complete '
+                 'receipt atomically, ending your recovery run without a separate finish call.\n\n')
     return text + ("Your run ends with exactly one receipt: `cointos finish --complete \"EVIDENCE\"` when this bounded "
                    "assignment is done, or `cointos finish --blocked \"SPECIFIC BLOCKER\"`. The daemon checks it against "
                    "your artifacts and refuses it with the reason if they do not match; fix that and finish again. "
@@ -150,4 +194,6 @@ def budget_notice(task: dict) -> str:
             f"once {CONFIG['recovery']['warning_fraction']:.0%} of either limit is spent. "
             "Act once evidence is sufficient: do not narrate plans, reopen settled choices, or repeatedly reread the "
             "same evidence. On exhaustion this run ends; its branch/files and a bounded evidence packet are "
-            "preserved for a fresh run of this assignment, which continues from them; do not expand scope.")
+            f"preserved. This role permits {schema.fresh_limit(CONFIG, task)} fresh budget retries; "
+            "after those, unresolved work stays blocked unless an eligible canonical recovery or corrective handoff can advance it. "
+            "Exhausted recovery Operators receive no recursive repair; do not expand scope.")

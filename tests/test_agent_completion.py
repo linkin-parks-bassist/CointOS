@@ -1,12 +1,293 @@
 """Receipt-driven completion: one typed receipt per run; process exit only reconciles."""
 import json
+import os
+import secrets
+import subprocess
+import sys
+import io
+from types import SimpleNamespace
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import api, checks, git, lifecycle, opencode, queues, runs, schema, snapshots, spawner, state, tasks, trees
+from cointos import api, checks, frontier, git, lifecycle, opencode, prompts, queues, runs, schema, snapshots, spawner, state, tasks, trees
 from tests import support
+
+
+class RunObserver(unittest.TestCase):
+    def test_malformed_event_shapes_do_not_end_a_live_run_or_hide_later_valid_events(self):
+        support.fresh_ledger(self)
+        support.quiet(self)
+        malformed = [None, [], 4, "bad event", {"part": ["bad part"]},
+                     {"part": {"type": "text", "text": 7}},
+                     {"part": {"type": "tool", "state": 7}},
+                     {"part": {"type": "tool", "state": {"input": "bad input"}}},
+                     {"part": {"type": "tool", "state": {"input": ["bad input"]}}}]
+        for index, event in enumerate(malformed):
+            with self.subTest(event=event), tempfile.TemporaryDirectory() as root:
+                agent = "shape-run-" + str(index)
+                task = support.running(tasks.create("steward", tasks.SYSTEM, "inspect-" + str(index),
+                                                     "Inspect malformed event", [6]), agent)
+                directory = Path(root)
+                session = "valid-session-" + str(index)
+                (directory / "events.jsonl").write_text(json.dumps(event) + "\n" + json.dumps({
+                    "type": "text", "sessionID": session, "part": {"type": "text", "text": "Still running"}}) + "\n")
+                (directory / "exit.json").write_text(json.dumps({"code": 1}))
+                observed = []
+
+                def unit_state(*args):
+                    observed.append(None)
+                    self.assertTrue(lifecycle.owns(task, agent))
+                    if len(observed) > 1:
+                        self.assertEqual(task["session"], session)
+                    return len(observed) == 1
+
+                with patch.object(opencode, "run_dir", return_value=directory), \
+                        patch.object(opencode, "active", side_effect=unit_state), patch.object(opencode.time, "sleep"):
+                    runs.follow(agent, None, None)
+                self.assertEqual(len(observed), 2, "malformed telemetry cannot settle a live run")
+                self.assertEqual((task["status"], task["session"]), ("waiting", session))
+                self.assertNotIn("AttributeError", task["note"])
+
+    def test_recovery_evidence_keeps_valid_outward_and_tool_records_among_malformed_events(self):
+        malformed = [None, [], 4, {"part": ["bad"]}, {"part": {"type": "text", "text": 7}},
+                     {"part": {"type": "tool", "state": "bad"}}]
+        outward = {"part": {"type": "text", "text": "Validated the existing contract"}}
+        tool = {"part": {"type": "tool", "tool": "shell", "state": {"status": "completed",
+                "input": {"command": "verify contract"}, "output": "All checks passed"}}}
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            transcript = [outward, *malformed, tool, *malformed]
+            (directory / "events.jsonl").write_text("\n".join(json.dumps(event) for event in transcript) + "\n")
+            with patch.object(opencode, "run_dir", return_value=directory):
+                evidence = opencode.evidence("recovery-transcript", 10)
+            self.assertEqual(evidence, ["TOOL: shell {'command': 'verify contract'}\nRESULT: All checks passed",
+                                        "OUTWARD: Validated the existing contract"])
+
+    def test_runner_stops_its_server_even_when_metadata_publication_fails(self):
+        for artifact in ("server.json", "exit.json"):
+            with self.subTest(artifact=artifact), tempfile.TemporaryDirectory() as root:
+                directory = Path(root)
+                (directory / "run.json").write_text(json.dumps({"task": {"worktree": root}, "session": None,
+                    "command": ["opencode", "run"], "text": "Inspect fixture", "model": {}}))
+                server = SimpleNamespace(pid=123)
+                client = SimpleNamespace(stdin=io.BytesIO(), wait=lambda: 1)
+                original_write = opencode.write_json
+
+                def publish(path, value):
+                    if path.name == artifact:
+                        raise OSError("fixture metadata publication failed: " + artifact)
+                    original_write(path, value)
+
+                with patch.object(opencode, "environment", return_value={}), \
+                        patch.object(opencode, "start_server", return_value=(server, "http://fixture")), \
+                        patch.object(opencode, "stop_group") as stop, \
+                        patch.object(opencode.subprocess, "Popen", return_value=client), \
+                        patch.object(opencode, "write_json", side_effect=publish):
+                    with self.assertRaisesRegex(OSError, "fixture metadata publication failed"):
+                        opencode.serve_run(directory)
+                    stop.assert_called_once_with(server.pid)
+
+    def test_runner_json_publication_does_not_reconcile_a_live_producer_mid_write(self):
+        support.fresh_ledger(self)
+        support.quiet(self)
+        task = support.running(tasks.create("steward", tasks.SYSTEM, "inspect", "Inspect publication", [6]), "json-run")
+        state.L["agents"]["json-run"]["engaged"] = True
+        actual_write = Path.write_text
+        actual_replace = os.replace
+        observed = []
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            actual_write(directory / "run.json", json.dumps({"task": {"worktree": root}, "session": None,
+                "command": ["opencode", "run"], "text": "Observe the fixture", "model": {}}))
+
+            def inspect_nonterminal():
+                # End only this observer after its first nonterminal poll; the unit
+                # and its lifecycle ownership remain live throughout the interleaving.
+                with patch.object(opencode, "active", return_value=True), \
+                        patch.object(opencode.time, "sleep", side_effect=runs.Ended):
+                    runs.follow("json-run", None, None)
+                observed.append("server publication")
+                self.assertTrue(lifecycle.owns(task, "json-run"), "partial artifacts cannot stop their live producer")
+
+            def direct_write(path, value, *args, **kwargs):
+                if path == directory / "server.json":
+                    with path.open("w") as stream:
+                        midpoint = len(value) // 2
+                        stream.write(value[:midpoint])
+                        stream.flush()
+                        inspect_nonterminal()
+                        stream.write(value[midpoint:])
+                    return len(value)
+                return actual_write(path, value, *args, **kwargs)
+
+            def publish(before, after):
+                if Path(after) == directory / "server.json":
+                    inspect_nonterminal()
+                return actual_replace(before, after)
+
+            client = SimpleNamespace(stdin=io.BytesIO(), wait=lambda: 1)
+            with patch.object(opencode, "run_dir", return_value=directory), \
+                    patch.object(opencode, "environment", return_value={}), \
+                    patch.object(opencode, "start_server", return_value=(SimpleNamespace(pid=123), "http://fixture")), \
+                    patch.object(opencode, "stop_group"), patch.object(opencode.subprocess, "Popen", return_value=client), \
+                    patch.object(Path, "write_text", direct_write), patch.object(os, "replace", side_effect=publish):
+                opencode.serve_run(directory)
+            self.assertEqual(observed, ["server publication"])
+            self.assertEqual(json.loads((directory / "server.json").read_text()), {"pid": 123, "url": "http://fixture"})
+            self.assertEqual(json.loads((directory / "exit.json").read_text()), {"code": 1})
+            self.assertTrue(lifecycle.owns(task, "json-run"))
+
+    def test_confirmed_terminal_unit_drains_a_valid_final_event_without_newline(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            error = {"name": "UnknownError", "data": {"message": "final model-server error"}}
+            (directory / "events.jsonl").write_text(json.dumps({"type": "step_finish", "part": {
+                "reason": "tool-calls"}}) + "\n" + json.dumps({"type": "error", "error": error}))
+            (directory / "exit.json").write_text(json.dumps({"code": 1}))
+            with patch.object(opencode, "run_dir", return_value=directory), \
+                    patch.object(opencode, "active", return_value=False), patch.object(opencode.time, "sleep"):
+                facts = opencode.watch("terminal-tail", lambda *event: None)
+            self.assertEqual(facts, {"finish": "tool-calls", "code": 1, "error": error})
+
+    def test_live_unit_does_not_consume_unterminated_event_before_terminal_confirmation(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            error = {"name": "UnknownError", "data": {"message": "final error"}}
+            (directory / "events.jsonl").write_text(json.dumps({"type": "error", "error": error}))
+            (directory / "exit.json").write_text(json.dumps({"code": 1}))
+            events = []
+
+            observations = []
+
+            def observe_unit(*args):
+                observations.append(None)
+                if len(observations) == 2:
+                    self.assertEqual(events, [], "a live producer still owns its unterminated line")
+                return len(observations) == 1
+
+            with patch.object(opencode, "run_dir", return_value=directory), \
+                    patch.object(opencode, "active", side_effect=observe_unit), patch.object(opencode.time, "sleep"):
+                facts = opencode.watch("live-tail", lambda *event: events.append(event))
+            self.assertEqual(facts["error"], error)
+
+    def test_confirmed_terminal_unit_ignores_a_truncated_final_event(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            (directory / "events.jsonl").write_text('{"type": "error", "error": {"name": "UnknownError"')
+            (directory / "exit.json").write_text(json.dumps({"code": 1}))
+            with patch.object(opencode, "run_dir", return_value=directory), \
+                    patch.object(opencode, "active", return_value=False), patch.object(opencode.time, "sleep"):
+                facts = opencode.watch("truncated-tail", lambda *event: None)
+            self.assertEqual(facts, {"finish": None, "code": 1})
+
+    @unittest.skipUnless(os.environ.get("COINTOS_NATIVE_PIPELINE_PROBE") == "1", "native observer probe is opt-in")
+    def test_native_unit_survives_uncertain_observation_then_reports_real_terminal_error(self):
+        support.fresh_ledger(self)
+        support.quiet(self)
+        agent = "observer-probe-" + secrets.token_hex(4)
+        task = support.running(tasks.create("steward", tasks.SYSTEM, "inspect", "Inspect native observer evidence", [6]), agent)
+        state.L["agents"][agent]["engaged"] = True
+        session = "native-observer-session-" + agent
+        unit = opencode.unit(agent)
+        actual_run = subprocess.run
+        with tempfile.TemporaryDirectory(prefix="cointos-native-observer-") as root:
+            directory = Path(root)
+            gate = directory / "release"
+            os.mkfifo(gate)
+            runner = directory / "runner.py"
+            runner.write_text(
+                "import json, pathlib, sys\n"
+                "root=pathlib.Path(sys.argv[1]); session=sys.argv[2]\n"
+                "with (root/'events.jsonl').open('w') as events:\n"
+                " for malformed in [None, {'sessionID':['bad'],'part':{'type':'text','text':7}}, {'part':{'type':'tool','state':{'input':'bad'}}}]: events.write(json.dumps(malformed)+'\\n')\n"
+                " events.write(json.dumps({'type':'text','sessionID':session,'part':{'type':'text','text':'Native observer gate ready'}})+'\\n'); events.flush()\n"
+                " with (root/'release').open() as gate: gate.read()\n"
+                " events.write(json.dumps({'type':'error','sessionID':session,'error':{'name':'UnknownError','data':{'message':'native fixture model-server error'}}})+'\\n'); events.flush()\n"
+                "(root/'exit.json').write_text(json.dumps({'code':1}))\n"
+                "sys.exit(1)\n")
+            injected = released = False
+
+            def query(command, **kwargs):
+                nonlocal injected, released
+                self.assertEqual(command, ["systemctl", "--user", "is-active", unit])
+                self.assertTrue(lifecycle.owns(task, agent))
+                observed = state.L["agents"][agent].get("session") == session
+                if observed and not injected:
+                    injected = True
+                    self.assertEqual(task["session"], session)
+                    raise OSError("fixture injected uncertainty for this unit query only")
+                result = actual_run(command, **kwargs)
+                if injected and not released and result.stdout.strip() in ("active", "activating"):
+                    self.assertEqual(state.L["agents"][agent]["session"], session)
+                    self.assertEqual(task["session"], session)
+                    with gate.open("w") as release:
+                        release.write("continue\n")
+                    released = True
+                return result
+
+            try:
+                launched = actual_run(["systemd-run", "--user", "--quiet", "--unit", unit,
+                                      "--property=RuntimeMaxSec=30s", sys.executable, str(runner), root, session],
+                                     capture_output=True, text=True)
+                self.assertEqual(launched.returncode, 0, launched.stderr)
+                with patch.object(opencode, "run_dir", return_value=directory), \
+                        patch.object(opencode.subprocess, "run", side_effect=query):
+                    runs.follow(agent, None, None)
+                self.assertTrue(injected)
+                self.assertTrue(released)
+                self.assertEqual((task["status"], task["session"]), ("waiting", session))
+                self.assertNotIn(agent, state.L["agents"])
+                self.assertIn("exit code 1", task["note"])
+                self.assertIn("native fixture model-server error", task["note"])
+            finally:
+                actual_run(["systemctl", "--user", "stop", unit], capture_output=True)
+                actual_run(["systemctl", "--user", "reset-failed", unit], capture_output=True)
+
+    def test_unit_queries_distinguish_confirmed_terminal_state_from_observation_failure(self):
+        for text, code, terminal in (
+                ("inactive", 3, True), ("failed", 3, True), ("unknown", 4, True),
+                ("inactive", 0, True), ("active", 0, False), ("activating", 0, False),
+                ("deactivating", 0, False), ("reloading", 0, False),
+                ("", 0, False), ("malformed state", 0, False), ("inactive", 1, False)):
+            with self.subTest(text=text, code=code), patch.object(opencode.subprocess, "run", return_value=
+                    subprocess.CompletedProcess([], code, text + "\n", "")):
+                self.assertEqual(opencode.active("observed-run"), not terminal)
+        with patch.object(opencode.subprocess, "run", side_effect=OSError("user bus query unavailable")):
+            self.assertTrue(opencode.active("observed-run"))
+
+    def test_transient_systemctl_failure_does_not_end_a_still_live_run(self):
+        support.fresh_ledger(self)
+        support.quiet(self)
+        task = support.running(tasks.create("steward", tasks.SYSTEM, "inspect", "Inspect current work", [6]),
+                               "observed-run")
+        state.L["agents"]["observed-run"]["engaged"] = True
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            calls = []
+
+            def query(command, **kwargs):
+                calls.append(command)
+                self.assertTrue(lifecycle.owns(task, "observed-run"))
+                self.assertIn("observed-run", state.L["agents"])
+                if len(calls) == 2:
+                    return subprocess.CompletedProcess(command, 1, "", "Failed to connect to user bus: Interrupted")
+                if len(calls) < 4:
+                    return subprocess.CompletedProcess(command, 0, "active\n", "")
+                if len(calls) == 4:
+                    (directory / "events.jsonl").write_text(json.dumps({"type": "error", "error": {
+                        "name": "UnknownError", "data": {"message": "the thought failed on the model server"}}}) + "\n")
+                    (directory / "exit.json").write_text(json.dumps({"code": 1}))
+                return subprocess.CompletedProcess(command, 3, "inactive\n", "")
+
+            with patch.object(opencode, "run_dir", return_value=directory), \
+                    patch.object(opencode.subprocess, "run", side_effect=query), patch.object(opencode.time, "sleep"):
+                runs.follow("observed-run", None, None)
+            self.assertGreaterEqual(len(calls), 4, "ambiguous bus failure cannot authorize unit death")
+            self.assertEqual((task["status"], state.L["agents"]), ("waiting", {}))
+            self.assertIn("exit code 1", task["note"])
+            self.assertIn("the thought failed on the model server", task["note"])
 
 
 class Completion(unittest.TestCase):
@@ -17,7 +298,9 @@ class Completion(unittest.TestCase):
         self.enterContext(patch.object(opencode, "run_dir", return_value=self.run_dir))
         self.enterContext(patch.object(opencode, "active", return_value=False))
         self.project = support.project(self, support.repository(self))
+        support.accepted_plan(self.project['path'])
         self.task = support.running(tasks.create("steward", tasks.SYSTEM, "loose-ends", "Look around", [6]), "run-1")
+        support.review_frontier(self.task)
 
     def end(self, *events, code=0, agent="run-1"):
         """The run's unit has exited having written these events; its observer reports it."""
@@ -28,7 +311,7 @@ class Completion(unittest.TestCase):
     # ------------------------------------------------ process exit only reconciles
 
     def test_exit_after_receipt_releases_the_run_and_keeps_the_settlement(self):
-        lifecycle.submit(self.task["id"], "run-1", "complete", "Nothing fell between owners")
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Nothing fell between owners", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         self.assertEqual((self.task["status"], self.task["agent"]), ("done", None))
         # A normal exit precedes the observer's release: not an invariant violation.
         self.assertTrue(all(c["ok"] for c in checks.evaluate(state.CONFIG, state.L, state.now(), {})))
@@ -39,15 +322,17 @@ class Completion(unittest.TestCase):
 
     def test_receipt_keeps_the_active_conversation_warm_until_release(self):
         state.L["snapshots"]["warm"] = {"owner": self.task["id"]}
-        with patch.object(snapshots.BACKEND, "forget") as forget:
-            lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        with patch.object(snapshots.cleanup, "queue", wraps=snapshots.cleanup.queue) as retire:
+            lifecycle.submit(self.task["id"], "run-1", "complete", "Done", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
             self.assertIn("warm", state.L["snapshots"])
+            retire.assert_not_called()
             lifecycle.release("run-1", "run ended")
         self.assertNotIn("warm", state.L["snapshots"])
-        forget.assert_called_once_with(state.CONFIG, "warm")
+        retire.assert_called_once_with("warm", {"owner": self.task["id"]})
+        self.assertTrue(state.L["snapshot_garbage"])
 
     def test_receipt_delivery_schedules_the_exact_run_for_retirement(self):
-        lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Done", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         with patch.object(lifecycle.threading, "Thread") as thread:
             lifecycle.receipt_delivered(self.task["id"], "run-1")
         target = thread.call_args.kwargs["target"]
@@ -56,7 +341,7 @@ class Completion(unittest.TestCase):
         stop.assert_called_once_with("run-1", "completion receipt delivered", requeue=False, charge=False)
 
     def test_receipt_delivery_rejects_another_run(self):
-        lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Done", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         with self.assertRaisesRegex(ValueError, "no completion receipt"):
             lifecycle.receipt_delivered(self.task["id"], "run-2")
 
@@ -67,7 +352,7 @@ class Completion(unittest.TestCase):
         self.assertIn("without a completion receipt (finish marker stop, exit code 0)", self.task["note"])
 
     def test_a_transcript_ending_after_tool_calls_is_decided_by_the_receipt_alone(self):
-        lifecycle.submit(self.task["id"], "run-1", "complete", "Queued one command")
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Queued one command", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         self.end({"type": "step_start", "part": {"type": "step-start"}},
                  {"type": "step_finish", "part": {"reason": "tool-calls"}}, code=1)
         self.assertEqual(self.task["status"], "done")
@@ -81,6 +366,23 @@ class Completion(unittest.TestCase):
             runs.follow("run-1", None, None)
         self.assertEqual(self.task["status"], "waiting")
         self.assertIn("RuntimeError: serve failed", self.task["note"])
+
+    def test_terminal_model_error_event_is_retained_in_retry_diagnostics(self):
+        self.end({"type": "step_finish", "part": {"reason": "tool-calls"}},
+                 {"type": "error", "error": {"name": "UnknownError", "data": {
+                     "message": '{"message":"the thought failed on the model server; try again"}'}}}, code=1)
+        self.assertEqual(self.task["status"], "waiting")
+        self.assertIn("exit code 1", self.task["note"])
+        self.assertIn("the thought failed on the model server", self.task["note"])
+
+    def test_error_after_receipt_keeps_checked_settlement_authority(self):
+        receipt = lifecycle.submit(self.task["id"], "run-1", "complete", "Checked work is complete", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
+        self.end({"type": "error", "error": {"name": "UnknownError", "data": {
+            "message": "the thought failed after its checked receipt"}}}, code=1)
+        self.assertEqual(self.task["status"], "done")
+        self.assertEqual(self.task["receipt"], receipt)
+        self.assertEqual(self.task["result"], "Checked work is complete")
+        self.assertEqual(state.L["agents"], {})
 
     def test_launch_failures_are_uncharged_bounded_and_held(self):
         self.task["runs"] = 1
@@ -115,14 +417,14 @@ class Completion(unittest.TestCase):
     def test_a_session_learned_by_the_observer_belongs_to_the_current_run_only(self):
         runs.observed("run-1", "session", "session-a")
         self.assertEqual(self.task["session"], "session-a")
-        lifecycle.submit(self.task["id"], "run-1", "complete", "Done")
+        lifecycle.submit(self.task["id"], "run-1", "complete", "Done", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         runs.observed("run-1", "session", "session-b")
         self.assertEqual(self.task["session"], "session-a")
 
     # ------------------------------------------------ receipts
 
     def test_a_lost_reply_retry_returns_the_recorded_receipt(self):
-        first = lifecycle.submit(self.task["id"], "run-1", "complete", "Clean finding")
+        first = lifecycle.submit(self.task["id"], "run-1", "complete", "Clean finding", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         self.assertIs(lifecycle.submit(self.task["id"], "run-1", "complete", "Clean finding"), first)
         with self.assertRaisesRegex(ValueError, "different completion receipt"):
             lifecycle.submit(self.task["id"], "run-1", "blocked", "Clean finding")
@@ -131,7 +433,7 @@ class Completion(unittest.TestCase):
         lifecycle.stop("run-1", "silent too long", requeue=True)
         support.running(self.task, "run-2", worktree=False)
         with self.assertRaisesRegex(ValueError, "only its current run"):
-            lifecycle.submit(self.task["id"], "run-1", "complete", "Late summary")
+            lifecycle.submit(self.task["id"], "run-1", "complete", "Late summary", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         state.L["agents"]["run-1"] = {**state.L["agents"]["run-2"], "id": "run-1"}  # its late exit report
         lifecycle.ended("run-1", {"finish": "stop", "code": 0})
         self.assertEqual((self.task["status"], self.task["agent"]), ("running", "run-2"))
@@ -154,7 +456,7 @@ class Completion(unittest.TestCase):
 
     def test_a_receipt_needs_its_kinds_disposition_and_a_summary(self):
         with self.assertRaisesRegex(ValueError, "needs a summary"):
-            lifecycle.submit(self.task["id"], "run-1", "complete", " ")
+            lifecycle.submit(self.task["id"], "run-1", "complete", " ", checked={"scout_result": {"kind": "no_action", "checked_projects": ["p"]}})
         with self.assertRaisesRegex(ValueError, "complete or blocked"):
             lifecycle.submit(self.task["id"], "run-1", "returned", "No")
         self.assertEqual(self.task["status"], "running")
@@ -176,10 +478,12 @@ class Completion(unittest.TestCase):
         lifecycle.release("worker-1", "run ended")
         self.assertTrue(Path(worker["worktree"]).is_dir(), "the integrator still needs the worker's branch")
 
-    def test_a_blocked_worker_is_reviewed_too(self):
+    def test_a_blocked_worker_goes_directly_to_a_manager(self):
         worker = self.worker()
         lifecycle.submit(worker["id"], "worker-1", "blocked", "Needs decomposition: split")
-        self.assertEqual(worker["status"], "review")
+        self.assertEqual(worker["status"], "failed")
+        self.assertTrue(queues.state(queues.records()[worker["record"]])["recoverable"])
+        self.assertEqual(spawner.integrations(), [])
 
     def test_an_uncommitted_worker_cannot_finish(self):
         worker = self.worker(commit=False)
@@ -272,26 +576,25 @@ class Completion(unittest.TestCase):
         lifecycle.submit(integration["id"], "integrator-1", "blocked", "Main checkout is dirty")
         self.assertEqual((integration["status"], worker["status"]), ("failed", "failed"))
 
-    def test_verified_blocker_dispatches_one_manager_without_magic_words(self):
+    def test_worker_blocker_dispatches_one_controller_without_an_integrator(self):
         worker = self.worker()
         lifecycle.submit(worker["id"], "worker-1", "blocked", "Contract mismatch: identical inputs share identity")
         lifecycle.release("worker-1", "run ended")
-        integration = support.running(tasks.create("integrate", self.project, "integrate-parser", worker["brief"],
-                                                   [2], item="parser", worker=worker["id"]), "integrator-1")
-        lifecycle.submit(integration["id"], "integrator-1", "blocked", "Verified identity mismatch; repair the brief")
-        lifecycle.release("integrator-1", "run ended")
+        self.assertEqual(spawner.integrations(), [])
         record = queues.records()[worker["record"]]
-        self.assertEqual((queues.status(record), queues.state(record)["decompose"]), ("blocked", True))
+        self.assertEqual((queues.status(record), queues.state(record)["recoverable"]), ("blocked", True))
         self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt the user")
         manager = spawner.next_task()
-        self.assertEqual((manager["role"], manager["item"]), ("manager", "parser"))
+        self.assertEqual((manager["role"], manager["item"]), ("operator", "parser"))
         self.assertIn("Contract mismatch", manager["brief"])
-        self.assertIn("Verified identity mismatch", manager["brief"])
-        self.assertIn(worker["brief"], manager["brief"])
-        self.assertIs(spawner.next_task(), manager, "reconciliation must not create a second manager")
+        view = frontier.inspect(manager['id'], state.L)
+        self.assertEqual(view['origin_task']['receipt'], worker['receipt'])
+        self.assertEqual(view['queue']['brief'], worker['brief'])
+        self.assertIn(worker['receipt']['evidence']['commit'], prompts.launch_text(manager, self.project))
+        self.assertIs(spawner.next_task(), manager, "reconciliation must not create a second controller")
         support.running(manager, "manager-1")
         lifecycle.submit(manager["id"], "manager-1", "blocked", "the user must choose the public contract")
-        self.assertFalse(queues.state(record)["decompose"])
+        self.assertFalse(queues.state(record)["recoverable"])
         self.assertIn("the user must choose", state.L["alerts"][-1]["text"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
 
@@ -299,9 +602,9 @@ class Completion(unittest.TestCase):
         worker = support.queued(self.project, "exhausted", "Build one bounded concern")
         lifecycle.fail(worker, "fresh retries exhausted")
         manager = spawner.next_task()
-        self.assertEqual((manager["kind"], manager["item"]), ("decompose", "exhausted"))
+        self.assertEqual((manager["kind"], manager["item"]), ("operator", "exhausted"))
         lifecycle.fail(manager, "manager retries exhausted")
-        self.assertFalse(queues.state(queues.records()[worker["record"]])["decompose"])
+        self.assertFalse(queues.state(queues.records()[worker["record"]])["recoverable"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
 
     def test_recovery_manager_does_not_inherit_the_failed_workers_limits(self):
@@ -312,8 +615,8 @@ class Completion(unittest.TestCase):
         lifecycle.fail(worker, "fresh retries exhausted")
         with patch.dict(state.CONFIG["reasoning"], manager="medium"):
             manager = spawner.next_task()
-        self.assertEqual(manager["kind"], "decompose")
-        self.assertEqual(manager["budget"], schema.budget(state.CONFIG))
+        self.assertEqual(manager["kind"], "operator")
+        self.assertEqual(manager["budget"], schema.budget(state.CONFIG, role="operator"))
         self.assertEqual(manager["reasoning_effort"], "medium")
         self.assertEqual(worker["budget"], {"generation_seconds": 1, "generation_tokens": 200})
 
@@ -335,7 +638,7 @@ class Completion(unittest.TestCase):
         worker = support.queued(self.project, "wrong-edge", "Depends on: missing\nBuild core")
         lifecycle.fail(worker, "bad prerequisite")
         manager = spawner.next_task()
-        self.assertEqual((manager["kind"], manager["item"]), ("decompose", "wrong-edge"))
+        self.assertEqual((manager["kind"], manager["item"]), ("operator", "wrong-edge"))
 
     # ------------------------------------------------ daemon replacement
 

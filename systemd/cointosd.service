@@ -1,17 +1,19 @@
 [Unit]
 Description=CointOS daemon: GPU lanes, gateway, agents, guard and self-check
 After=network.target
+OnFailure=cointos-repair.service
 
 [Service]
 Type=simple
 WorkingDirectory=@ROOT@
 Environment=PYTHONUNBUFFERED=1
 Environment=PATH=@ROOT@/bin:@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/python3 -m cointos.daemon
+ExecStart=/usr/bin/python3 -m cointos.boot
 KillMode=mixed
 TimeoutStopSec=90
 Restart=on-failure
-RestartSec=3
+RestartPreventExitStatus=2
+RestartSec=@SERVICE_RESTART_SECONDS@
 
 [Install]
 WantedBy=default.target

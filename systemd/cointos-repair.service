@@ -1,0 +1,13 @@
+[Unit]
+Description=Independent CointOS startup repair through Codex
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+WorkingDirectory=@ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=@ROOT@/bin:@HOME@/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 -m cointos.repair @ROOT@ cointosd.service
+Restart=on-failure
+RestartSec=@SERVICE_RESTART_SECONDS@

@@ -45,7 +45,9 @@ def summary(entries: list[dict], hours: float) -> str:
     landed = Counter(e.get("stage", "?") for e in entries if e["event"] == "verified landing")
     rejected = Counter(e.get("stage", "?") for e in entries if e["event"] == "landing gate rejected")
     infeasible = [e for e in entries if e["event"] == "brief infeasible"]
-    created = Counter(kind(e.get("task", "")) for e in entries if e["event"] == "task created")
+    created = Counter(e.get('kind') or kind(e.get("task", "")) for e in entries if e["event"] == "task created")
+    repairs = sum(bool(e.get('repair_origin') or ':operator-repair-' in e.get('task', ''))
+                  for e in entries if e['event'] == 'task created')
     receipts = Counter((kind(e.get("task", "")), e.get("disposition")) for e in entries if e["event"] == "receipt")
     packet_failures = sum(1 for e in entries if e["event"] == "packet tests failed")
     total = sum(landed.values())
@@ -56,17 +58,25 @@ def summary(entries: list[dict], hours: float) -> str:
     lines.append("Gate returns:         " + (", ".join(f"{s} {n}" for s, n in sorted(rejected.items())) or "none"))
     lines.append(f"Infeasible briefs:    {len(infeasible)} caught at dispatch before any worker ran")
     lines.append(f"Worker items started: {created['item']}")
-    lines.append(f"Manager recoveries:   {created['decompose']} (decomposition passes after a failed or infeasible item)")
+    lines.append(f"Recovery controllers: {repairs}")
+    lines.append(f"Legacy manager passes: {created['decompose']}")
+    lines.append(f"Planning assignments: {created['breakdown']}")
     lines.append(f"Integrations:         {created['integrate']}")
     blocked = sum(n for (k, d), n in receipts.items() if k == "item" and d == "blocked")
     complete = sum(n for (k, d), n in receipts.items() if k == "item" and d == "complete")
     lines.append(f"Worker receipts:      {complete} complete, {blocked} blocked")
     lines.append(f"Packet test failures: {packet_failures} sent straight back to their implementers")
     lines.append("")
-    lines.append(f"Recoveries per landing: {created['decompose'] / total:.2f}" if total else
+    lines.append(f"Recoveries per landing: {(created['decompose'] + repairs) / total:.2f}" if total else
                  "Recoveries per landing: n/a (nothing landed)")
     lines.append(f"Implementation share of landings: {landed['implementation'] / total:.0%}" if total else
                  "Implementation share of landings: n/a")
+    measured = [e for e in entries if e['event'] == 'agent ended' and 'generation_seconds' in e]
+    if measured:
+        for role in sorted({e['role'] for e in measured}):
+            runs = [e for e in measured if e['role'] == role]
+            lines.append(f"Recorded {role} generation: {sum(e['generation_seconds'] for e in runs):.0f}s / "
+                         f"{sum(e['generation_tokens'] for e in runs)} tokens ({len(runs)} runs)")
     for e in infeasible[-5:]:
         lines.append(f"  infeasible {e.get('task')}: {', '.join(e.get('missing', []))}")
     return "\n".join(lines)

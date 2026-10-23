@@ -15,7 +15,8 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     stage, reasoning_effort, budget      pinned metadata; `stage` only for items
     prompt_date, system_context          fixed system-prefix identity (content is deduplicated in the ledger)
     abilities, spawned_by                an operator's permissions; the task whose run started it
-    replacements                         a decomposition's replacement children
+    replacements                         a recovery controller's replacement children
+    repair_origin                        automatic Operator's originating task/record and version
     revision                             why and by whom its item was last revised
     review, rejections                   the integrator's latest return notes and their count
     fresh_retries, recovery_note, recovery_context   budget recovery state
@@ -33,7 +34,7 @@ import re
 import time
 from pathlib import Path
 
-from cointos import names, queues, schema
+from cointos import frontier, names, queues, schema
 from cointos.config import ROOT, managed_trees
 from cointos.state import CONFIG, L, log, now
 
@@ -84,7 +85,8 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
            record_version: int | None = None, worker: str | None = None, reasoning_effort: str | None = None,
            budget: dict | None = None, **fields) -> dict:
     """A new waiting task of `kind` in `where`. A queue-backed task is named by its item, so its
-    id is its record's key; any other is numbered (`garden-3`), so ids never repeat. Caller holds LOCK."""
+    id is its record's key; any other is numbered (`garden-3`), avoiding IDs already owned
+    by tasks or queued records. Caller holds LOCK."""
     spec = schema.KINDS[kind]
     title = Path(item).stem if item else name
     if not spec["record"]:
@@ -106,22 +108,24 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
         "prompt_date": time.strftime("%a %b %d %Y", time.localtime(created)),
         **fields,
     }
-    # Recovery is a new managerial assignment, not another run of the failed worker.
+    # Recovery is an independent controller assignment with its own budget.
     # Its record supplies evidence/identity, but the worker's limits cannot govern it.
-    metadata = record if kind != "decompose" else None
+    metadata = record
     task["reasoning_effort"] = schema.default_effort(CONFIG, {
         **task, "reasoning_effort": schema.effort(reasoning_effort) or (metadata or {}).get("reasoning_effort")},
         reviewed=L["tasks"].get(worker))
-    task["budget"] = schema.budget(CONFIG, budget if budget is not None else (metadata or {}).get("budget"))
+    task["budget"] = schema.budget(CONFIG, budget if budget is not None else (metadata or {}).get("budget"), role=task["role"])
     L["tasks"][task["id"]] = task
     L["cadence"][f"{kind}:{where['name']}"] = created
-    log("task created", task=task["id"])
+    log("task created", task=task["id"], kind=kind, role=task['role'],
+        record=task['record'], record_version=record_version, repair_origin=task.get('repair_origin'))
     return task
 
 
 def numbered(place_name: str, base: str) -> str:
     prefix = f"{place_name}:{base}-"
-    taken = [int(tid[len(prefix):]) for tid in L["tasks"] if tid.startswith(prefix) and tid[len(prefix):].isdigit()]
+    taken = [int(tid[len(prefix):]) for tid in L["tasks"].keys() | queues.records().keys()
+             if tid.startswith(prefix) and tid[len(prefix):].isdigit()]
     return f"{base}-{max(taken, default=0) + 1}"
 
 
@@ -172,6 +176,61 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
     return operator
 
 
+def newer_attempt(source: dict) -> dict | None:
+    """Latest same-kind/place work superseding an unqueued failure, if any."""
+    if source.get("record"):
+        return None
+    return max((other for other in L["tasks"].values()
+                if other["kind"] == source["kind"] and other["place"] == source["place"]
+                and other["created_at"] > source["created_at"]),
+               key=lambda other: other["created_at"], default=None)
+
+
+def request_repair(source: dict) -> tuple[dict | None, bool]:
+    """One capable recovery controller for the unchanged work assignment. Caller holds LOCK."""
+    origin = frontier.origin(source)
+    known = frontier.controller(source)
+    if known is not None:
+        return known, False
+    reason = frontier.reason(source)
+    if reason is None:
+        return None, False
+    place_name = source["project"] if "project" in source else source["place"]
+    project = next((p for p in CONFIG["projects"] if p["name"] == place_name), None)
+    where = project or SYSTEM
+    if project:
+        scope = project["path"]
+    elif "project" not in source:
+        try:
+            scope = place(source)["path"]
+        except StopIteration:
+            return None, False  # its tree is no longer configured
+    else:
+        return None, False
+    brief = (f"Restore progress on {origin['task']} (assignment version {origin['version']}).\n"
+             f"Origin place: {place_name}. Accessible repair scope: {scope}.\n\n"
+             f"Current blocker, verify independently:\n{reason[:1000]}\n\n"
+             f"Current assignment and binding contracts: cointos task {origin['task']}.\n"
+             f"Full preserved execution evidence: cointos task {origin['task']} --history.\n\n"
+             "Inspect the owning contracts, live ledger, receipts, branches and logs. Repair the cause and "
+             "establish a runnable continuation. Use correct_tests for invalid accepted tests, resume for repaired "
+             "infrastructure admission, and revise/supersede for mistaken assignments. Queue and "
+             "supersede corrective stages as needed. Any queued continuation must address the independently "
+             "verified obstruction, not arbitrary new work. Do not stop at repeating the diagnosis. Use the normal "
+             "worker receipt and landing gates for product implementation and test packets; do not mark "
+             "unverified work accepted. Preserve explicit user holds, knowledge-tree access policy and normal task write scope. "
+             "Finish complete only with evidence that this episode's condition changed and work can continue.")
+    name = "operator-repair-" + queues.slug(origin["task"])
+    rank = [schema.KINDS["operator"]["rank"], where.get("priority", 0)]
+    task = create("operator", where, name, brief, rank, repair_origin=origin,
+                  item=source.get('item'),
+                  record_version=origin['version'],
+                  abilities=list(schema.ABILITIES),
+                  reasoning_effort=CONFIG["reasoning"].get("manager", CONFIG["reasoning"]["default"]))
+    log("repair operator requested", task=task["id"], origin=origin)
+    return task, True
+
+
 def request_steward() -> tuple[dict, bool]:
     """The one system-wide loose-end scout: the live one, or a new one now."""
     existing = [t for t in L["tasks"].values() if t["kind"] == "steward" and pending(t)]
@@ -220,18 +279,31 @@ def set_reasoning(task_id: str, effort: str) -> None:
 
 
 def set_budget(task_id: str, changes) -> dict:
-    """Change only undispatched or waiting work; never surprise an active run. Caller holds LOCK."""
+    """Set waiting limits or explicitly increase a live allowance without resetting usage. Caller holds LOCK."""
     task, record = L["tasks"].get(task_id), queues.records().get(task_id)
-    if task and (task["status"] != "waiting" or task.get("validating")):
-        raise ValueError("budget changes require an inactive waiting task")
+    if task and (task["status"] not in ("waiting", "running") or task.get("validating")):
+        raise ValueError("budget changes require waiting or running work outside validation")
     if not task and (not record or queues.status(record) != "queued"):
         raise ValueError("budget changes require a waiting task or undispatched queue item")
     if not changes:
         raise ValueError("budget changes must contain at least one limit")
     schema.budget(CONFIG, changes)  # validate the request before any mutation
     effective = schema.budget(CONFIG, {**(task or record).get("budget", {}), **changes})
+    if task and task['status'] == 'running' and any(effective[key] < task['budget'][key] for key in schema.BUDGET_KEYS):
+        raise ValueError("a running task's budget can only increase; spent generation and session are preserved")
+    increased = task and task['status'] == 'running' and effective != task['budget']
     for holder in (task, record):
         if holder is not None:
             holder["budget"] = effective
+    if increased:
+        agent = L['agents'].get(task.get('agent'))
+        if agent is not None:
+            agent.pop('budget_warned', None)
+        L['messages'].append({'at': now(), 'from': 'cointos', 'to': task['id'], 'read': False,
+                              'text': f"Your generation budget was explicitly increased to "
+                                      f"{effective['generation_seconds']:g} seconds or "
+                                      f"{effective['generation_tokens']:,} tokens, whichever comes first. "
+                                      "These limits supersede your launch allowance; existing usage, grants, "
+                                      "session and work remain. Continue the assigned work under the new limits."})
     log("task budget changed", task=task_id, budget=effective)
     return {"ok": True, "budget": effective}

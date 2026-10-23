@@ -1,0 +1,22 @@
+---
+status: green
+revised_at: "2026-10-19T15:44:31+11:00"
+---
+
+cointos review brings main into the review branch, preserves committed candidates, composes packet tests/submitted code and shows the worker receipt plus candidate diffstat. cointos land commits pending edits or submits clean HEAD. Commit-message wording cannot authorize acceptance.
+
+Review lists retained scratch for the receipt's submitting run when present, without inspecting, copying or executing probes. Mutable probes are unverified: inspect/copy useful sources into own scratch and replay against the exact candidate, checking assertions and exit status. Build-dependent probes run only after a successful build; failed rebuilds can leave old executables. Expected-failure tests check their own result explicitly. Installed base-role/review guidance requires this; pinned agents retain prior instructions. Native adherence remains unproved. A real-Git regression preserves the inactive author's probe/receipt and leaves completion untouched. Fresh processes receive the new CLI; loaded MCP imports retain old code. Installed CLI/guidance match source; authority and daemon/Coin/native PIDs survive deployment, and generation continues (review-diagnostics-20261019/deployment-verified.json). Native reuse benefit remains unmeasured.
+
+landing.py validates an exact detached candidate outside LOCK. Every stage requires current integration ownership, exact worker commit and complete receipt. Implementation/integration requires nonempty accepted test-contract dependencies matching receipt test commits. Test-contract candidates cannot change production. contracts.packet_unchanged enforces worker stage history and exact protected content from main plus submitted tests. Missing/altered content refuses. Blocked workers require recovery rather than landing.
+
+contracts.suite executes every registered command and measures suite (command count), failed (candidate failures) and red_on_main (failures also reproduced on main). Newly caused failures return implementation work with failing commands/output/source bundled. Existing-main failures do not block it, but acceptance is not evidence of a wholly green suite. Execution errors are distinct from assertion failures.
+
+Executed red test-contract candidates may receive independent hidden acceptance after authority rechecks: via=tests settles tasks and satisfies prerequisites without publishing main. Green reviewed test candidates publish via=landing. The reviewer owns assertion validity and witness representability; writer observations alone cannot establish acceptance.
+
+The API returns the durable acceptance, including via and measured gate. Worker acceptance, integrator receipt and queue done retain the same gate counts. Verified publication intents pin counts so recovery/lost-reply replay preserve them. Unknown historical results remain unknown, never reconstructed as zero failures. CLI says accepted hidden test packet/not published for via=tests, and landed on main only for via=landing. It prints retained suite failures and already-main failures; missing measurements cannot imply green.
+
+Validation uses separate clocks: timeouts.command_seconds bounds each command after acquiring the output lease; timeouts.validation_seconds bounds the full operation including waits (defaults 300/1800 seconds). CLI/MCP allow the full operation. validation.py distinguishes assertion exits, including 124, from timeouts/signals/failed units/missing results, which raise ExecutionError and cannot authorize hidden acceptance. Units are memory-capped, swap-disabled and cleaned as a group; changing tracked candidate content invalidates execution. Repeated unchanged infrastructure failures escalate separately from product refusals.
+
+Before acceptance or failed-test bundling, recheck run, receipt/version, holds and worker/candidate/main refs. Publication saves verified intent before atomic main advancement and settlement. Matching published intents recover without old worktrees; ancestry alone is insufficient. Concurrent changes leave authority intact and require renewed review. Duplicate validation refuses; draining waits for checks and validation is silence-exempt. Settlement retries save before acknowledgement.
+
+Evidence: contracts, landing, lifecycle, CLI and real-Git landing/publication/restart fixtures. Native evidence established the need for separate command/suite clocks; focused validation evidence owns current replay and deployment outcomes.

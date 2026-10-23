@@ -1,29 +1,10 @@
 ---
 status: green
-revised_at: "2026-10-08T22:01:49+11:00"
+revised_at: "2026-10-16T06:01:23+11:00"
 ---
 
-The daemon alone owns this queue. Submit changes through its API.
+The installed daemon owns live construction work in ~/.CointOS/state/cointos.json. This source checkout is not a live queue projection.
 
-## p:new
+Use `cointos jobs --project PROJECT` to find current work and `cointos task PROJECT:ITEM` for its canonical assignment, binding tests, correction owners, holds and receipt. Queue changes go through the daemon API. Runtime-generated knowledge is a readable projection of that authority, never a separate planning source.
 
-Status: queued
-Stage: implementation
-Reasoning effort: stage default
-
-New
-
-Current dependencies: none
-Run budget metadata: {} (omitted limits use daemon defaults)
-
-## p:next
-
-Status: queued
-Stage: implementation
-Reasoning effort: stage default
-
-Depends on: old
-Next
-
-Current dependencies: new
-Run budget metadata: {} (omitted limits use daemon defaults)
+Test fixtures publish into disposable knowledge roots and registries; their synthetic project names are not live work.

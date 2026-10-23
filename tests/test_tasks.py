@@ -1,4 +1,5 @@
 """Task records and their pinned metadata: stage, reasoning effort, run budget."""
+import copy
 import json
 import unittest
 from unittest.mock import patch
@@ -29,7 +30,7 @@ class Metadata(unittest.TestCase):
         self.assertEqual(schema.default_effort(config, {"kind": "item", "stage": "implementation"}), "low")
         self.assertEqual(schema.default_effort(config, {"kind": "item", "stage": "test-contract"}), "medium")
         managed = {"reasoning": {"default": "low", "manager": "medium"}}
-        self.assertEqual(schema.default_effort(managed, {"kind": "decompose", "stage": None}), "medium")
+        self.assertEqual(schema.default_effort(managed, {"kind": "breakdown", "stage": None}), "medium")
         self.assertEqual(schema.default_effort(managed, {"kind": "breakdown", "stage": None}), "medium")
         self.assertEqual(schema.default_effort(managed, {"kind": "item", "stage": "implementation"}), "low")
         self.assertEqual(schema.default_effort(config, {"kind": "item", "stage": "test-contract",
@@ -79,7 +80,8 @@ class Metadata(unittest.TestCase):
         queues.add(project, "queued", "impl", "Implement it")
         task = tasks.create("item", project, "impl", "Implement it", [4], item="impl")
         edit = opencode.settings(state.CONFIG, "key", task, runs.protected(task, project))["permission"]["edit"]
-        self.assertEqual((edit[f"{task['worktree']}/tests/**"], edit["tests/contracts.json"], edit["*"]), ("deny", "deny", "allow"))
+        self.assertEqual((edit[f"{task['worktree']}/tests/**"], edit["tests/contracts.json"], edit["*"]), ("deny", "deny", "deny"))
+        self.assertEqual(edit[f"{task['worktree']}/**"], "allow")
         self.assertEqual(runs.protected({**task, "stage": "test-contract"}, project), [])
         legacy = {**project, "test_policy": {"manifest": "tests/contracts.json"}}
         edit = opencode.settings(state.CONFIG, "key", task, runs.protected(task, legacy))["permission"]["edit"]
@@ -111,7 +113,7 @@ class Budgets(unittest.TestCase):
         with patch.dict(state.CONFIG["recovery"], generation_seconds=9999):
             self.assertEqual(restored["tasks"][task["id"]]["budget"]["generation_seconds"], task["budget"]["generation_seconds"])
 
-    def test_only_waiting_work_changes_budget_and_the_other_limit_stays(self):
+    def test_waiting_limits_and_live_increases_preserve_the_other_limit_and_usage(self):
         api.dispatch("queue", {"project": "p", "name": "child", "brief": "Brief", "budget": {"generation_seconds": 90}})
         self.assertEqual(api.dispatch("budget", {"task": "p:child", "budget": {"generation_tokens": 2000}})["budget"],
                          {"generation_tokens": 2000, "generation_seconds": 90})
@@ -119,9 +121,26 @@ class Budgets(unittest.TestCase):
         tasks.set_budget(task["id"], {"generation_tokens": 555})
         self.assertEqual(task["budget"], {"generation_tokens": 555, "generation_seconds": 90})
         task["status"] = "running"
-        with self.assertRaisesRegex(ValueError, "inactive waiting"):
-            tasks.set_budget(task["id"], {"generation_tokens": 777})
-        self.assertEqual(task["budget"]["generation_tokens"], 555)
+        task.update(session='existing-session', agent='live-run', runs=1)
+        state.L['agents']['live-run'] = {'task': task['id'], 'generation_seconds': 75,
+                                        'generation_tokens': 500, 'granted': {'generation_tokens': 20},
+                                        'budget_warned': True}
+        before = copy.deepcopy(state.L['agents']['live-run'])
+        api.dispatch('budget', {'task': task['id'], 'budget': {'generation_tokens': 777}})
+        self.assertEqual(task['budget'], {'generation_tokens': 777, 'generation_seconds': 90})
+        self.assertEqual(queues.records()['p:child']['budget'], task['budget'])
+        self.assertEqual(state.L['agents']['live-run'], {k:v for k,v in before.items() if k != 'budget_warned'})
+        self.assertIn('777 tokens', state.L['messages'][-1]['text'])
+        self.assertEqual(state.L['messages'][-1]['to'], task['id'])
+        self.assertEqual((task['session'], task['agent'], task['runs']), ('existing-session', 'live-run', 1))
+        with self.assertRaisesRegex(ValueError, 'only increase'):
+            tasks.set_budget(task['id'], {'generation_seconds': 89, 'generation_tokens': 1000})
+        self.assertEqual(task['budget'], {'generation_tokens': 777, 'generation_seconds': 90})
+
+    def test_default_allowances_have_no_hidden_short_manager_or_recovery_override(self):
+        limits = {key: state.CONFIG['recovery'][key] for key in schema.BUDGET_KEYS}
+        for role in ('worker', 'manager', 'integrator', 'operator'):
+            self.assertEqual(schema.budget(state.CONFIG, role=role), limits)
 
 
 class Identity(unittest.TestCase):
@@ -136,6 +155,21 @@ class Identity(unittest.TestCase):
         project = support.project(self, support.repository(self))
         worker = support.queued(project, "parser")
         self.assertEqual((worker["id"], worker["record"], worker["branch"]), ("p:parser", "p:parser", "work/parser"))
+
+    def test_numbered_maintenance_skips_existing_queue_identities(self):
+        project = support.project(self, support.repository(self))
+        for kind, base in (("garden", "garden"), ("tree-audit", "tree-audit")):
+            with self.subTest(kind=kind):
+                queues.add(project, "command", base + "-1", "A separately queued assignment")
+                record = state.L["queue"]["p:" + base + "-1"]
+                maintenance = tasks.create(kind, project, base, "Maintenance selection", [6])
+                self.assertEqual(maintenance["id"], "p:" + base + "-2")
+                self.assertIs(state.L["queue"]["p:" + base + "-1"], record)
+                self.assertNotIn("p:" + base + "-1", state.L["tasks"])
+                worker = tasks.create("breakdown", project, base + "-1", record["brief"], [5],
+                                      item=base + "-1", record_version=record["version"])
+                self.assertIs(state.L["tasks"][maintenance["id"]], maintenance)
+                self.assertIs(state.L["tasks"][worker["id"]], worker)
 
 
 if __name__ == "__main__":

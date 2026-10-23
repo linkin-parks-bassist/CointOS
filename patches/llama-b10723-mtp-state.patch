@@ -1,0 +1,334 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -11,6 +11,7 @@
+ #include "common.h"
+ #include "fit.h"
+ #include "llama.h"
++#include "../../src/llama-ext.h"
+ #include "log.h"
+ #include "sampling.h"
+ #include "speculative.h"
+@@ -2342,6 +2343,77 @@
+                 "created context checkpoint %d of %d (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", size = %.3f MiB)\n",
+                 (int) slot.prompt.checkpoints.size(), params_base.n_ctx_checkpoints, cur.pos_min,
+                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
++    }
++
++    bool paired_mtp_slots() const {
++        return std::getenv("LLAMA_MTP_SLOT_STATE") != nullptr && ctx_dft &&
++            llama_get_ctx_other(ctx_dft) != ctx_tgt &&
++            std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end() &&
++            std::all_of(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                [](common_speculative_type type) { return type == COMMON_SPECULATIVE_TYPE_NONE || type == COMMON_SPECULATIVE_TYPE_DRAFT_MTP; });
++    }
++
++    // Experimental trailer after the native target state. Older readers ignore it.
++    static constexpr uint64_t mtp_slot_magic = 0x31544f4c5350544dULL;
++
++    size_t save_mtp_slot(const std::string & path, llama_seq_id id) {
++        std::vector<uint8_t> boundary;
++        if (!common_speculative_get_state(spec.get(), id, boundary) || boundary.empty()) {
++            throw std::runtime_error("MTP boundary state unavailable");
++        }
++        std::vector<uint8_t> draft(llama_state_seq_get_size(ctx_dft, id));
++        if (llama_state_seq_get_data(ctx_dft, draft.data(), draft.size(), id) != draft.size()) {
++            throw std::runtime_error("Cannot save MTP draft state");
++        }
++        const uint64_t header[] = { mtp_slot_magic, 1, draft.size(), boundary.size() };
++        std::ofstream file(path, std::ios::binary | std::ios::app);
++        file.exceptions(std::ios::failbit | std::ios::badbit);
++        file.write(reinterpret_cast<const char *>(header), sizeof(header));
++        file.write(reinterpret_cast<const char *>(draft.data()), draft.size());
++        file.write(reinterpret_cast<const char *>(boundary.data()), boundary.size());
++        file.close();
++        return sizeof(header) + draft.size() + boundary.size();
++    }
++
++    size_t restore_mtp_slot(const std::string & path, size_t target_bytes, llama_seq_id id) {
++        std::ifstream file(path, std::ios::binary | std::ios::ate);
++        file.exceptions(std::ios::failbit | std::ios::badbit);
++        const auto file_bytes = (uint64_t) file.tellg();
++        if (file_bytes < target_bytes) {
++            throw std::runtime_error("Truncated MTP slot state");
++        }
++        if (file_bytes == target_bytes) {
++            // Legacy snapshots have no draft history. Do not inherit another owner's state.
++            llama_memory_seq_rm(llama_get_memory(ctx_dft), id, -1, -1);
++            std::vector<uint8_t> boundary;
++            if (common_speculative_get_state(spec.get(), id, boundary)) {
++                std::fill(boundary.begin(), boundary.end(), 0);
++                common_speculative_set_state(spec.get(), id, boundary);
++            }
++            SRV_WRN("%s", "legacy target-only snapshot: MTP draft history is cold\n");
++            return 0;
++        }
++        uint64_t header[4];
++        if (file_bytes - target_bytes < sizeof(header)) {
++            throw std::runtime_error("Truncated MTP slot trailer");
++        }
++        file.seekg(target_bytes);
++        file.read(reinterpret_cast<char *>(header), sizeof(header));
++        const uint64_t payload_bytes = file_bytes - target_bytes - sizeof(header);
++        const uint64_t boundary_bytes = (uint64_t) llama_model_n_embd_out(llama_get_model(ctx_dft)) * sizeof(float);
++        if (header[0] != mtp_slot_magic || header[1] != 1 || header[3] != boundary_bytes ||
++                header[2] > payload_bytes || header[3] != payload_bytes - header[2]) {
++            throw std::runtime_error("Invalid MTP slot trailer");
++        }
++        std::vector<uint8_t> draft(header[2]), boundary(header[3]);
++        file.read(reinterpret_cast<char *>(draft.data()), draft.size());
++        file.read(reinterpret_cast<char *>(boundary.data()), boundary.size());
++        if (llama_state_seq_set_data(ctx_dft, draft.data(), draft.size(), id) != draft.size()) {
++            throw std::runtime_error("Cannot restore MTP draft state");
++        }
++        common_speculative_set_state(spec.get(), id, boundary);
++        return sizeof(header) + payload_bytes;
+     }
+ 
+     // returns false to decline the task, it is offered again after the decode is done
+@@ -2544,12 +2616,22 @@
+                     }
+ 
+                     GGML_ASSERT(packed.size() % sizeof(llama_token) == 0);
+-                    const size_t nwrite = llama_state_seq_save_file(
++                    size_t nwrite = llama_state_seq_save_file(
+                         ctx_tgt, filepath.c_str(), slot->id,
+                         reinterpret_cast<const llama_token *>(packed.data()), packed.size() / sizeof(llama_token));
+                     if (nwrite == 0) {
+                         send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
+                         break;
++                    }
++
++                    if (paired_mtp_slots()) {
++                        try {
++                            nwrite += save_mtp_slot(filepath, slot->id);
++                        } catch (const std::exception & err) {
++                            std::remove(filepath.c_str());
++                            send_error(task, err.what(), ERROR_TYPE_SERVER);
++                            break;
++                        }
+                     }
+ 
+                     const int64_t t_end = ggml_time_us();
+@@ -2609,6 +2691,9 @@
+                             throw std::runtime_error("Invalid tokens in slot save file");
+                         }
+ 
++                        if (paired_mtp_slots()) {
++                            nread += restore_mtp_slot(filepath, nread, slot->id);
++                        }
+                         slot->prompt.clear();
+                         slot->prompt.tokens = std::move(restored);
+                     } catch (const std::exception & err) {
+@@ -2763,7 +2848,20 @@
+     };
+ #endif
+ 
++    const bool profile_cycles = std::getenv("LLAMA_CYCLE_PROFILE") != nullptr;
++    bool profile_cycle = false;
++    int64_t p_pre = 0, p_draft = 0, p_decode = 0, p_submit = 0, p_sync = 0;
++    int64_t p_catchup = 0, p_post = 0, p_sample = 0;
++    int p_drafted = 0, p_accepted = 0;
++
+     void update_slots() {
++        // Single-slot decode only. Timers do not add synchronization.
++        profile_cycle = profile_cycles && slots.size() == 1 && slots[0].state == SLOT_STATE_GENERATING;
++        const int64_t profile_start = profile_cycle ? ggml_time_us() : 0;
++        const int profile_task = profile_cycle ? slots[0].task->id : -1;
++        const int profile_context = profile_cycle ? slots[0].prompt.n_tokens() : 0;
++        p_pre = p_draft = p_decode = p_submit = p_sync = p_catchup = p_post = p_sample = 0;
++        p_drafted = p_accepted = 0;
+ #ifdef DEBUG_TIMINGS
+         static int64_t t_prev = 0;
+         int64_t t_start = ggml_time_us();
+@@ -2805,6 +2903,7 @@
+         }
+ 
+         try {
++            common_time_meas profile(p_pre, !profile_cycle);
+             scoped_timer t(t_pre_decode, n_pre_decode);
+             pre_decode();
+             batch.render();
+@@ -2843,6 +2942,7 @@
+         for (int32_t off = 0; off < batch.size(); off = off_next) {
+             const int32_t n_tokens = std::min(n_batch, batch.size() - off);
+             try {
++                common_time_meas profile(p_decode, !profile_cycle);
+                 scoped_timer t(t_decode, n_decode);
+                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
+ 
+@@ -2869,6 +2969,7 @@
+             }
+ 
+             try {
++                common_time_meas profile(p_post, !profile_cycle);
+                 scoped_timer t(t_post_decode, n_post_decode);
+                 post_decode(n_tokens, off, batch_view);
+             } catch (const std::exception & e) {
+@@ -2876,6 +2977,18 @@
+                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
+                 break; // stop any further processing
+             }
++        }
++        if (profile_cycle) {
++            const json record = {
++                {"task", profile_task}, {"context", profile_context},
++                {"total_us", ggml_time_us() - profile_start},
++                {"pre_us", p_pre}, {"draft_us", p_draft},
++                {"decode_us", p_decode}, {"target_submit_us", p_submit},
++                {"target_sync_us", p_sync}, {"draft_catchup_us", p_catchup},
++                {"post_us", p_post}, {"sample_us", p_sample},
++                {"drafted", p_drafted}, {"accepted", p_accepted},
++            };
++            SRV_INF("cycle_profile %s\n", record.dump().c_str());
+         }
+     }
+ 
+@@ -3016,6 +3129,7 @@
+         // generate the actual drafts (if any)
+         if (!drafting.empty()) {
+             queue_tasks.yield_to_queue([&]() {
++                common_time_meas profile(p_draft, !profile_cycle);
+                 common_speculative_draft(spec.get());
+             });
+         }
+@@ -3026,6 +3140,7 @@
+             auto & ckpt  = slot.spec_ckpt;
+ 
+             slot.stats.n_draft_tokens += draft.size();
++            if (profile_cycle) { p_drafted += draft.size(); }
+ 
+             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
+             const bool use_ckpt_dft = ctx_dft_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL;
+@@ -3652,8 +3767,12 @@
+         // note: the sync is done here too, so that the wait is also covered by the yield
+         int ret = 0;
+         queue_tasks.yield_to_queue([&]() {
+-            ret = llama_decode(ctx_tgt, batch_view);
++            {
++                common_time_meas profile(p_submit, !profile_cycle);
++                ret = llama_decode(ctx_tgt, batch_view);
++            }
+             if (ret == 0 && has_output) {
++                common_time_meas profile(p_sync, !profile_cycle);
+                 llama_synchronize(ctx_tgt);
+             }
+         });
+@@ -3717,6 +3836,7 @@
+         if (spec) {
+             bool ok = true;
+             queue_tasks.yield_to_queue([&]() {
++                common_time_meas profile(p_catchup, !profile_cycle);
+                 ok = common_speculative_process(spec.get(), batch_view);
+             });
+ 
+@@ -3825,6 +3945,7 @@
+ 
+             llama_token id;
+             {
++                common_time_meas profile(p_sample, !profile_cycle);
+                 scoped_timer timer(t_sampl, n_sampl);
+                 id = common_sampler_sample(slot.smpl.get(), slot.ctx_tgt, tok_idx);
+             }
+@@ -3885,11 +4006,13 @@
+ 
+                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
+                 const auto & synth_probs = common_speculative_get_synth_probs(spec.get());
++                const int64_t sample_start = profile_cycle ? ggml_time_us() : 0;
+                 auto accepted = synth_probs.empty()
+                     ? common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft)
+                     : server_sample_and_accept_synth(
+                             slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft,
+                             synth_probs, slot.spec_synth_rng, slot.spec_is_replay);
++                if (profile_cycle) { p_sample += ggml_time_us() - sample_start; }
+                 slot.spec_i_batch.clear();
+ 
+                 GGML_ASSERT(accepted.size() >= 1);
+@@ -3934,8 +4057,9 @@
+                     SLT_INF(slot, "accepted %2zu/%2zu draft tokens\n", accepted.size() - 1, n_draft);
+                 }
+ 
+-                common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+-
++                if (!paired_mtp_slots()) {
++                    common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
++                }
+                 slot.spec_draft = std::move(accepted);
+             }
+ 
+@@ -3951,6 +4075,7 @@
+ 
+             // update how many tokens out of those tested were accepted
+             slot.stats.n_draft_accepted += n_accepted;
++            if (profile_cycle) { p_accepted += n_accepted; }
+             slot.stats.n_draft_verif_steps += 1;
+ 
+             auto & n_accepted_per_pos = slot.n_accepted_per_pos;
+@@ -3986,6 +4111,7 @@
+                     // can occur before all of it is returned. Keep the final
+                     // returned token pending, exactly as non-speculative decoding
+                     // does, so the next request can extend this reusable state.
++                    size_t n_keep_accepted = ids.size() - 1;
+                     const size_t n_tail = ids.size() - 1 - i;
+                     const size_t n_rollback = n_draft + 1 - ids.size() + n_tail;
+                     auto can_remove = [&](llama_context * ctx, common_context_seq_rm_type type) {
+@@ -3995,7 +4121,11 @@
+                     if (n_tail > 0 && can_remove(slot.ctx_tgt, ctx_tgt_seq_rm_type) &&
+                             (!slot.ctx_dft || can_remove(slot.ctx_dft, ctx_dft_seq_rm_type))) {
+                         slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_tail);
++                        n_keep_accepted = i;
+                         SLT_DBG(slot, "removed %zu speculative tokens after stopping\n", n_tail);
++                    }
++                    if (paired_mtp_slots()) {
++                        common_speculative_accept(spec.get(), slot.id, n_keep_accepted);
+                     }
+                     slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+                     slot.print_timings();
+@@ -4006,6 +4136,9 @@
+                 }
+             }
+ 
++            if (paired_mtp_slots()) {
++                common_speculative_accept(spec.get(), slot.id, ids.size() - 1);
++            }
+             slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+             slot.print_timings_tg();
+ 
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1537,6 +1537,9 @@
+                     continue;
+                 }
+ 
++                if (batch_in.pos[i_batch_beg[seq_id]] == 0) {
++                    std::fill(pending_h[seq_id].begin(), pending_h[seq_id].end(), 0.0f);
++                }
+                 set_h(i_batch_beg[seq_id], pending_h[seq_id].data());
+             }
+ 
+@@ -1742,6 +1745,25 @@
+                 dp.result->clear();
+             }
+         }
++    }
++
++    bool get_state(llama_seq_id seq_id, std::vector<uint8_t> & data) const override {
++        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
++            return false;
++        }
++        const auto & h = pending_h[seq_id];
++        data.resize(h.size() * sizeof(float));
++        std::memcpy(data.data(), h.data(), data.size());
++        return true;
++    }
++
++    void set_state(llama_seq_id seq_id, const std::vector<uint8_t> & data) override {
++        if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq || data.size() != (size_t) n_embd * sizeof(float)) {
++            throw std::runtime_error("Invalid MTP boundary state");
++        }
++        std::memcpy(pending_h[seq_id].data(), data.data(), data.size());
++        verify_h[seq_id].clear();
++        verify_h_rows[seq_id] = 0;
+     }
+ 
+     void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {

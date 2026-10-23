@@ -1,0 +1,46 @@
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index f547735..6deb0fa 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -3968,8 +3968,8 @@ private:
+             slot.sampled = ids.back(); // last accepted token
+             SLT_DBG(slot, "add accepted tokens: sampled=%d, ids.size=%zu, n_draft=%zu\n", slot.sampled, ids.size(), n_draft);
+ 
+-            slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+-
++            // Apply one rollback after determining the returned prefix. Recurrent
++            // snapshot rollback is single-use until the next decode.
+             for (size_t i = 0; i < ids.size(); ++i) {
+                 completion_token_output result;
+ 
+@@ -3982,6 +3982,22 @@ private:
+                 slot.stats.n_gen += 1;
+ 
+                 if (!process_token(result, slot)) {
++                    // Verification decoded the whole accepted draft, but a stop
++                    // can occur before all of it is returned. Keep the final
++                    // returned token pending, exactly as non-speculative decoding
++                    // does, so the next request can extend this reusable state.
++                    const size_t n_tail = ids.size() - 1 - i;
++                    const size_t n_rollback = n_draft + 1 - ids.size() + n_tail;
++                    auto can_remove = [&](llama_context * ctx, common_context_seq_rm_type type) {
++                        return type == COMMON_CONTEXT_SEQ_RM_TYPE_PART ||
++                            (type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_rollback <= llama_n_rs_seq(ctx));
++                    };
++                    if (n_tail > 0 && can_remove(slot.ctx_tgt, ctx_tgt_seq_rm_type) &&
++                            (!slot.ctx_dft || can_remove(slot.ctx_dft, ctx_dft_seq_rm_type))) {
++                        slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_tail);
++                        SLT_DBG(slot, "removed %zu speculative tokens after stopping\n", n_tail);
++                    }
++                    slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+                     slot.print_timings();
+                     send_final_response(slot);
+                     slot.release();
+@@ -3990,6 +4006,7 @@ private:
+                 }
+             }
+ 
++            slot.mem.seq_rm(slot.id, slot.prompt.tokens.pos_next(), -1);
+             slot.print_timings_tg();
+ 
+             SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) n_accepted, (int) n_draft, slot.prompt.n_tokens());

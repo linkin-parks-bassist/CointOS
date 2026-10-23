@@ -7,7 +7,7 @@ from __future__ import annotations
 import secrets
 import threading
 
-from cointos import git, keys, lifecycle, opencode, prompts, tasks
+from cointos import git, keys, lifecycle, opencode, packets, prompts, queues, tasks
 from cointos.state import CONFIG, LOCK, L, log, now
 
 
@@ -16,24 +16,44 @@ class Ended(Exception):
 
 
 def start(task: dict) -> str:
-    """Start an agent run for a waiting task. Caller holds LOCK."""
-    agent_id = f"{task['role']}-{secrets.token_hex(3)}"
-    lifecycle.start(task, agent_id)
-    key = keys.issue(agent_id, "background")
-    L["agents"][agent_id] = {
-        "id": agent_id, "role": task["role"], "place": task["place"], "task": task["id"], "title": task["title"],
-        "class": "background", "state": "starting", "pid": None, "url": None, "session": task["session"],
-        "doing": None, "thoughts": 0, "generated": 0, "engaged": False,
-        "repeats": 0, "last_thought": None, "last_activity": now(),
-        "started_at": now(), "stage": task["stage"], "reasoning_effort": task["reasoning_effort"]}
-    log("agent started", agent=agent_id, task=task["id"], run=task["runs"])
-    threading.Thread(target=follow, args=(agent_id, dict(task), key), daemon=True).start()
-    return agent_id
+    """Reserve and admit one run. LOCK is the follower's admission barrier."""
+    with LOCK:
+        lifecycle.require_start(task)
+        reserved = set(keys.recorded()) | set(keys.ISSUED)
+        while True:
+            agent_id = f"{task['role']}-{secrets.token_hex(3)}"
+            if agent_id in L["agents"] or agent_id in L["exiting"] or agent_id in reserved:
+                continue
+            try:
+                opencode.run_dir(agent_id).mkdir(parents=True)
+            except FileExistsError:
+                continue
+            break
+        # The follower cannot launch until this lock is released. Thread/key failure
+        # leaves the task untouched; an unregistered follower exits without stopping
+        # any unit. Keep the directory reserved, including failed admissions.
+        threading.Thread(target=follow, args=(agent_id, dict(task), None), daemon=True).start()
+        keys.issue(agent_id, "background")
+        lifecycle.start(task, agent_id)
+        L["agents"][agent_id] = {
+            "id": agent_id, "role": task["role"], "place": task["place"], "task": task["id"], "title": task["title"],
+            "class": "background", "state": "starting", "pid": None, "url": None, "session": task["session"],
+            "doing": None, "thoughts": 0, "generated": 0, "engaged": False,
+            "repeats": 0, "last_thought": None, "last_activity": now(),
+            "started_at": now(), "stage": task["stage"], "reasoning_effort": task["reasoning_effort"]}
+        log("agent started", agent=agent_id, task=task["id"], run=task["runs"])
+        return agent_id
 
 
 def follow(agent_id: str, task: dict | None, key: str | None) -> None:
     """Own one run from launch (or, with no task, from adoption after a daemon restart) to its
     end, then report its execution facts. The run is a systemd unit outside the daemon."""
+    if task is not None:
+        with LOCK:
+            current = L["tasks"].get(task["id"])
+            if agent_id not in L["agents"] or not lifecycle.owns(current, agent_id):
+                return
+            task, key = dict(current), keys.ISSUED[agent_id]
     try:
         if task is not None:
             launch(agent_id, task, key)
@@ -53,10 +73,20 @@ def follow(agent_id: str, task: dict | None, key: str | None) -> None:
 def launch(agent_id: str, task: dict, key: str) -> None:
     """Prepare the task's worktree and start its run's unit. Runs outside LOCK."""
     where = tasks.place(task)
+    correction = (queues.records().get(task.get('record')) or {}).get('correction')
     if task["branch"] is not None:
-        git.add_worktree(where["path"], task["worktree"], task["branch"], where["main_branch"])
+        if correction:
+            packets.require_current(task)
+        git.add_worktree(where["path"], task["worktree"], task["branch"],
+                         correction['commit'] if correction else where["main_branch"])
+        # Reusing a checkout/branch preserves work, but does not prove it still
+        # contains the accepted packet (another run may have moved its ref).
+        if correction and not git.contains(task['worktree'], correction['commit'], 'HEAD'):
+            raise ValueError(f"correction checkout {task['worktree']} at {git.head(task['worktree'])} "
+                             f"does not contain accepted packet {correction['commit']}; "
+                             "preserve its files and branch, then repair the checkout baseline before resuming")
     if task["kind"] == "item" and not task.get("base_commit"):
-        base = git.run(task["worktree"], "merge-base", "HEAD", where["main_branch"])
+        base = correction['commit'] if correction else git.run(task["worktree"], "merge-base", "HEAD", where["main_branch"])
         with LOCK:
             L["tasks"][task["id"]]["base_commit"] = task["base_commit"] = base
     opencode.launch(CONFIG, agent_id, task, key, prompts.launch_text(task, where), protected(task, where))
@@ -85,6 +115,8 @@ def observed(agent_id: str, kind: str, value) -> None:
             if lifecycle.owns(task, agent_id):
                 task["session"] = value
         elif kind == "activity" and value:
+            if agent.get("doing") != value:
+                agent["doing_since"] = now()
             agent["doing"] = value
         agent["last_activity"] = now()
 
@@ -96,10 +128,12 @@ def adopt(previous: dict) -> None:
     recorded = keys.recorded()
     for agent_id, agent in (previous.get("agents") or {}).items():
         task = L["tasks"].get(agent["task"])
-        if (agent_id not in recorded or task is None or task["agent"] != agent_id
+        if (agent_id not in recorded or task is None
+                or (task["agent"] != agent_id and (task.get("receipt") or {}).get("run") != agent_id)
                 or not opencode.active(agent_id)):
             continue
         L["agents"][agent_id] = {**agent,
+                                 "gpu_since": None,
                                  "engaged": agent.get("engaged", bool(agent.get("thoughts") or agent.get("generated"))),
                                  "last_activity": now()}
         keys.adopt(agent_id, agent["class"], recorded[agent_id])
@@ -113,5 +147,6 @@ def adopt(previous: dict) -> None:
                 except PermissionError:
                     pass
     for task in L["tasks"].values():
-        if task["status"] == "running" and task["agent"] not in L["agents"]:
+        agent = L["agents"].get(task["agent"])
+        if task["status"] == "running" and (agent is None or agent["task"] != task["id"]):
             lifecycle.orphaned(task)

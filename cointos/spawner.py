@@ -2,17 +2,18 @@
 
 Waiting tasks resume first, in rank order; then the best new work is created, also by rank
 (`what/is/the/architecture/of/cointos.md`, *Autonomy*): integrating reviewed items before new
-work, decompositions, queued items and commands in queue order within project priority, then
+work, queued items and commands in queue order within project priority, then
 the periodic steward, test audit and tree maintenance. Caller holds LOCK throughout.
 """
 from __future__ import annotations
 
 import functools
 import subprocess
+from copy import deepcopy
 
-from cointos import git, lanes, lifecycle, queues, runs, schema, tasks, trees
+from cointos import frontier, git, lanes, lifecycle, queues, runs, schema, tasks, trees
 from cointos.config import managed_trees
-from cointos.state import CONFIG, STOPPING, L, alert, log, now
+from cointos.state import CONFIG, STOPPING, LOCK, L, alert, log, now
 
 
 def refresh() -> tuple[dict, dict]:
@@ -28,7 +29,24 @@ def refresh() -> tuple[dict, dict]:
         if L["dependency_problems"].get(key) != problem:
             alert(f"{key} can never start: {problem}.")
     L["dependency_problems"] = problems
+    # Materialize recovery before choosing existing waiting work, so Operator rank
+    # applies immediately instead of starving behind a permanent waiting backlog.
+    repair_work(scanned)
+    L['work_frontier'] = [row for project in projects for row in frontier.view(project['name'])]
     return scanned, ready
+
+
+def repair_work(scanned: dict) -> None:
+    """Reconcile one repair Operator per unchanged failure, including taskless bad dependencies."""
+    if L["paused"]:
+        return
+    for source in list(L["tasks"].values()):
+        if frontier.reason(source) is not None and not draft_blocked(source):
+            tasks.request_repair(source)
+    for records in scanned.values():
+        for record in records:
+            if frontier.reason(record) is not None:
+                tasks.request_repair(record)
 
 
 def spawn() -> None:
@@ -59,7 +77,7 @@ def next_task() -> dict | None:
     if not options:
         return None
     created = min(options, key=lambda option: option[0])[1]()
-    # A dispatch refused before it ran failed its item for good; what that changed (its manager
+    # A dispatch refused before it ran failed its item; what that changed (its controller
     # is now due) decides the next choice.
     return created if created is not None else next_task()
 
@@ -71,8 +89,14 @@ def held(task: dict) -> bool:
 
 
 def runnable(task: dict, ready: dict) -> bool:
-    if held(task):
+    if held(task) or frontier.obsolete(task):
         return False
+    if task.get('repair_origin') and not frontier.runnable(task):
+        return False
+    if task.get('repair_origin') and not task['runs']:
+        source = L['tasks'].get(task['repair_origin']['task'])
+        if source and draft_blocked(source):
+            return False
     scope = schema.KINDS[task["kind"]]["scope"]
     if scope in ("project", "either") and task["place"] != "system":
         project = next((p for p in CONFIG["projects"] if p["name"] == task["place"]), None)
@@ -82,8 +106,23 @@ def runnable(task: dict, ready: dict) -> bool:
         return ready.get(task["place"], {}).get(task["item"]) == "ready"
     if task["kind"] == "integrate":
         worker = L["tasks"].get(task["worker"])
-        return bool(worker and worker["status"] == "review" and not held(worker))
+        # Retained reviewers obey the same project serialization as new ones.
+        return bool(worker and review_ready(worker, ready.get(worker['place']))
+                    and not any(other["kind"] == "integrate" and other["place"] == task["place"]
+                                and other["id"] != task["id"] and other["status"] == "running"
+                                for other in L["tasks"].values()))
     return True
+
+
+def draft_blocked(task: dict) -> bool:
+    """Unstarted garden recovery waits for canonical draft owners, not another allowance."""
+    if task['kind'] != 'garden':
+        return False
+    tree = next((tree for tree in managed_trees(CONFIG) if tree['name'] == task['place']), None)
+    health = tree_health(tree) if tree else None
+    if tree and health is None and tree['name'] not in L['trees']:
+        return True  # preserve first-observation ordering without blocking admission on I/O
+    return health is not None and bool(set(task['brief'].splitlines()) & set(health.get('deferred', [])))
 
 
 def queue_rank(kind: str, project: dict, position: int) -> list:
@@ -100,24 +139,14 @@ def reorder(scanned: dict) -> None:
 
 
 def queued_work(scanned: dict, ready: dict) -> list:
-    """New tasks for ready queue records: a worker item or command, or a decomposition manager
-    for a failed worker item awaiting managerial recovery. A test-contract brief relying on APIs
-    main lacks is refused before any run and goes to that recovery pass."""
+    """New worker or planning tasks for ready records; recovery has already been reconciled.
+    Test contracts relying on absent APIs are refused before a worker run."""
     options = []
     for project in tasks.enabled_projects():
         for record in scanned[project["name"]]:
             if record["held_by"]:
                 continue
             found = queues.state(record)
-            if found["decompose"]:
-                name = f"decompose-{record['item']}"
-                known = L["tasks"].get(f"{project['name']}:{name}")
-                if not (known and (tasks.active(known) or known["record_version"] == record["version"])):
-                    rank = [schema.KINDS["decompose"]["rank"], project.get("priority", 100)]
-                    options.append((rank, functools.partial(
-                        tasks.create, "decompose", project, name, found["blocker"], rank,
-                        item=record["item"], record_version=record["version"])))
-                continue
             if found["status"] != "queued" or ready[project["name"]][record["item"]] != "ready":
                 continue
             known = L["tasks"].get(f"{project['name']}:{record['item']}")
@@ -154,6 +183,17 @@ def unfounded(project: dict, record: dict) -> list[str]:
     return queues.missing_reliances(project["path"], head, queues.relies_on(record["brief"]))
 
 
+def review_ready(worker: dict, ready: dict | None = None) -> bool:
+    """A waiting consumer review cannot occupy its pending correction's review slot."""
+    if worker['status'] != 'review' or held(worker):
+        return False
+    if not worker.get('record'):
+        return True
+    if ready is None:
+        ready = queues.readiness(queues.live(worker['place']), queues.landed(worker['place']))
+    return ready.get(worker['item']) == 'ready'
+
+
 def integrations() -> list:
     """One integration at a time per project, of its oldest reviewed item. An integration occupies
     its project only while it can proceed: one that is held, or whose worker is back at work,
@@ -162,12 +202,12 @@ def integrations() -> list:
     for project in tasks.enabled_projects():
         active = [t for t in L["tasks"].values() if t["kind"] == "integrate" and t["place"] == project["name"]
                   and tasks.pending(t)]
-        if any(t["status"] == "running" or (not held(t) and L["tasks"][t["worker"]]["status"] == "review")
+        if any(t["status"] == "running" or (not held(t) and review_ready(L["tasks"][t["worker"]]))
                for t in active):
             continue
         integrated = {t["worker"] for t in active}
-        reviewed = [t for t in L["tasks"].values() if t["place"] == project["name"] and t["status"] == "review"
-                    and not held(t) and t["id"] not in integrated]
+        reviewed = [t for t in L["tasks"].values() if t["place"] == project["name"]
+                    and review_ready(t) and t["id"] not in integrated]
         if reviewed:
             worker = min(reviewed, key=lambda t: t["updated_at"])
             rank = [schema.KINDS["integrate"]["rank"], project.get("priority", 100)]
@@ -202,10 +242,11 @@ def tree_work() -> list:
         latest = max(gardens, key=lambda t: t["created_at"], default=None)
         changed = health["leaves"] and not (latest and latest.get("health_hash") == health["hash"])
         if changed or now() - tasks.last_created("garden", tree["name"]) > CONFIG["garden"]["every_seconds"]:
-            leaves = [str(p.relative_to(trees.root(tree))) for p in trees.root(tree).rglob("*.md")]
+            leaves = health.get('inventory', [])
             batch = "\n".join(trees.select(health, leaves, CONFIG["garden"]["leaves_per_pass"]))
-            options.append((trees.rank(health), functools.partial(
-                tasks.create, "garden", tree, "garden", batch, trees.rank(health), health_hash=health["hash"])))
+            if batch:
+                options.append((trees.rank(health), functools.partial(
+                    tasks.create, "garden", tree, "garden", batch, trees.rank(health), health_hash=health["hash"])))
         elif now() - tasks.last_created("tree-audit", tree["name"]) > CONFIG["garden"]["audit_every_seconds"]:
             rank = [schema.KINDS["tree-audit"]["rank"]]
             options.append((rank, functools.partial(tasks.create, "tree-audit", tree, "tree-audit", "", rank)))
@@ -244,15 +285,43 @@ def periodic() -> list:
 
 
 def tree_health(tree: dict) -> dict | None:
-    """The tree's health, re-read every `garden.check_seconds`; None while it cannot be read
-    (the user is told once per new reason)."""
+    """Last completed observation, never subprocess I/O in the admission transaction."""
     seen = L["trees"].get(tree["name"])
-    if seen is None or now() - seen["checked_at"] >= CONFIG["garden"]["check_seconds"]:
+    return seen if seen is not None and 'error' not in seen else None
+
+
+def refresh_trees() -> None:
+    """Observe due trees outside LOCK; publish only against the captured configuration/cache.
+
+    One daemon observer calls this. Admission sees completed observations, while
+    receipt-time health checks may supersede an observation still in flight.
+    """
+    with LOCK:
+        if STOPPING.is_set() or L['restarting']:
+            return
+        configured = deepcopy({key: CONFIG[key] for key in ('projects', 'trees')})
+        seen = dict(L['trees'])
+        interval, timeout = CONFIG['garden']['check_seconds'], CONFIG['timeouts']['command_seconds']
+    disabled = {p['name'] for p in configured['projects'] if not p.get('enabled', True)}
+    for tree in managed_trees(configured):
+        previous = seen.get(tree['name'])
+        if (STOPPING.is_set() or tree['name'] in disabled
+                or previous is not None and now() - previous['checked_at'] < interval):
+            continue
         try:
-            seen = {**trees.health(tree, CONFIG["timeouts"]["command_seconds"]), "checked_at": now()}
+            fresh = {**trees.health(tree, timeout), "checked_at": now()}
+            deferred = sorted(set(trees.pending(fresh)) & set(fresh.get('deferred', [])))
+            fresh['deferred_health'] = deferred
         except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
-            if (seen or {}).get("error") != str(error):
-                alert(f"Cannot read the {tree['name']} knowledge tree's health: {error}")
-            seen = {"error": str(error), "checked_at": now()}
-        L["trees"][tree["name"]] = seen
-    return None if "error" in seen else seen
+            fresh = {'error': str(error), 'checked_at': now()}
+        with LOCK:
+            if (STOPPING.is_set() or L['restarting']
+                    or configured != {key: CONFIG[key] for key in ('projects', 'trees')}
+                    or L['trees'].get(tree['name']) is not previous):
+                continue
+            if fresh.get('deferred_health') and fresh['deferred_health'] != (previous or {}).get('deferred_health', []):
+                alert(f"Cannot garden pending or absent canonical answers in {tree['name']}: " +
+                      ', '.join(fresh['deferred_health']) + '. Preserve and reconcile their owning answers before branch maintenance.')
+            if 'error' in fresh and fresh['error'] != (previous or {}).get('error'):
+                alert(f"Cannot read the {tree['name']} knowledge tree's health: {fresh['error']}")
+            L['trees'][tree['name']] = fresh

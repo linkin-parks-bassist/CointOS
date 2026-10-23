@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Build the pinned Gufo control process; optionally package a persistent local executable."""
+import argparse
+import hashlib
+import json
+import os
+import re
+import shlex
+import shutil
+from pathlib import Path
+import subprocess
+
+REVISION = '1f97092333af10f29887b098d9cb8a041610004a'
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def run(*args, cwd):
+    return subprocess.run(args, cwd=cwd, check=True)
+
+
+def package(binary, destination, runtime_library_dir):
+    """Keep non-system build dependencies with the binary; use the installed ROCm SDK."""
+    binary = binary.resolve()
+    destination = destination.expanduser().resolve()
+    runtime_library_dir = runtime_library_dir.expanduser().resolve()
+    if not runtime_library_dir.is_dir(): raise ValueError('ROCm runtime library directory is missing')
+    destination.mkdir(mode=0o700, parents=True, exist_ok=False)
+    library_dir = destination / 'lib'; library_dir.mkdir(mode=0o700)
+    listing = subprocess.check_output(['ldd', str(binary)], text=True)
+    if 'not found' in listing: raise RuntimeError('build has unresolved shared libraries')
+    copied = {}
+    for line in listing.splitlines():
+        match = re.match(r'\s*(\S+)\s+=>\s+(.+?)\s+\(0x[0-9a-f]+\)', line)
+        if not match: continue
+        name, path = match.groups(); dependency = Path(path).resolve()
+        if dependency.is_relative_to(Path('/usr/lib')) or dependency.is_relative_to(runtime_library_dir): continue
+        target = library_dir / name
+        shutil.copyfile(dependency, target)
+        copied[name] = hashlib.sha256(target.read_bytes()).hexdigest()
+    installed = destination / 'gufo-control.bin'
+    shutil.copyfile(binary, installed); installed.chmod(0o700)
+    launcher = destination / 'gufo-control'
+    launcher.write_text('#!/bin/sh\n'
+        'GUFO_PACKAGE_DIR=$(dirname -- "$(readlink -f -- "$0")")\n'
+        'export LD_LIBRARY_PATH="$GUFO_PACKAGE_DIR/lib":' + shlex.quote(str(runtime_library_dir))
+        + '${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n'
+        'exec "$GUFO_PACKAGE_DIR/gufo-control.bin" "$@"\n')
+    launcher.chmod(0o700)
+    shutil.copyfile(ROOT / 'patches/gufo/native-control.patch', destination / 'native-control.patch')
+    manifest = {'upstream': REVISION, 'binary_sha256': hashlib.sha256(installed.read_bytes()).hexdigest(),
+                'runtime_library_dir': str(runtime_library_dir), 'libraries': copied,
+                'source_sha256': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in sorted((ROOT / 'patches/gufo').iterdir()) if path.suffix in ('.cpp','.hpp','.patch')}}
+    overlay = destination / 'cointos'; overlay.mkdir(mode=0o700)
+    manifest['python_modules'] = {}
+    for name in ('backend_chat.py','backend_gufo.py','backend_native.py','backend_llama.py'):
+        target = overlay / name; shutil.copyfile(ROOT / 'cointos' / name, target)
+        manifest['python_modules'][name] = hashlib.sha256(target.read_bytes()).hexdigest()
+    (destination / 'build.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    # Verify the launcher resolves its relocated dependencies, independent of /tmp.
+    env = {**os.environ, 'LD_LIBRARY_PATH': str(library_dir) + ':' + str(runtime_library_dir)}
+    resolved = subprocess.check_output(['ldd', str(installed)], text=True, env=env)
+    if 'not found' in resolved or any('/tmp/' in line for line in resolved.splitlines() if ' => ' in line):
+        raise RuntimeError('packaged executable still depends on temporary build files')
+    probe = subprocess.run([str(launcher)], capture_output=True, text=True)
+    if probe.returncode != 1 or 'usage: gufo-control' not in probe.stderr:
+        raise RuntimeError('packaged executable did not start correctly')
+    return launcher
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, required=True, help='Gufo checkout at the pinned revision')
+    parser.add_argument('--preset', choices=('release', 'gpu-test', 'cpu-test'), default='release')
+    parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument('--configure-arg', action='append', default=[], help='Additional CMake argument (use = for -D flags)')
+    parser.add_argument('--package', type=Path, help='Create a new persistent local package directory')
+    parser.add_argument('--runtime-library-dir', type=Path, help='Installed ROCm SDK lib directory (required with --package)')
+    args = parser.parse_args()
+    if args.package and not args.runtime_library_dir: parser.error('--package requires --runtime-library-dir')
+    source = args.source.resolve()
+    actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
+    if actual != REVISION:
+        parser.error(f'Gufo must be checked out at {REVISION}, found {actual}')
+    dependency_patch = str(ROOT / 'patches/gufo/native-control.patch')
+    applied = subprocess.run(['git', 'apply', '--reverse', '--check', dependency_patch], cwd=source, capture_output=True)
+    if applied.returncode:
+        run('git', 'apply', '--check', dependency_patch, cwd=source)
+        run('git', 'apply', dependency_patch, cwd=source)
+    cmake = source / 'CMakeLists.txt'
+    marker = '\n# CointOS external runner control\n'
+    suffix = marker + f'add_subdirectory("{ROOT / "patches/gufo"}" cointos-control)\n'
+    text = cmake.read_text()
+    if marker in text:
+        text = text[:text.index(marker)]
+    cmake.write_text(text + suffix)
+    run('cmake', '--preset', args.preset, *args.configure_arg, cwd=source)
+    targets = ['gufo-control']
+    if args.preset != 'release':
+        targets.append('cointos_gufo_control_test')
+    if args.preset == 'gpu-test':
+        targets.append('cointos_gufo_gpu_test')
+    run('cmake', '--build', '--preset', args.preset, '--target', *targets, '--parallel', str(args.jobs), cwd=source)
+    if args.preset != 'release':
+        run('ctest', '--test-dir', f'build/{args.preset}', '-R', '^cointos_gufo_(control|gpu)_test$', '--output-on-failure', cwd=source)
+    binary = source / f'build/{args.preset}/cointos-control/gufo-control'
+    print(package(binary, args.package, args.runtime_library_dir) if args.package else binary)
+
+
+if __name__ == '__main__':
+    main()

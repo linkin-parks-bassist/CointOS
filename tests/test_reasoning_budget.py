@@ -34,6 +34,22 @@ class ReasoningBudget(unittest.TestCase):
         self.assertEqual(self.step(run)[0], 26)
         self.assertTrue(run['queue'].empty())
 
+    def test_continuation_only_gets_the_unspent_reasoning_tokens(self):
+        run = self.run_state(budget=4)
+        run['reader']['reasoning_used'] = 3
+        self.assertEqual(self.step(run)[0], 1)
+        run['generated'].append(7)
+        self.step(run)
+        self.assertEqual(run['generated'], [7, 10, 99, 10])
+
+    def test_exhausted_continuation_closes_before_any_more_reasoning(self):
+        for used in (4, 7):
+            with self.subTest(used=used):
+                run = self.run_state(budget=4)
+                run['reader']['reasoning_used'] = used
+                self.assertEqual(self.step(run)[0], 29)
+                self.assertEqual(run['generated'], [10, 99, 10])
+
     def test_short_total_limit_reserves_closure_and_output(self):
         run = self.run_state([1, 2], budget=1024, maximum=6)
         self.assertEqual(self.step(run)[0], 1)

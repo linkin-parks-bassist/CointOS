@@ -8,6 +8,7 @@ carries keep-alive comments.
 from __future__ import annotations
 
 import json
+import gzip
 import hashlib
 import queue
 import re
@@ -18,16 +19,147 @@ import threading
 import time
 import traceback
 import urllib.parse
+import urllib.error
+from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from cointos import api, journal, keys, lanes, lifecycle, memory, projects, prompts, queues
+from cointos import api, journal, keys, lanes, lifecycle, memory, projects, prompts, queues, scheduler, snapshot_cleanup, startup, tool_history, schema, performance, wakeups
 from cointos.config import ROOT
-from cointos.state import ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, now
+from cointos.state import STARTUP, ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, now, log, _snapshot
+
+def coin_view():
+    """An old busy report cannot keep a stopped Coin visible as active."""
+    value = dict(L['coin'])
+    identity = value.get('process')
+    if identity:
+        current = wakeups.process(identity['pid'])
+        if (current is None or current['state'] == 'Z'
+                or current['start_ticks'] != identity['start_ticks']
+                or identity['boot_id'] != wakeups.boot_id()):
+            value.update(busy=False, doing=None, gpu_since=None)
+    return value
+
 
 KT_STARTUP = "Knowledge-tree startup:"
+TOOL_HISTORY: dict[str, dict] = {}  # private recovery-cache mirrors, never task authority
+
+
+def _history_owner(agent):
+    task = L['tasks'].get((L['agents'].get(agent) or {}).get('task'))
+    if task and task.get('agent') == agent and task['status'] == 'running':
+        return agent, task['id'], task.get('record_version', 1)
+
+
+def _prepare_tool_history(agent, model, conversation, rendered):
+    if CONFIG['models'][model].get('backend') != 'gufo':
+        return rendered
+    with LOCK:
+        for gone in [a for a,r in TOOL_HISTORY.items() if _history_owner(a) != r['owner']]:
+            del TOOL_HISTORY[gone]
+        owner = _history_owner(agent)
+        record = TOOL_HISTORY.get(agent)
+    if owner is None:
+        return rendered
+    def owner_of(cached_owner):
+        with LOCK:
+            task = L['tasks'].get(cached_owner[1])
+            # During startup, durable task ownership precedes process adoption.
+            # Do not discard another run's cache merely because its server has
+            # not yet been added to the new daemon's live-agent map.
+            if (task and task['status'] in schema.ACTIVE and task.get('agent') == cached_owner[0]
+                    and task.get('record_version', 1) == cached_owner[2]):
+                return cached_owner
+    try:
+        if record is None:
+            tool_history.prune_cache(ROOT, owner_of)
+            record = tool_history.load_cache(ROOT, owner)
+            if record is not None:
+                with LOCK:
+                    if _history_owner(agent) == owner:
+                        TOOL_HISTORY[agent] = record
+        candidate = tool_history.extend(CONFIG, model, record.get('record') if record else None,
+                                        conversation, rendered)
+    except Exception as error:
+        candidate = rendered
+        with LOCK:
+            log('tool history unavailable', agent=agent, detail=f'{type(error).__name__}: {error}')
+    with LOCK:
+        if _history_owner(agent) != owner:
+            return rendered
+        if candidate is not rendered:
+            log('tool history preserved', agent=agent, model=model, kept=len(record['record']['held']),
+                tokens=len(candidate['tokens']), canonical_tokens=len(rendered['tokens']))
+    return {**candidate, '_tool_history': {'owner': owner, 'conversation': conversation}}
+
+
+def _remember_tool_history(agent, model, rendered, generated, parsed, delivered, end):
+    context = rendered.get('_tool_history')
+    if context is None:
+        return
+    with LOCK:
+        if _history_owner(agent) != context['owner']:
+            return
+    try:
+        record = tool_history.capture(CONFIG, model, context['conversation'], rendered['tokens'],
+                                      generated, parsed, delivered) if end == 'done' else None
+    except Exception as error:  # optional reuse never fails a model reply
+        record = None
+        with LOCK:
+            log('tool history unavailable', agent=agent, detail=f'{type(error).__name__}: {error}')
+    def still_owned():
+        with LOCK:
+            return _history_owner(agent) == context['owner']
+    try:
+        tool_history.store_cache(ROOT, context['owner'], record, still_owned)
+    except Exception as error:
+        with LOCK:
+            log('tool history cache unavailable', agent=agent, detail=f'{type(error).__name__}: {error}')
+    with LOCK:
+        if _history_owner(agent) == context['owner']:
+            if record is None:
+                TOOL_HISTORY.pop(agent, None)
+            else:
+                TOOL_HISTORY[agent] = {'owner': context['owner'], 'record': record}
+    return record
+
+
+def _discard_tool_history(agent, rendered, record):
+    context = rendered.get('_tool_history')
+    if context is None or record is None:
+        return
+    with LOCK:
+        if TOOL_HISTORY.get(agent) == {'owner': context['owner'], 'record': record}:
+            TOOL_HISTORY.pop(agent, None)
+    try:
+        tool_history.discard_cache(ROOT, context['owner'], record)
+    except Exception as error:
+        with LOCK:
+            log('tool history cache unavailable', agent=agent, detail=f'{type(error).__name__}: {error}')
 # OpenCode environment lines that differ between tasks; the assignment states them instead.
 TASK_ENVIRONMENT = re.compile(r"[ \t]*(Working directory|Workspace root folder|Is directory a git repo|Today's date):")
 ENVIRONMENT_POINTER = "  Working directory, repository and task start date: stated in your assignment"
+
+
+def pre_stop_check(body: dict, agent: str, final: dict) -> dict:
+    """One read-only tool check before an unreceipted project run's plain final reply."""
+    if final['tool_calls'] or body.get('tool_choice') not in (None, 'auto'):
+        return final
+    names = [t['function']['name'] for t in (body.get('tools') or [])
+             if isinstance(t, dict) and t.get('type') == 'function'
+             and isinstance(t.get('function'), dict) and isinstance(t['function'].get('name'), str)]
+    tool = next((name for name in names if name == 'cointos_check_work' or name.endswith('_cointos_check_work')), None)
+    if not tool:
+        return final
+    with LOCK:
+        run = L['agents'].get(agent)
+        task = L['tasks'].get(run['task']) if run else None
+        if (not task or task['status'] != 'running' or task.get('agent') != agent or task['role'] not in ('worker', 'manager', 'integrator')
+                or task['place'] == 'system' or run.get('pre_stop_checked')):
+            return final
+        run['pre_stop_checked'] = True
+        log('pre-stop check', task=task['id'], agent=agent)
+    return {**final, 'tool_calls': [{'id': 'call-' + secrets.token_hex(12), 'type': 'function',
+                                   'function': {'name': tool, 'arguments': '{}'}}]}
 
 
 def stable_environment(messages: list[dict], agent: str) -> list[dict]:
@@ -84,17 +216,13 @@ def stable_environment(messages: list[dict], agent: str) -> list[dict]:
         if not inserted:
             result = pinned_system + result
         digest = hashlib.sha256(pinned.encode()).hexdigest()
-        try:
-            journal.write({"at": now(), "event": "system prompt", "agent": agent,
-                           "task": task["id"], "digest": digest,
-                           "components": [{"role": message.get("role"),
-                                           "digest": hashlib.sha256(json.dumps(message, sort_keys=True,
-                                                        ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
-                                           "chars": len(str(message.get("content", "")))}
-                                          for message in pinned_system]}, CONFIG["journal"]["bytes"])
-            L.pop("journal_error", None)
-        except OSError as error:
-            L["journal_error"] = str(error)
+        journal.write({"at": now(), "event": "system prompt", "agent": agent,
+                       "task": task["id"], "digest": digest,
+                       "components": [{"role": message.get("role"),
+                                       "digest": hashlib.sha256(json.dumps(message, sort_keys=True,
+                                                    ensure_ascii=False, separators=(",", ":")).encode()).hexdigest(),
+                                       "chars": len(str(message.get("content", "")))}
+                                      for message in pinned_system]}, CONFIG["journal"]["bytes"])
         return result
 
 
@@ -102,15 +230,50 @@ def stable_tools(tools, agent: str):
     """Pin a managed task's tool definitions at its first request, as its system prefix is pinned.
 
     The chat template renders tools near the start of the prompt, so a relaunched session that
-    loaded newer tool schemas would diverge from every saved state of its conversation and reread
-    it whole. A conversation keeps the tools it started with; new tools reach new tasks."""
+    loaded newer tool schemas would diverge from every saved state and reread it whole.
+    Ordinary tools remain pinned. CointOS's executable contracts must track its live MCP
+    handlers, so those definitions deliberately refresh without discarding the session."""
     with LOCK:
         owner = L["agents"].get(agent)
         task = L["tasks"].get(owner["task"]) if owner else None
         if task is None or tools is None:
             return tools
+        def owned(tool):
+            return tool.get("function", {}).get("name", "").startswith("cointos_")
         pinned = L["system_contexts"].get(task.get("tool_context") or "")
+        if pinned is not None:
+            current = [t for t in tools if owned(t)]
+            if current:
+                refreshed, inserted = [], False
+                for tool in json.loads(pinned):
+                    if owned(tool):
+                        if not inserted:
+                            refreshed.extend(current)
+                            inserted = True
+                    else:
+                        refreshed.append(tool)
+                if not inserted:
+                    refreshed.extend(current)
+                encoded = json.dumps(refreshed, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+                if encoded != pinned:
+                    task["tool_context"] = hashlib.sha256(encoded.encode()).hexdigest()
+                    pinned = L["system_contexts"].setdefault(task["tool_context"], encoded)
         if pinned is None:
+            # OpenCode puts its per-run temporary path in Bash's description,
+            # ahead of every shared instruction. Keep that capability expressed
+            # through the run's existing environment instead of its unique ID.
+            tools = deepcopy(tools)
+            # A role's CointOS tools must not split the common declarations.
+            # Stable sorting retains each group's original order and schemas.
+            tools.sort(key=owned)
+            temporary = ROOT / 'state' / 'agents' / agent / 'scratch' / 'opencode'
+            literal = f"Use `{temporary}` for temporary work outside the workspace."
+            portable = ("Use `$COINTOS_SCRATCH/opencode` for temporary work outside the workspace. "
+                        "Expand the environment variable before passing an absolute path to a tool.")
+            for tool in tools:
+                function = tool.get('function', {})
+                if function.get('name') == 'bash' and isinstance(function.get('description'), str):
+                    function['description'] = function['description'].replace(literal, portable)
             encoded = json.dumps(tools, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
             task["tool_context"] = hashlib.sha256(encoded.encode()).hexdigest()
             pinned = L["system_contexts"].setdefault(task["tool_context"], encoded)
@@ -120,13 +283,29 @@ def stable_tools(tools, agent: str):
 SAMPLING = ("temperature", "top_p", "top_k", "min_p", "presence_penalty", "frequency_penalty", "repeat_penalty", "seed")
 
 
-def identity(key: str) -> tuple[str, str, str]:
+def identity(key: str, user: str | None = None) -> tuple[str, str, str]:
     """(agent, class, conversation) for a gateway key. Agents' conversations are their tasks,
     so a resumed task resumes its context; any key CointOS did not issue is the user's."""
     agent, klass = keys.owner(key)
     with LOCK:
         conversation = L["agents"][agent]["task"] if agent in L["agents"] else agent
+    if agent == "coin" and user is not None:
+        if not isinstance(user, str) or not user:
+            raise ValueError("Coin user must be a nonempty string")
+        conversation = "coin/" + hashlib.sha256(user.encode()).hexdigest()
     return agent, klass, conversation
+
+
+def request_class(body: dict, owner_class: str) -> str:
+    """A request may yield scheduling priority without changing its owner."""
+    if 'request_class' not in body:
+        return owner_class
+    requested = body['request_class']
+    if not isinstance(requested, str) or requested not in CONFIG['classes']:
+        raise ValueError('request_class must name a configured scheduling class')
+    if owner_class not in CONFIG['classes'] or scheduler.rank(CONFIG, requested) < scheduler.rank(CONFIG, owner_class):
+        raise ValueError('request_class cannot raise the gateway owner scheduling priority')
+    return requested
 
 
 def template_options(body: dict, agent: str) -> dict:
@@ -143,7 +322,7 @@ def template_options(body: dict, agent: str) -> dict:
     return options
 
 
-def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
+def render_request(body: dict, agent: str, model: str, template: dict, *, summary: bool = False) -> dict:
     """Render a request and identify the reusable starts of a fresh run by exact tokens.
 
     Prompt construction names the semantic boundaries; the backend remains the authority on
@@ -151,19 +330,75 @@ def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
     each boundary makes each common token prefix safe to share across sequential tasks: of the
     project, of any role, and of the same role.
     """
+    prefix_messages = body.get('cache_prefix_messages')
+    if prefix_messages is not None and (agent != 'coin' or type(prefix_messages) is not int
+                                       or not 1 <= prefix_messages < len(body['messages'])):
+        raise ValueError('cache_prefix_messages requires a proper Coin message prefix')
     messages = stable_environment(body["messages"], agent)
-    conversation = {"messages": messages, "tools": stable_tools(body.get("tools"), agent), "template": template,
+    tools = stable_tools(body.get("tools"), agent)
+    fallback = None
+    if summary:
+        if body.get("tools") or not messages or messages[-1].get("role") != "user":
+            raise ValueError("structured summary requires a tool-free final user envelope")
+        envelope = messages[-1].get("content")
+        if not isinstance(envelope, str):
+            raise ValueError("structured summary envelope must be text")
+        packet = json.loads(envelope)
+        if not isinstance(packet, dict) or set(packet) != {"c", "f"} or not all(
+                isinstance(packet[key], str) and packet[key] for key in ("c", "f")):
+            raise ValueError("invalid structured summary envelope")
+        with LOCK:
+            owner = L["agents"].get(agent)
+            task = L["tasks"].get(owner["task"]) if owner else None
+            if task is None:
+                raise ValueError("structured summary requires a managed task")
+            pinned = L["system_contexts"].get(task.get("tool_context") or "")
+        fallback = stable_environment([{"role": "user", "content": packet["f"]}], agent)
+        messages = messages[:-1] + [{"role": "user", "content":
+                    "Summarize the preceding conversation using these instructions:\n" + packet["c"] +
+                    "\n\nWork-state accuracy: Planned checks and measurements belong in Next Move, not Blocked. "
+                    "Blocked requires an explicitly established obstacle preventing the next action; otherwise write (none). "
+                    "Active contains genuinely unfinished work, not completed verification. "
+                    "Do not invent pauses, dependencies or deployment conditions."}]
+        tools = json.loads(pinned) if pinned is not None else None
+        if tools is None:
+            messages = fallback
+    conversation = {"messages": messages, "tools": tools, "template": template,
                     "reasoning_budget": CONFIG.get("reasoning", {}).get("budgets", {}).get(
                         template.get("reasoning_effort"))}
     rendered = BACKEND.render(CONFIG, model, conversation)
+    if summary:
+        reserve = min(int(body.get("max_tokens") or body.get("max_completion_tokens")
+                          or CONFIG["scheduler"]["max_thought_tokens"]), CONFIG["scheduler"]["max_thought_tokens"])
+        window = CONFIG["models"][model]["ctx_size"] // CONFIG["models"][model]["lanes"]
+        if reserve <= 0:
+            raise ValueError("structured summary output budget must be positive")
+        if tools is not None and len(rendered["tokens"]) + reserve > window:
+            rendered = BACKEND.render(CONFIG, model, {**conversation, "messages": fallback, "tools": None})
+        rendered["reader"]["allow_tools"] = False  # declarations are for prefix rendering only
+        return rendered
+    rendered = _prepare_tool_history(agent, model, conversation, rendered)
     if agent == "coin" and messages and messages[0].get("role") == "system":
-        # Coin's system prompt and tools never change. A snapshot ending exactly where they end
+        # Coin's system prompt and tools never change. A snapshot ending before the user's text
         # lets every turn restore them instead of reading them cold; however short, it is worth
         # keeping, because the user is waiting.
-        start = BACKEND.render(CONFIG, model, {**conversation, "messages": messages[:1]})
-        shared = lanes.common(rendered["tokens"], start["tokens"])
+        # Templates may require a user query even when finding the shared boundary.
+        start = BACKEND.render(CONFIG, model, {**conversation, "messages":
+                               [messages[0], {"role": "user", "content": ""}]})
+        alternate = BACKEND.render(CONFIG, model, {**conversation, 'messages': [messages[0],
+                                   {'role': 'assistant', 'content': ''}, {'role': 'user', 'content': ''}]})
+        # An odd-sized trim can leave either role first. Save only the system
+        # prefix common to both, excluding any first-message role header.
+        shared = min(lanes.common(rendered['tokens'], start['tokens']),
+                     lanes.common(start['tokens'], alternate['tokens']))
         if 0 < shared < len(rendered["tokens"]):
             rendered["shared"] = [shared]
+        if prefix_messages is not None and prefix_messages > 1:
+            history = BACKEND.render(CONFIG, model, {**conversation, 'messages':
+                                     messages[:prefix_messages] + [{'role': 'user', 'content': ''}]})
+            boundary = lanes.common(rendered['tokens'], history['tokens'])
+            if shared < boundary < len(rendered['tokens']):
+                rendered['retained_prefix'] = boundary
         return rendered
     with LOCK:
         owner = L["agents"].get(agent)
@@ -178,6 +413,13 @@ def render_request(body: dict, agent: str, model: str, template: dict) -> dict:
     # One boundary per tier: hybrid-model state cannot be cut back, so a start is reusable by
     # another task only if a snapshot ends exactly there.
     boundaries = set()
+    common_tools = [tool for tool in (tools or [])
+                    if not tool.get('function', {}).get('name', '').startswith('cointos_')]
+    if common_tools and len(common_tools) < len(tools):
+        ordinary = BACKEND.render(CONFIG, model, {**conversation, 'tools': common_tools})
+        shared = lanes.common(rendered['tokens'], ordinary['tokens'])
+        if CONFIG['scheduler']['shared_prefix_tokens'] <= shared < len(rendered['tokens']):
+            boundaries.add(shared)
     for prefix in tiers:
         prefix_messages = list(messages)
         prefix_messages[user] = {**messages[user], "content": prefix}
@@ -203,9 +445,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def reply(self, status: int, value, content_type="application/json"):
         body = value if isinstance(value, bytes) else json.dumps(value).encode()
+        compressed = False
+        for coding in self.headers.get("Accept-Encoding", "").split(","):
+            name, *parameters = coding.strip().lower().split(";")
+            if name != "gzip":
+                continue
+            try:
+                quality = next((float(p.strip()[2:]) for p in parameters if p.strip().startswith("q=")), 1)
+            except ValueError:
+                quality = 0
+            if 0 < quality <= 1 and len(body) >= 1024:
+                body = gzip.compress(body, compresslevel=1)
+                compressed = True
+            break
         try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            self.send_header("Vary", "Accept-Encoding")
+            if compressed:
+                self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -219,8 +477,9 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": name, "object": "model", "owned_by": "cointos"} for name in CONFIG["models"]]})
         if path == "/api/ledger":
             with LOCK:
-                return self.reply(200, {**L, "queue": queues.view(),
-                                        "project_about": {p["name"]: projects.about(p) for p in L["projects"]}})
+                snapshot = _snapshot({**L, "performance": performance.snapshot(), "coin": coin_view(), "startup": dict(STARTUP), "gateway_coin": startup.coin_digest(keys.OWNERS), "queue": queues.view(),
+                                     "project_about": {p["name"]: projects.about(p) for p in L["projects"]}})
+            return self.reply(200, snapshot)
         if path == "/api/live":
             return self.live()
         if path in ("/", "/index.html"):
@@ -260,9 +519,10 @@ class Handler(BaseHTTPRequestHandler):
             while True:
                 measured = memory.measure()
                 with LOCK:
-                    frame = {"agents": L["agents"], "thoughts": L["thoughts"],
+                    frame = {"agents": L["agents"], "thoughts": L["thoughts"], "coin": coin_view(), "performance": performance.snapshot(),
                              "memory": {**L["memory"], **measured}, "models": L["models"], "model_memory": L["model_memory"],
-                             "saved_bytes": sum(s["bytes"] for s in L["snapshots"].values() if s["tier"] == "memory")}
+                             "saved_bytes": sum(s["bytes"] for s in L["snapshots"].values() if s["tier"] == "memory")
+                                            + snapshot_cleanup.occupied('memory') * memory.GB}
                     data = json.dumps(frame)
                 self.wfile.write(b"data: " + data.encode() + b"\n\n")
                 self.wfile.flush()
@@ -293,7 +553,8 @@ class Handler(BaseHTTPRequestHandler):
         key = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
         if keys.ended(key):
             return self.reply(410, {"error": {"message": "this agent run has ended"}})
-        agent, klass, conversation = identity(key)
+        agent, klass, conversation = identity(key, body.get("user"))
+        klass = request_class(body, klass)
         model = {"work": CONFIG["work_model"]}.get(body.get("model"), body.get("model"))
         if model not in CONFIG["models"]:
             return self.reply(404, {"error": {"message": f"unknown model {model!r}"}})
@@ -305,7 +566,16 @@ class Handler(BaseHTTPRequestHandler):
         max_new = min(int(body.get("max_tokens") or body.get("max_completion_tokens") or cap), cap)
         template = template_options(body, agent)
         try:
-            rendered = render_request(body, agent, model, template)
+            summary = self.headers.get("X-CointOS-Summary")
+            if summary not in (None, "structured-v1"):
+                raise ValueError("unsupported summary protocol")
+            rendered = render_request(body, agent, model, template, summary=bool(summary))
+        except urllib.error.HTTPError as error:
+            # A rejected template is not an outage. Retrying the same invalid
+            # history only wastes time and hides the model server's diagnosis.
+            if 400 <= error.code < 500:
+                return self.reply(error.code, {"error": {"message": f"{model} rejected the request: {error.reason}"}})
+            return self.reply(503, {"error": {"message": f"{model} is not reachable: {error}"}})
         except OSError as error:
             return self.reply(503, {"error": {"message": f"{model} is not reachable: {error}"}})
         sampling = {name: body[name] for name in SAMPLING if body.get(name) is not None}
@@ -352,9 +622,16 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return
         if end in ("failed", "cancelled"):
-            error = {"error": {"message": "the thought failed on the model server; try again"}}
-            return self.wfile.write(b"data: " + json.dumps(error).encode() + b"\n\n") if stream else self.reply(502, error)
+            return self.reply_model_error(stream, 'the thought failed on the model server; try again', 'model_failure')
         final = BACKEND.read(CONFIG, model, rendered["reader"], generated, True)
+        parsed = deepcopy(final)
+        if end != 'limit':
+            final = pre_stop_check(body, agent, final)
+            if not final['content'].strip() and not final['tool_calls']:
+                log('incomplete model reply', agent=agent, model=model, generated=len(generated),
+                    reasoning_chars=len(final.get('reasoning', '')))
+                return self.reply_model_error(stream, 'the model ended without an answer or tool call; '
+                                              'the response is incomplete', 'incomplete_response')
         show(agent, final)
         with LOCK:
             if agent in L["agents"]:  # its tools now run, silently, until the next request
@@ -366,12 +643,23 @@ class Handler(BaseHTTPRequestHandler):
             message = {"role": "assistant", "content": final["content"], "reasoning_content": final["reasoning"]}
             if final["tool_calls"]:
                 message["tool_calls"] = final["tool_calls"]
-            self.reply(200, {"id": reply_id, "object": "chat.completion", "created": int(time.time()),
-                             "model": model, "usage": usage,
-                             "choices": [{"index": 0, "message": message, "finish_reason": finish}]})
+            # Publish the conditional cache before completion reaches the client:
+            # its next fast tool/request must not race cache construction. It is
+            # usable only if that request echoes this exact assistant response.
+            prepared = _remember_tool_history(agent, model, rendered, generated, parsed, final, end)
+            try:
+                self.reply(200, {"id": reply_id, "object": "chat.completion", "created": int(time.time()),
+                                 "model": model, "usage": usage,
+                                 "choices": [{"index": 0, "message": message, "finish_reason": finish}]})
+            except OSError:
+                _discard_tool_history(agent, rendered, prepared)
+                raise
         else:
+            prepared = None
             try:
                 self.send_new(reply_id, model, final, sent)
+                delivered = {**final, **{part: sent[part] for part in ('content', 'reasoning')}}
+                prepared = _remember_tool_history(agent, model, rendered, generated, parsed, delivered, end)
                 for index, call in enumerate(final["tool_calls"]):
                     self.wfile.write(chunk(reply_id, model, {"tool_calls": [{"index": index, **call}]}))
                 self.wfile.write(chunk(reply_id, model, {}, finish))
@@ -380,7 +668,17 @@ class Handler(BaseHTTPRequestHandler):
                                                              "model": model, "choices": [], "usage": usage}).encode() + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
             except OSError:
-                pass
+                _discard_tool_history(agent, rendered, prepared)
+                return
+
+    def reply_model_error(self, stream: bool, message: str, code: str):
+        """A failed/incomplete model reply is never a successful assistant stop."""
+        error = {'error': {'message': message, 'type': 'server_error', 'code': code}}
+        if stream:
+            self.wfile.write(b'data: ' + json.dumps(error).encode() + b'\n\n')
+            self.wfile.flush()
+        else:
+            self.reply(502, error)
 
     def send_new(self, reply_id: str, model: str, thought: dict, sent: dict) -> None:
         """Stream what the thought says beyond what was already sent."""
@@ -397,9 +695,13 @@ class Handler(BaseHTTPRequestHandler):
 def show(agent: str, thought: dict) -> None:
     """Keep the end of what an agent is saying, for the dashboard's live view of it."""
     with LOCK:
-        if agent in L["agents"]:
-            L["agents"][agent]["live"] = {"reasoning": thought["reasoning"][-CONFIG["dashboard"]["live_chars"]:],
-                                          "content": thought["content"][-CONFIG["dashboard"]["live_chars"]:], "phase": thought["phase"]}
+        holder = L["agents"].get(agent) or (L["coin"] if agent == "coin" else None)
+        if holder is not None:
+            live = holder.get("live") or {}
+            phase_since = live.get("phase_since") if live.get("phase") == thought["phase"] else now()
+            holder["live"] = {"reasoning": thought["reasoning"][-CONFIG["dashboard"]["live_chars"]:],
+                              "content": thought["content"][-CONFIG["dashboard"]["live_chars"]:], "phase": thought["phase"],
+                              "phase_since": phase_since}
 
 
 def serve() -> None:

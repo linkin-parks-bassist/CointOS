@@ -1,0 +1,53 @@
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -1694,7 +1694,8 @@
+ 
+                 result.push_back(id);
+ 
+-                if (params.n_max <= (int) result.size()) {
++                if (params.n_max <= (int) result.size() ||
++                    (dp.n_max > 0 && dp.n_max <= (int) result.size())) {
+                     drafting[seq_id] = false;
+                     n_drafting--;
+                     continue;
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -495,6 +495,12 @@
+ 
+         if (n_remaining() > 0) {
+             n_draft_max = std::min(n_draft_max, n_remaining() - 1);
++        }
++
++        if (std::getenv("LLAMA_MTP_REQUEST_DEPTH") &&
++            std::find(task->params.speculative.types.begin(), task->params.speculative.types.end(),
++                      COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != task->params.speculative.types.end()) {
++            n_draft_max = std::min(n_draft_max, task->params.speculative.draft.n_max);
+         }
+ 
+         SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
+--- a/tools/server/server-schema.cpp
++++ b/tools/server/server-schema.cpp
+@@ -1,6 +1,8 @@
+ #include "server-schema.h"
+ 
+ #include "json-schema-to-grammar.h"
++
++#include <cstdlib>
+ 
+ namespace server_schema {
+ 
+@@ -193,6 +195,14 @@
+     //
+     // Speculative decoding params
+     //
++
++    if (std::getenv("LLAMA_MTP_REQUEST_DEPTH") && params_base.speculative.draft.n_max > 0 &&
++        std::find(params_base.speculative.types.begin(), params_base.speculative.types.end(),
++                  COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end()) {
++        add((new field_num("speculative.n_max", params.speculative.draft.n_max))
++            ->set_hard_limits(1, params_base.speculative.draft.n_max)
++            ->set_desc("Maximum MTP draft length, bounded by the loaded draft capacity"));
++    }
+ 
+     // TODO: to keep things simple, we disable speculative parameter adjustments for now
+ #if 0

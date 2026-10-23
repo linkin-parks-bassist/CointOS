@@ -1,9 +1,9 @@
 """The agents' MCP server: CointOS controls as typed tools instead of shell commands.
 
 OpenCode starts one per agent run over stdio, in the run's environment (`COINTOS_TASK_ID`,
-`COINTOS_AGENT`). Each tool builds an argument vector for the same `cli` command a person
-would type, so arguments never pass through a shell and both surfaces share one
-implementation. A run sees only its role's tools. Every result ends with a notice when the
+`COINTOS_AGENT`). Tools share the CLI/API domain implementation without a shell.
+Validation returns native structured data and marks failed checks as tool errors.
+A run sees only its role's tools. Every result ends with a notice when the
 run's task has unread messages from other agents or the user.
 """
 from __future__ import annotations
@@ -40,6 +40,22 @@ def flags(arguments: dict, names: dict) -> list[str]:
     return argv
 
 
+QUEUE_FIELDS = {
+    "dependencies": {"type": "array", "items": {"type": "string"},
+                     "description": "prerequisite item IDs, optionally PROJECT:ITEM; [] means none"},
+    "summary": text("short dashboard description"),
+    "relies_on": {"type": "array", "items": {"type": "string"},
+                  "description": "existing API names used by test witnesses; required for test-contract work"}}
+
+
+def queue_fields(arguments: dict) -> list[str]:
+    argv = flags(arguments, {"summary": "--summary"})
+    for key, flag in (("dependencies", "--dependencies-json"), ("relies_on", "--relies-on-json")):
+        if key in arguments:
+            argv += [flag, json.dumps(arguments[key])]
+    return argv
+
+
 BUDGET = {"generation_seconds": {"type": "number", "description": "override the run's generation-seconds budget"},
           "generation_tokens": {"type": "integer", "description": "override the run's generated-token budget"}}
 BUDGET_FLAGS = {"generation_seconds": "--generation-seconds", "generation_tokens": "--generation-tokens"}
@@ -48,25 +64,52 @@ WORK = {"stage": choice(cli.schema.STAGES, "construction stage of a worker item"
 WORK_FLAGS = {"stage": "--stage", "reasoning_effort": "--reasoning-effort"}
 
 MANAGERS = ("manager",)
+REPAIRERS = MANAGERS + ("operator",)
 SCOUTS = ("steward", "test-auditor")
 LANDERS = ("manager", "gardener", "tree-auditor", "operator")
 SPAWNERS = ("manager", "integrator", "steward", "test-auditor", "gardener", "tree-auditor", "operator")
 EVERYONE = None
 
+
+def finish_args(arguments):
+    result = (['finish', '--complete', arguments['complete']] if arguments.get('complete')
+              else ['finish', '--blocked', arguments['blocked']])
+    if 'scout_result' in arguments:
+        result += ['--scout-result-json', json.dumps(arguments['scout_result'])]
+    return result
+
 # name: (roles or EVERYONE, description, properties, required, argv builder)
 TOOLS = {
+    'handoff': (MANAGERS, 'Finish planning by atomically queueing a runnable set of child assignments and '
+                'submitting your completion receipt. Use this as soon as the next boundary is clear; '
+                'children continue independently. Requires a clean published planning branch. '
+                'Invalid graphs create no children. Ends this run.',
+                {'summary': text('planning decision and remaining frontier'),
+                 'items': {'type': 'array', 'minItems': 1, 'items': {'type': 'object', 'properties': {
+                     'name': text('new item name'), 'brief': text('behavior, scope and acceptance'),
+                     'kind': choice(cli.schema.QUEUE_KINDS, 'queued, urgent or command'),
+                     **WORK, **QUEUE_FIELDS}, 'required': ['name', 'brief', 'summary', 'dependencies']}}},
+                ['summary', 'items'], lambda a: ['handoff', a['summary'], '--items-json', json.dumps(a['items'])]),
     "finish": (EVERYONE, "Submit this run's one completion receipt: exactly one of complete (evidence that the "
                "assigned concern is done) or blocked (the specific blocker). Ends the run.",
                {"complete": text("evidence the assigned concern is complete"),
                 "blocked": text("specific blocker requiring intervention")}, [],
-               lambda a: ["finish", "--complete", a["complete"]] if a.get("complete") else ["finish", "--blocked", a["blocked"]]),
-    "task": (EVERYONE, "Show one exact task and its queue record, receipts and dependencies.",
-             {"task": text("PROJECT:NAME task id")}, ["task"], lambda a: ["task", a["task"]]),
-    "jobs": (EVERYONE, "List recent and active tasks with their states.",
-             {"all": {"type": "boolean", "description": "include all history"}}, [],
-             lambda a: ["jobs"] + (["--all"] if a.get("all") else [])),
+               finish_args),
+    "task": (EVERYONE, "Show current work, binding accepted tests, actual correction owners and receipts. "
+             "Recovery IDs resolve their canonical assignment. Request history only for older execution evidence.",
+             {"task": text("PROJECT:NAME task id"),
+              "history": {"type": "boolean", "description": "include full historical execution narratives"}},
+             ["task"], lambda a: ["task", a["task"]] + (["--history"] if a.get("history") else [])),
+    "jobs": (EVERYONE, "List every unfinished task, including held work, plus recent terminal history. "
+             "Filter by project for current work discovery; use all only for historical investigation. "
+             "Use task for the full brief, linked queue, holds and receipts.",
+             {"all": {"type": "boolean", "description": "include complete history for historical investigation"},
+              "project": text("exact project name; omit to inspect all projects")}, [],
+             lambda a: ["jobs"] + (["--all"] if a.get("all") else []) + flags(a, {"project": "--project"})),
     "status": (EVERYONE, "Show the daemon, agents, work counts, memory and models.", {}, [], lambda a: ["status"]),
-    "merge": (LANDERS, "Land this run's committed branch on its project's main branch.", {}, [], lambda a: ["merge"]),
+    "merge": (LANDERS, "Land this run's committed maintenance branch on main. Refuses pending canonical knowledge "
+              "answer/policy overlaps; preserve both drafts and report blocked rather than overwriting the owner.",
+              {}, [], lambda a: ["merge"]),
     "review": (("integrator",), "Show the worker's submitted change and report for review.", {}, [], lambda a: ["review"]),
     "land": (("integrator",), "Land the reviewed worker item through the daemon's exact-candidate gate. Ends the run.",
              {"summary": text("what landed and the evidence it is correct")}, ["summary"], lambda a: ["land", a["summary"]]),
@@ -76,33 +119,74 @@ TOOLS = {
                     {"task": text("PROJECT:NAME task in review"), "commit": text("exact current main commit SHA"),
                      "worker_commit": text("exact submitted worker commit SHA")}, ["task", "commit", "worker_commit"],
                     lambda a: ["incorporate", a["task"], "--commit", a["commit"], "--worker-commit", a["worker_commit"]]),
-    "queue": (MANAGERS + SCOUTS + ("integrator",), "Add an item to a project's queue. The brief is plain text: "
+    "queue": (REPAIRERS + SCOUTS + ("integrator",), "Add an item to a project's queue. The brief is plain text: "
               "no quoting or escaping is needed.",
               {"project": text("project name"), "name": text("new item name"),
-               "brief": text("the complete brief, including Summary:, Depends on: and Relies on: lines as required"),
-               "kind": choice(cli.schema.QUEUE_KINDS, "queued (default), urgent or command"), **WORK, **BUDGET},
-              ["project", "name", "brief"],
-              lambda a: ["queue", a["project"], a["name"], a["brief"]] + flags(a, {"kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS})),
-    "hold": (MANAGERS, "Hold a queue item so it does not start (and stops a run of it) while you decide; "
+               "brief": text("product behavior, scope and acceptance in plain prose; metadata uses separate fields"),
+               "kind": choice(cli.schema.QUEUE_KINDS, "queued (default), urgent or command"), **WORK, **BUDGET, **QUEUE_FIELDS},
+              ["project", "name", "brief", "summary", "dependencies"],
+              lambda a: ["queue", a["project"], a["name"], a["brief"]] + flags(a, {"kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
+    "hold": (REPAIRERS, "Hold a queue item so it does not start (and stops a run of it) while you decide; "
              "release=true lifts your hold.",
              {"item": text("PROJECT:ITEM"), "release": {"type": "boolean"}}, ["item"],
              lambda a: ["hold", a["item"]] + (["--release"] if a.get("release") else [])),
-    "revise": (MANAGERS, "Replace a held item's brief; omitted stage, effort and budget are retained.",
+    'correct_tests': (REPAIRERS, 'Correct an invalid accepted test contract through an independent test worker '
+                     'and reviewer. The original stays binding until review accepts the correction; dependent '
+                     'implementations then resume automatically with their artifacts preserved. Repeated '
+                     'requests for the same contract return its existing correction owner. For a recovery '
+                     'controller this also checks and records complete handback atomically, ending its run; '
+                     'commit and merge your changes first. Managers and ad-hoc Operators only queue the correction.',
+                     {'project': text('project name'), 'packet': text('accepted PROJECT:ITEM test packet'),
+                      'name': text('new correction item name'), 'brief': text('correct behavior and assertions'),
+                      'reason': text('contract defect and independently checked evidence'),
+                      'summary': text('short description'), 'relies_on': QUEUE_FIELDS['relies_on']},
+                     ['project', 'packet', 'name', 'brief', 'reason', 'summary', 'relies_on'],
+                     lambda a: ['correct-tests', a['project'], a['packet'], a['name'], a['brief'],
+                                '--reason', a['reason'], '--summary', a['summary'],
+                                '--relies-on-json', json.dumps(a['relies_on'])]),
+    'resume': (('operator',), 'Release a repaired infrastructure admission hold in your scope. '
+               'Explicit user holds remain under user authority.', {'task': text('PROJECT:TASK')}, ['task'],
+               lambda a: ['resume', a['task']]),
+    "check_work": (REPAIRERS + SCOUTS + ("integrator", "worker"),
+                   "Validate before handoff: omit brief to inspect your queued frontier. For scouts this supplies "
+                   "every enabled project's accepted plan, current queue and recent acceptances; a fresh "
+                   "review is required before no_action. Supply a draft to "
+                   "check metadata, dependency IDs, unknown prerequisites, cycles and declared APIs without "
+                   "queueing it. Existing-work checks also report uncommitted work and the required native "
+                   "receipt, uncommitted files outside a worker's stage, staged/unstaged review candidate integrity "
+                   "including untracked protected files, and production edits in test-packet reviews. Preserve out-of-scope diagnostics "
+                   "separately and restore those files before committing. "
+                   "Maintenance checks include forbidden staged, unstaged and untracked paths as well as committed history. "
+                   "Pending canonical knowledge answer/policy overlaps also refuse; lifecycle stamps alone do not. "
+                   "Allowed integrator staging is valid. Green preflight is not semantic acceptance. "
+                   "Ordinary dependency waits are valid. Returns exact problems to fix.",
+                   {"project": text("project name; defaults to your project"), "name": text("new proposal name"),
+                    "brief": text("draft product assignment; omit to check existing queued work"),
+                    "kind": choice(cli.schema.QUEUE_KINDS, "queued, urgent or command"),
+                    **WORK, **BUDGET, **QUEUE_FIELDS}, [],
+                   lambda a: ["check-work"] + flags(a, {"project": "--project", "name": "--name",
+                       "brief": "--brief", "kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
+    "revise": (REPAIRERS, "Replace a held item's brief; omitted stage, effort and budget are retained. "
+               "Retain accepted test-contract dependencies on implementation/integration work; discarding them is refused.",
                {"item": text("PROJECT:ITEM"), "brief": text("the complete revised brief"),
-                "reason": text("why the item changes"), **WORK, **BUDGET}, ["item", "brief", "reason"],
-               lambda a: ["revise", a["item"], a["brief"], "--reason", a["reason"]] + flags(a, {**WORK_FLAGS, **BUDGET_FLAGS})),
-    "cancel": (MANAGERS, "Withdraw unaccepted queue items for good. Name dependents in the same call.",
+                "reason": text("why the item changes"), **WORK, **BUDGET, **QUEUE_FIELDS},
+               ["item", "brief", "reason", "summary", "dependencies"],
+               lambda a: ["revise", a["item"], a["brief"], "--reason", a["reason"]] + flags(a, {**WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
+    "cancel": (REPAIRERS, "Withdraw unaccepted queue items for good. Name dependents in the same call.",
                {"items": {"type": "array", "items": {"type": "string"}, "description": "PROJECT:ITEM ids"},
                 "reason": text("why")}, ["items", "reason"],
                lambda a: ["cancel", *a["items"], "--reason", a["reason"]]),
-    "replace": (MANAGERS, "Replace this task's failed item with already-queued children, repointing dependents.",
-                {"children": {"type": "array", "items": {"type": "string"}, "description": "child item names"}},
+    "replace": (("operator",), "Hand this recovery controller's origin to existing same-project queue items, "
+                "repointing dependents and recording your complete receipt atomically, without duplicating work. "
+                "Commit and merge your own changes first. This ends your run; no separate finish call is needed. "
+                "Revising another item alone does not establish this handoff.",
+                {"children": {"type": "array", "items": {"type": "string"}, "description": "existing item names without project prefixes"}},
                 ["children"], lambda a: ["replace", *a["children"]]),
-    "supersede": (MANAGERS, "Replace failed prerequisites with existing same-project items without accepting them.",
+    "supersede": (REPAIRERS, "Replace failed prerequisites with existing same-project items without accepting them.",
                   {"task": text("PROJECT:FAILED"), "replacements": {"type": "array", "items": {"type": "string"}},
                    "reason": text("evidence")}, ["task", "replacements", "reason"],
                   lambda a: ["supersede", a["task"], *a["replacements"], "--reason", a["reason"]]),
-    "budget": (MANAGERS, "Set generation limits on waiting or undispatched work.",
+    "budget": (REPAIRERS, "Set waiting or undispatched generation limits, or increase a running task's allowance without resetting usage.",
                {"task": text("PROJECT:TASK"), **BUDGET}, ["task"], lambda a: ["budget", a["task"]] + flags(a, BUDGET_FLAGS)),
     "operator": (SPAWNERS, "Start an operator: a general agent for work the pipeline has no route for. Its budget "
                  "comes out of what this run has left, and it gets no ability this run lacks.",
@@ -119,7 +203,7 @@ def run_cli(argv: list[str]) -> tuple[str, bool]:
     failed = False
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
-            cli.main(argv)
+            cli.main(argv, acknowledge=False)
         except SystemExit as stop:
             failed = stop.code not in (None, 0)
             if isinstance(stop.code, str):
@@ -227,6 +311,19 @@ def catalogue(for_role: str | None) -> list[dict]:
               "inputSchema": {"type": "object", "properties": properties, "required": required}}
              for name, (roles, description, properties, required, _) in TOOLS.items()
              if roles is EVERYONE or for_role in roles]
+    if for_role == 'steward':
+        finish = next(tool for tool in tools if tool['name'] == 'finish')
+        finish['inputSchema']['properties'] = {**finish['inputSchema']['properties'], 'scout_result': {
+            'type': 'object', 'additionalProperties': False,
+            'description': 'Required for complete. Approved unfinished work needs manager_handoff, not user_decision. '
+                           'A local user alert is not a manager handoff or Telegram delivery.',
+            'properties': {
+                'kind': {'type': 'string', 'enum': ['no_action', 'manager_handoff', 'user_decision']},
+                'handoff': text('exact PROJECT:ITEM command queued by this steward; required for manager_handoff'),
+                'checked_projects': {'type': 'array', 'items': {'type': 'string'},
+                                     'description': 'all enabled projects whose remaining plans were checked; required for no_action'},
+                'question': text('specific new decision requiring personal user authority; required for user_decision')},
+            'required': ['kind']}}
     tools += [{"name": name, "description": description,
                "inputSchema": {"type": "object", "properties": properties, "required": required}}
               for name, (description, properties, required) in MESSAGE_TOOLS.items()]
@@ -234,11 +331,13 @@ def catalogue(for_role: str | None) -> list[dict]:
 
 
 def missing(required: list[str], arguments: dict) -> str | None:
-    absent = [key for key in required if arguments.get(key) in (None, "", [])]
+    absent = [key for key in required if arguments.get(key) in (None, "")]
     return f"missing required argument(s): {', '.join(absent)}" if absent else None
 
 
 def invoke(name: str, arguments: dict, for_role: str | None) -> tuple[str, bool]:
+    if problem := unexpected_arguments(name, arguments, for_role):
+        return problem, True
     if name in MESSAGE_TOOLS:
         if problem := missing(MESSAGE_TOOLS[name][2], arguments):
             return problem, True
@@ -254,6 +353,15 @@ def invoke(name: str, arguments: dict, for_role: str | None) -> tuple[str, bool]
     return result + ("" if name == "inbox" else unread_notice()), failed
 
 
+def unexpected_arguments(name: str, arguments: dict, for_role: str | None) -> str | None:
+    """Never silently discard a purported target or operation absent from the contract."""
+    declaration = next((t for t in catalogue(for_role) if t['name'] == name), None)
+    if declaration:
+        unknown = sorted(set(arguments) - set(declaration['inputSchema'].get('properties', {})))
+        if unknown:
+            return 'unsupported argument(s): ' + ', '.join(unknown) + '; use the declared tool fields. '
+
+
 def respond(request: dict, for_role: str | None) -> dict | None:
     method, ident = request.get("method"), request.get("id")
     if ident is None:
@@ -265,13 +373,46 @@ def respond(request: dict, for_role: str | None) -> dict | None:
         result = {"tools": catalogue(for_role)}
     elif method == "tools/call":
         params = request.get("params", {})
-        output, failed = invoke(params.get("name", ""), params.get("arguments") or {}, for_role)
-        result = {"content": [{"type": "text", "text": output}], "isError": failed}
+        arguments = params.get('arguments')
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            result = {'content':[{'type':'text','text':'tool arguments must be an object'}], 'isError':True}
+        elif problem := unexpected_arguments(params.get('name', ''), arguments, for_role):
+            result = {'content':[{'type':'text','text':problem}], 'isError':True}
+        elif params.get('name') == 'check_work' and for_role in TOOLS['check_work'][0]:
+            body = {key: arguments[key] for key in ('project', 'name', 'brief', 'kind', 'stage',
+                    'reasoning_effort', 'dependencies', 'relies_on', 'summary')
+                    if arguments.get(key) is not None}
+            budget = {key: arguments[key] for key in cli.schema.BUDGET_KEYS if arguments.get(key) is not None}
+            if budget:
+                body['budget'] = budget
+            try:
+                checked = call('check-work', body)
+                result = {'content': [{'type': 'text', 'text': json.dumps(checked)}],
+                          'structuredContent': checked, 'isError': not checked['ok']}
+                if notice := unread_notice():
+                    result['content'].append({'type':'text', 'text':notice})
+            except (ValueError, Unreachable) as error:
+                result = {'content':[{'type':'text', 'text':str(error)}], 'isError':True}
+        else:
+            output, failed = invoke(params.get("name", ""), arguments, for_role)
+            result = {"content": [{"type": "text", "text": output}], "isError": failed}
     elif method == "ping":
         result = {}
     else:
         return {"jsonrpc": "2.0", "id": ident, "error": {"code": -32601, "message": f"unknown method {method}"}}
     return {"jsonrpc": "2.0", "id": ident, "result": result}
+
+
+def write_reply(protocol, request: dict, reply: dict) -> None:
+    """A terminal result must leave MCP's output buffer before its run is retired."""
+    protocol.write(json.dumps(reply) + '\n')
+    protocol.flush()
+    if (request.get('method') == 'tools/call'
+            and request.get('params', {}).get('name', '').replace('_', '-') in cli.TERMINAL_COMMANDS
+            and cli.has_receipt_here()):
+        cli.deliver_receipt()
 
 
 def main() -> None:
@@ -289,8 +430,7 @@ def main() -> None:
             continue
         reply = respond(request, for_role)
         if reply is not None:
-            protocol.write(json.dumps(reply) + "\n")
-            protocol.flush()
+            write_reply(protocol, request, reply)
 
 
 if __name__ == "__main__":

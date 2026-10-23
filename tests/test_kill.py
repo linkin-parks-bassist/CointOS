@@ -12,6 +12,7 @@ class Kill(unittest.TestCase):
         support.fresh_ledger(self)
         support.quiet(self)
         self.project = support.project(self, support.repository(self))
+        support.accepted_plan(self.project['path'])
 
     def test_killed_work_survives_restart_held_until_explicit_release(self):
         for kind in ("item", "garden", "steward", "operator"):
@@ -40,7 +41,9 @@ class Kill(unittest.TestCase):
 
     def test_kill_after_receipt_preserves_the_terminal_outcome(self):
         task = support.running(tasks.create("steward", tasks.SYSTEM, "scout", "Work", [6]), "run", False)
-        lifecycle.submit(task["id"], "run", "complete", "Done")
+        support.review_frontier(task)
+        lifecycle.submit(task["id"], "run", "complete", "Done",
+                         {'scout_result': {'kind': 'no_action', 'checked_projects': ['p']}})
         self.assertFalse(api.kill_agent({"agent": "run"})["held"])
         self.assertEqual(task["status"], "done")
 

@@ -1,6 +1,8 @@
 """An agent's system prefix is pinned per task and identical across tasks: no clock rollover,
 worktree, scope or skill location may change it."""
 import json
+from copy import deepcopy
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -57,6 +59,7 @@ class PromptDate(unittest.TestCase):
         from cointos import opencode
         env = opencode.environment(opencode.ROOT, {"task": state.L["tasks"][self.tid]})
         self.assertEqual(env["OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"], "1")
+        self.assertEqual(env["OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER"], "1")
 
     def test_other_clients_are_unchanged(self):
         messages = self.messages("Mon Sep 28 2026")
@@ -129,12 +132,14 @@ class PromptDate(unittest.TestCase):
         body = {"messages": [{"role": "system", "content": "You are Coin."}, {"role": "user", "content": "hi"}]}
 
         def render(config, model, conversation):
+            if not any(message['role'] == 'user' for message in conversation['messages']):
+                raise ValueError('No user query found in messages')
             text = "|".join(str(message.get("content", "")) for message in conversation["messages"])
             return {"tokens": list(text.encode()) + [999], "reader": {}}
 
         with patch.object(gateway.BACKEND, "render", side_effect=render):
             rendered = gateway.render_request(body, "coin", state.CONFIG["work_model"], {})
-        self.assertEqual(rendered["shared"], [len("You are Coin.".encode())])
+        self.assertEqual(rendered["shared"], [len("You are Coin.|".encode())])
 
     def test_continuation_is_rendered_only_once(self):
         state.L["tasks"][self.tid]["session"] = "session"
@@ -145,18 +150,101 @@ class PromptDate(unittest.TestCase):
         self.assertNotIn("shared", rendered)
         renderer.assert_called_once()
 
+    def test_fresh_run_marks_the_common_tools_before_role_specific_definitions(self):
+        task = state.L['tasks'][self.tid]
+        ordinary = {'type': 'function', 'function': {'name': 'read', 'description': 'common ' * 700}}
+        role = {'type': 'function', 'function': {'name': 'cointos_finish', 'description': 'role contract'}}
+        body = {'messages': self.messages('today'), 'tools': [role, ordinary]}
+        body['messages'][-1]['content'] = prompts.launch_text(task, tasks.SYSTEM)
+
+        def render(config, model, conversation):
+            declarations = '\n'.join(t['function']['name'] + ':' + t['function']['description']
+                                     for t in conversation.get('tools') or [])
+            text = declarations + '\nEND_TOOLS\n' + '|'.join(m['content'] for m in conversation['messages'])
+            return {'tokens': list(text.encode()) + [999], 'reader': {}}
+
+        with patch.object(gateway.BACKEND, 'render', side_effect=render) as renderer:
+            rendered = gateway.render_request(body, 'agent', state.CONFIG['work_model'], {})
+        boundary = len(('read:' + ordinary['function']['description'] + '\n').encode())
+        self.assertIn(boundary, rendered['shared'])
+        self.assertGreaterEqual(boundary, state.CONFIG['scheduler']['shared_prefix_tokens'])
+        self.assertEqual(renderer.call_args_list[0].args[2]['tools'], [ordinary, role])
+        self.assertTrue(any(call.args[2]['tools'] == [ordinary] for call in renderer.call_args_list))
+        self.assertEqual(body['tools'], [role, ordinary])
+
 
 class ToolPinning(unittest.TestCase):
-    def test_a_relaunched_conversation_keeps_the_tools_it_started_with(self):
+    def test_fresh_tool_partition_preserves_every_contract_and_order_within_groups(self):
+        support.fresh_ledger(self)
+        task = tasks.create('steward', tasks.SYSTEM, 'new', 'Assignment', [6])
+        state.L['agents']['agent'] = {'task': task['id']}
+        tools = [{'type': 'function', 'function': {'name': name, 'parameters': {'const': name}}}
+                 for name in ('cointos_finish', 'read', 'cointos_task', 'bash')]
+        before = deepcopy(tools)
+        self.assertEqual(gateway.stable_tools(tools, 'agent'), [tools[i] for i in (1, 3, 0, 2)])
+        self.assertEqual(tools, before)
+
+    def test_fresh_runs_share_bash_contract_without_sharing_their_scratch(self):
+        support.fresh_ledger(self)
+        self.enterContext(patch.object(gateway, 'ROOT', Path('/installed')))
+        first = tasks.create('steward', tasks.SYSTEM, 'first', 'First assignment', [6])
+        second = tasks.create('steward', tasks.SYSTEM, 'second', 'Second assignment', [6])
+        state.L['agents'].update(first={'task': first['id']}, second={'task': second['id']})
+
+        def tools(agent):
+            return [{'type': 'function', 'function': {'name': 'bash',
+                     'description': f'Use `/installed/state/agents/{agent}/scratch/opencode` '
+                                    'for temporary work outside the workspace. Keep every other rule.',
+                     'parameters': {'type': 'object', 'properties': {'command': {'type': 'string'}},
+                                    'required': ['command']}}}]
+
+        raw = tools('first')
+        before = deepcopy(raw)
+        pinned = gateway.stable_tools(raw, 'first')
+        self.assertEqual(pinned, gateway.stable_tools(tools('second'), 'second'))
+        self.assertIn('$COINTOS_SCRATCH/opencode', pinned[0]['function']['description'])
+        self.assertIn('Keep every other rule.', pinned[0]['function']['description'])
+        self.assertEqual(pinned[0]['function']['parameters'], raw[0]['function']['parameters'])
+        self.assertEqual(raw, before)
+        # Relauching on a fresh run still resolves the current run's own path.
+        from cointos import opencode
+        for agent in ('first', 'second'):
+            spec = {'task': {'id': agent, 'worktree': '/workspace'}}
+            env = opencode.environment(Path('/installed/state/agents') / agent, spec)
+            self.assertEqual(env['COINTOS_SCRATCH'], f'/installed/state/agents/{agent}/scratch')
+
+    def test_existing_tool_prefix_and_non_bash_contracts_are_unchanged(self):
+        support.fresh_ledger(self)
+        self.enterContext(patch.object(gateway, 'ROOT', Path('/installed')))
+        task = tasks.create('steward', tasks.SYSTEM, 'legacy', 'Assignment', [6])
+        state.L['agents']['current'] = {'task': task['id']}
+        ordinary = [{'type': 'function', 'function': {'name': 'bash',
+                     'description': 'Use `/installed/state/agents/old/scratch/opencode` '
+                                    'for temporary work outside the workspace.'}}]
+        task['tool_context'] = 'legacy'
+        state.L['system_contexts']['legacy'] = json.dumps(ordinary)
+        self.assertEqual(gateway.stable_tools([], 'current'), ordinary)
+        self.assertEqual(task['tool_context'], 'legacy')
+        task.pop('tool_context')
+        ordinary[0]['function']['name'] = 'read'
+        self.assertEqual(gateway.stable_tools(ordinary, 'current'), ordinary)
+        self.assertIs(gateway.stable_tools(ordinary, 'unmanaged'), ordinary)
+
+    def test_cointos_contracts_refresh_while_other_tool_prefixes_remain_pinned(self):
         from cointos import gateway, state, tasks
         from tests import support
         support.fresh_ledger(self)
         project = support.project(self, support.repository(self))
         support.running(support.queued(project, "build"), "agent")
-        first = [{"type": "function", "function": {"name": "cointos_inbox", "parameters": {}}}]
-        newer = [{"type": "function", "function": {"name": "cointos_inbox", "parameters": {"wait": {}}}}]
+        ordinary = {"type": "function", "function": {"name": "read", "parameters": {"old": {}}}}
+        first = [ordinary, {"type": "function", "function": {"name": "cointos_inbox", "parameters": {}}}]
+        newer = [{"type": "function", "function": {"name": "read", "parameters": {"new": {}}}},
+                 {"type": "function", "function": {"name": "cointos_inbox", "parameters": {"wait": {}}}},
+                 {"type": "function", "function": {"name": "cointos_check_work", "parameters": {}}}]
         self.assertEqual(gateway.stable_tools(first, "agent"), first)
-        self.assertEqual(gateway.stable_tools(newer, "agent"), first)
+        refreshed = [ordinary, *newer[1:]]
+        self.assertEqual(gateway.stable_tools(newer, "agent"), refreshed)
+        self.assertEqual(gateway.stable_tools(newer, "agent"), refreshed)
         self.assertIsNone(gateway.stable_tools(None, "agent"))
         self.assertEqual(gateway.stable_tools(newer, "someone-else"), newer)
 
