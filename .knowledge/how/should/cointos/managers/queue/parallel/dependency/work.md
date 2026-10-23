@@ -1,6 +1,7 @@
 ---
 status: green
 revised_at: "2026-09-29T08:03:04+10:00"
+checked_at: '2026-10-24T02:43:26+11:00'
 ---
 
 A steward surfaces at most one neglected project concern; it does not enumerate or queue the project's implementation graph. The manager owning that concern reads the project's current plan and contracts, identifies the next bounded frontier, and queues the currently-ready independent children together with explicit dependency edges. Independent chains should be simultaneously eligible so the scheduler can use available agents and lanes; genuine skeleton, test-contract, implementation and integration dependencies remain ordered.
