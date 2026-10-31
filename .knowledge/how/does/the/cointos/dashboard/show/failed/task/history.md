@@ -1,6 +1,7 @@
 ---
 status: green
 revised_at: "2026-10-23T22:28:09+11:00"
+checked_at: '2026-10-31T17:33:22+11:00'
 ---
 
 The Work panel's **Failed** count button (beside **Done**) opens a list of every task with status failed except cancelled tasks. It includes superseded task versions, old integrator failures and earlier work whose queue record is now accepted or replaced. The count is failed task records, not unresolved product defects or individual model runs. The open list's explanatory text says old and superseded tasks remain visible and a failed manager's child work may still be running. Failures are preserved rather than hidden or marked accepted.

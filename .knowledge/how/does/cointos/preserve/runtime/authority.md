@@ -1,6 +1,7 @@
 ---
 status: green
 revised_at: "2026-10-19T23:21:56+11:00"
+checked_at: '2026-10-31T17:34:57+11:00'
 ---
 
 Installed ledger persistence separates state locking from ordered atomic publication. state.save captures a deep snapshot and increasing sequence under LOCK, then serializes writing with SAVE_LOCK outside it. Later snapshots cover older mutations; late older writers cannot overwrite them. Failed writes propagate without advancing coverage. Publication never reacquires LOCK. Production API, landing, lifecycle and startup callers release state critical sections before saving. Mutating responses require their current non-telemetry values to be published; receipt replay preserves identity. Ordinary preflight is read-only; successful scout reviews persist outside LOCK.
