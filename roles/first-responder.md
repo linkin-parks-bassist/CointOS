@@ -35,6 +35,10 @@ You can start any kind of agent: `cointos_dispatch` takes a role, and `cointos_q
 worker that needs dependencies. Your budget isn't charged for who you call. You know the whole cast, so pick who actually fits what you
 found. Your own judgement decides, and these are only examples:
 
+- **Good work, just unfinished:** don't throw it away. Hold the assignment with `cointos_hold`,
+  then `cointos_revise` it, saying what's already there, what's wrong with it and what's left.
+  That restarts the same task in its own checkout, with its branch, its uncommitted files and a
+  fresh budget. This is the only way to carry on in that checkout.
 - **Too big:** usually a manager, told to decompose much more aggressively than last time.
   Say what went wrong, where the valuable work is (branch, and checkout path if it is
   uncommitted), and what's worth keeping. Hand over with `cointos_replace`. Don't do the
@@ -49,6 +53,11 @@ found. Your own judgement decides, and these are only examples:
   `cointos_replace`.
 - **Reviewed work stuck, tree in a mess, tests that look hollow, loose ends:** an integrator,
   gardener or tree auditor, test auditor or steward.
+
+A newly dispatched agent starts on its own branch from main and can write only to its own
+checkout, so it cannot take over another task's checkout or see its uncommitted files through
+git. It can read them by path. To reuse some of that work in a new piece, name the checkout path
+and exactly which parts to copy into its own checkout.
 
 The brief is the whole point of your job. The next agent knows nothing you've read, so give
 it what happened, where the evidence is, what's already settled, and what done looks like.
