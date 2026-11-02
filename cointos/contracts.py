@@ -355,22 +355,62 @@ def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str 
 LOCATIONS = (re.compile(r'File "([^"]+)", line (\d+)'), re.compile(r"([\w./-]+\.\w+):(\d+)"))
 
 
-def reveal(path, output: str, files: list[str], context: int = 12, limit: int = 6) -> str:
-    """The test source around each failure location the output names in the given files, or the
-    files themselves when it names none."""
-    root, shown, parts = str(path).rstrip("/") + "/", set(), []
+SCENARIO = re.compile(r"^\s*(?:SECTION\s*\(|TEST\w*\s*\(|(?:async\s+)?def\s+test|it\s*\(|test\s*\()")
+CALL = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+SCENARIO_LINES, HELPER_LINES = 400, 120
+
+
+def scenario(lines: list[str], line: int, context: int) -> tuple[int, int]:
+    """The whole test around a failing line, when the file marks where tests begin."""
+    start = next((n for n in range(line, max(line - SCENARIO_LINES, 0), -1) if SCENARIO.match(lines[n - 1])), None)
+    if start is None:
+        return max(1, line - context), min(len(lines), line + context)
+    end = next((n - 1 for n in range(line + 1, min(start + SCENARIO_LINES, len(lines)) + 1)
+                if SCENARIO.match(lines[n - 1])), min(start + SCENARIO_LINES, len(lines)))
+    return start, end
+
+
+def helper(lines: list[str], name: str) -> tuple[int, int] | None:
+    """Where a file-local helper called on a failing line is defined."""
+    head = re.compile(rf"^(?:def\s+{name}\s*\(|[A-Za-z_][\w\s\*]*\b{name}\s*\()")
+    for number, line in enumerate(lines, 1):
+        if head.match(line) and not line.rstrip().endswith(";"):
+            for last in range(number + 1, min(number + HELPER_LINES, len(lines)) + 1):
+                text = lines[last - 1]
+                if text.startswith("}") or (line.startswith("def") and text.strip() and not text[0].isspace()):
+                    return number, last - (0 if text.startswith("}") else 1)
+            return number, min(number + HELPER_LINES, len(lines))
+    return None
+
+
+def reveal(path, output: str, files: list[str], context: int = 12, limit: int = 6, seen: set | None = None) -> str:
+    """The test around each failure the output names in the given files, with the helpers its
+    failing line calls, or the files themselves when it names none. `seen` keeps several
+    failures from repeating the same source."""
+    root, seen, parts = str(path).rstrip("/") + "/", set() if seen is None else seen, []
+    found = False
+
+    def show(name, lines, low, high):
+        if (name, low, high) not in seen:
+            seen.add((name, low, high))
+            parts.append(f"{name}:{low}-{high}\n" + "\n".join(f"{n:6} {lines[n - 1]}" for n in range(low, high + 1)))
+
     for pattern in LOCATIONS:
         for name, number in pattern.findall(output):
             name = name[len(root):] if name.startswith(root) else name
             match = next((f for f in files if f == name or f.endswith("/" + name)), None)
-            if match is None or (match, number) in shown or len(parts) >= limit:
+            if match is None or len(parts) >= limit:
                 continue
-            shown.add((match, number))
+            found = True
             lines = (Path(path) / match).read_text(errors="replace").splitlines()
             line = int(number)
-            low, high = max(1, line - context), min(len(lines), line + context)
-            parts.append(f"{match}:{low}-{high}\n" + "\n".join(f"{n:6} {lines[n - 1]}" for n in range(low, high + 1)))
-    if not parts:
+            if not 1 <= line <= len(lines):
+                continue
+            show(match, lines, *scenario(lines, line, context))
+            for called in dict.fromkeys(CALL.findall(lines[line - 1])):
+                if where := helper(lines, called):
+                    show(match, lines, *where)
+    if not parts and not found:
         for name in files:
             if (Path(path) / name).is_file():
                 parts.append(f"{name}\n" + (Path(path) / name).read_text(errors="replace")[:6000])
@@ -378,9 +418,10 @@ def reveal(path, output: str, files: list[str], context: int = 12, limit: int = 
 
 
 def failures(path, results: list[tuple[list[str], str]], files: list[str]) -> str:
-    """Failing tests as an implementer sees them: command, output tail and revealed source."""
+    """Failing tests as an implementer sees them: command, output tail and the test's source."""
+    seen = set()
     return "\n\n".join(f"Failing test: {' '.join(command)}\n{output[-3000:]}\n\nTest source:\n"
-                        f"{reveal(path, output, files)}" for command, output in results)
+                        f"{reveal(path, output, files, seen=seen) or '(shown above)'}" for command, output in results)
 
 
 def packet_check(repo, main: str, commit: str, tests: list[str], bundled: list[list[str]], rules: dict,

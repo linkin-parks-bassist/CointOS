@@ -104,11 +104,13 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
         "permission": {
             "*": "allow", "webfetch": "allow", "websearch": "allow", "doom_loop": "deny",
             "bash": {"*": "allow", **{command: "deny" for command in denied},
+                     **({"*probe*": "deny"} if protected else {}),
                      **{command: "allow" for command in LOOKING},
                      **({"systemctl --user *": "allow"} if operator_control else {})},
             "external_directory": {"*": "deny", f"{home}/**": "allow", **read_scope},
             "read": {"*": "allow", **read_scope, "*.env": "deny"},
-            "edit": {**edit_scope, **{path: "deny" for path in protected}},
+            "edit": {**edit_scope, **{path: "deny" for path in protected},
+                     **({"*probe*": "deny"} if protected else {})},  # implementers implement; finish runs the tests
         },
         "autoupdate": False, "share": "disabled",
         "plugin": [(ROOT / "cointos/opencode_resume.mjs").as_uri()],

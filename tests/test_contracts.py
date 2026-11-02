@@ -226,6 +226,17 @@ class Contracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "protected tests"):
             contracts.stage_history(self.repo, self.worker, self.base, self.rules)
 
+    def test_a_failure_shows_its_whole_test_and_the_helpers_it_calls(self):
+        source = ["static int gates(int x)", "{", "\treturn x == 7;", "}", "", "int main(void)", "{"]
+        source += ['\tSECTION("first") {', "\t\tint witness = 3;"] + ["\t\t/* padding */"] * 20
+        source += ["\t\tREQUIRE(gates(witness));", "\t}", '\tSECTION("second") {', "\t\tint other = 9;", "\t}", "}"]
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / "t.c").write_text("\n".join(source) + "\n")
+            shown = contracts.reveal(temp, "FAIL: first at t.c:30: gates(witness)", ["t.c"])
+        self.assertIn("int witness = 3;", shown, "setup far above the failing line")
+        self.assertIn("return x == 7;", shown, "the helper the failing line calls")
+        self.assertNotIn("int other = 9;", shown, "other tests stay hidden")
+
     def test_a_rebased_branch_is_not_refused_for_its_history(self):
         self.worker["stage"] = "test-contract"
         self.worker["base_commit"] = "0" * 40  # the pinned commit is no longer an ancestor

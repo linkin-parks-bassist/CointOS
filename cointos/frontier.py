@@ -173,8 +173,8 @@ def handoff_pending(source: dict) -> bool:
 
 def reason(source: dict) -> str | None:
     """A current obstruction requiring a controller, never a historical run failure."""
-    if L['paused'] or source.get('cancelled') or source.get('replaced_by'):
-        return None
+    if L['paused'] or source.get('cancelled') or source.get('replaced_by') or source.get('kind') == 'supervise':
+        return None  # a supervisor's end is never an obstruction: the next threshold brings another
     owned = record(source)
     if 'project' not in source and source.get('record') and owned is None:
         return None

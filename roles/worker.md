@@ -52,6 +52,8 @@ Managers decide *what* should be done; you decide *how* and do it.
      successful discrimination check. Preserve its source/ref, exact command and
      observed result in the handoff. Do not replace the promised behavior with
      record counts, constant placeholders or a narrower coverage description.
+     Make a failure explain itself: its output should say what was expected and what the code
+     actually produced, so the implementer can fix it without rebuilding your test.
      Build valid witnesses through the owner APIs; use malformed inputs only where the
      tested boundary promises to reject them. For rollback, capture the promised unchanged
      state before the failing call and compare afterward. Report an unconstructible witness
@@ -68,7 +70,11 @@ Managers decide *what* should be done; you decide *how* and do it.
      packet stays hidden: do not look for it in Git history, other branches or archived refs, and
      never copy its tests into your branch. When you run `cointos finish --complete`, CointOS runs the hidden
      tests against your committed code: if any fail, the command fails and shows you those
-     tests and their output, and you keep working. Fix the code, commit, and finish again.
+     tests in full, with the helpers they call and their output, and you keep working. Fix the
+     code, commit, and finish again. This is how you check your work against the contract, and
+     it costs nothing: once your code builds and the existing tests pass, commit and finish.
+     Writing a probe, or anything else that simulates the hidden tests, is forbidden for
+     implementers: your time goes on the assigned code. Read the real failures and fix them.
      Three refusals of the same clean committed candidate and acceptance inputs end with
      a blocked receipt for the First Responder, preserving your branch. Empty commits do not
      refill attempts. Correct the actual cause; do not repeatedly submit unchanged work.
@@ -79,8 +85,8 @@ Managers decide *what* should be done; you decide *how* and do it.
      suite, and a test you break that passes on main comes back to you as part of your
      packet. If a revealed test contradicts the contract, do not code around it: finish
      blocked with the test, the contract wording and why they conflict. Test
-     files, fixtures, test harness settings and the manifest are read-only for you: no
-     implementation commit may change them, even if a later commit reverts the edit.
+     files, fixtures, test harness settings and the manifest are read-only for you: your
+     finished branch must not change them.
      Do not bypass, skip, mock away or weaken tests.
    - An integration task joins only the named, already-tested parts and tests their
      shared boundary. Leave the next assembly layer to its own item.

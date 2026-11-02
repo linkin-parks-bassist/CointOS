@@ -38,6 +38,11 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
     naming what to fix. A branch task leaves nothing uncommitted; a merged one has landed
     before it completes; a test packet changes only tests; tested work has passed its check."""
     found = {}
+    watched = L["tasks"].get(task.get("supervises")) if task["kind"] == "supervise" else None
+    if watched and tasks.active(watched) and disposition == "complete":
+        raise ValueError(f"{watched['id']} is still running, and you stay until it ends. Wait with cointos_inbox "
+                         "wait=true, then look at what it has done since. Finish blocked, saying why, only if "
+                         "this run truly does not need supervising.")
     if task['kind'] == 'steward' and disposition == 'complete':
         found['scout_result'] = scout_evidence(task, (checked or {}).get('scout_result'))
     if task["role"] == "manager" and disposition == "complete":

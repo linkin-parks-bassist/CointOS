@@ -137,8 +137,8 @@
     "generation_tokens": 30000
    },
    "supervisor": {
-    "generation_seconds": 600,
-    "generation_tokens": 12000
+    "generation_seconds": 1800,
+    "generation_tokens": 40000
    }
   },
   "role_fresh_retries": {

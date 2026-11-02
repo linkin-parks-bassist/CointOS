@@ -61,7 +61,7 @@ else can pick up.
   behavior/tests or obtain an explicit scope decision from the requirement's owner;
   never silently narrow the original contract to match what happens to pass.
 - **Scratch ownership.** Each new run has its own `$COINTOS_SCRATCH`; `$TMPDIR` points
-  there too. Use `mktemp -d` within it for probes, builds and temporary checkouts.
+  there too. Use `mktemp -d` within it for builds and temporary checkouts.
   If a destination already exists, choose a fresh name. Never remove an older directory
   to make room: only clean up artifacts you created in this run. A prior run's files may
   be useful evidence or unfinished work. Commit deliverable changes in your worktree.

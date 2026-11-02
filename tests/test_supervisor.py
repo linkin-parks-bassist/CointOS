@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import api, lifecycle, opencode, recovery, schema, spawner, state, tasks
+from cointos import api, frontier, lifecycle, opencode, recovery, schema, spawner, state, tasks
 from tests import support
 
 
@@ -40,6 +40,29 @@ class Supervisors(unittest.TestCase):
             recovery.enforce()
         self.assertEqual([t['supervises'] for t in self.supervisors()], [self.worker['id']])
         self.assertEqual(supervisor['role'], 'supervisor')
+
+    def test_a_supervisor_cannot_complete_while_its_run_is_going(self):
+        self.agent['generation_seconds'] = 1800
+        recovery.enforce()
+        supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
+        with self.assertRaisesRegex(ValueError, 'you stay until it ends'):
+            lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'looks fine')
+        self.worker['status'] = 'done'
+        lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'it finished')
+        self.assertEqual(supervisor['receipt']['disposition'], 'complete')
+
+    def test_a_supervisor_that_stops_needs_no_first_responder(self):
+        self.agent['generation_seconds'] = 1800
+        recovery.enforce()
+        supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
+        lifecycle.submit(supervisor['id'], 'supervisor-1', 'blocked', 'this run needs no supervising')
+        self.assertIsNone(frontier.reason(supervisor))
+
+    def test_an_implementer_cannot_write_or_run_a_probe(self):
+        permission = opencode.settings(state.CONFIG, 'key', {'abilities': ['standard']}, ['tests/*'])['permission']
+        self.assertEqual((permission['bash']['*probe*'], permission['edit']['*probe*']), ('deny', 'deny'))
+        other = opencode.settings(state.CONFIG, 'key', {'abilities': ['standard']}, [])['permission']
+        self.assertNotIn('*probe*', other['bash'])
 
     def test_a_supervisor_is_stood_down_when_its_run_ends(self):
         self.agent['generation_seconds'] = 1800
