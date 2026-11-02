@@ -1,16 +1,16 @@
 ---
 status: green
-revised_at: "2026-11-02T18:11:50+11:00"
+revised_at: "2026-11-02T18:47:42+11:00"
 ---
 
 Remaining work, next first. Stored plans grant no authority.
 
 Paused: the sustained >60 tokens/s investigation with Qwen3.8-27B dense fixed. The benchmark and Gufo owners retain the current results and remaining performance limits.
 
-1. Observe the first live First Responder: Dounrend is paused holding pipeline-calc-standin-replacement, whose worker left 775 added and 54 removed lines uncommitted in its checkout. The user starts it with `cointos agent run NAME BRIEF --role first-responder --task pigen:pipeline-calc-standin-replacement`. how/does/cointos/recover/blocked/assignments.md owns the role.
+1. Observe, without touching, the revised pipeline-calc-standin-replacement run started by the first live First Responder. The user predicts it stays overscoped and the worker spirals. how/does/cointos/recover/blocked/assignments.md owns the role.
 2. Confirm the installed Coin repairs on its next multi-round native turn: Coin `tool history preserved`, resident switches and no zero restores on follow-up rounds, plus the mirrored OpenCode viewer showing that live turn. why/does/coin/reread/its/whole/context/on/every/model/request.md and how/can/an/opencode/viewer/show/coin.md own them.
-3. Make an admitted run wait for resident capacity instead of failing. how/does/cointos/protect/workstation/memory.md owns the defect; it ended an integrator run on 2026-11-02.
-4. Sweep source knowledge leaves still naming recovery Operators or run_agent: kt_grep "recovery Operator|repair Operator|recovery controller|run_agent".
+3. Make an admitted run wait for resident capacity instead of failing. how/does/cointos/protect/workstation/memory.md owns the defect.
+4. Sweep source leaves still naming recovery Operators or run_agent, including spec, how/to/keep/cointos/simple.md and how/does/telegram/reach/cointos.md.
 5. Complete the held assignments through their scoped continuation owners: continue-instance-lowering-frontier accounts for preserved instance work and the next behavior; continue-pipeline-fsm-contract-frontier owns computation/halting/FSM coverage and the next map. Reuse the existing computation map/review and CLI Operator. Preserve original artifacts and requirements through reviewed maps, single-scenario authors and implementation. Verify service handoff observation and result delivery; product supervision belongs to managers/Operators.
 6. Observe native Coin acknowledgement, truthful receipt-versus-filing language, repeated-set fidelity, existing-owner consumption and verified completion with the installed conversation flow. Source/installed fixture qualification and scoped deployment are complete; native interpretation and fifteen-second loaded responses remain unproved. Concurrent admission during tools, bounded foreground execution and substantive delegation remain open.
 7. Observe a user-requested recurring stationed agent set up through Coin: native tool choice, next_run confirmation, brief quality and a real occurrence. A scheduled run waits behind memory admission like other work.
@@ -26,8 +26,6 @@ Paused: the sustained >60 tokens/s investigation with Qwen3.8-27B dense fixed. T
 17. Observe deployed semantic-review guidance and final correction gates through real author/reviewer recovery handoffs; isolated three-case decision replays do not establish general adherence. Measure sustained unattended reviewed landings, planning handoffs and useful generation. Check native single-turn summary reduction against retained work and fidelity. Compare batching with foreground blocking, noncanonical restart splicing and cache/pressure churn; exclude fixture pollution.
 18. Exercise remaining acceptance: loaded-model startup/recovery, interrupted compaction, Coin judgment/timing, Coin trigger titles, active-only card and viewer-slot handoff after a quiet reload, standing-route copy/move fidelity under actual uploads, note filing, tool-output growth, shared-lane behaviour and desktop responsiveness. Reboot/halt need separate authority.
 19. Exercise the dashboard's controls against the live daemon: forms (queue, operator, message/reply, budget, revise, add project), project enable/priority/remove, drawer reasoning and queue segments, armed cancel/clear and the viewer switch; only captured-data rendering is verified.
-
-Open decision: how to keep implementers small without numeric targets in prompts. Recommended: the daemon refuses an implementation item binding more than one test section, implementer budgets shrink silently so overruns reach a First Responder, and manager guidance shows real good and bad splits from this repository. Worker runs measure median 17,720 generated tokens, p90 46,037, maximum 108,183. Passwordless sudo for Coin is also the user's call.
 
 Open decision: what/are/the/cointos/agent/capability/gaps.md records accidental agent-capability restrictions (kt write paths, operator handoff, compaction, read-only command denials, toolchain access, landing granularity, infrastructure retries). Choose which to correct and in what order. Deliberate guards remain knowledge-leaf friction, reasoning caps, test-contract integrity and explicit user holds.
 
