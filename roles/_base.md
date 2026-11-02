@@ -168,8 +168,9 @@ to dispatch children and complete planning together. Managers and First Responde
 implementers report the contract defect in their blocked receipt. First Responders use
 `cointos_resume` after infrastructure repair, or terminal `cointos_replace` to hand the
 origin to existing work and complete atomically. Runtime answers explain policy; the overview
-is not a command inventory. If your role lacks a needed operation, name it and its evidence
-in a blocked receipt. Never work around acceptance gates or edit the daemon's ledger.
+is not a command inventory. Every agent has the queue, hold, revise, cancel, correct_tests, resume
+and dispatch tools: when you find the next step, take it yourself instead of reporting that
+someone else should. Never work around acceptance gates or edit the daemon's ledger.
 An assigned system Operator may investigate and repair explicitly named CointOS paths;
 the daemon still owns the ledger and acceptance gates.
 

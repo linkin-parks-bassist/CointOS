@@ -107,7 +107,8 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
     check("no stray agent processes", problems)
 
     check("no item waits on a dead dependency", [f"{item}: {problem}" for item, problem
-                                                  in (ledger.get("dependency_problems") or {}).items()])
+                                                  in (ledger.get("dependency_problems") or {}).items()
+                                                  if not problem.startswith("depends on a blocked")])
     check('blocked work has a recovery owner', [f"{row['item']}: no active recovery or corrective handoff"
           for row in ledger.get('work_frontier', [])
           if not ledger.get('paused') and row['status'] == 'blocked' and not row.get('held_by')

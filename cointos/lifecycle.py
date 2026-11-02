@@ -445,6 +445,11 @@ def replace(record: dict, replacements: list[str], by: str, reason: str) -> None
                    and t["status"] == "running" for t in L["tasks"].values()):
                 raise ValueError(f"{key} is being integrated; no records changed")
     changed = queues.replace(record, replacements, reason, preflight=preflight)
+    # A correction handed to one successor stays a correction, or its result would bind nothing.
+    successors = [queues.records().get(f"{record['project']}:{name}") for name in record['replaced_by']]
+    if record.get('correction') and len(successors) == 1 and successors[0]:
+        if successors[0].get('stage') == 'test-contract' and not successors[0].get('correction'):
+            successors[0]['correction'] = dict(record['correction'])
     for key in changed:
         queues.records()[key]["revised_by"] = by
         refresh_assignment(key, by, reason, queues.records()[key])

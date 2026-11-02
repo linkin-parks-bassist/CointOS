@@ -64,7 +64,7 @@ class Handoffs(unittest.TestCase):
         return api.dispatch("queue", {"project": project, "kind": kind, "name": name, "brief": "A concrete concern",
                                       "caller": support.caller(by, by["agent"])})
 
-    def test_stewards_and_test_auditors_propose_only_manager_commands_in_any_project(self):
+    def test_stewards_and_test_auditors_propose_in_any_project(self):
         other = {**self.project, "name": "q"}
         state.CONFIG["projects"].append(other)
         for kind in ("steward", "test-audit"):
@@ -72,8 +72,6 @@ class Handoffs(unittest.TestCase):
                 by = self.running_as(kind)
                 self.propose(by, "command", f"concern-{kind}", project="q")
                 self.assertEqual(state.L["queue"][f"q:concern-{kind}"]["proposed_by"], by["id"])
-                with self.assertRaisesRegex(ValueError, "scout/auditor"):
-                    self.propose(by, "queued", f"implementation-{kind}")
 
     def test_steward_cannot_complete_a_declared_handoff_with_only_a_user_alert(self):
         by = self.running_as('steward')
@@ -142,11 +140,9 @@ class Handoffs(unittest.TestCase):
         lifecycle.submit(by['id'], by['agent'], 'complete', 'Work has an owner',
                          {'scout_result': {'kind': 'no_action', 'checked_projects': ['p']}})
 
-    def test_an_integrator_proposes_one_same_project_command_kind(self):
+    def test_an_integrator_proposes_a_command(self):
         integrator = self.running_as("integrate", "integrate-x")
         self.propose(integrator, "command", "follow-up")
-        with self.assertRaisesRegex(ValueError, "manager/integrator"):
-            self.propose(integrator, "queued", "code")
 
     def test_a_proposal_must_come_from_the_proposing_tasks_current_run(self):
         with self.assertRaisesRegex(ValueError, "not running under"):

@@ -149,9 +149,9 @@ def requested_station(station, project: str | None, abilities: list, spawner: tu
         raise ValueError('a station directory confines an agent; the control ability belongs to system Operators')
     if spawner:
         task = spawner[0]
-        if not stations.covers(task.get('tools') or [], tools):
-            raise ValueError('an operator gets no station tool its spawner lacks')
         if stations.stationed(task):
+            if not stations.covers(task.get('tools') or [], tools):
+                raise ValueError('a stationed agent starts no agent with a station tool it lacks')
             home = Path(task['worktree']).resolve()
             directory = directory or str(home)
             if not Path(directory).is_relative_to(home):
@@ -173,24 +173,6 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
     if not isinstance(brief, str) or not brief.strip():
         raise ValueError("operator brief is required")
     abilities = schema.abilities(abilities)
-    if spawner:
-        task, agent = spawner
-        if task["role"] == "worker":
-            raise ValueError("a worker does not start operators: an operator would land its work unreviewed; "
-                             "finish blocked with the evidence instead")
-        if set(abilities) - set(task.get("abilities") or ["standard"]):
-            raise ValueError("an operator gets no ability its spawner lacks")
-        # A First Responder calls in help; its own small budget is for diagnosis, not for funding it.
-        if task["role"] != "first-responder":
-            used = schema.spent(agent)
-            left = {key: task["budget"][key] - used[key] for key in schema.BUDGET_KEYS}
-            if not budget or set(budget) != set(schema.BUDGET_KEYS):
-                raise ValueError(f"give the operator both budget limits from what this run has left: "
-                                 f"{left['generation_tokens']:,} tokens and {left['generation_seconds']:.0f} seconds")
-            schema.budget(CONFIG, budget)
-            if any(budget[key] > left[key] for key in schema.BUDGET_KEYS):
-                raise ValueError(f"this run has only {left['generation_tokens']:,} tokens and "
-                                 f"{left['generation_seconds']:.0f} seconds left to give")
     where = project_named(project) if project else SYSTEM
     directory, tools = requested_station(station, project, abilities, spawner)
     if check_only:
@@ -212,10 +194,6 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
                       spawned_by=spawner[0]["id"] if spawner else None, tools=tools,
                       **({"worktree": directory} if directory else {}),
                       **({"occurrence": occurrence} if occurrence else {}))
-    if spawner and spawner[0]["role"] != "first-responder":
-        granted = spawner[1].setdefault("granted", {})
-        for key in schema.BUDGET_KEYS:
-            granted[key] = granted.get(key, 0) + budget[key]
     return operator
 
 

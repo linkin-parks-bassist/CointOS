@@ -1,7 +1,7 @@
 """A wrong accepted witness can be corrected without bypassing independent review."""
 import copy
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from cointos import api, contracts, git, landing, lifecycle, packets, queues, runs, spawner, state, tasks
 from tests import support
@@ -122,6 +122,34 @@ class Corrections(Project):
         self.assertNotIn('launch_failures', self.worker)
         self.assertIn('correct-tests', self.worker['note'])
         self.assertEqual(queues.state(queues.records()[self.worker['record']])['status'], 'blocked')
+
+    def fail_composition(self):
+        lifecycle.refuse_dispatch(self.worker, 'the tests do not merge')
+        lifecycle.release('worker-1', 'refused')
+        self.worker['composition_failure'] = {'main': self.base, 'packets': [self.tests], 'paths': []}
+        return queues.records()[self.worker['record']]
+
+    def test_blocked_work_restarts_by_itself_once_its_tests_merge(self):
+        from cointos import spawner
+        record = self.fail_composition()
+        version = record['version']
+        started = []
+        with patch.object(spawner.threading, 'Thread',
+                          side_effect=lambda target, args, daemon: started.append((target, args)) or Mock()):
+            spawner.retry_compositions({'p': [record]})
+            spawner.retry_compositions({'p': [record]})
+        self.assertEqual(len(started), 1, 'one attempt per exact input')
+        started[0][0](*started[0][1])
+        self.assertEqual(record['version'], version + 1)
+        self.assertEqual(self.worker['status'], 'waiting')
+        self.assertNotIn('composition_failure', self.worker)
+        self.assertEqual(queues.state(record)['status'], 'queued')
+
+    def test_a_correction_handed_to_a_successor_still_rebinds_its_consumers(self):
+        record = queues.records()[f"p:{self.propose()['item']}"] if ':' not in self.propose()['item'] else queues.records()[self.propose()['item']]
+        support.queued(self.project, 'successor', 'Finish the correction\nRelies on: a', stage='test-contract')
+        lifecycle.replace(record, ['successor'], 'operator', 'handed on')
+        self.assertEqual(queues.records()['p:successor']['correction'], record['correction'])
 
     def recovery_request(self):
         lifecycle.submit(self.worker['id'], 'worker-1', 'blocked', 'The accepted witness contradicts the contract')
@@ -361,5 +389,5 @@ class Corrections(Project):
         self.assertEqual(self.worker['record_version'], 2)
 
     def test_implementer_cannot_request_replacement_of_its_acceptance_tests(self):
-        with self.assertRaisesRegex(ValueError, 'owning manager'):
+        with self.assertRaisesRegex(ValueError, 'its own acceptance tests'):
             api.dispatch('correct-tests', {'project': 'p', 'caller': support.caller(self.worker, 'worker-1')})

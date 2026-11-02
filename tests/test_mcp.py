@@ -130,17 +130,18 @@ class Tools(unittest.TestCase):
     def test_each_role_sees_its_own_tools(self):
         self.assertIn("queue", self.names("manager"))
         self.assertIn("land", self.names("integrator"))
-        self.assertNotIn("queue", self.names("worker"))
+        self.assertIn("queue", self.names("worker"))
         self.assertNotIn("land", self.names("worker"))
         self.assertTrue({"finish", "task", "send", "inbox"} <= self.names("worker"))
         self.assertEqual(mcp.invoke("land", {"summary": "x"}, "worker"), ("unknown tool 'land' for this role", True))
         self.assertIn("dispatch", self.names("manager"))
         self.assertIn("dispatch", self.names("steward"))
-        self.assertNotIn("dispatch", self.names("worker"))
+        self.assertIn("dispatch", self.names("worker"))
+        self.assertTrue({"hold", "revise", "cancel", "correct_tests", "resume"} <= self.names("steward"))
         self.assertIn('handoff', self.names('manager'))
         self.assertIn('correct_tests', self.names('manager'))
         self.assertTrue({'correct_tests', 'resume', 'replace'} <= self.names('operator'))
-        self.assertFalse({'correct_tests', 'resume', 'replace', 'handoff'} & self.names('worker'))
+        self.assertFalse({'replace', 'handoff', 'land'} & self.names('worker'))
 
     def test_a_brief_with_quotes_and_newlines_queues_verbatim(self):
         brief = 'Fix the "parser" isn\'t `it`\n$(rm -rf /) && echo hi'

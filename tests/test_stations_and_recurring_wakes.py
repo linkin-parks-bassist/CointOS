@@ -404,7 +404,7 @@ class Stations(unittest.TestCase):
         child = tasks.request_operator('child', 'Work.', None, None, None, budget, (parent, agent))
         self.assertEqual(child['worktree'], str(self.desk), 'no directory given stays home')
         self.assertTrue(opencode.confined_writes(child))
-        with self.assertRaisesRegex(ValueError, 'no station tool'):
+        with self.assertRaisesRegex(ValueError, 'station tool it lacks'):
             tasks.request_operator('x', 'Work.', None, None, None, budget, (parent, agent), station={'tools': ['cad']})
         with self.assertRaisesRegex(ValueError, 'inside'):
             tasks.request_operator('x', 'Work.', None, None, None, budget, (parent, agent), station={'directory': str(self.root)})

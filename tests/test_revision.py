@@ -349,21 +349,11 @@ class Revision(unittest.TestCase):
 
     # ------------------------------------------------ rights
 
-    def test_only_the_owning_projects_manager_or_user_decides(self):
+    def test_any_running_agent_can_steer_queued_work(self):
         queues.add(self.project, "queued", "impl", "Implement it")
         steward = support.running(tasks.create("steward", tasks.SYSTEM, "loose-ends", "", [6]), "steward-1", worktree=False)
-        with self.assertRaisesRegex(ValueError, "owning project's running manager"):
-            api.dispatch("hold", {"item": "p:impl", "caller": support.caller(steward, "steward-1")})
-        other = {**self.project, "name": "q"}
-        state.CONFIG["projects"].append(other)
-        foreign = support.running(support.queued(other, "plan", "Plan", kind="command"), "manager-2", worktree=False)
-        with self.assertRaisesRegex(ValueError, "owning project's running manager"):
-            api.dispatch("revise", {"item": "p:impl", "brief": "X", "reason": "r",
-                                    "caller": support.caller(foreign, "manager-2")})
-        with self.assertRaisesRegex(ValueError, "has no queue item"):
-            api.dispatch("hold", {"item": "impl"})
-        api.dispatch("hold", {"item": "p:impl"})  # the user
-        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], "user")
+        api.dispatch("hold", {"item": "p:impl", "caller": support.caller(steward, "steward-1")})
+        self.assertEqual(state.L["queue"]["p:impl"]["held_by"], steward["id"])
 
     def test_same_project_qualified_dependencies_normalize_brief_metadata_and_retry_aliases(self):
         queues.add(self.project, 'queued', 'base', 'Build the base')

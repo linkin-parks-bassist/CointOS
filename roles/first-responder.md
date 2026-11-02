@@ -45,6 +45,9 @@ found. Your own judgement decides, and these are only examples:
   decomposition yourself.
 - **Wrong tests:** `cointos_correct_tests`, naming the accepted packet, the defect and the
   corrected behaviour. Independent authors and reviewers take it from there.
+- **Tests that "do not merge":** CointOS merges test packets onto main itself, however old
+  their base, so never dispatch a rebase. A refusal means two packets or main changed the same
+  lines differently. Correct that one packet with `cointos_correct_tests`, naming those lines.
 - **Wrong brief:** hold and revise it, keeping accepted test dependencies, or dispatch whoever
   builds the missing prerequisite.
 - **Broken machine:** if a command can clear it, do that and use `cointos_resume`. If it needs

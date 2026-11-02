@@ -79,11 +79,11 @@ def contracts(repo, commit, rules) -> list[dict]:
 
 
 def stage_history(repo, worker, main, rules):
-    """Enforce edit ownership on the task's commits, excluding history already on main.
+    """Enforce edit ownership on what the branch would actually change against main.
 
-    The pinned base bounds the assignment; it is not a diff baseline after main advances.
-    Importing main is legal. Inventing a forbidden merge resolution or reverting an earlier
-    forbidden edit does not erase that edit from the assignment's history.
+    Only the net result lands, so how a worker got there does not matter: a rebase, a
+    reverted experiment or an imported main are all fine. A merge that invents or discards
+    a change outside the stage still shows in the result.
     """
     tests_only = worker["stage"] == "test-contract"
     def forbidden(path):
@@ -92,17 +92,10 @@ def stage_history(repo, worker, main, rules):
 
     reason = ("a test packet changes only tests; it also changes " if tests_only
               else "implementation changes protected tests or harness: ")
-    base = worker.get("base_commit")
-    if not base:
-        raise ValueError("worker has no pinned baseline; return it for a fresh assignment")
     head = git.head(repo, worker["branch"])
-    if not git.contains(repo, base, head):
-        raise ValueError("worker branch does not contain its pinned baseline")
-    for commit in git.run(repo, "rev-list", f"{base}..{head}", "--not", main).splitlines():
-        inherited = git.run(repo, "merge-base", main, commit)
-        paths = [p for p in git.changed(repo, inherited, commit) if forbidden(p)]
-        if paths:
-            raise ValueError(reason + ", ".join(paths))
+    paths = [p for p in git.changed(repo, git.run(repo, "merge-base", main, head), head) if forbidden(p)]
+    if paths:
+        raise ValueError(reason + ", ".join(paths))
 
 
 def worker_artifact(repo, task, commit):
@@ -312,6 +305,18 @@ class CompositionError(ValueError):
 
 
 
+def keep_current(path, conflicts: list[str]) -> None:
+    """Settle conflicted non-test files with the current side's version."""
+    for name in conflicts:
+        ours = [line.split("\t", 1)[0].split() for line in
+                git.run(path, "ls-files", "-u", "--", name).splitlines()]
+        if any(entry[2] == "2" for entry in ours):
+            git.run(path, "checkout", "--ours", "--", name)
+        else:
+            git.run(path, "rm", "-q", "-f", "--", name)
+        git.run(path, "add", "-A", "--", name)
+
+
 @contextlib.contextmanager
 def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str = "reject"):
     """A fresh detached checkout of `commit` with a packet's test commits merged in: (path, head).
@@ -333,14 +338,7 @@ def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str 
                 git.resolve_insertions(path, [p for p in conflicts if protected(p, rules)])
                 conflicts = [p for p in git.run(path, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p]
                 if non_code == "ours" and conflicts and not any(protected(p, rules) for p in conflicts):
-                    for name in conflicts:
-                        ours = [line.split("\t", 1)[0].split() for line in
-                                git.run(path, "ls-files", "-u", "--", name).splitlines()]
-                        if any(entry[2] == "2" for entry in ours):
-                            git.run(path, "checkout", "--ours", "--", name)
-                        else:
-                            git.run(path, "rm", "-q", "-f", "--", name)
-                        git.run(path, "add", "-A", "--", name)
+                    keep_current(path, conflicts)
                     conflicts = [p for p in git.run(path, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p]
                 if not conflicts:
                     git.run(path, "-c", "user.name=CointOS", "-c", "user.email=cointos@localhost",

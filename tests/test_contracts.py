@@ -212,26 +212,26 @@ class Contracts(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("AssertionError", output)
 
-    def test_test_edit_even_reverted_in_later_commit_is_rejected(self):
+    def test_only_the_net_result_counts_not_how_the_branch_got_there(self):
         path = self.tree / "tests/test_code.py"
         original = path.read_text()
         path.write_text(original + "\n# temporary change\n")
         self.commit(self.tree)
         path.write_text(original)
         self.commit(self.tree)
-        candidate = self.implement()
-        with self.assertRaisesRegex(ValueError, "protected tests"):
-            self.checks(candidate)
-
-    def test_a_test_writer_cannot_erase_a_production_edit_by_reverting_it(self):
-        self.worker["stage"] = "test-contract"
-        path = self.tree / "code.py"
-        original = path.read_text()
         self.implement()
-        path.write_text(original)
+        contracts.stage_history(self.repo, self.worker, self.base, self.rules)
+        path.write_text(original + "\n# kept change\n")
         self.commit(self.tree)
-        with self.assertRaisesRegex(ValueError, "changes only tests.*code.py"):
+        with self.assertRaisesRegex(ValueError, "protected tests"):
             contracts.stage_history(self.repo, self.worker, self.base, self.rules)
+
+    def test_a_rebased_branch_is_not_refused_for_its_history(self):
+        self.worker["stage"] = "test-contract"
+        self.worker["base_commit"] = "0" * 40  # the pinned commit is no longer an ancestor
+        (self.tree / "tests/test_code.py").write_text("# rebased\n")
+        self.commit(self.tree)
+        contracts.stage_history(self.repo, self.worker, self.base, self.rules)
 
     def test_a_merge_cannot_invent_changes_outside_its_stage(self):
         for stage, name in (("test-contract", "code.py"), ("implementation", "tests/test_code.py")):

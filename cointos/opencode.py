@@ -31,7 +31,11 @@ PROVIDER = "cointos"
 # Commands no agent may run; `control` ability lifts only the CointOS lifecycle ones.
 DENIED_COMMANDS = ["sudo *", "su *", "systemctl *", "apt *", "apt-get *", "dpkg *", "snap *",
                    "pip install *", "pip3 install *", "npm install -g *", "git push*"]
-LIFECYCLE_COMMANDS = ["cointos halt*", "cointos up*", "cointos stop*", "cointos kill*", "cointos resume*", "cointos restart*"]
+LIFECYCLE_COMMANDS = ["cointos halt*", "cointos up*", "cointos stop*", "cointos restart*"]
+LOOKING = ["systemctl status*", "systemctl --user status*", "systemctl cat*", "systemctl --user cat*",
+           "systemctl is-active*", "systemctl --user is-active*", "systemctl list-units*",
+           "systemctl --user list-units*", "systemctl show*", "systemctl --user show*", "dpkg -l*", "dpkg -s*",
+           "cointos *--help*"]
 
 
 def run_dir(agent_id: str) -> Path:
@@ -64,7 +68,6 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
     abilities = set(task.get("abilities") or ["standard"])
     denied = DENIED_COMMANDS + ([] if "control" in abilities else LIFECYCLE_COMMANDS)
     operator_control = task.get("role") == "operator" and "control" in abilities
-    network = "allow" if "network" in abilities else "deny"
     edit_scope = ({"*": "deny"} if task.get("role") == "first-responder"  # it dispatches; it doesn't do the work
                   else {"*": "deny", f"{Path(task['worktree']).resolve()}/**": "allow"}
                   if confined_writes(task) and task.get('worktree')
@@ -99,8 +102,9 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
                             "environment": {"PYTHONPATH": str(ROOT), "COINTOS_TASK_ID": task.get("id", ""),
                                             "COINTOS_AGENT": agent_id}}},
         "permission": {
-            "*": "allow", "webfetch": network, "websearch": network, "doom_loop": "deny",
+            "*": "allow", "webfetch": "allow", "websearch": "allow", "doom_loop": "deny",
             "bash": {"*": "allow", **{command: "deny" for command in denied},
+                     **{command: "allow" for command in LOOKING},
                      **({"systemctl --user *": "allow"} if operator_control else {})},
             "external_directory": {"*": "deny", f"{home}/**": "allow", **read_scope},
             "read": {"*": "allow", **read_scope, "*.env": "deny"},

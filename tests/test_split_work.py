@@ -152,10 +152,6 @@ class AnyRole(unittest.TestCase):
     def test_unknown_roles_and_agent_callers_are_refused(self):
         with self.assertRaisesRegex(api.ApiError, "unknown role"):
             api.run_agent({"role": "emperor", "name": "x", "brief": "x"})
-        task = tasks.create("steward", tasks.SYSTEM, "scout", "Look.", [6])
-        support.running(task, "steward-1", worktree=False)
-        with self.assertRaises(api.ApiError):
-            api.run_agent({"role": "manager", "name": "x", "brief": "x", "project": "p", "caller": support.caller(task, "steward-1")})
 
 
 class CoinTools(unittest.TestCase):
@@ -225,7 +221,7 @@ class FirstResponder(unittest.TestCase):
         self.assertEqual(coins["description"], agents[1])
         self.assertEqual(coins["parameters"]["properties"], agents[2])
         self.assertEqual(coins["parameters"]["required"], agents[3])
-        self.assertIn("first-responder", agents[0])
+        self.assertIs(agents[0], mcp.EVERYONE)
         self.assertNotIn("operator", mcp.TOOLS)
         self.assertNotIn("coin", agents[2]["role"]["enum"])
         self.assertEqual(set(agents[2]["role"]["enum"]), {spec["role"] for spec in schema.KINDS.values()})
@@ -244,8 +240,9 @@ class FirstResponder(unittest.TestCase):
     def test_who_calls_decides_what_it_may_start(self):
         steward = tasks.create("steward", tasks.SYSTEM, "scout", "Look.", [6])
         support.running(steward, "steward-1", worktree=False)
-        with self.assertRaisesRegex(api.ApiError, "only the user and First Responders"):
-            api.run_agent({"role": "manager", "name": "x", "brief": "x", "project": "p", "caller": support.caller(steward, "steward-1")})
+        self.assertTrue(api.run_agent({"role": "manager", "name": "x", "brief": "Goal.", "project": "p",
+                                       "summary": "Plan the next step of this goal", "dependencies": [],
+                                       "caller": support.caller(steward, "steward-1")})["ok"])
         self.assertTrue(api.run_agent({"role": "manager", "name": "by-user", "brief": "Goal.", "project": "p"})["ok"])
 
     def test_tool_arguments_reach_the_cli_for_every_field(self):

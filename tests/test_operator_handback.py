@@ -76,25 +76,6 @@ class OperatorHandback(unittest.TestCase):
         self.assertEqual(state.L['queue'][source['record']]['replaced_by'], ['replacement'])
         self.assertIsNone(source.get('acceptance'))
 
-    def test_standard_and_foreign_operators_cannot_repair_owner_queue(self):
-        source = self.blocked()
-        support.queued(self.project, 'replacement', 'Corrective stage', kind='command')
-        actions = (
-            ('queue', {'project': 'p', 'name': 'new', 'kind': 'command', 'brief': 'New'}),
-            ('hold', {'item': source['id']}),
-            ('revise', {'item': source['id'], 'brief': 'New', 'reason': 'Changed'}),
-            ('cancel', {'items': [source['id']], 'reason': 'Changed'}),
-            ('supersede', {'task': source['id'], 'replacements': ['replacement'], 'reason': 'Changed'}),
-            ('budget', {'task': 'p:replacement', 'budget': {'generation_tokens': 1234}}),
-        )
-        for operator in (self.operator(('standard',), name='standard'), self.operator(project='q', name='foreign')):
-            for action, body in actions:
-                with self.subTest(operator=operator['title'], action=action):
-                    before = copy.deepcopy(state.L['queue'])
-                    with self.assertRaises(ValueError):
-                        self.call(operator, action, **body)
-                    self.assertEqual(state.L['queue'], before)
-
     def test_system_operator_can_queue_diagnostic_handoff_without_file_scope_widening(self):
         operator = self.operator(project=None)
         self.call(operator, 'queue', project='q', name='diagnose', kind='command', brief='Check the verified obstruction')
@@ -286,13 +267,15 @@ class OperatorHandback(unittest.TestCase):
         self.assertEqual(state.L['queue']['q:diagnose']['proposed_by'], operator['id'])
         self.assertIsNone(operator['branch'])
 
-    def test_standard_and_foreign_resume_refused_and_human_hold_release_works(self):
+    def test_any_agent_resumes_infrastructure_holds_and_only_the_user_releases_theirs(self):
         source = support.queued(self.project, 'origin', 'Plan', kind='command')
+        operator = self.operator(('standard',), name='standard')
         source['admission_hold'] = 'repeated infrastructure launch failure'
-        for operator in (self.operator(('standard',), name='standard'), self.operator(project='q', name='foreign')):
-            with self.assertRaises(ValueError):
-                self.call(operator, 'resume-task', task=source['id'])
+        self.call(operator, 'resume-task', task=source['id'])
+        self.assertNotIn('admission_hold', source)
         source['admission_hold'] = 'paused by the user'
+        with self.assertRaises(ValueError):
+            self.call(operator, 'resume-task', task=source['id'])
         api.dispatch('resume-task', {'task': source['id']})
         self.assertNotIn('admission_hold', source)
 

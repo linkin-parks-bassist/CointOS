@@ -133,18 +133,18 @@ TOOLS = {
                     {"task": text("PROJECT:NAME task in review"), "commit": text("exact current main commit SHA"),
                      "worker_commit": text("exact submitted worker commit SHA")}, ["task", "commit", "worker_commit"],
                     lambda a: ["incorporate", a["task"], "--commit", a["commit"], "--worker-commit", a["worker_commit"]]),
-    "queue": (REPAIRERS + SCOUTS + ("integrator",), "Add an item to a project's queue. The brief is plain text: "
+    "queue": (EVERYONE, "Add an item to a project's queue. The brief is plain text: "
               "no quoting or escaping is needed.",
               {"project": text("project name"), "name": text("new item name"),
                "brief": text("product behavior, scope and acceptance in plain prose; metadata uses separate fields"),
                "kind": choice(cli.schema.QUEUE_KINDS, "queued (default), urgent or command"), **WORK, **BUDGET, **QUEUE_FIELDS},
               ["project", "name", "brief", "summary", "dependencies"],
               lambda a: ["queue", a["project"], a["name"], a["brief"]] + flags(a, {"kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
-    "hold": (REPAIRERS, "Hold a queue item so it does not start (and stops a run of it) while you decide; "
+    "hold": (EVERYONE, "Hold a queue item so it does not start (and stops a run of it) while you decide; "
              "release=true lifts your hold.",
              {"item": text("PROJECT:ITEM"), "release": {"type": "boolean"}}, ["item"],
              lambda a: ["hold", a["item"]] + (["--release"] if a.get("release") else [])),
-    'correct_tests': (REPAIRERS, 'Correct an invalid accepted test contract through an independent test worker '
+    'correct_tests': (EVERYONE, 'Correct an invalid accepted test contract through an independent test worker '
                      'and reviewer. The original stays binding until review accepts the correction; dependent '
                      'implementations then resume automatically with their artifacts preserved. Repeated '
                      'requests for the same contract return its existing correction owner. For a recovery '
@@ -158,10 +158,10 @@ TOOLS = {
                      lambda a: ['correct-tests', a['project'], a['packet'], a['name'], a['brief'],
                                 '--reason', a['reason'], '--summary', a['summary'],
                                 '--relies-on-json', json.dumps(a['relies_on'])]),
-    'resume': (('operator', 'first-responder'), 'Release a repaired infrastructure admission hold in your scope. '
+    'resume': (EVERYONE, 'Release a repaired infrastructure admission hold in your scope. '
                'Explicit user holds remain under user authority.', {'task': text('PROJECT:TASK')}, ['task'],
                lambda a: ['resume', a['task']]),
-    "check_work": (REPAIRERS + SCOUTS + ("integrator", "worker"),
+    "check_work": (EVERYONE,
                    "Validate before handoff: omit brief to inspect your queued frontier. For scouts this supplies "
                    "every enabled project's accepted plan, current queue and recent acceptances; a fresh "
                    "review is required before no_action. Supply a draft to "
@@ -180,13 +180,13 @@ TOOLS = {
                     **WORK, **BUDGET, **QUEUE_FIELDS}, [],
                    lambda a: ["check-work"] + flags(a, {"project": "--project", "name": "--name",
                        "brief": "--brief", "kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
-    "revise": (REPAIRERS, "Replace a held item's brief; omitted stage, effort and budget are retained. "
+    "revise": (EVERYONE, "Replace a held item's brief; omitted stage, effort and budget are retained. "
                "Retain accepted test-contract dependencies on implementation/integration work; discarding them is refused.",
                {"item": text("PROJECT:ITEM"), "brief": text("the complete revised brief"),
                 "reason": text("why the item changes"), **WORK, **BUDGET, **QUEUE_FIELDS},
                ["item", "brief", "reason", "summary", "dependencies"],
                lambda a: ["revise", a["item"], a["brief"], "--reason", a["reason"]] + flags(a, {**WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
-    "cancel": (REPAIRERS, "Withdraw unaccepted queue items for good. Name dependents in the same call.",
+    "cancel": (EVERYONE, "Withdraw unaccepted queue items for good. Name dependents in the same call.",
                {"items": {"type": "array", "items": {"type": "string"}, "description": "PROJECT:ITEM ids"},
                 "reason": text("why")}, ["items", "reason"],
                lambda a: ["cancel", *a["items"], "--reason", a["reason"]]),
@@ -196,13 +196,13 @@ TOOLS = {
                 "Revising another item alone does not establish this handoff.",
                 {"children": {"type": "array", "items": {"type": "string"}, "description": "existing item names without project prefixes"}},
                 ["children"], lambda a: ["replace", *a["children"]]),
-    "supersede": (REPAIRERS, "Replace failed prerequisites with existing same-project items without accepting them.",
+    "supersede": (EVERYONE, "Replace failed prerequisites with existing same-project items without accepting them.",
                   {"task": text("PROJECT:FAILED"), "replacements": {"type": "array", "items": {"type": "string"}},
                    "reason": text("evidence")}, ["task", "replacements", "reason"],
                   lambda a: ["supersede", a["task"], *a["replacements"], "--reason", a["reason"]]),
-    "budget": (REPAIRERS, "Set waiting or undispatched generation limits, or increase a running task's allowance without resetting usage.",
+    "budget": (EVERYONE, "Set waiting or undispatched generation limits, or increase a running task's allowance without resetting usage.",
                {"task": text("PROJECT:TASK"), **BUDGET}, ["task"], lambda a: ["budget", a["task"]] + flags(a, BUDGET_FLAGS)),
-    "dispatch": (SPAWNERS, cli.schema.DISPATCH_DESCRIPTION, cli.schema.DISPATCH_PROPERTIES, ["name", "brief"], dispatch_argv),
+    "dispatch": (EVERYONE, cli.schema.DISPATCH_DESCRIPTION, cli.schema.DISPATCH_PROPERTIES, ["name", "brief"], dispatch_argv),
 }
 
 
@@ -389,7 +389,7 @@ def respond(request: dict, for_role: str | None) -> dict | None:
             result = {'content':[{'type':'text','text':'tool arguments must be an object'}], 'isError':True}
         elif problem := unexpected_arguments(params.get('name', ''), arguments, for_role):
             result = {'content':[{'type':'text','text':problem}], 'isError':True}
-        elif params.get('name') == 'check_work' and for_role in TOOLS['check_work'][0]:
+        elif params.get('name') == 'check_work':
             body = {key: arguments[key] for key in ('project', 'name', 'brief', 'kind', 'stage',
                     'reasoning_effort', 'dependencies', 'relies_on', 'summary')
                     if arguments.get(key) is not None}

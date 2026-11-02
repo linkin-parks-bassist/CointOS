@@ -276,24 +276,15 @@ def replace(body):
 
 # Who may propose queue work: roles, whether they are bound to their own project, and which
 # queue kinds they may submit (None: any).
-PROPOSERS = {"manager": (True, None), "integrator": (True, ("command",)),
-             "steward": (False, ("command",)), "test-auditor": (False, ("command",)), "operator": (True, None), "first-responder": (True, None)}
-
-
 def queue(body):
     project = tasks.project_named(body.get("project", ""))
     kind = body.get("kind", "queued")
     by = running(body)
     if by is not None:
-        own_project, kinds = PROPOSERS.get(by["role"], (True, ()))
-        if (kinds is not None and kind not in kinds) or (own_project and by["place"] != project["name"]
-                and not (by["role"] in schema.CONTROLLERS and controls_project(by, project["name"]))):
-            raise ApiError("queue proposer must be an unfinished same-project manager/integrator, "
-                           "or a scout/auditor proposing a command")
+        if not controls_project(by, project["name"]):
+            raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
         if kind in ("queued", "urgent") and body.get("summary") is None:
             queues.require_summary(body["brief"])
-    if by is not None and by["role"] in schema.CONTROLLERS and not controls_project(by, project["name"]):
-        raise ApiError("queue repair requires a control-enabled Operator in its assigned project")
     item = queues.add(project, kind, body["name"], body["brief"], body.get("stage"),
                       body.get("reasoning_effort"), body.get("budget"),
                       dependency_ids=body.get("dependencies"), summary=body.get("summary"), reliances=body.get("relies_on"))
@@ -313,10 +304,13 @@ def correct_tests(body):
         if previous['disposition'] != 'complete' or not known or known['request'] != request:
             raise ApiError('this run already submitted a different completion receipt')
         return {'ok': True, 'item': known['item'], 'correction': known['correction'], 'receipt': previous}
+    if by is not None and by.get('kind') == 'item' and by.get('stage') in schema.TESTED:
+        raise ApiError("an implementer cannot replace its own acceptance tests; send the owning manager or a "
+                       "First Responder the defect and its evidence, or finish blocked with them")
     project = tasks.project_named(body.get('project', ''))
     running(body)
     if by is not None and not controls_project(by, project['name']):
-        raise ApiError('test-contract correction requires the owning manager or First Responder')
+        raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
     before = deepcopy(L['queue']) if by and by.get('repair_origin') else None
     try:
         record = packets.propose(project, body['packet'], body['name'], body['brief'],
@@ -487,13 +481,8 @@ def queue_key(name: str) -> str | None:
 
 
 def controls_project(task: dict, project: str) -> bool:
-    """Queue repair authority preserves project scope and the user's explicit holds."""
-    if task["role"] == "manager":
-        return task["place"] == project
-    if task["role"] not in schema.CONTROLLERS or "control" not in task.get("abilities", []):
-        return False
-    if task["place"] not in (project, "system"):
-        return False
+    """Every running agent may steer queued work, unless it is a recovery whose origin was
+    withdrawn or the work is held by someone else. The user's explicit holds always stand."""
     if origin := task.get("repair_origin"):
         source = L["tasks"].get(origin["task"])
         record = queues.records().get(origin["task"]) or queues.records().get((source or {}).get("record"))
@@ -524,7 +513,7 @@ def decider(body) -> tuple[str, str]:
     if by is None:
         return key, "user"
     if not controls_project(by, record["project"]):
-        raise ApiError("only the owning project's running manager, or the user, holds or revises queued work")
+        raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
     require_operator_release(by, record)
     return key, by["id"]
 
@@ -567,13 +556,12 @@ def cancel(body):
         else:
             raise ApiError(f"{name!r} is not a live task or queue item")
     by = running(body)
-    if by is not None and alone and all(t.get('repair_origin') for t in alone):
+    if by is not None and alone and any(t.get('repair_origin') for t in alone):
         origins = ', '.join(dict.fromkeys(t['repair_origin']['task'] for t in alone))
         raise ApiError('these are derived recovery tasks, not queued assignments; to withdraw obsolete '
                        'work, cancel its originating queue ID: ' + origins)
-    if by is not None and (alone or any(
-            not controls_project(by, queues.records()[k]["project"]) for k in keys)):
-        raise ApiError("only the owning project's running manager, or the user, cancels queued work")
+    if by is not None and any(not controls_project(by, queues.records()[k]["project"]) for k in keys):
+        raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
     for key in keys:
         require_operator_release(by, queues.records()[key])
     who = "user" if by is None else by["id"]
@@ -735,8 +723,8 @@ def resume_task(body):
     by = running(body)
     target = L["tasks"].get(body["task"])
     if by is not None:
-        if target is None or not controls_project(by, target["place"]) or by["role"] not in schema.CONTROLLERS:
-            raise ApiError("resuming infrastructure repair requires a control-enabled Operator in scope")
+        if target is None or not controls_project(by, target["place"]):
+            raise ApiError(f"no task {body['task']!r} that this run can resume")
         if target.get("admission_hold") != "repeated infrastructure launch failure":
             raise ApiError("explicit user holds require the user's own resume control")
     task = lifecycle.resume_task(body["task"])
@@ -763,8 +751,6 @@ def run_role(body, role):
     """Any other role, for the user and for a First Responder, whose job is to call the right
     one. Other agents propose work through the queue. Coin is no dispatchable role at all."""
     by = running(body)
-    if by is not None and by["role"] != "first-responder":
-        raise ApiError("only the user and First Responders start this role directly; agents propose work through the queue")
     if by is not None and role == "first-responder":
         raise ApiError("a First Responder does not call another First Responder; dispatch whoever can fix it")
     if body.get("check_only"):
@@ -791,7 +777,7 @@ def split(body):
     if target is None:
         raise ApiError(f"no task {body.get('task')!r}")
     if by is not None and not controls_project(by, target["place"]):
-        raise ApiError("splitting requires the user, the owning manager or a control-enabled Operator")
+        raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
     return {"ok": True, **lifecycle.split(target["id"], body.get("reason") or "the user stopped it as too big", by["id"] if by else "user")}
 
 
@@ -826,7 +812,7 @@ def supersede(body):
     record = queues.records().get(body.get("task", ""))
     by = running(body)
     if by is not None and (record is None or not controls_project(by, record["project"])):
-        raise ApiError("replacement requires the owning manager or a control-enabled Operator")
+        raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
     if record is not None:
         require_operator_release(by, record)
     if record is not None and record.get("replaced_by"):
@@ -861,8 +847,10 @@ def budget(body):
     key = queue_key(body["task"])
     target = L["tasks"].get(body["task"])
     project = queues.records()[key]["project"] if key else (target or {}).get("place")
+    if by is not None and by["id"] in (body["task"], key):
+        raise ApiError("an agent cannot raise its own budget; finish with what you have, or say what's left")
     if by is not None and not controls_project(by, project):
-        raise ApiError("budget changes require the owning manager or a control-enabled Operator")
+        raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
     return tasks.set_budget(body["task"], body["budget"])
 
 

@@ -9,11 +9,16 @@ from __future__ import annotations
 
 import functools
 import subprocess
+import threading
 from copy import deepcopy
 
-from cointos import capacity, models, frontier, git, lanes, lifecycle, queues, runs, schema, snapshots, tasks, trees
+from cointos import (capacity, contracts, models, frontier, git, landing, lanes, lifecycle, packets, queues, runs,
+                     schema, snapshots, tasks, trees)
 from cointos.config import managed_trees
 from cointos.state import CONFIG, STOPPING, LOCK, L, alert, log, now
+
+BLOCKED_DEPENDENCY = 'depends on a blocked item'
+COMPOSITIONS_TRIED: set[tuple] = set()
 
 
 def refresh() -> tuple[dict, dict]:
@@ -26,14 +31,61 @@ def refresh() -> tuple[dict, dict]:
     problems = {f"{project}:{item}": state for project, states in ready.items() for item, state in states.items()
                 if state not in ("ready", "waiting")}
     for key, problem in problems.items():
-        if L["dependency_problems"].get(key) != problem:
+        # The blocked item answers for itself; its dependents only have to wait for it.
+        if L["dependency_problems"].get(key) != problem and not problem.startswith(BLOCKED_DEPENDENCY):
             alert(f"{key} can never start: {problem}.")
     L["dependency_problems"] = problems
     # Materialize recovery before choosing existing waiting work, so Operator rank
     # applies immediately instead of starving behind a permanent waiting backlog.
     repair_work(scanned)
+    retry_compositions(scanned)
     L['work_frontier'] = [row for project in projects for row in frontier.view(project['name'])]
     return scanned, ready
+
+
+def retry_compositions(scanned: dict) -> None:
+    """Restart work refused because its tests would not merge, once they do.
+
+    Nothing else ever would: main or the composer can change with no owner left watching.
+    Each exact input is tried once per daemon run, outside LOCK; a real clash stays with its
+    recovery owner.
+    """
+    for project in tasks.enabled_projects():
+        rules = project.get('test_policy')
+        for record in scanned.get(project['name'], []) if rules and not L['paused'] else []:
+            key, task = queues.key(record), queues.current(record)
+            failure = task and (task.get('composition_failure')
+                                or (task.get('submission_failure') or {}).get('composition'))
+            repair = failure and frontier.controller(record)
+            if (not failure or queues.state(record)['status'] != 'blocked' or record['held_by']
+                    or packets.pending(record) or (repair and tasks.active(repair))):
+                continue
+            main, commits = git.head(project['path'], project['main_branch']), landing.tests_of(task)
+            attempt = (key, record['version'], main, tuple(commits))
+            if commits and attempt not in COMPOSITIONS_TRIED:
+                COMPOSITIONS_TRIED.add(attempt)
+                threading.Thread(target=retry_composition, args=(project, key, attempt, rules), daemon=True).start()
+
+
+def retry_composition(project: dict, key: str, attempt: tuple, rules: dict) -> None:
+    try:
+        with contracts.combined(project['path'], attempt[2], list(attempt[3]), rules, non_code='ours'):
+            pass
+    except Exception as error:  # still a real clash, or an unusable repository
+        log('composition retry refused', item=key, error=str(error)[:300])
+        return
+    with LOCK:
+        record = queues.records().get(key)
+        if not record or record['version'] != attempt[1] or queues.state(record)['status'] != 'blocked':
+            return
+        task = queues.current(record)
+        if git.head(project['path'], project['main_branch']) != attempt[2] or landing.tests_of(task) != list(attempt[3]):
+            return
+        record.update(version=record['version'] + 1, revised_by='cointos')
+        for field in ('composition_failure', 'submission_failure'):
+            task.pop(field, None)
+        lifecycle.refresh_assignment(key, 'cointos', 'its tests now merge with main', record)
+        log('composition retried', item=key, main=attempt[2])
 
 
 def repair_work(scanned: dict) -> None:

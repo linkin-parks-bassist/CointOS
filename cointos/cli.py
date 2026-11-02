@@ -326,6 +326,9 @@ def review() -> str:
                 rules = next(p for p in CONFIG["projects"] if p["name"] == task["place"]).get("test_policy")
                 if rules:
                     git.resolve_insertions(".", [p for p in merge_conflicts if contracts.protected(p, rules)])
+                    # A packet's knowledge edits were written against an older main; the
+                    # integrator brings knowledge up to date in this landing either way.
+                    contracts.keep_current(".", [p for p in conflicted() if contracts.matches(p, rules.get("non_code", []))])
             if merged.returncode and not merge_conflicts:
                 raise SystemExit(merged.stderr.strip())
             if conflicted():
