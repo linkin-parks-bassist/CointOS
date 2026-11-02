@@ -39,10 +39,12 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
     before it completes; a test packet changes only tests; tested work has passed its check."""
     found = {}
     watched = L["tasks"].get(task.get("supervises")) if task["kind"] == "supervise" else None
-    if watched and tasks.active(watched) and disposition == "complete":
-        raise ValueError(f"{watched['id']} is still running, and you stay until it ends. Wait with cointos_inbox "
-                         "wait=true, then look at what it has done since. Finish blocked, saying why, only if "
-                         "this run truly does not need supervising.")
+    if watched and tasks.active(watched) and disposition == "complete" and not task.get("insisted_on_retiring"):
+        task["insisted_on_retiring"] = True
+        raise ValueError(f"{watched['id']} is still running, and you normally stay until it ends. Wait with "
+                         "cointos_inbox wait=true, then look at what it has done since. Retire only if you are "
+                         "certain it is on course and will stay there: finish complete again with your evidence. "
+                         "Another Supervisor double-checks after its next 20 GPU minutes.")
     if task['kind'] == 'steward' and disposition == 'complete':
         found['scout_result'] = scout_evidence(task, (checked or {}).get('scout_result'))
     if task["role"] == "manager" and disposition == "complete":

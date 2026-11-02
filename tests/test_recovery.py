@@ -162,11 +162,13 @@ class Budgets(unittest.TestCase):
 
     def test_a_run_is_warned_once_as_its_budget_runs_low(self):
         limit = self.task["budget"]["generation_seconds"]
+        def warned():
+            return [m for m in state.L["messages"] if m["to"] == self.task["id"] and "Budget warning" in m["text"]]
         self.spend(seconds=limit * 0.7)
-        self.assertEqual([m for m in state.L["messages"] if m["to"] == self.task["id"]], [])
+        self.assertEqual(warned(), [])
         self.spend(seconds=limit * 0.75)
         self.spend(seconds=limit * 0.9)
-        warnings = [m for m in state.L["messages"] if m["to"] == self.task["id"]]
+        warnings = warned()
         self.assertEqual(len(warnings), 1)
         self.assertIn("Budget warning", warnings[0]["text"])
         self.assertIn("finish --blocked", warnings[0]["text"])

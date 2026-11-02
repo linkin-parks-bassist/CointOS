@@ -57,15 +57,18 @@ class Supervisors(unittest.TestCase):
         recovery.enforce()
         self.assertEqual(self.supervisors(), [])
 
-    def test_a_supervisor_cannot_complete_while_its_run_is_going(self):
+    def test_a_supervisor_must_insist_to_retire_and_another_double_checks(self):
         self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
-        with self.assertRaisesRegex(ValueError, 'you stay until it ends'):
+        with self.assertRaisesRegex(ValueError, 'you normally stay until it ends'):
             lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'looks fine')
-        self.worker['status'] = 'done'
-        lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'it finished')
+        lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'certain, and here is why')
         self.assertEqual(supervisor['receipt']['disposition'], 'complete')
+        supervisor['status'] = 'done'
+        self.run_for(2400)
+        recovery.enforce()
+        self.assertEqual(len(self.supervisors()), 2, 'a second one double-checks at 40 GPU minutes')
 
     def test_a_supervisor_that_stops_needs_no_first_responder(self):
         self.run_for(1200)

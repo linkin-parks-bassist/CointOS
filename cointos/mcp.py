@@ -278,8 +278,9 @@ MESSAGE_TOOLS = {
              "Use it to ask or tell, not to hand off work: queued work still goes through the queue.",
              {"to": text("PROJECT:NAME task id, 'mailbox:NAME', or 'user'"), "text": text("the message")}, ["to", "text"]),
     "inbox": ("Read this task's unread messages; reading marks them read. wait=true blocks until a message "
-              "arrives (up to 5 minutes) instead of returning empty: use it to wait for a reply instead of sleeping.",
-              {"wait": {"type": "boolean", "description": "block until a message arrives"}}, []),
+              "arrives (5 minutes, or wait_minutes up to 9) instead of returning empty: use it to wait instead of sleeping.",
+              {"wait": {"type": "boolean", "description": "block until a message arrives"},
+               "wait_minutes": {"type": "number", "description": "how long to wait, at most 9"}}, []),
 }
 
 
@@ -295,7 +296,7 @@ def message_tool(name: str, arguments: dict) -> tuple[str, bool]:
             result = call("send", {**identity(), "to": arguments["to"], "text": arguments["text"]})
             return f"sent to {result['to']}", False
         messages = call("inbox", identity())["messages"]
-        deadline = time.monotonic() + 300
+        deadline = time.monotonic() + 60 * max(0, min(float(arguments.get("wait_minutes") or 5), 9))
         while arguments.get("wait") and not messages and time.monotonic() < deadline:
             time.sleep(2)
             messages = call("inbox", identity())["messages"]
