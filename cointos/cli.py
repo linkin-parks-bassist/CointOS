@@ -11,6 +11,7 @@ import argparse
 import importlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -481,6 +482,22 @@ def _append_text(existing: str, value: str) -> str:
     return value
 
 
+def write_transcript(task_id: str, out: str | None) -> str:
+    """Write a task's whole agent record to a file and say where it is."""
+    from cointos import transcript
+    task = ledger()["tasks"].get(task_id)
+    if task is None:
+        raise SystemExit(f"no task {task_id}")
+    sessions = transcript.sessions_of(task, ROOT / "state/agents")
+    if not sessions:
+        raise SystemExit(f"{task_id} has no agent session on record")
+    text, messages = transcript.render(transcript.database(), sessions)
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id)
+    path = Path(out or Path(os.environ.get("COINTOS_SCRATCH") or ".") / f"transcript-{name}.txt")
+    path.write_text(text)
+    return f"{path}: {messages} messages in {len(sessions)} session(s), {len(text):,} characters. Search it, or read the parts you need."
+
+
 def coin_log(stop=None) -> None:
     """Show Coin in OpenCode's viewer until the slot changes; the monitor if that cannot start."""
     from cointos import coin_mirror
@@ -616,6 +633,9 @@ def parser() -> argparse.ArgumentParser:
     jobs.add_argument("--project", help="show only tasks belonging to this exact project")
     sub.add_parser("metrics", help="pipeline effectiveness over a recent window, from the event journal").add_argument(
         "--hours", type=float, default=24.0)
+    transcribing = sub.add_parser("transcript", help="write a task's complete agent transcript, including reasoning and tool output, to a file")
+    transcribing.add_argument("task")
+    transcribing.add_argument("--out", help="file to write; default is this run's scratch directory or the current one")
     task = sub.add_parser("task", help="show current work, binding tests, receipts and dependencies")
     task.add_argument("task")
     task.add_argument("--history", action="store_true", help="include full historical execution narratives")
@@ -830,6 +850,7 @@ COMMANDS = {
     "check": lambda args: show_check(),
     "metrics": lambda args: metrics.report(args.hours),
     "task": lambda args: show_task(args.task, args.history),
+    "transcript": lambda args: write_transcript(args.task, args.out),
     "go": lambda args: resume(),
     "stop": stop_command,
     "kill": lambda args: kill_command(args.agent),

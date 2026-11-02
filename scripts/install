@@ -40,7 +40,7 @@ def require_compatible_frontier(ledger, live):
 # CLI code is imported by clients/Coin, not the daemon. Existing client processes
 # retain imported code; new processes can receive it without replacing the daemon.
 DAEMON_PARTS = ('cointos', 'config', 'systemd')
-CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'), Path('cointos/coin_mirror.py'))
+CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'), Path('cointos/coin_mirror.py'), Path('cointos/transcript.py'))
 COPIED = ('cointos', 'roles', 'web', 'bin', 'systemd', 'config')
 
 

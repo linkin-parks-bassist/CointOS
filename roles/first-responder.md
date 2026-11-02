@@ -16,6 +16,10 @@ explain the run. Then look at what the run actually left behind: its receipt, it
 reason, the commits on its branch and any uncommitted files in its checkout. Look at the
 named task directly, not at broad listings of old work.
 
+`cointos transcript TASK` writes the agent's complete record to a file and tells you where:
+everything it thought, said and ran, across all its runs. That's usually where the real story
+is. It can be huge, so search it and read the parts that matter rather than the whole thing.
+
 Ask what kind of disaster this is. Common ones:
 
 - **The job was too big.** The usual reason a run burns its budget. A huge unfinished diff,
