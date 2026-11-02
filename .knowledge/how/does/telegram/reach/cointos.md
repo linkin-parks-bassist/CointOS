@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-30T12:55:23+11:00"
+revised_at: "2026-11-03T00:27:56+11:00"
 ---
 
 Coin is the independent Telegram service in cointos/coin.py. Credentials stay outside source in the configured environment file. The daemon owns task lifecycle and inbox delivery; Coin owns conversational intake, replies and dispatch coordination.
@@ -17,7 +17,7 @@ Polling is independent of four permanent threads: model work, wakes, attachment 
 
 All accepted outgoing parts enter one locked archive with chat-scoped message IDs, including partial sends and notices. Mid-turn deliveries reach the next prompt. Logs retain message IDs/dates and hashed correlation without text/credentials. Gateway SSE keepalives preserve scheduled waits; completed streams assemble content/tool calls, while disconnects/errors retain pending work. Failed turns/sends retry after error_pause_seconds; persistence failures reach native recovery. Interrupted effects and ambiguous acceptance can repeat. done closing content is delivered unless send/report_result handled it; internal completion checks otherwise stay silent. Presence is best effort; permanent thread exit triggers native restart.
 
-coin_notifications durably queues explanations without canned attention notices. Current evidence and reply references ground incoming answers; explanation handoff is not delivery or understanding. Ownerless unheld blockage escalates after coin.blocked_notify_seconds (60); holds, paused work, recovery and runnable continuations suppress it, and resolution cancels pending blockage. Routine mistakes stay local. Unsolicited updates require exhausted recovery or a concrete workflow deficiency. After acknowledgement, internal bookkeeping merits no repeated promise; requested results and direct questions still need answers.
+coin_notifications durably queues explanations without canned attention notices. Current evidence and reply references ground incoming answers; explanation handoff is not delivery or understanding. An agent's message to the user reaches Coin within seconds, whoever owns the work, and Coin decides from current status whether to tell the user. Ownerless unheld blockage escalates after coin.blocked_notify_seconds (60); holds, paused work, recovery and runnable continuations suppress that escalation, and resolution cancels pending blockage. Routine mistakes stay local. Unsolicited updates require exhausted recovery or a concrete workflow deficiency. After acknowledgement, internal bookkeeping merits no repeated promise; requested results and direct questions still need answers.
 
 Coin uses work_model unless coin.model requires another model. Direct input, work explanations and requested completions have Coin priority; ordinary wakes run background and promote on same-user input. Each round gets fresh local/UTC clocks and a source-time timeline; echoed headers are removed without rewriting archive bytes. History batches twenty messages down by seven to thirteen; the archive survives. Retained ongoing instructions and routes remain separate from rolling history.
 

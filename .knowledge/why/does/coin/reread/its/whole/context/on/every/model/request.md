@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-02T16:52:31+11:00"
+revised_at: "2026-11-03T00:27:25+11:00"
 ---
 
-Coin reread because two defects combined. Repairs are installed; a live Coin turn has not yet confirmed them, so `events.jsonl` should show Coin's `tool history preserved` and resident switches on its next multi-round turn.
+Coin reread because two defects combined. Both repairs are installed and a live pair of wakes confirmed them with no agents running: a turn after a prompt change read all 19,628 tokens and took 61 seconds to its first words, three rounds then ran at generation speed with no lane switch, and the next wake restored 15,860 of 18,379 tokens in 0.78 seconds and finished in 12 seconds. Changing Coin's prompt or tools still costs one full read on its next turn. A wake's first response also includes up to 384 tokens of reasoning, about 24 seconds. Preempting a running agent has not been timed.
 
 **Requests diverged from Coin's resident state.** `coin.complete` appended a `<cointos-message-times>` user message as each request's tail without retaining it, and Coin dropped generated reasoning, so the next request differed at that position (for example held 15,075, next 16,788, common 14,104). Gufo resident state cannot truncate, so `lanes.switch` needed a compatible snapshot. The block is present from c999367 (2026-10-24), and restored shares were already partial on 2026-10-22, when the event logs begin.
 
@@ -15,4 +15,4 @@ The repair exempts Coin's conversation, its resident state and the shared starts
 
 Coin's daily requests, zero-restore requests and restored share before the repair: 2026-10-22 to 10-29, 565, 29, 51-73%; 10-30, 93, 70, 15%; 10-31, 7, 7, 0%; 11-01, 7, 3, 44%. Whether admission caused the 10-30 to 11-01 clusters is unverified.
 
-Evidence: tests test_capacity, test_coin_history and test_tool_history; the source suite ran 1,212 tests with three skips.
+Evidence: tests test_capacity, test_coin_history and test_tool_history.
