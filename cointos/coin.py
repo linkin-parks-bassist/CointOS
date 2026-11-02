@@ -682,13 +682,28 @@ def invoke(name: str, arguments: dict, token: str, user: int, chat: int, knowled
     return result
 
 
+RECORDS = Path.home() / '.knowledge/where/are/my/personal/records.md'
+
+
+def personal_records() -> str:
+    """Where the user's own records live, so that finding them never takes a search."""
+    try:
+        body = RECORDS.read_text(encoding='utf-8')
+    except OSError:
+        return ''
+    if body.startswith('---\n'):
+        body = body.split('\n---\n', 1)[-1]
+    return '\n\n## The user\'s records\n\n' + body.strip()
+
+
 def system_prompt(knowledge: dict | None) -> tuple[str, list[dict]]:
     """The fixed prompt and tools: nothing in them changes between turns, so they stay cached."""
     kt = knowledge["tools"] if knowledge else []
+    records = personal_records()
     archive = (f'\n\nThe durable conversation archives are in {COIN_STATE}, named conversation-<user>.jsonl. '
                'The prompt contains only a recent window; older messages remain in that archive. '
                'Use fs_read/fs_search to retrieve earlier messages.')
-    return ROLE + archive, TOOLS + kt
+    return ROLE + records + archive, TOOLS + kt
 
 
 def time_context() -> str:

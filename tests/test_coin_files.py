@@ -11,6 +11,34 @@ class Filesystem(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+    def test_a_search_of_the_whole_home_is_refused(self):
+        with patch.object(coin_files.Path, 'home', return_value=self.root):
+            with self.assertRaisesRegex(ValueError, 'whole home'):
+                self.run_tool('fs_search', self.root)
+
+    def test_coins_prompt_carries_where_the_users_records_live(self):
+        leaf = self.root / 'records.md'
+        leaf.write_text('---\nstatus: green\n---\n\nWorkouts: ~/log.json\n')
+        with patch.object(coin, 'RECORDS', leaf):
+            prompt = coin.system_prompt(None)[0]
+        self.assertIn('Workouts: ~/log.json', prompt)
+        self.assertNotIn('status: green', prompt)
+        with patch.object(coin, 'RECORDS', self.root / 'absent.md'):
+            self.assertNotIn("## The user's records", coin.system_prompt(None)[0])
+
+    def test_a_search_skips_generated_trees_survives_unreadable_ones_and_stops_in_time(self):
+        folder = self.root / 'find'
+        (folder / 'node_modules').mkdir(parents=True)
+        (folder / 'node_modules' / 'a.txt').write_text('needle')
+        (folder / 'b.txt').write_text('needle')
+        (folder / 'locked').mkdir()
+        (folder / 'locked').chmod(0)
+        self.addCleanup((folder / 'locked').chmod, 0o700)
+        found = self.run_tool('fs_search', folder, text='needle')
+        self.assertEqual([m['path'] for m in found['matches']], [str(folder / 'b.txt')])
+        with patch.object(coin_files, 'SEARCH_SECONDS', -1):
+            self.assertIn('incomplete', self.run_tool('fs_search', folder, text='needle'))
+
     def run_tool(self, name, path, **arguments):
         return coin.execute(name, {'path': str(path), **arguments})
 

@@ -2,10 +2,14 @@
 import fnmatch
 import hashlib
 import os
+import time
 from pathlib import Path
 import shutil
 import stat
 import tempfile
+
+SEARCH_SECONDS = 30
+SEARCH_SKIPS = frozenset(('.git', '.cache', '.worktrees', 'node_modules', '__pycache__', 'containers', 'tmp'))
 
 
 
@@ -117,11 +121,19 @@ def execute(name, arguments):
         return {'ok': True, 'path': str(target), 'start_line': start, 'total_lines': len(lines),
                 'content': ''.join(lines[start - 1:None if count is None else start - 1 + count])}
     if name == 'fs_search':
+        if target.resolve() in (Path.home().resolve(), Path(target.anchor)):
+            raise ValueError('not searching your whole home or filesystem. Check your records section and the '
+                             'knowledge tree with different words, list a likely folder, or ask the user where it is')
         matches = []
         pattern, text = arguments.get('glob', '*'), arguments.get('text')
-        def failed(error):
-            raise error
-        for parent, dirs, files in os.walk(target, followlinks=False, onerror=failed):
+        # A search answers within a turn: unreadable and generated trees don't stop it, and
+        # running out of time returns what it found and says so.
+        deadline, incomplete = time.monotonic() + SEARCH_SECONDS, False
+        for parent, dirs, files in os.walk(target, followlinks=False):
+            dirs[:] = [name for name in dirs if name not in SEARCH_SKIPS]
+            if time.monotonic() > deadline:
+                incomplete = True
+                break
             for filename in files:
                 candidate = Path(parent) / filename
                 if not fnmatch.fnmatch(filename, pattern) or not candidate.is_file():
@@ -133,8 +145,11 @@ def execute(name, arguments):
                         with candidate.open(encoding='utf-8') as stream:
                             matches.extend({'path': str(candidate), 'line': number, 'text': line.rstrip('\n')}
                                            for number, line in enumerate(stream, 1) if text in line)
-                    except UnicodeError:
+                    except (UnicodeError, OSError):
                         continue
+        if incomplete:
+            return {'ok': True, 'matches': matches, 'incomplete': f'stopped after {SEARCH_SECONDS} seconds; '
+                    'search a narrower path, or find where these records live with a knowledge lookup'}
         return {'ok': True, 'matches': matches}
     if name == 'fs_mkdir':
         target.mkdir(parents=True, exist_ok=True, mode=0o700)
