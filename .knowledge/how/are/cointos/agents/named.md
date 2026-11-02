@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-15T23:54:34+11:00"
+revised_at: "2026-10-25T07:46:21+11:00"
 checked_at: "2026-10-12T12:45:58+11:00"
 ---
 
@@ -12,10 +12,10 @@ Personal names are generated, never selected from a list (the user's requirement
 
 Names appear in `prompts.identity` ("Your name is …"), delivered messages (`<message from="NAME (TASK)">`), `cointos_peers`, `cointos agents` and dashboard cards. Only runs launched after the name exists see it in their own prompt.
 
-Evidence: `tests/test_mcp.py` checks generated names, identity/messages and linked-record inspection. `tests/test_tasks.py` and `tests/test_queues.py` check identity collisions in both creation orders, cancelled history, identical retries and legitimate revisions. `tests/test_run_admission.py` covers run aliases, historical artifacts, persistence/thread failures, corrupt/unreadable key registries and exact restart ownership.
+Evidence: `tests/test_mcp.py` checks generated names, identity/messages and linked-record inspection. `tests/test_tasks.py` and `tests/test_queues.py` check identity collisions in both creation orders, cancelled history, identical retries and legitimate revisions. `tests/test_run_admission.py` covers run aliases, historical artifacts, persistence/thread failures, corrupt/unreadable key registries and exact restart ownership. The proof pins a neutral `TMPDIR` because the queue tests derive a worktree path from it and assert that path does not name the runtime.
 
 Proof:
 
 ```bash
-cd "$(git rev-parse --show-toplevel)" && python3 -m unittest -q tests.test_tasks tests.test_queues tests.test_mcp tests.test_run_admission tests.test_authority_storage
+cd "$(git rev-parse --show-toplevel)" && TMPDIR="$(mktemp -d /tmp/kt-proof-XXXXXX)" python3 -m unittest -q tests.test_tasks tests.test_queues tests.test_mcp tests.test_run_admission tests.test_authority_storage
 ```

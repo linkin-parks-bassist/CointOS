@@ -1,6 +1,7 @@
 ---
 status: green
 revised_at: "2026-10-17T21:22:13+11:00"
+checked_at: '2026-10-31T17:32:44+11:00'
 ---
 
 Each uncancelled bounded assignment ends with one checked receipt {run, disposition, summary, evidence, at} on its task. Integration preserves the worker account in its commit; claims in that account do not override checked evidence.
