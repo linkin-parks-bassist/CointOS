@@ -8,6 +8,22 @@ from tests import support
 
 
 class Retirement(unittest.TestCase):
+    def test_a_branch_left_in_a_runs_scratch_does_not_stop_its_owner(self):
+        git.run(self.repo, "branch", "work/owned", "main")
+        scratch = self.repo.parent / "state/agents/integrator-1/scratch/check"
+        git.run(self.repo, "worktree", "add", str(scratch), "work/owned")
+        (scratch / "kept.txt").write_text("kept")
+        owner = self.repo.parent / "owner"
+        git.add_worktree(self.repo, str(owner), "work/owned", "main")
+        self.assertEqual(git.run(owner, "rev-parse", "--abbrev-ref", "HEAD"), "work/owned")
+        self.assertEqual((scratch / "kept.txt").read_text(), "kept")
+
+    def test_a_branch_held_by_someone_elses_checkout_still_refuses(self):
+        git.run(self.repo, "branch", "work/owned", "main")
+        git.run(self.repo, "worktree", "add", str(self.repo.parent / "editor"), "work/owned")
+        with self.assertRaises(Exception):
+            git.add_worktree(self.repo, str(self.repo.parent / "owner"), "work/owned", "main")
+
     def setUp(self):
         support.fresh_ledger(self)
         support.quiet(self)

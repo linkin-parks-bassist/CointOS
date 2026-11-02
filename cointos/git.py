@@ -285,12 +285,31 @@ def resolve_insertions(repo, paths: list[str]) -> None:
 
 # ---------------------------------------------------------------- task worktrees
 
+SCRATCH = re.compile(r"/state/agents/[^/]+/scratch/")
+
+
+def free_from_scratch(repo, branch: str) -> None:
+    """A run's throwaway checkout must not stop a branch's owner from starting.
+
+    Git allows a branch in one worktree at a time, and any run can leave a branch checked out in
+    its scratch directory. Detaching keeps that checkout and its files, and only lets go of the name.
+    """
+    run(repo, "worktree", "prune")
+    path = None
+    for line in run(repo, "worktree", "list", "--porcelain").splitlines():
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line == f"branch refs/heads/{branch}" and path and SCRATCH.search(path):
+            run(path, "checkout", "-q", "--detach")
+
+
 def add_worktree(repo, worktree: str, branch: str, base: str) -> None:
     """A task's worktree on its own branch, created from `base` the first time."""
     if Path(worktree).is_dir():
         return
     Path(worktree).parent.mkdir(parents=True, exist_ok=True)
     if ok(repo, "rev-parse", "--verify", "--quiet", branch):
+        free_from_scratch(repo, branch)
         run(repo, "worktree", "add", worktree, branch)
     else:
         run(repo, "worktree", "add", "-b", branch, worktree, base)

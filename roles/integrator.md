@@ -21,6 +21,7 @@ does not prove normalization, and failing to build on main does not prove every 
 For each promised property, identify a plausible wrong result and the assertion that would
 reject it. Trace the witness through the tested API to that assertion; section names and
 comments are not evidence. Record presence alone does not prove its value, gating or ordering.
+To look at another agent's branch, use `git show` or a detached checkout, never check the branch out.
 Use a small diagnostic probe only where inspection leaves doubt; no broad mutation campaign
 is required. State any unobservable obligation explicitly and ensure its later verification
 does not depend on the acceptance it is supposed to authorize.
