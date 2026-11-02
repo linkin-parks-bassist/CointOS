@@ -230,6 +230,17 @@ class FirstResponder(unittest.TestCase):
         self.assertNotIn("coin", agents[2]["role"]["enum"])
         self.assertEqual(set(agents[2]["role"]["enum"]), {spec["role"] for spec in schema.KINDS.values()})
 
+    def test_a_worker_can_be_described_through_the_tool_itself(self):
+        support.running(self.responder, "responder-1", worktree=False)
+        started = api.run_agent({"role": "worker", "name": "piece", "brief": "One bit.", "project": "p", "stage": "skeleton",
+                                 "summary": "write one small piece of the parser here", "dependencies": [],
+                                 "caller": support.caller(self.responder, "responder-1")})
+        self.assertEqual(queues.records()[started["task"]]["summary"], "write one small piece of the parser here")
+        argv = mcp.dispatch_argv({"name": "n", "brief": "b", "role": "worker", "summary": "s", "dependencies": ["a"], "relies_on": ["f"]})
+        args = cli.parser().parse_args(argv)
+        self.assertEqual((args.summary, args.dependencies_json, args.relies_on_json), ("s", ["a"], ["f"]))
+        self.assertEqual(coin.agent_request({"name": "a", "brief": "b", "summary": "s"})["summary"], "s")
+
     def test_who_calls_decides_what_it_may_start(self):
         steward = tasks.create("steward", tasks.SYSTEM, "scout", "Look.", [6])
         support.running(steward, "steward-1", worktree=False)

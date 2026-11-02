@@ -774,7 +774,8 @@ def run_role(body, role):
             raise ApiError(f"a {role} works in a registered project: name it, or create one with project_new first")
         request = {"project": body["project"], "kind": "command" if role == "manager" else "queued", "name": body["name"],
                    "brief": body["brief"], "stage": body.get("stage"), "reasoning_effort": body.get("reasoning_effort"),
-                   "budget": body.get("budget"), **({"caller": body["caller"]} if by else {})}
+                   "budget": body.get("budget"), "summary": body.get("summary"), "dependencies": body.get("dependencies"),
+                   "relies_on": body.get("relies_on"), **({"caller": body["caller"]} if by else {})}
         item = queue(request)["item"]
         return {"ok": True, "task": f"{body['project']}:{item}", "item": item}
     from cointos import spawner

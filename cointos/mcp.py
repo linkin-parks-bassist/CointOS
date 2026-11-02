@@ -51,7 +51,7 @@ def dispatch_argv(a: dict) -> list[str]:
         argv += ["--ability", ability]
     for tool in station.get("tools") or []:
         argv += ["--tool", tool]
-    return argv
+    return argv + queue_fields(a)
 
 
 QUEUE_FIELDS = {

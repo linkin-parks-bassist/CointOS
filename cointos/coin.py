@@ -486,7 +486,7 @@ def project_change(arguments: dict) -> dict:
 
 def agent_request(arguments: dict) -> dict:
     """The daemon's Operator request from dispatch's tool arguments, also saved by a wake."""
-    body = {key: arguments[key] for key in ("name", "brief", "project", "station", "abilities", "reasoning_effort", "role", "task", "stage") if arguments.get(key) is not None}
+    body = {key: arguments[key] for key in ("name", "brief", "project", "station", "abilities", "reasoning_effort", "role", "task", "stage", "summary", "dependencies", "relies_on") if arguments.get(key) is not None}
     budget = {key: arguments[key] for key in ("generation_seconds", "generation_tokens") if key in arguments}
     return {**body, **({"budget": budget} if budget else {})}
 

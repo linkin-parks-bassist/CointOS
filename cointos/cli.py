@@ -777,6 +777,9 @@ def parser() -> argparse.ArgumentParser:
     agent_run.add_argument("--role", choices=sorted({kind["role"] for kind in schema.KINDS.values()}), default="operator")
     agent_run.add_argument("--task", help="for an integrator: the reviewed worker task; for a first-responder: the failed task")
     agent_run.add_argument("--stage", choices=schema.STAGES)
+    agent_run.add_argument("--summary", help="for a worker: 5-20 plain words saying what the task is for")
+    agent_run.add_argument("--dependencies-json", type=json.loads, help="for a worker: structured array of prerequisite item IDs")
+    agent_run.add_argument("--relies-on-json", type=json.loads, help="for a test-contract worker: structured array of existing API names")
     agent_run.add_argument("--reasoning-effort", choices=schema.EFFORTS)
     budget_options(agent_run)
     return top
@@ -904,6 +907,8 @@ COMMANDS = {
     "split": lambda args: json.dumps(call("split", {"task": args.task, "reason": args.reason})),
     "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
                                              "role": args.role, "task": args.task, "stage": args.stage,
+                                             "summary": args.summary, "dependencies": args.dependencies_json,
+                                             "relies_on": args.relies_on_json,
                                              "abilities": args.ability or ["standard"],
                                              "reasoning_effort": args.reasoning_effort, "budget": limits(args),
                                              "station": {"directory": args.directory, "tools": args.tool}})["task"],

@@ -68,7 +68,10 @@ DISPATCH_PROPERTIES = {
     **AGENT_PROPERTIES,
     "role": {"type": "string", "enum": sorted({kind["role"] for kind in KINDS.values()})},
     "task": {"type": "string", "description": "for integrator: the reviewed worker task; for first-responder: the failed task"},
-    "stage": {"type": "string", "enum": ["skeleton", "test-contract", "implementation", "integration"], "description": "for worker: its construction stage"}}
+    "stage": {"type": "string", "enum": ["skeleton", "test-contract", "implementation", "integration"], "description": "for worker: its construction stage"},
+    "summary": {"type": "string", "description": "for worker: 5-20 plain words saying what the task is for, shown on the dashboard"},
+    "dependencies": {"type": "array", "items": {"type": "string"}, "description": "for worker: prerequisite item IDs; [] means none"},
+    "relies_on": {"type": "array", "items": {"type": "string"}, "description": "for a test-contract worker: existing API names its tests use"}}
 
 # A task's status: unfinished (waiting for or holding a run, or in review), or settled for good.
 ACTIVE, PENDING, SETTLED = ("waiting", "running", "review"), ("waiting", "running"), ("done", "failed")
