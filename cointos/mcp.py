@@ -196,6 +196,14 @@ TOOLS = {
                 "Revising another item alone does not establish this handoff.",
                 {"children": {"type": "array", "items": {"type": "string"}, "description": "existing item names without project prefixes"}},
                 ["children"], lambda a: ["replace", *a["children"]]),
+    "split": (EVERYONE, "This job is too big for one agent: stop an implementer or Operator and hand its work, branch "
+              "and files to a manager to cut up much smaller.",
+              {"task": text("PROJECT:TASK"), "reason": text("why it is too big and what is worth keeping")}, ["task", "reason"],
+              lambda a: ["split", a["task"], "--reason", a["reason"]]),
+    "recover": (EVERYONE, "This assignment is malformed: stop its run, keeping its branch and files, and send it to "
+                "a First Responder to work out and dispatch the fix.",
+                {"task": text("PROJECT:TASK"), "reason": text("what is wrong with the assignment, with evidence")},
+                ["task", "reason"], lambda a: ["recover", a["task"], "--reason", a["reason"]]),
     "supersede": (EVERYONE, "Replace failed prerequisites with existing same-project items without accepting them.",
                   {"task": text("PROJECT:FAILED"), "replacements": {"type": "array", "items": {"type": "string"}},
                    "reason": text("evidence")}, ["task", "replacements", "reason"],

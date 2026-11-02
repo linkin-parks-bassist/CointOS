@@ -767,6 +767,9 @@ def parser() -> argparse.ArgumentParser:
     splitting = sub.add_parser("split", help="stop an implementer or Operator whose job is too big; a manager salvages it and cuts it up")
     splitting.add_argument("task")
     splitting.add_argument("--reason", default="the user stopped it as too big")
+    recovering = sub.add_parser("recover", help="stop a run whose assignment is malformed and send it to a First Responder")
+    recovering.add_argument("task")
+    recovering.add_argument("--reason", required=True)
     agent = sub.add_parser("agent", help="run one ad-hoc operator with explicit scope and abilities")
     agent_run = agent.add_subparsers(dest="agent_command", required=True).add_parser("run")
     agent_run.add_argument("name")
@@ -908,6 +911,7 @@ COMMANDS = {
     "budget": lambda args: json.dumps(call("budget", {"task": args.task, "budget": limits(args) or {}})),
     "project": project_command,
     "split": lambda args: json.dumps(call("split", {"task": args.task, "reason": args.reason})),
+    "recover": lambda args: json.dumps(call("recover", {"task": args.task, "reason": args.reason})),
     "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
                                              "role": args.role, "task": args.task, "stage": args.stage,
                                              "summary": args.summary, "dependencies": args.dependencies_json,

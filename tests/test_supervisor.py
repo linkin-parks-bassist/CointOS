@@ -64,7 +64,7 @@ class Supervisors(unittest.TestCase):
         other = opencode.settings(state.CONFIG, 'key', {'abilities': ['standard']}, [])['permission']
         self.assertNotIn('*probe*', other['bash'])
 
-    def test_a_revise_replaces_the_run_and_the_supervisor_stays_on(self):
+    def test_a_revise_replaces_the_run_and_retires_the_supervisor(self):
         self.agent['generation_seconds'] = 1800
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
@@ -75,9 +75,19 @@ class Supervisors(unittest.TestCase):
         self.assertEqual(self.worker['status'], 'waiting')
         self.assertIsNone(self.worker['session'])
         self.assertNotIn('worker-1', state.L['agents'])
-        self.assertEqual(supervisor['status'], 'running')
-        lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'revised it; my brief is the handoff')
-        self.assertEqual(supervisor['receipt']['disposition'], 'complete')
+        self.assertEqual(supervisor['status'], 'failed')
+        self.assertIn('its brief is the handoff', supervisor['note'])
+        self.assertNotIn('supervisor-1', state.L['agents'])
+
+    def test_a_supervisor_can_send_a_malformed_assignment_to_recovery(self):
+        self.agent['generation_seconds'] = 1800
+        recovery.enforce()
+        supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
+        with patch.object(lifecycle.opencode, 'stop'):
+            api.dispatch('recover', {'task': self.worker['id'], 'reason': 'the brief contradicts itself',
+                                     'caller': support.caller(supervisor, 'supervisor-1')})
+        self.assertEqual(self.worker['status'], 'failed')
+        self.assertIn('contradicts itself', frontier.reason(self.worker))
 
     def test_a_supervisor_is_stood_down_when_its_run_ends(self):
         self.agent['generation_seconds'] = 1800

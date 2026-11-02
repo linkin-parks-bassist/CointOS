@@ -534,8 +534,8 @@ def revise(body):
                      body.get("reasoning_effort"), body.get("budget"), dependency_ids=body.get("dependencies"),
                      summary=body.get("summary"), reliances=body.get("relies_on"))
     caller_task = L["tasks"].get(by)
-    if caller_task and caller_task.get("supervises") == key:
-        caller_task["revised_its_run"] = True  # its brief is the handoff; the next threshold brings another
+    if caller_task and caller_task.get("supervises") == key:  # its brief is the handoff; the next threshold brings another
+        lifecycle.cancel_task(caller_task, "cointos", "it revised its run; its brief is the handoff")
     return {"ok": True, "item": key}
 
 
@@ -784,6 +784,25 @@ def split(body):
     return {"ok": True, **lifecycle.split(target["id"], body.get("reason") or "the user stopped it as too big", by["id"] if by else "user")}
 
 
+def recover(body):
+    """Stop a run whose assignment is wrong; its failure brings a First Responder."""
+    by = running(body)
+    target = L["tasks"].get(body.get("task", ""))
+    if target is None or not tasks.active(target):
+        raise ApiError(f"no live task {body.get('task')!r}")
+    if target.get("validating"):
+        raise ApiError("its tests are running; retry when they finish")
+    if by is not None and (by["id"] == target["id"] or not controls_project(by, target["place"])):
+        raise ApiError("an agent finishes itself blocked instead; a withdrawn recovery no longer steers work")
+    reason = f"sent to recovery by {by['id'] if by else 'user'}: {body.get('reason', '').strip()}"
+    if target.get("agent") in L["agents"]:
+        lifecycle.stop(target["agent"], reason, requeue=False, charge=False)
+    else:
+        lifecycle.fail(target, reason)
+    log("sent to recovery", task=target["id"], reason=reason)
+    return {"ok": True, "task": target["id"]}
+
+
 def run_agent(body):
     role = body.get("role", "operator")
     if role != "operator":
@@ -986,7 +1005,7 @@ ACTIONS = {
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "coin": coin, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,
-    "run-agent": run_agent, "split": split, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
+    "run-agent": run_agent, "recover": recover, "split": split, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
     "reasoning": reasoning, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
     "viewers": viewers, "scheduler": scheduler, "default-model": models.choose,
     "project-list": project_list, "project-new": project_new, "project-add": project_add,
