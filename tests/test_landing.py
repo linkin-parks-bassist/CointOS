@@ -277,6 +277,15 @@ class Packets(Project):
         self.assertNotIn('self.assertEqual(code.a(), 42)', str(failed.exception))
         self.assertIsNone(self.worker['receipt'])
 
+    def test_command_main_removed_after_the_packet_forked_is_not_binding(self):
+        changed = TESTS.replace('code.b(), 7', 'code.b(), 8')
+        packet = self.packet('forked-before-removal', {'tests/test_code.py': changed,
+                                                       'tests/test_a.py': TESTS_A}, A)
+        self.assertEqual(contracts.packet_tests(self.repo, self.base, [packet], RULES), [B, A])
+        (self.repo / 'tests/contracts.json').write_text(json.dumps([{'covers': ['code.py::b'], 'command': ['true']}]))
+        main = support.commit(self.repo, 'main stops registering B')
+        self.assertEqual(contracts.packet_tests(self.repo, main, [packet], RULES), [A])
+
     def test_hold_during_validation_prevents_acceptance(self):
         integration, candidate, _ = self.landing()
         def held(*args):

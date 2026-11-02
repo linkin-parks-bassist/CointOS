@@ -261,12 +261,15 @@ def packet_tests(repo, main: str, tests: list[str], rules: dict) -> list[list[st
     Command identity alone cannot identify changed assertions inside a shared target.
     The manifest maps production coverage, not test-file ownership, so use the suite
     rather than guessing a command from a filename. A reused command never means no tests.
+    A command the packet only inherited from its base, and main has since removed, is not
+    part of the packet: the composed tree no longer has anything to run for it.
     """
     accepted, own = registered(repo, main, rules), []
     for commit in tests:
-        commands = registered(repo, commit, rules)
-        added = [c for c in commands if c not in accepted]
         base = git.run(repo, 'merge-base', main, commit)
+        inherited = registered(repo, base, rules)
+        commands = [c for c in registered(repo, commit, rules) if c in accepted or c not in inherited]
+        added = [c for c in commands if c not in accepted]
         shared = any(path != rules['manifest'] and protected(path, rules)
                      and git.blob(repo, base, path) is not None
                      for path in git.changed(repo, base, commit))
