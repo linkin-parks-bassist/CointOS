@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-02T10:34:34+11:00"
+revised_at: "2026-11-02T13:28:26+11:00"
 ---
 
 A station is where an agent works and what it can reach: (directory, tools). Every agent has one; `cointos/stations.py` owns the concept.
@@ -15,4 +15,6 @@ The directory is the task's `worktree`, so a factory agent's station is its chec
 
 Available tools do not settle data access: a server's own policy still applies. Stdio servers run inside their agent's write confinement, so one that writes outside its allowed paths fails there.
 
-Evidence: `tests/test_stations_and_recurring_wakes.py` covers grants, refusals, real Landlock confinement in a non-Git directory, spawning limits and hung servers. Native runs under a live daemon remain unobserved until deployed.
+**Admission.** A stationed run competes for memory like other work. A new agent needs its process cap plus native state (about 20 GB), so with two agents running a scheduled occurrence can wait until one finishes; the check below waited 28 minutes.
+
+Evidence: `tests/test_stations_and_recurring_wakes.py` covers grants, refusals, real Landlock confinement in a non-Git directory, spawning limits and hung servers. A native installed schedule wake started a stationed Operator with no model turn and re-armed; the agent wrote in a non-Git directory, was denied a write under home and reached the granted Studio server (`unknown job_id` for a fake job). Coin's own model-driven setup of a recurring agent remains unobserved.

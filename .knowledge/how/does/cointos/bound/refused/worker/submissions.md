@@ -1,13 +1,13 @@
 ---
 status: green
-revised_at: "2026-10-28T12:32:23+11:00"
+revised_at: "2026-11-02T12:57:38+11:00"
 ---
 
 A clean committed construction worker gets three product-validation refusals with unchanged acceptance inputs. On the third, api.finishing records a blocked receipt and returns it to the terminal caller. The work frontier assigns one recovery controller; branch and failure evidence survive. CLI finish reports the actual disposition, even when complete was requested.
 
 Persistent submission_failure stores attempts, validator error and inputs: candidate tree, accepted main, test refs, bundled commands, copied policy, stage and assignment version. This uses artifact/authority identity, never report-text parsing. Empty commits do not refill attempts; changed content/main/tests/policy/stage/version starts a new episode. Success clears failure. State reload preserves the episode.
 
-For identical submission fingerprints, source api.finishing reuses retained product failures before executing validation; each refused request still advances the existing three-refusal accounting. Changed inputs invalidate reuse. Execution failures always execute again. CompositionError has a separate category: the first current refusal blocks directly into contract recovery rather than asking for code repair. Its structured main/candidate, packet list, failed packet and conflicting paths survive in submission_failure and frontier.inspect, including recovery views. Blocked-request replay remains idempotent. These source changes are not yet deployed.
+For identical submission fingerprints, api.finishing reuses retained product failures before executing validation; each refused request still advances the existing three-refusal accounting. Changed inputs invalidate reuse. Execution failures always execute again. CompositionError has a separate category: the first current refusal blocks directly into contract recovery rather than asking for code repair. Its structured main/candidate, packet list, failed packet and conflicting paths survive in submission_failure and frontier.inspect, including recovery views. Blocked-request replay remains idempotent.
 
 Recording/escalation rechecks current run, version, stage, test refs, bundled commands, policy, clean worktree, submitted HEAD and accepted main. Revoked validation cannot block newer work. Accounting unwinds in finally. The original complete request can replay its automatic blocked receipt for the same run/account after a lost reply; foreign requests cannot.
 
