@@ -1622,7 +1622,11 @@ print(json.dumps(refused))
             return run
         state.L['paused'] = False
         state.L['models'][state.CONFIG['work_model']]['up'] = True
-        state.L['memory']['headroom_gb'] = state.CONFIG['memory']['agent_memory_gb'] * 4
+        # Supply actual admission capacity; four 1 GB launch estimates no longer
+        # cover native states plus the process limits the units can grow into.
+        state.L['models'][state.CONFIG['work_model']]['resident_state_bytes'] = 11_000_000_000
+        state.L['memory']['headroom_gb'] = 4 * (
+            state.CONFIG['memory']['agent_limit_gb'] * 2**30 / 1e9 + 11)
         with patch.object(spawner.runs, 'start', side_effect=admit):
             api.dispatch('prepare-restart', {})
             spawner.spawn()

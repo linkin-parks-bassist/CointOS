@@ -1,204 +1,211 @@
 {
-  "backend": "cointos.backend_native",
-  "lemonade": "http://127.0.0.1:13305",
-  "snapshots": "/dev/shm/cointos-contexts",
-  "disk_snapshots": "~/.cache/cointos/contexts",
-  "server_cgroup": "/sys/fs/cgroup/inference.slice",
-  "port": 4200,
-  "project_defaults": {
-    "test_policy": {
-      "manifest": "tests/contracts.json",
-      "protected": [
-        "tests/**",
-        "Makefile"
-      ],
-      "non_code": [
-        ".knowledge/**",
-        "*.md"
-      ]
-    }
-  },
-  "tick_seconds": 1,
-  "service_restart_seconds": 3,
-  "model_check_seconds": 5,
-  "keepalive_seconds": 10,
-  "work_model": "Qwen3.8-27B-GGUF",
-  "reasoning": {
-    "default": "low",
-    "test-contract": "medium",
-    "manager": "medium",
-    "integrator": "medium",
-    "budgets": {
-      "low": 256,
-      "medium": 384,
-      "xhigh": 1024
-    }
-  },
-  "models": {
-    "Qwen3.8-27B-GGUF": {
-      "ctx_size": 131072,
-      "lanes": 1,
-      "memory_gb": 39,
-      "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0",
-      "weights_gb": 17.5,
-      "backend": "gufo",
-      "gufo": {
-        "executable": "~/.local/share/cointos/gufo/1f970923-native-dflash-v9-header-20261019/gufo-control",
-        "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-UD-Q4_K_XL.gguf",
-        "socket": "~/.CointOS/state/gufo/qwen/control.sock",
-        "sha256": "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e",
-        "sampling": {
-          "temperature": 1.0,
-          "top_k": 20,
-          "top_p": 0.95,
-          "min_p": 0.05,
-          "repeat_last_n": 64,
-          "seed": -1
-        },
-        "dflash": {
-          "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf",
-          "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd",
-          "max_draft_tokens": 7,
-          "policy": "adaptive"
-        }
-      }
-    }
-  },
-  "classes": [
-    "coin",
-    "user",
-    "background"
-  ],
-  "reserved_lanes": [],
-  "scheduler": {
-    "chunk_tokens": 32,
-    "read_chunk_tokens": 1024,
-    "slice_seconds": 30,
-    "yield_grace_seconds": 15,
-    "max_thought_tokens": 16384,
-    "shared_prefix_tokens": 4096,
-    "weights": {
-      "worker": 4,
-      "integrator": 4,
-      "manager": 2,
-      "operator": 2
-    }
-  },
-  "memory": {
-    "reserve_gb": 24,
-    "agent_memory_gb": 1,
-    "agent_limit_gb": 8,
-    "max_psi": 1.5,
-    "distress_seconds": 30,
-    "disk_snapshots_gb": 300,
-    "shed_step_seconds": 3,
-    "calm_seconds": 120,
-    "snapshots_gb": 40
-  },
-  "checks": {
-    "idle_lane_seconds": 5,
-    "preempt_seconds": 15,
-    "agent_silent_seconds": 600,
-    "tool_silent_seconds": 660,
-    "thought_stalled_seconds": 60,
-    "alert_recovery_seconds": 30,
-    "max_identical_thoughts": 3,
-    "exit_grace_seconds": 30
-  },
-  "spawner": {
-    "max_agents": 4,
-    "interval_seconds": 5,
-    "max_runs_per_task": 5,
-    "max_launch_failures": 2,
-    "steward_every_seconds": 21600,
-    "idle_steward_seconds": 300,
-    "test_auditor_every_seconds": 21600,
-    "user_quiet_seconds": 120
-  },
-  "trees": [
-    {
-      "name": "CointOS",
-      "path": "~/Projects/CointOS",
-      "tree": ".knowledge",
-      "main_branch": "master"
-    }
-  ],
-  "garden": {
-    "check_seconds": 60,
-    "every_seconds": 86400,
-    "leaves_per_pass": 3,
-    "audit_every_seconds": 604800
-  },
-  "history_length": 200,
-  "coin": {
-    "model": "Qwen3.8-27B-GGUF",
-    "telegram_env": "~/.config/agent-ecosystem/telegram.env",
-    "history_messages": 20,
-    "history_trim_messages": 7,
-    "max_tool_rounds": 8,
-    "model_seconds": 600,
-    "finishing_rounds": 3,
-    "telegram_seconds": 40,
-    "long_poll_seconds": 25,
-    "send_attempts": 3,
-    "retry_pause_seconds": 2,
-    "error_pause_seconds": 5,
-    "blocked_notify_seconds": 60
-  },
-  "viewers": {
-    "max_viewers": 4,
-    "terminal": [
-      "gnome-terminal",
-      "--"
-    ],
-    "opening_seconds": 15,
-    "poll_seconds": 2,
-    "detach_seconds": 5
-  },
-  "dashboard": {
-    "live_hz": 10,
-    "live_chars": 600
-  },
-  "timeouts": {
-    "lemonade_health_seconds": 10,
-    "model_launch_seconds": 900,
-    "model_kill_seconds": 300,
-    "server_seconds": 60,
-    "render_seconds": 120,
-    "snapshot_seconds": 300,
-    "agent_start_seconds": 60,
-    "agent_stop_grace_seconds": 5,
-    "leftover_stop_grace_seconds": 2,
-    "api_seconds": 10,
-    "command_seconds": 300,
-    "validation_seconds": 1800,
-    "stop_save_seconds": 60,
-    "mcp_close_seconds": 5
-  },
-  "alerts_kept": 50,
-  "messages_kept": 200,
-  "summary_words": [
-    5,
-    20
-  ],
-  "result_chars": 2000,
-  "recovery": {
-    "generation_seconds": 86400,
-    "generation_tokens": 2000000,
-    "warning_fraction": 0.75,
-    "handoff_chars": 6000,
-    "fresh_retries": 2,
-    "role_budgets": {},
-    "role_fresh_retries": {
-      "worker": 0,
-      "manager": 0,
-      "integrator": 0,
-      "operator": 0
+ "alerts_kept": 50,
+ "backend": "cointos.backend_native",
+ "checks": {
+  "agent_silent_seconds": 600,
+  "alert_recovery_seconds": 30,
+  "exit_grace_seconds": 30,
+  "idle_lane_seconds": 5,
+  "max_identical_thoughts": 3,
+  "preempt_seconds": 15,
+  "thought_stalled_seconds": 60,
+  "tool_silent_seconds": 660
+ },
+ "classes": [
+  "coin",
+  "user",
+  "background"
+ ],
+ "coin": {
+  "blocked_notify_seconds": 60,
+  "error_pause_seconds": 5,
+  "finishing_rounds": 8,
+  "history_messages": 20,
+  "history_trim_messages": 7,
+  "long_poll_seconds": 25,
+  "max_tool_rounds": 128,
+  "model_seconds": 600,
+  "reasoning_effort": "medium",
+  "retry_pause_seconds": 2,
+  "send_attempts": 3,
+  "telegram_env": "~/.config/agent-ecosystem/telegram.env",
+  "telegram_seconds": 40
+ },
+ "dashboard": {
+  "live_chars": 600,
+  "live_hz": 10,
+  "model_discovery_seconds": 15
+ },
+ "disk_snapshots": "~/.cache/cointos/contexts",
+ "garden": {
+  "audit_every_seconds": 604800,
+  "check_seconds": 60,
+  "every_seconds": 86400,
+  "leaves_per_pass": 3
+ },
+ "history_length": 200,
+ "journal": {
+  "bytes": 8388608
+ },
+ "keepalive_seconds": 10,
+ "lemonade": "http://127.0.0.1:13305",
+ "memory": {
+  "agent_limit_gb": 8,
+  "agent_memory_gb": 1,
+  "calm_seconds": 120,
+  "disk_snapshots_gb": 300,
+  "distress_seconds": 30,
+  "max_psi": 1.5,
+  "reserve_gb": 24,
+  "shed_step_seconds": 3,
+  "snapshots_gb": 40
+ },
+ "messages_kept": 200,
+ "model_check_seconds": 5,
+ "model_directories": [
+  "~/.cache/cointos-speed/models",
+  "~/.cache/huggingface/hub",
+  "/var/lib/lemonade/.cache/huggingface/hub"
+ ],
+ "models": {
+  "Qwen3.8-27B-GGUF": {
+   "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0",
+   "backend": "gufo",
+   "ctx_size": 131072,
+   "gufo": {
+    "dflash": {
+     "max_draft_tokens": 7,
+     "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf",
+     "policy": "adaptive",
+     "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd"
     },
-    "reorient_after_seconds": 10800,
-    "retire_per_tick": 4
-  },
-  "journal": {
-    "bytes": 8388608
+    "executable": "/home/david/.local/share/cointos/gufo/192b75a-native-v13-20261031/gufo-control",
+    "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-UD-Q4_K_XL.gguf",
+    "sampling": {
+     "min_p": 0.05,
+     "repeat_last_n": 64,
+     "seed": -1,
+     "temperature": 1.0,
+     "top_k": 20,
+     "top_p": 0.95
+    },
+    "sha256": "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e",
+    "socket": "~/.CointOS/state/gufo/qwen/control.sock"
+   },
+   "lanes": 1,
+   "memory_gb": 39,
+   "weights_gb": 17.5
   }
+ },
+ "port": 4200,
+ "project_defaults": {
+  "test_policy": {
+   "manifest": "tests/contracts.json",
+   "non_code": [
+    ".knowledge/**",
+    "*.md"
+   ],
+   "protected": [
+    "tests/**",
+    "Makefile"
+   ]
+  }
+ },
+ "reasoning": {
+  "budgets": {
+   "low": 256,
+   "medium": 384,
+   "xhigh": 1024
+  },
+  "default": "low",
+  "integrator": "medium",
+  "manager": "medium",
+  "test-contract": "medium"
+ },
+ "recovery": {
+  "fresh_retries": 2,
+  "generation_seconds": 5400,
+  "generation_tokens": 2000000,
+  "handoff_chars": 6000,
+  "reorient_after_seconds": 10800,
+  "retire_per_tick": 4,
+  "role_budgets": {},
+  "role_fresh_retries": {
+   "integrator": 0,
+   "manager": 0,
+   "operator": 0,
+   "worker": 0
+  },
+  "warning_fraction": 0.75
+ },
+ "reserved_lanes": [],
+ "result_chars": 2000,
+ "scheduler": {
+  "chunk_tokens": 32,
+  "max_thought_tokens": 16384,
+  "read_chunk_tokens": 1024,
+  "shared_prefix_tokens": 4096,
+  "slice_seconds": 30,
+  "weights": {
+   "integrator": 4,
+   "manager": 2,
+   "operator": 2,
+   "worker": 4
+  },
+  "yield_grace_seconds": 15
+ },
+ "server_cgroup": "/sys/fs/cgroup/inference.slice",
+ "service_restart_seconds": 3,
+ "snapshots": "/dev/shm/cointos-contexts",
+ "spawner": {
+  "idle_steward_seconds": 300,
+  "interval_seconds": 5,
+  "max_agents": 4,
+  "max_launch_failures": 2,
+  "max_runs_per_task": 5,
+  "steward_every_seconds": 21600,
+  "test_auditor_every_seconds": 21600,
+  "user_quiet_seconds": 120
+ },
+ "summary_words": [
+  5,
+  20
+ ],
+ "tick_seconds": 1,
+ "timeouts": {
+  "agent_start_seconds": 60,
+  "agent_stop_grace_seconds": 5,
+  "api_seconds": 10,
+  "command_seconds": 300,
+  "leftover_stop_grace_seconds": 2,
+  "lemonade_health_seconds": 10,
+  "mcp_call_seconds": 120,
+  "mcp_close_seconds": 5,
+  "model_kill_seconds": 300,
+  "model_launch_seconds": 900,
+  "render_seconds": 120,
+  "server_seconds": 60,
+  "snapshot_seconds": 300,
+  "stop_save_seconds": 60,
+  "validation_seconds": 1800
+ },
+ "trees": [
+  {
+   "main_branch": "master",
+   "name": "CointOS",
+   "path": "~/Projects/CointOS",
+   "tree": ".knowledge"
+  }
+ ],
+ "viewers": {
+  "detach_seconds": 5,
+  "max_viewers": 4,
+  "opening_seconds": 15,
+  "poll_seconds": 2,
+  "terminal": [
+   "gnome-terminal",
+   "--"
+  ]
+ },
+ "work_model": "Qwen3.8-27B-GGUF"
 }

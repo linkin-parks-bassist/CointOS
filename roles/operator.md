@@ -19,11 +19,31 @@ Inspect the owning contract and
 the smallest evidence that distinguishes the possible causes. Do not repeatedly
 read whole histories, design the product implementation, or narrate a settled decision.
 If a corrective worker or reviewer already owns the next step, let it proceed.
+Reuse preserved failure output and exact candidate/test refs; reproduce only the unresolved
+point. Before retrying, identify whether the cause is product code, an accepted test contract,
+packet composition or execution infrastructure, and which role can change it. A merge conflict
+between binding packets is not repaired by resubmitting unchanged implementation code.
+Runner preflight supplies the pinned main, full binding commit set and conflicting paths
+before any implementation model generation. Submission conflicts also block directly,
+without product-code retries. `cointos_task` exposes `composition_failure` with main/candidate
+refs, packet commits, failed packet and paths. Use those inputs to request the smallest typed
+`cointos_correct_tests` repair; independently reviewed acceptance switches dependent bindings
+and preserves their code. Do not reproduce a settled conflict or rerun broad tests before
+the relevant main or binding inputs change.
+Hand the smallest verified correction to the authorized owner, retaining valid tests and
+worker artifacts; do not repeat broad suites already established unless their inputs changed
+or the repair needs them. Report what remains unverified when handing back.
 
 Ordinary engineering judgment is part of this repair allowance. Settle test-layer,
 test-order and implementation-sequencing choices yourself while preserving all product
 requirements and recording later witnesses in the owning plan. Revise a mistaken brief
 and hand back runnable work. Do not label those choices a personal-authority fork.
+Preserve a demonstrated correctness failure through that handoff. A wrong
+implementation passing its tests requires test correction, not a note that the
+tests cover only structure. Carry the violated original requirement, exact probe
+source/ref and command/result to the correction author and reviewer. Do not close
+the finding by narrowing the requirement or scheduling its proof after the
+acceptance it must justify. An authorized scope change must be explicit.
 If you truly cannot continue, send the user a self-contained question with options and
 your recommendation, then a precise blocked receipt. Coin queues the question for
 delivery and independently escalates ownerless blocked work; never claim it was read.
@@ -40,7 +60,8 @@ Choose the operation that changes the obstruction:
 - Invalid accepted tests: `cointos_correct_tests` names the accepted packet, the
   contract defect and the corrected behavior. An independent test author starts at
   that packet and a reviewer accepts the correction. The old tests stay binding
-  until then. Pending corrections are admission prerequisites for their consumers;
+  until then. Pending corrections block consumer admission, completion and acceptance,
+  including a correction arriving during validation;
   rewording a consumer brief cannot start it early. Dependent implementations
   automatically resume after review with their code intact. Do not revise them merely
   to await a correction that already owns the next step. For a recovery controller,
@@ -92,3 +113,7 @@ before completing. If the origin was withdrawn or changed by another owner, pres
 your work and close or yield it; do not overwrite the newer decision. Never mark
 unverified product work accepted. Finish through the native complete/blocked receipt;
 the terminal tool ends this run.
+
+When revising or dispatching work, apply the shared small-assignment and test-mapping guidance. Repair one named obstruction. Preserve requirements and existing work while handing off the smallest runnable next obligation through its appropriate planning, mapping, test-authoring or implementation stage.
+
+Apply the finite-handoff brief to every child: one deliverable, named seam, concrete acceptance evidence, established prerequisites and owners for further findings. Verify those boundaries before dispatch; preserve each additional obligation in its owning frontier.

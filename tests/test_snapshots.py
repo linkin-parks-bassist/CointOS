@@ -14,6 +14,9 @@ class Snapshots(unittest.TestCase):
     """Only a conversation that can go on keeps saved contexts, and only ones it can go on from."""
 
     def setUp(self):
+        # Persistence-path fixtures; ordinary resident selection is covered in
+        # test_resident_switch and the native continuation checks.
+        self.enterContext(mock.patch.object(lanes.BACKEND, 'resident_states', return_value=False))
         transfers = set(snapshots.TRANSFERS)
         self.addCleanup(lambda: (snapshots.TRANSFERS.clear(), snapshots.TRANSFERS.update(transfers)))
         snapshots.TRANSFERS.clear()

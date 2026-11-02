@@ -295,23 +295,59 @@ def packet_files(repo, main: str, tests: list[str], rules: dict) -> list[str]:
     return found
 
 
+class CompositionError(ValueError):
+    """Accepted contract inputs cannot be composed; retry requires changed inputs."""
+
+    def __init__(self, message, *, main=None, packets=None, failed_packet=None, paths=None, candidate=None):
+        super().__init__(message)
+        self.evidence = {'main': main, 'packets': list(packets or []),
+                         'failed_packet': failed_packet, 'paths': list(paths or []), 'candidate': candidate}
+
+    @classmethod
+    def retained(cls, message, evidence):
+        return cls(message, **evidence)
+
+
+
 @contextlib.contextmanager
-def combined(repo, commit: str, tests: list[str], rules: dict):
-    """A fresh detached checkout of `commit` with a packet's test commits merged in: (path, head)."""
+def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str = "reject"):
+    """A fresh detached checkout of `commit` with a packet's test commits merged in: (path, head).
+
+    ``non_code="reject"`` keeps the strict three-way merge. Callers that only need the
+    protected test contract, or that are executing a reviewed candidate, use
+    ``non_code="ours"``: unrelated knowledge/document conflicts take the candidate's side
+    while protected test insertions are still composed exactly. A protected conflict that
+    cannot be composed stays a real refusal.
+    """
+    if non_code not in ("reject", "ours"):
+        raise ValueError("non_code must be reject or ours")
     with checkout(repo, commit) as path:
         for test in tests:
             merged = git.result(path, "-c", "user.name=CointOS", "-c", "user.email=cointos@localhost",
                                 "merge", "-q", "--no-edit", test)
             if merged.returncode:
-                conflicts = git.run(path, "diff", "--name-only", "--diff-filter=U", "-z").split("\0")
-                git.resolve_insertions(path, [p for p in conflicts if p and protected(p, rules)])
-                if any(conflicts) and not git.run(path, "ls-files", "-u"):
+                conflicts = [p for p in git.run(path, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p]
+                git.resolve_insertions(path, [p for p in conflicts if protected(p, rules)])
+                conflicts = [p for p in git.run(path, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p]
+                if non_code == "ours" and conflicts and not any(protected(p, rules) for p in conflicts):
+                    for name in conflicts:
+                        ours = [line.split("\t", 1)[0].split() for line in
+                                git.run(path, "ls-files", "-u", "--", name).splitlines()]
+                        if any(entry[2] == "2" for entry in ours):
+                            git.run(path, "checkout", "--ours", "--", name)
+                        else:
+                            git.run(path, "rm", "-q", "-f", "--", name)
+                        git.run(path, "add", "-A", "--", name)
+                    conflicts = [p for p in git.run(path, "diff", "--name-only", "--diff-filter=U", "-z").split("\0") if p]
+                if not conflicts:
                     git.run(path, "-c", "user.name=CointOS", "-c", "user.email=cointos@localhost",
                             "commit", "-q", "--no-edit")
                     continue
                 git.result(path, "merge", "--abort")
-                raise ValueError(f"the packet's tests ({test[:12]}) do not merge with {commit[:12]}:\n"
-                                 + (merged.stdout + merged.stderr).strip()[-2000:])
+                raise CompositionError(f"the packet's tests ({test}) do not merge with {commit}; "
+                                       f"binding set: {tests}; conflicts: {conflicts}:\n"
+                                 + (merged.stdout + merged.stderr).strip()[-2000:],
+                                       main=commit, packets=tests, failed_packet=test, paths=conflicts)
         yield path, git.head(path)
 
 
@@ -353,18 +389,14 @@ def packet_check(repo, main: str, commit: str, tests: list[str], bundled: list[l
     own = packet_tests(repo, main, tests, rules)
     own += [list(c) for c in bundled if list(c) not in own]
     deadline = time.monotonic() + timeout
-    with combined(repo, commit, tests, rules) as (path, head):
-        failed = []
-        for command in own:
-            code, output = _run(path, head, command, deadline, memory_gb)
-            if code:
-                failed.append((command, output))
+    with combined(repo, commit, tests, rules, non_code="ours") as (path, head):
+        counts, failed = compare_main(repo, main, path, head, own, rules, deadline, memory_gb)
         if failed:
             raise ValueError(f"{len(failed)} of the packet's {len(own)} tests fail. They are shown here; the rest "
                              f"stay hidden. Fix the code (not the tests), commit, then finish again.\n\n"
                              + failures(path, failed, packet_files(repo, main, tests, rules)
                                         + [c for c in bundled_files(path, failed)]))
-    return {"tests": list(tests), "packet_tests": len(own)}
+    return {"tests": list(tests), "packet_tests": len(own), "packet_gate": counts}
 
 
 def passing(repo, main: str, tests: list[str], rules: dict, timeout: float, memory_gb=None) -> bool:
@@ -372,7 +404,7 @@ def passing(repo, main: str, tests: list[str], rules: dict, timeout: float, memo
     registered command. Such tests have no code left to wait for."""
     deadline = time.monotonic() + timeout
     try:
-        with combined(repo, main, tests, rules) as (path, head):
+        with combined(repo, main, tests, rules, non_code="ours") as (path, head):
             return all(_run(path, head, command, deadline, memory_gb)[0] == 0
                        for command in registered(repo, head, rules))
     except ExecutionError:
@@ -397,7 +429,7 @@ def packet_unchanged(repo, worker: dict, main: str, candidate: str | None, tests
     """Stage ownership holds and the complete test tree equals main plus the packet.
     A test writer supplies its own commit; an implementer supplies its accepted test commits."""
     stage_history(repo, worker, main, rules)
-    with combined(repo, main, tests, rules) as (_, expected):
+    with combined(repo, main, tests, rules, non_code="ours") as (_, expected):
         paths = git.changed(repo, expected, candidate) if candidate is not None else working_paths(repo, expected)
         changed = [p for p in paths if protected(p, rules)]
         if changed:
@@ -416,8 +448,25 @@ def tests_landed(repo, main: str, tests: list[str], rules: dict) -> bool:
     files = packet_files(repo, main, tests, rules)
     if not files:
         return True
-    with combined(repo, main, tests, rules) as (_, merged):
+    with combined(repo, main, tests, rules, non_code="ours") as (_, merged):
         return all(git.blob(repo, merged, name) == git.blob(repo, main, name) for name in files)
+
+
+def compare_main(repo, main: str, path, candidate: str, commands: list[list[str]], rules: dict,
+                 deadline: float, memory_gb=None) -> tuple[dict, list]:
+    """One baseline rule for submission and landing. Only a command registered
+    on exact main and failing there can be exempted; new packet tests stay binding.
+    ExecutionError propagates from either side and never counts as a baseline red.
+    Both sides consume the same operation deadline.
+    """
+    on_main = registered(repo, main, rules)
+    red = [(c, out) for c in commands for code, out in [_run(path, candidate, c, deadline, memory_gb)] if code]
+    already = []
+    if red:
+        with checkout(repo, main) as before:
+            already = [c for c, _ in red if c in on_main and _run(before, main, c, deadline, memory_gb)[0]]
+    caused = [(c, out) for c, out in red if c not in already]
+    return {"suite": len(commands), "failed": len(red), "red_on_main": len(already)}, caused
 
 
 def suite(repo, main: str, candidate: str, rules: dict, timeout: float, memory_gb=None) -> tuple[dict, list]:
@@ -425,14 +474,8 @@ def suite(repo, main: str, candidate: str, rules: dict, timeout: float, memory_g
     the failures the candidate causes (red on the candidate, not red on main), each as
     (command, output, revealed source). A failure main already has is not the packet's."""
     commands = registered(repo, candidate, rules)
-    on_main = registered(repo, main, rules)
     deadline = time.monotonic() + timeout
     with checkout(repo, candidate) as path:
-        red = [(c, out) for c in commands for code, out in [_run(path, candidate, c, deadline, memory_gb)] if code]
-        caused = []
-        if red:
-            with checkout(repo, main) as before:
-                already = [c for c, _ in red if c in on_main and _run(before, main, c, deadline, memory_gb)[0]]
-            caused = [(c, out, reveal(path, out, bundled_files(path, [(c, out)])))
-                      for c, out in red if c not in already]
-    return {"suite": len(commands), "failed": len(red), "red_on_main": len(red) - len(caused)}, caused
+        counts, failures_ = compare_main(repo, main, path, candidate, commands, rules, deadline, memory_gb)
+        caused = [(c, out, reveal(path, out, bundled_files(path, [(c, out)]))) for c, out in failures_]
+    return counts, caused

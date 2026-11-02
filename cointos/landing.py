@@ -71,6 +71,7 @@ def check_candidate(repo: str, worker: dict, parent: str, commit: str | None, ru
 def submitted_tests(worker: dict) -> list[str]:
     """The current independent contract, validated by this worker's exact receipt."""
     with LOCK:
+        packets.require_resolved(worker)
         tests = tests_of(worker, required=True)
         if worker['receipt']['evidence'].get('tests') != tests:
             raise ValueError('receipt test-contract commits differ from the current accepted dependencies; '
@@ -88,6 +89,7 @@ def current(integration: dict, run: str | None, submitted: dict, repo: str, main
     """
     lifecycle.require_run(integration, run)
     worker = L["tasks"][integration["worker"]]
+    packets.require_resolved(worker)
     packets.require_current(worker)
     if any(t.get("admission_hold") or queues.records().get(t.get("record"), {}).get("held_by")
            for t in (integration, worker)):
@@ -251,6 +253,7 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
                 if integration.get("admission_hold"):
                     raise ValueError("integration is held")
             held = L["tasks"][worker_id]
+            packets.require_resolved(held)
             if (held["status"] != "review" or held.get("receipt") != worker["receipt"]
                     or held.get("record_version") != worker.get("record_version")
                     or held.get("admission_hold")

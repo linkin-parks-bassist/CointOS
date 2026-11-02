@@ -1,12 +1,13 @@
 ---
 status: green
-revised_at: "2026-10-22T08:10:44+11:00"
+revised_at: "2026-10-25T13:46:28+11:00"
 ---
 
 Acceptance requires independent live behavior, not ledger totals or green fixtures.
 
 - Soak: two hours unattended with at least four live agents sharing the configured lane, checks green throughout and at least three accepted queue-item commits. Integrators signal checked acceptance and the daemon settles dependencies.
 - Coin under load: ten Telegram messages during the soak receive visible model replies within fifteen seconds.
+- Requested results: completion announcements verify the actual requested implementation and relevant behaviour at its accepted location. Plans and unrelated passing tests do not establish delivery. Repeated checks of the same outcome across task changes, history rollover and restart send no new announcement; direct user questions still receive current answers. Exercise this with native model judgment as well as fixtures.
 - Workstation: normal desktop use remains responsive; the user's local OpenCode work outranks background agents.
 - Halt/up: halting during the soak leaves no CointOS process or loaded model; up resumes interrupted tasks.
 - Kill: killing a native agent is detected and resumed within thirty seconds, returning checks to green.

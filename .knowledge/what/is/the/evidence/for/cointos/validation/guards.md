@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-19T23:13:22+11:00"
+revised_at: "2026-10-26T16:41:19+11:00"
 ---
 
 The latest source suite passes 1,061 tests with three native-only skips (workflow-observation-20261019/snapshot-cleanup-suite.log). snapshot-cleanup-verified.json binds ten runtime modules. Its 117 focused checks cover blocked RAM/SSD deletion, charged capacity, concurrent TCP/token progress, restore pins, copy-back, inventory/deletion retry, restart and filename safety. Earlier qualified checks retain FIFO journal progress/ordering, usable-prefix fallback, twelve real copy-process deaths, exact-byte recovery, protected cache replacement, identical HTTP snapshots, delivered tool-cycle reuse and rejection of changed reasoning. Real-file persistence checks cover telemetry-only deduplication, immediate budget/receipt/snapshot/hold publication, target binding, failed-write retry, ordering and blocked-storage authority. Focused persistence/storage owners retain deployment and live-benefit bounds.
@@ -13,7 +13,7 @@ Native branch-publisher confinement/scratch/compaction/recovery qualification pa
 
 Mechanism coverage includes recovery ownership, restart deduplication, project serialization, atomic planning/handoff, exact replay, immutability and MCP flush before acknowledgment. Independently reviewed correction preserves implementation, holds and old acceptance until review activates bindings. Admission/review-slot ordering prevents consumers starving correction review. Migration preserves authority/artifacts. Review staging rejects staged, unstaged and untracked tampering. Fault campaigns exercise production functions through the current seeded/ordered-pair matrix and 20,000 previously qualified cases.
 
-Timeout and shell/direct OOM raise ExecutionError; ordinary exit 124 remains assertion evidence. Suites may outlast a command cap; lease wait does not consume it. Infrastructure failures escalate separately from product refusals. Packet-preserving revision refuses test removal. Distinct shared commands execute once. Landing exempts unrelated failures already on main; submission requires all selected bindings. Registered commands do not prove semantic adequacy.
+Timeout and shell/direct OOM raise ExecutionError; ordinary exit 124 remains assertion evidence. Suites may outlast a command cap; lease wait does not consume it. Infrastructure failures escalate separately from product refusals. Packet-preserving revision refuses test removal. Distinct shared commands execute once. Submission and landing share the registered-command baseline comparison: only failures reproduced on pinned main are exempt; new commands must pass and execution errors block. Three real-Git regressions cover agreement, new-command rejection and baseline execution errors. The retained Pigen candidate a43106b against main afe318b and packet cdf4e41 ran 90 commands with seven failures, all reproduced on main (submission-baseline-20261026/candidate-check.json). This is gate evidence, not reviewed product acceptance. Registered commands do not prove semantic adequacy.
 
 Native independently reviewed corrections, implementation landings and model-error retries have focused evidence in live acceptance; these observations do not certify sustained judgment or throughput.
 

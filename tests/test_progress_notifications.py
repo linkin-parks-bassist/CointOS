@@ -202,13 +202,16 @@ class ConversationLoop(unittest.TestCase):
             self.assertIn('Yes, use your recommendation.', text)
             self.assertIn('<cointos-reply-to>', text)
             if len(requests) == 1:
+                return {'role': 'assistant', 'tool_calls': [{'id': 'ack', 'function': {
+                    'name': 'send', 'arguments': '{"message":"Releasing the held work."}'}}]}
+            if len(requests) == 2:
                 return {'role': 'assistant', 'tool_calls': [{'id': 'release', 'function': {
                     'name': 'hold_item', 'arguments': '{"item":"p:step","release":true}'}}]}
             self.assertIsNone(state.L['queue']['p:step']['held_by'])
             return {'role': 'assistant', 'content': 'Pigen can continue; I released the held work.'}
         with patch.object(coin, 'complete', side_effect=complete), \
                 patch.object(coin, 'call', side_effect=api.dispatch), \
-                patch.object(coin, 'send', return_value={'message_id': 43}):
+                patch.object(coin, 'send', side_effect=[{'message_id': 43}, {'message_id': 44}]):
             coin.turn('fixture-token', 7, 70, [record], lambda: [], None)
         self.assertIsNone(state.L['queue']['p:step']['held_by'])
         self.assertEqual(coin.recent(7)[-1]['content'], 'Pigen can continue; I released the held work.')

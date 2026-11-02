@@ -46,3 +46,29 @@ class CompletionFollowups(unittest.TestCase):
                     {'tasks': {'system:audio': {'status': 'done'}}}, {7})
         with coin_followups._registry(self.root / 'followups') as (_, data):
             self.assertEqual(len(data['items']), 1)
+
+    def test_factory_handoffs_are_observed_without_intermediate_coin_turns(self):
+        coin_followups.retain(self.root / 'followups', 7, 70, 'p:plan', 'Build feature')
+        ledger = {'tasks': {'p:plan': {'status': 'done', 'place': 'p', 'receipt': {
+            'evidence': {'handoff': [{'name': 'review'}]}}}}, 'queue': {
+            'p:plan': {'project': 'p', 'done': {'commit': 'plan'}},
+            'p:review': {'project': 'p', 'proposed_by': 'p:plan'},
+            'p:implementation': {'project': 'p', 'proposed_by': 'p:review'}}}
+        for key in ('p:review', 'p:implementation'):
+            coin_followups.observe(self.root / 'followups', self.root / 'wakes', ledger, {7})
+            self.assertEqual(wakeups.list(self.root / 'wakes', 7), [])
+            self.assertEqual(len(coin_followups.context(self.root / 'followups', 7, 70)), 1)
+            ledger['queue'][key]['done'] = {'commit': key}
+        coin_followups.observe(self.root / 'followups', self.root / 'wakes', ledger, {7})
+        self.assertEqual(len(wakeups.list(self.root / 'wakes', 7)), 1)
+        self.assertEqual(coin_followups.context(self.root / 'followups', 7, 70), [])
+
+    def test_missing_declared_handoff_and_pending_replacement_are_not_completion(self):
+        ledger = {'tasks': {'p:plan': {'status': 'done', 'place': 'p', 'receipt': {
+            'evidence': {'handoff': [{'name': 'missing'}]}}}}}
+        self.assertFalse(coin_followups.settled('p:plan', ledger))
+        ledger = {'queue': {'p:old': {'project': 'p', 'replaced_by': ['new']},
+                            'p:new': {'project': 'p'}}}
+        self.assertFalse(coin_followups.settled('p:old', ledger))
+        ledger['queue']['p:new']['done'] = {'commit': 'landed'}
+        self.assertTrue(coin_followups.settled('p:old', ledger))

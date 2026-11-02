@@ -35,24 +35,68 @@ def retain(directory, user, chat, task, description):
         privatejson.write(fd, 'followups.json', data, _validate)
 
 
+def context(directory, user, chat):
+    """The conversation's dispatched owners, independent of rolling history."""
+    with _registry(directory) as (_, data):
+        return [dict(item) for item in data['items'].values()
+                if item['user'] == user and item['chat'] == chat]
+
+
+def settled(task_id, ledger):
+    """Follow declared factory ownership without asking Coin to supervise the queue."""
+    tasks, records = ledger.get('tasks', {}), ledger.get('queue', {})
+    pending, seen = [task_id], set()
+    while pending:
+        key = pending.pop()
+        if key in seen:
+            continue
+        seen.add(key)
+        task, record = tasks.get(key), records.get(key)
+        replacements = (record or {}).get('replaced_by') or []
+        if replacements:
+            pending.extend(f"{record['project']}:{name}" for name in replacements)
+        elif record is not None:
+            if not record.get('done'):
+                return False
+        elif not task or task.get('status') != 'done':
+            return False
+        owners = {key}
+        owners.update(t['id'] for t in tasks.values()
+                      if t.get('record') == key or t.get('worker') == key
+                      or (t.get('repair_origin') or {}).get('task') == key)
+        pending.extend(k for k, r in records.items() if r.get('proposed_by') in owners)
+        # A declared handoff missing from the projection is unknown, never completion.
+        for child in ((task or {}).get('receipt') or {}).get('evidence', {}).get('handoff', []):
+            name = child.get('name')
+            if name:
+                place = (record or {}).get('project') or (task or {}).get('place')
+                pending.append(f'{place}:{name}')
+    return True
+
+
 def observe(directory, wakes, ledger, allowed):
     """Successful task settlement queues model verification; failures remain local."""
     with _registry(directory) as (fd, data):
         for key, item in list(data['items'].items()):
             if item['user'] not in allowed:
                 continue
-            task = ledger.get('tasks', {}).get(item['task'])
-            if not task or task.get('status') != 'done':
+            if not settled(item['task'], ledger):
                 continue
-            message = ('Report completion of requested work. The user asked for: ' + item['description']
+            message = ('Report completion of requested work. This is a verification trigger, not proof of completion. The user asked for: ' + item['description']
                 + '\nTask: ' + item['task'] + '\nFollow-up: ' + key
                 + '\nRead the current task receipt and verify the deliverables exist before replying. '
-                  'Send a short substantive update saying what is finished and where the result is. '
+                  'Read exact returned evidence paths; delegate implementation/diff and behaviour verification. A plan-only commit, '
+                  'green unrelated suite or completed controller does not establish the requested implementation. '
+                  'Use report_result for a short substantive update saying what is finished and where it is. '
                   'A significant usable deliverable merits a milestone message even if other work remains. '
                   'Internal planning or a successful test alone is not a user-facing milestone. '
-                  'If this task handed off children, continue tracking the unfinished deliverables with '
-                  'task-state wakes; do not claim the whole request is complete. '
-                  'Keep routine mistakes and recovery chatter local. Check history to avoid duplicate announcements.')
+                  'The service observes declared handoffs; factory managers and Operators own product supervision. '
+                  'Do not inspect the whole queue, schedule continuation checks or choose the next product task. '
+                  'Use only the exact returned result/evidence paths; delegate detailed verification if needed. '
+                  'Keep routine mistakes and recovery chatter local. Check reported-results context and archive '
+                  'before reporting; reuse the same location/milestone for the same user deliverable across task IDs. '
+                  'A repeated verification or cleared internal blocker merits no new announcement. Finish silently '
+                  'when there is no new verified user deliverable.')
             if not any(r['message'] == message for r in wakeups.list(wakes, item['user'])):
                 wakeups.create(wakes, item['user'], item['chat'], message,
                                {'kind': 'deadline', 'after_seconds': 0})

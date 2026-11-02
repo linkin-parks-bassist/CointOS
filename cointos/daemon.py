@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 
-from cointos import (checks, gateway, keys, messages, lanes, lifecycle, memory, opencode, queues, recovery, runs, settings,
+from cointos import (checks, gateway, keys, messages, lanes, lifecycle, memory, models, opencode, queues, recovery, runs, settings,
                      snapshots, snapshot_cleanup, spawner, startup, viewers)
 from cointos.config import LEDGER, read_owned_json
 from cointos.state import BACKEND, CONFIG, LOCK, L, STARTUP, STOPPING, alert, fresh, flush_journal, log, now, save
@@ -26,15 +26,24 @@ from cointos.state import BACKEND, CONFIG, LOCK, L, STARTUP, STOPPING, alert, fr
 def check_models() -> None:
     """Match lanes to what the model server actually serves, and launch a wanted model that
     is missing, one at a time, once its memory fits."""
+    with LOCK:
+        if models.changing():
+            return
+        wanted = models.required()
+        selected = {**CONFIG, "models": {n: s for n, s in CONFIG["models"].items() if n in wanted}}
     try:
-        found, unreachable = BACKEND.models(CONFIG), None
+        found, unreachable = BACKEND.models(selected), None
     except Exception as error:
         found, unreachable = None, f"model server unreachable: {error}"
     with LOCK:
+        if models.changing():
+            return
         for name, state in L["models"].items():
-            if state["launching"]:
+            if name not in wanted or state["launching"]:
                 continue
             problems = [unreachable] if found is None else found[name].get("problems", [])
+            if not problems and 'resident_state_bytes' in found[name]:
+                state['resident_state_bytes'] = found[name]['resident_state_bytes']
             if not problems and not state["up"]:
                 state.update(up=True, problems=[])
                 lanes.lanes_up(name)
@@ -48,7 +57,7 @@ def check_models() -> None:
         if found is None or STOPPING.is_set() or any(m["launching"] for m in L["models"].values()):
             return
         for name, state in L["models"].items():
-            if state["up"] or (L["guard"]["killed"] and name == CONFIG["work_model"]):
+            if name not in wanted or state["up"] or (L["guard"]["killed"] and name == CONFIG["work_model"]):
                 continue
             if not snapshots.make_room(CONFIG["models"][name]["memory_gb"]):
                 state["problems"] = [f"waiting for {CONFIG['models'][name]['memory_gb']} GB of headroom"]
@@ -138,7 +147,7 @@ def look_after_agents() -> None:
                 agent["last_activity"] = now()
         if agent["repeats"] > limits["max_identical_thoughts"]:
             lifecycle.stop(agent_id, "repeating one thought", requeue=True)
-    for agent_id in checks.silent_agents(CONFIG, L, now()):
+    for agent_id in ([] if models.changing() else checks.silent_agents(CONFIG, L, now())):
         lifecycle.stop(agent_id, "silent too long", requeue=True)
 
 
@@ -258,6 +267,7 @@ def observe_trees() -> None:
 def main() -> None:
     faulthandler.register(signal.SIGUSR1, all_threads=True)  # `kill -USR1` shows every thread's stack
     restore(read_owned_json(LEDGER, {}))
+    models.retire_unused()
     gateway.serve()
     for tier in ('memory', 'disk'):
         threading.Thread(target=snapshot_cleanup.run, args=(tier,), daemon=True, name=f'cache-{tier}-cleanup').start()

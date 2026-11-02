@@ -8,7 +8,8 @@ from cointos.state import CONFIG
 
 class ReasoningBudget(unittest.TestCase):
     def run_state(self, generated=(), budget=4, maximum=32):
-        return {'reader': {'reasoning_budget': budget, 'think_end': 99, 'think_close': [10, 99, 10]},
+        return {'reader': {'reasoning_budget': budget, 'think_end': 99, 'think_close': [10, 99, 10],
+                           'think_close_text': '\n</think>\n\n'},
                 'generated': list(generated), 'max': maximum, 'queue': queue.Queue()}
 
     def step(self, run, chunk=96):
@@ -23,7 +24,7 @@ class ReasoningBudget(unittest.TestCase):
         run['generated'].append(4)
         count, thought = self.step(run)
         self.assertEqual(run['generated'], [1, 2, 3, 4, 10, 99, 10])
-        self.assertEqual(run['queue'].get_nowait(), [10, 99, 10])
+        self.assertEqual(run['queue'].get_nowait(), ([10, 99, 10], '\n</think>\n\n'))
         self.assertTrue(thought['reasoning_budget_reached'])
         self.assertEqual(count, 25)
         self.step(run)

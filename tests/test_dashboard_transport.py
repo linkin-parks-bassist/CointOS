@@ -191,3 +191,86 @@ const poll = html.slice(html.indexOf('async function poll()'), html.indexOf('\np
 '''
         subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
                        check=True, timeout=10, capture_output=True, text=True)
+
+
+class OperatorPreview(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'requires Node for browser JavaScript checks')
+    def test_scrolled_snapshot_stays_fixed_until_return_to_live(self):
+        script = r"""
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+const html = fs.readFileSync('web/dashboard.html', 'utf8');
+const output = {dataset: {}, innerHTML: ''}, events = {}, button = {hidden: true};
+let top = 0;
+const viewport = {firstElementChild: output, clientHeight: 100, setAttribute() {}, focus() {},
+  addEventListener: (kind, fn) => events[kind] = fn,
+  get scrollHeight() { return Math.max(100, output.innerHTML.length); },
+  get scrollTop() { return top; }, set scrollTop(value) { top = Math.max(0, Math.min(value, this.scrollHeight - 100)); }};
+const wrap = {querySelector: name => name === '.live' ? viewport : button};
+const context = {setHTML: (el, value) => { el.innerHTML = value; }};
+vm.createContext(context);
+vm.runInContext(html.slice(html.indexOf('function updateLivePreview('), html.indexOf('// Balance rows')), context);
+context.updateLivePreview(wrap, 'a'.repeat(1000), true);
+assert.equal(top, 900);
+viewport.scrollTop = 300; events.scroll();
+assert.equal(button.hidden, false);
+context.updateLivePreview(wrap, 'b'.repeat(1500), true);
+assert.equal(output.innerHTML, 'a'.repeat(1000), 'stream updates preserve the snapshot being read');
+assert.equal(top, 300);
+context.updateLivePreview(wrap, '', true);
+assert.equal(output.innerHTML, 'a'.repeat(1000), 'a cleared stream preserves the snapshot too');
+context.updateLivePreview(wrap, 'latest'.repeat(300), true);
+button.onclick({preventDefault() {}, stopPropagation() {}});
+assert.equal(output.innerHTML, 'latest'.repeat(300));
+assert.equal(top, 1700);
+assert.equal(button.hidden, true);
+context.updateLivePreview(wrap, 'newest'.repeat(400), true);
+assert.equal(top, 2300, 'live following resumes');
+"""
+        subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                       check=True, capture_output=True, text=True, timeout=10)
+
+
+class WorkflowStages(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'requires Node for browser JavaScript checks')
+    def test_mapping_review_authorship_and_artifact_review_stay_distinct(self):
+        script = r"""
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+const html = fs.readFileSync('web/dashboard.html', 'utf8');
+const elements = {workflow: {}, flow: {}};
+const context = {assert, elements, console, ROUTE: {project: 'p'}, $: id => elements[id], esc: value => String(value ?? ''), ago: () => '1m',
+  setHTML: (el, value) => el.innerHTML = value};
+vm.createContext(context);
+const source = html.slice(html.indexOf('const WORKFLOW_STAGES'), html.indexOf('// One card per registered project'));
+vm.runInContext(source + `
+const state = {queue: {
+ 'p:map-pipeline-tests': {project:'p', item:'map-pipeline-tests', kind:'command', status:'done', depends:[]},
+ 'p:review-pipeline-test-map': {project:'p', item:'review-pipeline-test-map', kind:'command', status:'queued', depends:['map-pipeline-tests']},
+ 'p:scenario': {project:'p', item:'scenario', kind:'queued', stage:'test-contract', status:'queued', depends:['review-pipeline-test-map']},
+ 'p:packet': {project:'p', item:'packet', kind:'queued', stage:'test-contract', status:'queued', depends:[]},
+ 'p:held': {project:'p', item:'held', kind:'queued', stage:'implementation', status:'queued', depends:[]}
+}, tasks: {
+ 'p:map-pipeline-tests': {id:'p:map-pipeline-tests',kind:'breakdown',role:'manager',place:'p',title:'map-pipeline-tests',status:'done'},
+ 'p:review-pipeline-test-map': {id:'p:review-pipeline-test-map',kind:'breakdown',role:'manager',place:'p',title:'review-pipeline-test-map',status:'running'},
+ 'p:packet': {id:'p:packet',kind:'item',role:'worker',stage:'test-contract',place:'p',title:'packet',status:'review'},
+ 'p:integrator': {id:'p:integrator',kind:'integrate',role:'integrator',worker:'p:packet',status:'running'},
+ 'p:held': {id:'p:held',kind:'item',role:'worker',stage:'implementation',place:'p',status:'waiting',admission_hold:'paused by user'}
+}};
+FLOW = computeFlow(state);
+assert.equal(FLOW.items.get('p:review-pipeline-test-map').step, 'building');
+assert.equal(workflowPosition(FLOW.items.get('p:review-pipeline-test-map')), 'map-review');
+assert.equal(FLOW.items.get('p:scenario').step, 'blocked');
+assert.equal(workflowPosition(FLOW.items.get('p:scenario')), 'test-contract');
+assert.equal(workflowPosition(FLOW.items.get('p:packet')), 'test-review');
+assert.equal(FLOW.items.get('p:held').step, 'blocked');
+assert.equal(landedKind(FLOW.items.get('p:map-pipeline-tests')), 'test-mapping');
+assert.equal(workflowStage({role:'manager',brief:'Workflow stage: map-review',title:'custom-title'}), 'map-review');
+assert.ok(stageBadge(state.tasks['p:review-pipeline-test-map']).includes('Review test map'));
+assert.ok(stageBadge(state.tasks['p:integrator'],state.tasks['p:packet']).includes('Review tests'));
+renderFlow(state);
+assert.equal((elements.workflow.innerHTML.match(/data-workflow=/g) || []).length, 9);
+for (const stage of WORKFLOW_STAGES) assert.ok(elements.workflow.innerHTML.includes(stage[1]), stage[1]);
+assert.ok(elements.flow.innerHTML.includes('Review map'));
+`, context);
+"""
+        subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                       check=True, capture_output=True, text=True, timeout=10)

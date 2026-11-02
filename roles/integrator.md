@@ -18,6 +18,27 @@ whole-pipeline success: two simultaneously enabled users of an exclusive resourc
 be a valid ownership witness.
 Check each named property's observable consequence: a fixture already normalized by hand
 does not prove normalization, and failing to build on main does not prove every claimed law.
+For each promised property, identify a plausible wrong result and the assertion that would
+reject it. Trace the witness through the tested API to that assertion; section names and
+comments are not evidence. Record presence alone does not prove its value, gating or ordering.
+Use a small diagnostic probe only where inspection leaves doubt; no broad mutation campaign
+is required. State any unobservable obligation explicitly and ensure its later verification
+does not depend on the acceptance it is supposed to authorize.
+If a probe violates a promised behavior but passes the packet, that is a failed
+contract review: return the packet with the counterexample and missing assertion.
+Running and recording the probe does not satisfy the requirement to reject that
+wrong behavior. Do not accept by relabeling the same assertions as structural
+coverage, narrowing the requested behavior, or deferring its proof until after the
+acceptance it must authorize. A real phase-local or skeleton contract may cover
+structure only; it cannot discharge a behavioral requirement. An impossible
+observation boundary needs an explicit contract/interface repair by its owner.
+For an already accepted defective packet, finish blocked with the exact packet,
+violated obligation, candidate/probe refs and observed result so recovery can use
+the independently reviewed correct-tests path. Returning a test author's old
+packet or returning an implementation does not replace that accepted contract;
+the handoff must explicitly request its independent correction and retain the
+consumer's blocker until correction review. Preserve the finding in the owning
+knowledge answer and return/handoff; passing tests or commentary cannot close it.
 Do failure witnesses reach the tested API, and do assertions remain valid after implementation?
 A command failing to build or execute is not evidence of missing behavior. Inspect the output
 and distinguish the intended assertion from infrastructure failures. Return defective tests;
@@ -32,7 +53,11 @@ Only a complete worker receipt authorizes landing, whatever its stage.
    Protected-file conflicts containing only concurrent insertions are composed automatically,
    retaining a whole block once when already present; otherwise current-side blocks precede
    packet blocks. Repeating review preserves committed candidates. Conflicting replacements need review.
-   Resolve conflicts. The item's construction stage is fixed and decides its landing checks.
+   Resolve conflicts. An ordinary knowledge/document conflict is yours to resolve here:
+   keep main's knowledge and the packet's tests, stage the resolution, and land. The gate
+   composes only the protected test contract for exactness, so an unrelated non-code conflict
+   does not return the packet or make it blocked. A protected test/harness conflict still
+   returns to the worker. The item's construction stage is fixed and decides its landing checks.
    Protected paths include configured build files such as Makefile. A test-contract worker
    may change those harnesses; their filename does not make the item an implementation.
    A candidate-content mismatch means your review tree differs from main plus the submitted
@@ -113,7 +138,9 @@ Only a complete worker receipt authorizes landing, whatever its stage.
    If the API reply is lost, rerun the same command and summary; acceptance is idempotent.
    If current main conflicts with your candidate, preserve both sides' intent, resolve
    and stage the files, then rerun `cointos land` with the same summary. That command
-   commits the resolution and submits the exact candidate through the landing gate.
+   commits the resolution and submits the exact candidate through the landing gate. This
+   includes knowledge leaves: a resolvable merge is not a blocked item. Never discard
+   accepted main knowledge or the packet's tests to make a conflict disappear.
    Never write scheduler leaves or use commit trailers for queue settlement.
    For implementation and integration items, a test the candidate breaks returns the item,
    with that test, to its

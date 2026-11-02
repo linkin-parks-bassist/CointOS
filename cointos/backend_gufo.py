@@ -1,6 +1,7 @@
 """Externally scheduled Gufo runner, through the private gufo-control socket."""
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
 import math
@@ -21,22 +22,26 @@ def _options(config: dict, model: str) -> dict:
 
 
 def _identity(options: dict) -> str:
+    # Snapshot compatibility namespace; info.upstream_revision identifies the engine.
     identity = options['sha256'] + ':1f97092333af10f29887b098d9cb8a041610004a:'
     if draft := options.get('dflash'):
         identity += f"dflash:{draft['sha256']}:{draft.get('max_draft_tokens', 7)}:{draft.get('policy', 'adaptive')}:"
     return identity
 
 
-def _call(config: dict, model: str, op: str, *, timeout=None, **body):
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+def _connect(config: dict, model: str, op: str, *, timeout=None, **body):
+    connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
         connection.settimeout(timeout or config['timeouts']['server_seconds'])
         connection.connect(str(Path(_options(config, model)['socket']).expanduser()))
         connection.sendall(json.dumps({'op': op, **body}).encode() + b'\n')
-        with connection.makefile('rb') as response:
-            line = response.readline()
-    if not line:
-        raise RuntimeError('Gufo control connection ended without a response')
-    result = json.loads(line)
+    except BaseException:
+        connection.close()
+        raise
+    return connection
+
+
+def _failure(result: dict, op: str):
     if 'error' in result:
         if result['error'].startswith('lost:'):
             raise Lost(result['error'])
@@ -48,6 +53,43 @@ def _call(config: dict, model: str, op: str, *, timeout=None, **body):
     return result['result']
 
 
+def _call(config: dict, model: str, op: str, *, timeout=None, **body):
+    with _connect(config, model, op, timeout=timeout, **body) as connection:
+        with connection.makefile('rb') as response:
+            line = response.readline()
+    if not line:
+        raise RuntimeError('Gufo control connection ended without a response')
+    return _failure(json.loads(line), op)
+
+
+def _call_stream(config: dict, model: str, op: str, on_tokens, *, timeout=None, **body):
+    """Call a model operation, delivering each streamed token/piece before its result."""
+    with _connect(config, model, op, timeout=timeout, **body) as connection:
+        streamed = False
+        with connection.makefile('rb') as response:
+            while True:
+                line = response.readline()
+                if not line:
+                    raise RuntimeError('Gufo control connection ended without a response')
+                message = json.loads(line)
+                if 'stream' in message:
+                    frame = message['stream']
+                    tokens, pieces = frame.get('tokens'), frame.get('pieces')
+                    if (not isinstance(tokens, list) or not tokens
+                            or any(type(token) is not int or not 0 <= token <= 0xffffffff
+                                   for token in tokens)
+                            or not isinstance(pieces, str)):
+                        raise RuntimeError('Gufo streamed an incomplete token frame')
+                    try:
+                        payload = base64.b64decode(pieces, validate=True)
+                    except ValueError as error:
+                        raise RuntimeError('Gufo streamed invalid token bytes') from error
+                    on_tokens(tokens, payload)
+                    streamed = True
+                    continue
+                return _failure(message, op), streamed
+
+
 def models(config: dict) -> dict[str, dict]:
     found = {}
     for model, shape in config['models'].items():
@@ -57,10 +99,14 @@ def models(config: dict) -> dict[str, dict]:
             identity = _identity(options)
             if (info.get('protocol') != 1 or info.get('context') != shape['ctx_size'] // shape['lanes']
                     or info.get('lanes') != shape['lanes'] or info.get('speculative') is not bool(options.get('dflash'))
-                    or not info.get('identity', '').startswith(identity)):
+                    or not info.get('identity', '').startswith(identity)
+                    or info.get('resident_switch') is not True
+                    or type(info.get('resident_state_bytes')) is not int
+                    or info['resident_state_bytes'] <= 0):
                 found[model] = {'problems': ['Gufo native shape/identity mismatch']}
             else:
-                found[model] = {'lanes': shape['lanes']}
+                found[model] = {'lanes': shape['lanes'],
+                                'resident_state_bytes': info['resident_state_bytes']}
         except (OSError, ValueError, RuntimeError) as error:
             found[model] = {'problems': [str(error)]}
     return found
@@ -160,6 +206,30 @@ def can_continue(config: dict, model: str, held: list[int] | None, tokens: list[
     return bool(held) and len(held) <= len(tokens) and tokens[:len(held)] == held
 
 
+def select(config: dict, model: str, lane: int, owner: str) -> list[int]:
+    """Select the resident native object, never a serialized copy."""
+    result = _call(config, model, 'select', lane=lane, owner=owner)
+    tokens = result.get('tokens')
+    if not isinstance(tokens, list) or any(type(t) is not int or not 0 <= t <= 0xffffffff for t in tokens):
+        raise RuntimeError('Gufo resident selection returned invalid tokens')
+    return tokens
+
+
+def release_residents(config: dict, model: str, owners: list[str]) -> None:
+    _call(config, model, 'release_residents', owners=owners)
+
+
+def residents(config: dict, model: str) -> list[str]:
+    return _call(config, model, 'residents')['owners']
+
+
+def resident_bytes(config: dict, model: str) -> int:
+    info = _call(config, model, 'info')
+    if info.get('resident_switch') is not True:
+        raise RuntimeError('Gufo binary does not support resident state selection')
+    return info['resident_state_bytes']
+
+
 def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> None:
     result = _call(config, model, 'prefill', lane=lane, tokens=tokens, held=held,
                    max_input_tokens=config['scheduler']['read_chunk_tokens'])
@@ -170,9 +240,14 @@ def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -
 def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max_new: int,
           sampling: dict, on_tokens) -> dict:
     sampling = {**_options(config, model).get('sampling', {}), **sampling}
-    event = _call(config, model, 'think', lane=lane, tokens=tokens, held=held, max_new=max_new,
-                  sampling=sampling,
-                  max_input_tokens=config['scheduler']['read_chunk_tokens'])
+    delivered = []
+    def emit(new, pieces):
+        delivered.extend(new)
+        on_tokens(new, pieces)
+    event, streamed = _call_stream(config, model, 'think', emit, lane=lane, tokens=tokens, held=held,
+                                   max_new=max_new, sampling=sampling,
+                                   max_input_tokens=config['scheduler']['read_chunk_tokens'],
+                                   stream=True)
     new = event.get('tokens')
     if (not isinstance(new, list) or any(type(token) is not int or not 0 <= token <= 0xffffffff for token in new)
             or len(new) > max_new or event.get('held') != len(tokens) + len(new)
@@ -180,8 +255,11 @@ def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max
             or type(event.get('generation_seconds')) not in (int, float)
             or not math.isfinite(event['generation_seconds']) or event['generation_seconds'] < 0):
         raise RuntimeError('Gufo returned an incomplete token step')
-    if new:
-        on_tokens(new)
+    if streamed:
+        if delivered != new:
+            raise RuntimeError('Gufo streamed tokens differ from its completed step')
+    elif new:
+        on_tokens(new, None)
     seconds = event['generation_seconds']
     return {**event, 'held': tokens + new, 'sampling': sampling,
             'rate': len(new) / seconds if seconds and len(new) >= 16 else None}

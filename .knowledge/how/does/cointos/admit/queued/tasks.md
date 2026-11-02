@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-16T05:23:05+11:00"
+revised_at: "2026-10-27T08:58:56+11:00"
 ---
 
 tasks.create allocates tasks in the shared task/queue namespace. schema.KINDS owns role, rank, scope and receipt/landing vocabulary. lifecycle.py owns transitions and acceptance; frontier.py derives recovery ownership from current work. A failed assignment goes directly to one capable controller, with no decomposition-manager stage. Automatic controllers in the same project execute serially; unrelated workers and independent review remain eligible.
 
-Spawner refreshes work/dependency projections and materializes current recovery before choosing retained runnable tasks by rank/creation time. It then considers new queue work, integrations, maintenance and scouts. Admission and GPU pre-emption are separate. Ordinary dependency waits remain valid; user holds, disabled projects, stale ownership and active same-project integration govern eligibility.
+Spawner refreshes work/dependency projections and materializes current recovery before choosing retained runnable tasks by rank/creation time. It then considers new queue work, integrations, maintenance and scouts. Admission and GPU pre-emption are separate. Resource admission uses capacity.py's shared process/native-state commitments before launching, with disposable cache reclamation; how/does/cointos/protect/workstation/memory.md owns the capacity contract. Ordinary dependency waits remain valid; user holds, disabled projects, stale ownership and active same-project integration govern eligibility.
 
 Pending typed test corrections are derived admission prerequisites for consumers of the original packet. A brief revision cannot restart those consumers early. The author never waits on its own correction; waiting consumer reviews cannot occupy the correction's review slot. Withdrawal removes this wait without changing old acceptance; independent acceptance refreshes dependent assignments. Runtime queue projections identify the pending correction. Already active runs retain ordinary lifecycle handling. This behavior is installed. The 132-test isolated installed replay covers the race and reviewer ordering; live-ledger inspection confirms consumer admission waits while correction review remains eligible. Native acceptance of correction 53e6a913 then advanced the unchanged implementation to version 5 and launched worker-6293c0; its own task tool returned that corrected binding and no pending correction.
 

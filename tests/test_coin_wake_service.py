@@ -154,7 +154,7 @@ class WakeService(unittest.TestCase):
     def test_wake_tools_bind_identity_to_conversation_and_deduplicate_repeated_calls(self):
         arguments = {'message': 'Check later.', 'condition': {'kind': 'deadline', 'after_seconds': 10},
                      'user': 8, 'chat': 80}
-        replies = iter([assistant(call('wake', arguments), call('wake', arguments, 'duplicate')), assistant(call('done'))])
+        replies = iter([assistant(call('send', {'message': 'I’ll arrange that check.'}), call('wake', arguments), call('wake', arguments, 'duplicate')), assistant(call('done'))])
         with patch.object(coin, 'complete', side_effect=lambda *args, **kwargs: next(replies)):
             coin.turn('never-a-real-token', 7, 70, ['Check later.'], lambda: [], None)
         records = wakeups.list(self.directory / 'wakes', 7)

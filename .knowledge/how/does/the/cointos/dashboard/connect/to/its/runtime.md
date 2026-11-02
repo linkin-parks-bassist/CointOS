@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-19T23:21:57+11:00"
+revised_at: "2026-10-30T12:55:25+11:00"
 ---
 
-The dashboard uses relative /api/ledger, /api/live and control URLs against its page's server. A DDRiver reverse proxy displays DDRiver's runtime; the viewing device needs no local instance. Host access and layout retain separate owners.
+The dashboard uses relative /api/ledger, /api/live and control URLs against its page's server. A proxy displays its configured host's runtime; the viewer needs no instance. The durable instance runs on halomit. DDRiver was erased for return; performance evidence below is pre-migration donor qualification. Host access and layout retain separate owners.
 
 Full snapshots clone nested state under the daemon lock, then encode, compress and send outside it. Slow sockets cannot retain that lock; concurrent mutation cannot change a captured reply. Installed capture reuses state._snapshot's JSON-container clone instead of generic deepcopy, preserving ordinary JSON response bytes and nested isolation.
 

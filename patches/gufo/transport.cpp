@@ -10,7 +10,22 @@
 #include <future>
 #include <mutex>
 #include <stdexcept>
+#include <string_view>
 namespace cointos {
+namespace {
+bool SendAll(int socket, std::string_view bytes) {
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    const auto n = send(socket, bytes.data() + offset, bytes.size() - offset,
+                        MSG_NOSIGNAL);
+    if (n <= 0)
+      return false;
+    offset += static_cast<std::size_t>(n);
+  }
+  return true;
+}
+}  // namespace
+
 void ServeControl(int listener, Control& control) {
   std::atomic<bool> running{true};
   std::mutex owner;
@@ -66,21 +81,24 @@ void ServeControl(int listener, Control& control) {
             running.store(false);
             shutdown(listener, SHUT_RDWR);
             response["ok"] = true;
-          } else
-            response["result"] = control.Call(request);
+          } else {
+            const auto* stream = request.find("stream");
+            const bool streaming = stream && stream->is_bool() &&
+                                   stream->as_bool();
+            Control::Emit emit;
+            if (streaming)
+              emit = [&](const gufo::json::Value& frame) {
+                auto wrapper = gufo::json::Value::object();
+                wrapper["stream"] = frame;
+                SendAll(client, wrapper.dump() + "\n");
+              };
+            response["result"] = control.Call(request, emit);
+          }
         }
       } catch (const std::exception& exception) {
         response["error"] = exception.what();
       }
-      const auto bytes = response.dump() + "\n";
-      std::size_t offset = 0;
-      while (offset < bytes.size()) {
-        auto n = send(client, bytes.data() + offset, bytes.size() - offset,
-                      MSG_NOSIGNAL);
-        if (n <= 0)
-          break;
-        offset += n;
-      }
+      SendAll(client, response.dump() + "\n");
       close(client);
     }));
   }

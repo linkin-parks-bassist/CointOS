@@ -23,6 +23,7 @@ import urllib.request
 from pathlib import Path
 
 from cointos import cli, config as configuration, kt_mcp, wakeups, coin_input, coin_attachments, coin_files, coin_requests, coin_routing, coin_notifications, coin_followups
+from cointos import coin_reports, stations
 from cointos.client import Unreachable, call, ledger
 from cointos.config import KEYS, ROOT, STATE
 
@@ -297,11 +298,39 @@ def complete(model: str, messages: list[dict], timeout: float, **options) -> dic
                          "Do not reproduce these headers in replies. Message numbers are positions "
                          "in the preceding message list, starting at 1 and including system messages.\n"
                          + "\n".join(timeline) + "\n</cointos-message-times>"})
-    body = {"model": model, "messages": rendered, "reasoning_effort": CONFIG["reasoning"]["default"], **options}
+    body = {"model": model, "messages": rendered, "reasoning_effort": SETTINGS.get("reasoning_effort", CONFIG["reasoning"]["default"]), **options, "stream": True}
     request = urllib.request.Request(configuration.api_url(CONFIG) + "/v1/chat/completions", json.dumps(body).encode(),
                                      {"Content-Type": "application/json", "Authorization": f"Bearer {coin_key()}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.load(response)["choices"][0]["message"]
+        message = {"role": "assistant", "content": ""}
+        calls = {}
+        finished = False
+        for line in response:
+            if not line.startswith(b"data: "):
+                continue  # gateway keepalives preserve waiting requests
+            payload = line[6:].strip()
+            if payload == b"[DONE]":
+                if not finished:
+                    raise RuntimeError("Coin stream ended without a completed reply")
+                if calls:
+                    message['tool_calls'] = [calls[i] for i in sorted(calls)]
+                return message
+            event = json.loads(payload)
+            if event.get('error'):
+                raise RuntimeError(f"Coin model error: {event['error']}")
+            for choice in event.get('choices', []):
+                delta = choice.get('delta') or {}
+                for field in ('content', 'reasoning_content'):
+                    if delta.get(field):
+                        message[field] = message.get(field, '') + delta[field]
+                for part in delta.get('tool_calls', []):
+                    call = calls.setdefault(part['index'], {'type': 'function', 'function': {'name': '', 'arguments': ''}})
+                    if part.get('id'):
+                        call['id'] = part['id']
+                    for field in ('name', 'arguments'):
+                        call['function'][field] += part.get('function', {}).get(field, '')
+                finished |= choice.get('finish_reason') is not None
+        raise RuntimeError("Coin model stream disconnected before completion")
 
 
 # ---------------------------------------------------------------- turns
@@ -310,6 +339,19 @@ def tool(name: str, description: str, properties: dict | None = None, required: 
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {
         "type": "object", "properties": properties or {}, "required": required or [], "additionalProperties": False}}}
 
+
+INPUT_IDS = {'type': 'array', 'items': {'type': 'integer', 'minimum': 0}, 'minItems': 1,
+             'description': 'Current update_ids belonging to this assignment. Required when multiple inputs are present; exclude unrelated requests.'}
+
+
+AGENT_PROPERTIES = {
+    "name": {"type": "string"}, "brief": {"type": "string"}, "project": {"type": "string"},
+    "station": {"type": "object", "additionalProperties": False, "description": "Where the agent works and what it can reach. Omit for no project: the runtime with standard tools.", "properties": {
+        "directory": {"type": "string", "description": "An existing directory to work in; its writes are confined there. Not combined with project."},
+        "tools": {"type": "array", "items": {"type": "string"}, "description": "Configured MCP servers it can use beyond the standard tools, from mcp_tools, or * for all."}}},
+    "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network"]}},
+    "reasoning_effort": {"type": "string", "enum": ["low", "medium", "xhigh"]},
+    "generation_seconds": {"type": "number"}, "generation_tokens": {"type": "integer"}, 'input_ids': INPUT_IDS}
 
 TOOLS = [
     tool('run_command', 'Run a Bash command on the workstation as the local user. Use for general computer control, programs, services and filesystem tasks. Returns exit status, stdout and stderr. An optional timeout is in seconds; omitted means wait for completion.',
@@ -353,11 +395,12 @@ TOOLS = [
          {"task": {"type": "string", "description": "PROJECT:NAME from jobs or agents"},
           "history": {"type": "boolean", "description": "Include full historical execution narratives"}}, ["task"]),
     tool("check", "The self-check invariants."),
-    tool("queue_item", "Add work to a project's queue: 'urgent' or 'queued' for concrete work, 'command' "
-         "for any bounded managerial action or planning request.", {
+    tool("queue_item", "Dispatch software goals, bug reports, test-quality concerns and integration requests "
+         "with kind command to a manager. The manager maps and reviews tests, then assigns small authors and "
+         "implementers with structured dependencies. urgent/queued describe already-planned construction work.", {
              "project": {"type": "string"}, "kind": {"type": "string", "enum": ["urgent", "queued", "command"]},
              "name": {"type": "string", "description": "a short name, a few words"},
-             "brief": {"type": "string", "description": "the outcome wanted, where it lives, how to tell it is done"}},
+             "brief": {"type": "string", "description": "the outcome wanted, where it lives, how to tell it is done"}, 'input_ids': INPUT_IDS},
          ["project", "kind", "name", "brief"]),
     tool("hold_item", "Keep a queue item (PROJECT:ITEM) from starting while the user decides; release=true lifts the hold.", {
              "item": {"type": "string"}, "release": {"type": "boolean"}}, ["item"]),
@@ -378,12 +421,11 @@ TOOLS = [
              "priority": {"type": "integer"}, "enabled": {"type": "boolean"}}, ["project"]),
     tool("project_remove", "Remove an idle project from CointOS without deleting its repository.", {
              "project": {"type": "string"}}, ["project"]),
-    tool("run_agent", "Start one ad-hoc operator with explicit system/project scope, abilities, reasoning and budget.", {
-             "name": {"type": "string"}, "brief": {"type": "string"}, "project": {"type": "string"},
-             "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network"]}},
-             "reasoning_effort": {"type": "string", "enum": ["low", "medium", "xhigh"]},
-             "generation_seconds": {"type": "number"}, "generation_tokens": {"type": "integer"}},
+    tool("run_agent", "Start one ad-hoc operator with explicit scope, station, abilities, reasoning and budget.", AGENT_PROPERTIES,
          ["name", "brief"]),
+    tool('update_work', 'Forward a continuation or correction to an existing dispatched owner without stopping or restarting it. The service includes the original current inputs verbatim. Use the task ID from dispatched-work context. Inbox acceptance is not consumption or completed work.',
+         {'task': {'type': 'string'}, 'instruction': {'type': 'string', 'description': 'How this input changes the existing request; preserve repetitions and quantities.'}, 'input_ids': INPUT_IDS},
+         ['task', 'instruction']),
     tool("scout", "Schedule the canonical system-wide loose-end scout now."),
     tool("pause_agents", "Stop running autonomous agents (their tasks are kept) and start no new ones."),
     tool("resume_agents", "Let autonomous agents run again."),
@@ -393,8 +435,15 @@ TOOLS = [
     tool("halt", "Halt CointOS: stop the daemon and all agents and unload the models. Coin stays up."),
     tool("start", "Start CointOS again after a halt (or if it is down)."),
     tool("restart", "Drain replies and restart only the daemon, preserving agents, sessions and loaded models."),
-    tool("wake", "Save a durable one-shot model turn with a message and condition. Use it for reminders, future checks or actions. The model can inspect state, use tools and send requested results when woken. Background system alerts remain off.", {
-        "message": {"type": "string"}, "condition": {"oneOf": [
+    tool("wake", "Save a durable future turn with a message and condition, for reminders, checks or actions. The model can inspect state, use tools and send requested results when woken. Deadline, process-exit, unit-state and task-state wakes fire once. schedule and *-change wakes repeat until cancelled, each firing once per new occurrence. Give agent to start that stationed agent directly on each firing with no model turn; message then only describes it. Background system alerts remain off.", {
+        "message": {"type": "string"},
+        "agent": {"type": "object", "properties": AGENT_PROPERTIES, "required": ["name", "brief"], "additionalProperties": False,
+                  "description": "The agent to start each time this fires. Its brief must stand alone: it receives the trigger time but not this conversation."},
+        "condition": {"oneOf": [
+            {"type": "object", "properties": {"kind": {"const": "schedule"}, "cron": {"type": "string", "description": "Five fields, minute hour day-of-month month day-of-week, on the timezone's wall clock. Weekdays at 6:00pm: 0 18 * * 1-5."}, "timezone": {"type": "string", "description": "Named zone such as Pacific/Auckland. Defaults to the workstation's; the result's next_run shows the wall clock to confirm."}}, "required": ["kind", "cron"], "additionalProperties": False},
+            {"type": "object", "properties": {"kind": {"const": "unit-change"}, "unit": {"type": "string"}, "state": {"type": "string", "enum": sorted(wakeups.UNIT_STATES)}}, "required": ["kind", "unit", "state"], "additionalProperties": False},
+            {"type": "object", "properties": {"kind": {"const": "task-change"}, "state": {"type": "string", "enum": sorted(wakeups.TASK_STATES)}, "project": {"type": "string"}}, "required": ["kind", "state"], "additionalProperties": False},
+            {"type": "object", "properties": {"kind": {"const": "path-change"}, "path": {"type": "string", "description": "A file, or a directory's direct entries; nested changes are not seen."}}, "required": ["kind", "path"], "additionalProperties": False},
             {"type": "object", "properties": {"kind": {"const": "deadline"}, "after_seconds": {"type": "number", "minimum": 0}}, "required": ["kind", "after_seconds"], "additionalProperties": False},
             {"type": "object", "properties": {"kind": {"const": "deadline"}, "at": {"type": "string", "description": "ISO date/time with UTC offset. Preserve the requested wall clock with its offset: 12:05 NZST is T12:05:00+12:00; 12:05 NZDT is T12:05:00+13:00. The service converts this to UTC. If you supply a converted UTC clock instead, its offset must be +00:00 or Z."}}, "required": ["kind", "at"], "additionalProperties": False},
             {"type": "object", "properties": {"kind": {"const": "process-exit"}, "pid": {"type": "integer", "minimum": 1}}, "required": ["kind", "pid"], "additionalProperties": False},
@@ -407,19 +456,30 @@ TOOLS = [
          {'id': {'type': 'string'}}, ['id']),
     tool("wakeups", "List this user's saved wakes and any pending events."),
     tool("cancel_wake", "Cancel this user's wake by its returned id, including a queued event. Does not interrupt actions already started.", {"id": {"type": "string"}}, ["id"]),
-    tool("send", "Send a direct reply now; the turn continues. All Telegram text must come from the model; send substantive replies or material progress, never a canned queued receipt. Saved model wakes may send requested reminders or relevant results; do not forward system warnings.", {"message": {"type": "string"}}, ["message"]),
-    tool("done", "End this turn. Closing assistant content is delivered unless this reply already calls send; omit content to finish silently."),
+    tool("pause_wake", "Pause or resume a repeating wake without losing it. Occurrences while paused do not count.", {"id": {"type": "string"}, "paused": {"type": "boolean"}}, ["id", "paused"]),
+    tool("mcp_tools", "Your station has every configured MCP server. With no server, list them; with one, list its tools and their inputs.", {"server": {"type": "string"}}),
+    tool("mcp_call", "Call one tool on a configured local MCP server; use mcp_tools first for its name and inputs.", {"server": {"type": "string"}, "tool": {"type": "string"}, "arguments": {"type": "object"}}, ["server", "tool"]),
+    tool('report_result', 'Announce a verified requested deliverable once. Use for unsolicited completion/milestone updates instead of send. Read reported-results context first and reuse its location/milestone for the same outcome, even across different tasks. Internal plans, tests or handoffs are not delivered implementations. Cite successful fs_read or run_command call IDs from this turn that actually verify the promised behaviour; tool success alone does not prove completion.',
+         {'location': {'type': 'string', 'description': 'Existing canonical result file or project directory; reuse the recorded location.'},
+          'milestone': {'type': 'string', 'description': 'Stable user-visible outcome, e.g. cli-wiring. Reuse for the same deliverable; never task IDs, timestamps or commit hashes.'},
+          'message': {'type': 'string'},
+          'evidence_calls': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1}},
+         ['location', 'milestone', 'message', 'evidence_calls']),
+    tool("send", "Send a direct reply now; the turn continues. Use report_result for unsolicited completion/milestone announcements. All Telegram text must come from the model; never send a canned queued receipt or forward system warnings.", {"message": {"type": "string"}}, ["message"]),
+    tool("done", "End this turn. Closing content is delivered unless this reply calls send/report_result. Internal completion checks require report_result and otherwise finish silently; omit content for silence."),
 ]
-INPUT_GUIDANCE = ("(This is the current pending input, durably saved. Earlier conversation messages are history; "
-                  "their attachments are not newly received in this turn. For a note, log entry or incremental "
-                  "update, FIRST use send to acknowledge receipt of the actual information without claiming "
-                  "it has been recorded. Make the appropriate change on disk, then report it saved, logged, "
-                  "filed, added, updated or corrected only after the operation succeeds. Chat history is not "
-                  "a substitute for the requested record. If writing fails, say it has not been recorded. "
-                  "Answer the current text request before "
-                  "resuming an older retained task. If work will continue, use send to deliver the current answer "
-                  "promptly before further tool rounds. The service sends no canned acknowledgements. "
-                  "Input can replay after interruption: inspect current OS state before repeating actions.)")
+INPUT_GUIDANCE = ("(This is the current pending input, durably saved. Reply FIRST using send, "
+                  "without claiming unperformed work is complete. Dispatch SECOND using run_agent or "
+                  "queue_item; always defer substantive searches, record updates, diagnostics and execution. "
+                  "For unclear work, dispatch an Operator to determine how to dispatch its execution. "
+                  "Use update_work for a continuation to an existing dispatched owner; do not kill/revise it. "
+                  "The service carries original inputs into dispatches; summaries must not override or deduplicate them. "
+                  "Select their input_ids when multiple messages are present; exclude unrelated requests. "
+                  "Pass known destinations. Do not perform a home search, "
+                  "long command or investigation yourself. Retain and track the request, then done; "
+                  "do not wait or repeatedly poll. Earlier messages are history, not new attachments. "
+                  "On replay, use bounded current-task inspection to avoid duplicate dispatch.)")
+
 # The kt tools Coin needs to read and correct knowledge; the rest stay out of its prompt.
 KT_TOOLS = ("kt_lookup", "kt_find", "kt_grep", "kt_read", "kt_add", "kt_rewrite", "kt_renew")
 
@@ -429,10 +489,56 @@ def project_change(arguments: dict) -> dict:
     return call("project-set", {"project": arguments["project"], "settings": changes})
 
 
+def agent_request(arguments: dict) -> dict:
+    """The daemon's Operator request from run_agent's tool arguments, also saved by a wake."""
+    body = {key: arguments[key] for key in ("name", "brief", "project", "station", "abilities", "reasoning_effort") if arguments.get(key) is not None}
+    budget = {key: arguments[key] for key in ("generation_seconds", "generation_tokens") if key in arguments}
+    return {**body, **({"budget": budget} if budget else {})}
+
+
 def run_agent(arguments: dict) -> dict:
-    body = {key: arguments.get(key) for key in ("name", "brief", "project", "abilities", "reasoning_effort")}
-    body["budget"] = {key: arguments[key] for key in ("generation_seconds", "generation_tokens") if key in arguments} or None
-    return call("run-agent", body)
+    return call("run-agent", agent_request(arguments))
+
+
+MCP_SESSIONS: dict[str, dict] = {}
+
+
+def mcp_session(server: str) -> dict:
+    """An open session to one server in Coin's station, restarted if it has died. The kt server
+    has its own session, which withholds the access tools that are the user's decision."""
+    session = MCP_SESSIONS.get(server)
+    if session and session["process"].poll() is None:
+        return session
+    if session:
+        kt_mcp.close(session)
+    configured = stations.servers().get(server)
+    if server in stations.BASE or configured is None:
+        raise ValueError(f"unknown MCP server {server!r}; configured: {mcp_servers()}")
+    if configured.get("type") != "local":
+        raise ValueError(f"{server} is not a local server; start an agent with it in its station instead")
+    session = kt_mcp.connect(configured["command"], Path(stations.COIN["directory"]),
+                             {**os.environ, **configured.get("environment", {})})
+    if session is None:
+        raise RuntimeError(f"MCP server {server} did not start")
+    MCP_SESSIONS[server] = session
+    return session
+
+
+def mcp_servers() -> list[str]:
+    return sorted(set(stations.servers()) - stations.BASE)
+
+
+def mcp_tools(arguments: dict) -> dict:
+    if not arguments.get("server"):
+        return {"ok": True, "servers": mcp_servers()}
+    return {"ok": True, "tools": [tool["function"] for tool in mcp_session(arguments["server"])["tools"]]}
+
+
+def mcp_call(arguments: dict) -> dict:
+    session = mcp_session(arguments["server"])
+    limit = stations.servers()[arguments["server"]].get("timeout")
+    return kt_mcp.call(session, arguments["tool"], arguments.get("arguments") or {},
+                       limit / 1000 if limit else CONFIG["timeouts"]["mcp_call_seconds"])
 
 
 def output(value: str) -> dict:
@@ -467,6 +573,8 @@ EXECUTE = {
     "project_set": project_change,
     "project_remove": lambda arguments: call("project-remove", arguments),
     "run_agent": run_agent,
+    "mcp_tools": mcp_tools,
+    "mcp_call": mcp_call,
     "scout": lambda arguments: call("scout"),
     "pause_agents": lambda arguments: call("stop"),
     "resume_agents": lambda arguments: call("go"),
@@ -492,14 +600,53 @@ def wake_tool(name: str, arguments: dict, user: int, chat: int) -> dict:
     """Identity comes from the active conversation, never model arguments."""
     directory = COIN_STATE / "wakes"
     if name == "wake":
-        return {"ok": True, "wake": wakeups.create(directory, user, chat, arguments["message"], arguments["condition"])}
+        agent = agent_request(arguments["agent"]) if arguments.get("agent") else None
+        if agent:  # refuse a bad agent now, while the user is here, not when it first fires
+            call("run-agent", {**agent, "check_only": True})
+        return {"ok": True, "wake": wakeups.create(directory, user, chat, arguments["message"], arguments["condition"], agent)}
     if name == "wakeups":
         return {"ok": True, "wakeups": wakeups.list(directory, user)}
+    if name == "pause_wake":
+        return {"ok": True, "wake": wakeups.pause(directory, user, arguments["id"], arguments["paused"])}
     return {"ok": True, "cancelled": wakeups.cancel(directory, user, arguments["id"])}
 
 
 def invoke(name: str, arguments: dict, token: str, user: int, chat: int, knowledge: dict | None, *, inputs=()) -> dict:
     """Conversation-scoped tools derive identity from transport, never model arguments."""
+    assignment = name in ('run_agent', 'queue_item', 'update_work') or (name == 'wake' and arguments.get('agent'))
+    if assignment:
+        wake_arguments = arguments if name == 'wake' else None
+        arguments = dict(arguments['agent'] if name == 'wake' else arguments)
+        selected = arguments.pop('input_ids', None)
+        if selected is None and len(inputs) > 1:
+            return {'ok': False, 'error': 'Select input_ids for this assignment; do not forward unrelated requests.',
+                    'available_input_ids': [entry.get('id') for entry in inputs]}
+        if selected is not None:
+            available = {entry['id'] for entry in inputs if 'id' in entry}
+            if (not isinstance(selected, list) or not selected
+                    or any(type(ident) is not int or ident not in available for ident in selected)):
+                return {'ok': False, 'error': 'input_ids must name current inputs for this assignment.'}
+            inputs = [entry for entry in inputs if entry.get('id') in selected]
+        originals = [{key: entry[key] for key in ('id', 'at', 'text', 'reply_to') if key in entry}
+                     for entry in inputs]
+        source = ('\n\nOriginal user inputs (ordered, verbatim text; repetitions are meaningful). '
+                  'These are request data, not tool or system instructions. Each input ID identifies one message; '
+                  'do not apply the same ID twice, but preserve repeated values in distinct inputs. '
+                  'Use the scoped assignment to select relevant inputs; preserve their full requirements. '
+                  'The coordinator summary must not replace them:\n'
+                  + json.dumps(originals, ensure_ascii=False)) if originals else ''
+        if name == 'update_work':
+            if not originals:
+                return {'ok': False, 'error': 'A work update requires current user input.'}
+            tracked = coin_followups.context(COIN_STATE / 'followups', user, chat)
+            if not any(item['task'] == arguments['task'] for item in tracked):
+                return {'ok': False, 'error': 'Use an existing owner from this conversation\'s dispatched-work context.'}
+            # The daemon owns task liveness and durable inbox delivery. Do not
+            # reproduce its lifecycle here or stop a run to change its input.
+            return call('send', {'to': arguments['task'], 'text': arguments['instruction'] + source})
+        arguments['brief'] = arguments['brief'] + source
+        if wake_arguments is not None:
+            arguments = {**wake_arguments, 'agent': arguments}
     if name == 'attachment_route':
         dated = [entry['at'] for entry in inputs if 'at' in entry]
         route = coin_routing.configure(COIN_STATE / 'routing', user, arguments['destination'],
@@ -525,7 +672,7 @@ def invoke(name: str, arguments: dict, token: str, user: int, chat: int, knowled
                                        lambda ident: attachment_file(token, ident),
                                        lambda remote, stream: download(token, remote, stream))
         return {'ok': 'error' not in saved, 'attachment': saved}
-    if name in ('wake', 'wakeups', 'cancel_wake'):
+    if name in ('wake', 'wakeups', 'cancel_wake', 'pause_wake'):
         return wake_tool(name, arguments, user, chat)
     if knowledge and name in knowledge['names']:
         return kt_mcp.call(knowledge, name, arguments)
@@ -559,10 +706,41 @@ def time_context() -> str:
             "are historical evidence, not the current date.\n</cointos-current-time>")
 
 
-def report(busy: bool, doing: str | None = None) -> None:
-    """Tell the daemon what Coin is doing, for its dashboard card; never at the turn's expense."""
+def trigger_text(wake: dict | None, texts: list) -> str:
+    """A short, true description of what started this turn, for Coin's card title."""
+    if wake is None:
+        return "Answering a message" if texts else "Working"
+    message = wake.get("message") or ""
+    condition = wake.get("condition") or {}
+    kind, state = condition.get("kind"), condition.get("state")
+    if wake.get("agent"):
+        return "Starting a saved agent"
+    if kind == "schedule":
+        return "Running a scheduled check"
+    if kind in wakeups.RECURRING:
+        return "Responding to a change"
+    if message.startswith("Explain this CointOS work update"):
+        return "Explaining a work update"
+    if message.startswith("Report completion of requested work."):
+        return "Following up on requested work"
+    if kind == "deadline":
+        return "Issuing a reminder"
+    if kind == "task-state":
+        return "Following up on finished work" if state == "done" else "Checking requested work"
+    if kind == "unit-state":
+        return "Checking a service"
+    if kind == "process-exit":
+        return "Checking a process"
+    return "Following up"
+
+
+def report(busy: bool, doing: str | None = None, trigger: str | None = None) -> None:
+    """Tell the daemon what Coin is doing and what prompted it; never at the turn's expense."""
+    body = {"busy": busy, "doing": doing, "pid": os.getpid()}
+    if trigger is not None:
+        body["trigger"] = trigger
     try:
-        call("coin", {"busy": busy, "doing": doing, "pid": os.getpid()}, timeout=2)
+        call("coin", body, timeout=2)
     except Exception:
         pass
 
@@ -583,13 +761,21 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
     observed_outgoing = {(m['at'], m['content']) for m in history if m['role'] == 'assistant'}
     direct = wake is None or wake["message"].startswith(("Explain this CointOS work update to the user",
                                                           "Report completion of requested work."))
+    completion_only = bool(wake and not texts and (
+        wake['message'].startswith('Report completion of requested work.')
+        or (wake.get('condition', {}).get('kind') == 'task-state'
+            and wake['condition'].get('state') == 'done')))
+    verification = {}
+    reports_context = None
     active_context = None
     route_context = None
     notification_context = None
+    dispatched_context = None
     current_inputs = []
+    awaiting_reply = False
 
     def refresh_requests():
-        nonlocal active_context, route_context, notification_context
+        nonlocal active_context, route_context, notification_context, reports_context, dispatched_context
         # The delivery observer runs concurrently with a model turn. Include a
         # notice sent after this turn's history snapshot before the next round.
         for entry in recent(user):
@@ -635,16 +821,40 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                   'Continue relevant work. Check current files/state; prior assistant claims are not completion evidence. '
                   'A newer user correction or cancellation takes precedence.'}
             messages.insert(history_prefix_messages, active_context)
+        if reports_context is not None:
+            messages.remove(reports_context)
+            reports_context = None
+        reported = coin_reports.context(COIN_STATE / 'reports', user, chat)
+        if reported:
+            reports_context = {'role': 'user', 'content': '<cointos-reported-results>\n'
+                + json.dumps([{k: r[k] for k in ('location', 'milestone', 'message', 'at')}
+                              for r in reported], ensure_ascii=False)
+                + '\n</cointos-reported-results>\nAlready delivered results, independent of rolling history and task IDs. '
+                  'Do not announce these outcomes again. Reuse the recorded location/milestone in report_result. '
+                  'A new task, receipt, wake or verification is not a new milestone. Direct user questions still get answers.'}
+            messages.insert(history_prefix_messages, reports_context)
+        if dispatched_context is not None:
+            messages.remove(dispatched_context)
+            dispatched_context = None
+        dispatched = coin_followups.context(COIN_STATE / 'followups', user, chat)
+        if dispatched:
+            dispatched_context = {'role': 'user', 'content': '<cointos-dispatched-work>\n'
+                + json.dumps(dispatched, ensure_ascii=False)
+                + '\n</cointos-dispatched-work>\nExisting owners of this conversation\'s work. '
+                  'For a continuation/correction use update_work, not kill/revise/restart or a duplicate Operator. '
+                  'Dispatch/inbox acceptance is not completed work. Original wording and repeated quantities matter.'}
+            messages.insert(history_prefix_messages, dispatched_context)
 
     def hear(new: list[str | dict]) -> None:
-        nonlocal direct, chat
+        nonlocal direct, chat, completion_only, awaiting_reply
         if new:
             direct = True
+            completion_only = False
+            awaiting_reply = True
             if input_chat is not None:
                 chat = input_chat()
         for entry in new:
-            if isinstance(entry, dict):
-                current_inputs.append(entry)
+            current_inputs.append(entry if isinstance(entry, dict) else {'text': entry})
             text = input_text(token, entry)
             update_id = entry.get('id') if isinstance(entry, dict) else None
             at = remember(user, "user", text, at=entry.get("at") if isinstance(entry, dict) else None,
@@ -653,10 +863,14 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                        if update_id is not None else text)
             messages.append({"role": "user", "content": content, "at": at})
 
-    def say(text: str) -> None:
+    def say(text: str) -> bool:
+        nonlocal awaiting_reply
         text = reply_text(text)
-        if text:
+        if text and not completion_only:
             deliver_text(token, user, chat, text)
+            awaiting_reply = False
+            return True
+        return False
 
     hear(texts)
     # Instructions at the top of the prompt lose to the habit of looking first; a reminder beside
@@ -667,19 +881,30 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                    "Use tools as needed and send the requested reminder or relevant result; finish with done if nothing needs saying. Do not forward system warnings. Delivery may repeat after interruption; check whether prior actions already happened.")
         at = time.time()  # internal work is not a Telegram message/history slot
         messages.append({"role": "user", "content": content, "at": at})
+        if completion_only:
+            messages.append({'role': 'user', 'content': 'This is an internal completion check. '
+                'Only report_result can send an announcement. send and closing prose are suppressed. '
+                'Read exact returned evidence paths; delegate detailed implementation/behaviour verification. '
+                'If already reported, only an internal stage finished, or completion is unverified, finish silently. '
+                'The service tracks declared handoffs. Product supervision belongs to managers and Operators. '
+                'Do not scan queues, choose next tasks or create continuation wakes. Read only exact result/evidence paths '
+                'for reporting; delegate detailed verification. Do not restart completed work.'})
     elif texts:
         messages[-1] = {**messages[-1], "content": messages[-1]["content"] + "\n\n" + INPUT_GUIDANCE}
     seen: dict[str, dict] = {}
     limit = SETTINGS["max_tool_rounds"]
-    closing_tools = [entry for entry in tools if entry["function"]["name"] in {"send", "done"}]
     for round_number in range(limit + SETTINGS["finishing_rounds"]):
         if round_number:
             hear(arrivals())
         refresh_requests()
+        closing_tools = [entry for entry in tools if entry['function']['name'] in (
+            {'report_result', 'done'} if completion_only else {'send', 'done'})]
         if round_number == limit:
-            messages.append({"role": "user", "content": "Out of steps: `send` what you know and call `done`.", "at": time.time()})
+            messages.append({"role": "user", "content": (
+                'Out of steps: use report_result only for a new verified deliverable; otherwise done silently.'
+                if completion_only else 'Out of steps: `send` what you know and call `done`.'), 'at': time.time()})
         messages.append({"role": "user", "content": time_context(), "at": time.time()})
-        assistant = complete(SETTINGS["model"], messages, timeout=SETTINGS["model_seconds"],
+        assistant = complete(SETTINGS.get("model", "default"), messages, timeout=SETTINGS["model_seconds"],
                              cache_prefix_messages=history_prefix_messages,
                              tools=tools if round_number < limit else closing_tools,
                              temperature=0.4, user=hashlib.sha256(str(user).encode()).hexdigest(),
@@ -689,8 +914,12 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                          "at": time.time()})
         if not calls:
             say(assistant.get("content") or "")
+            if awaiting_reply:
+                messages.append({'role': 'user', 'content': 'This new user input still needs a reply. Use send or provide a direct answer before ending.'})
+                continue
             return
         finished = False
+        sent_in_response = False
         for request in calls:
             name = request["function"]["name"]
             try:
@@ -698,31 +927,59 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
             except ValueError as error:
                 arguments, result = {}, {"ok": False, "error": f"invalid arguments: {error}"}
             else:
-                if name == "send":
-                    say(str(arguments.get("message", "")))
-                    result = {"ok": True, "output": "sent"}
+                if awaiting_reply and name not in ('send', 'done'):
+                    result = {'ok': False, 'error': 'Reply to the current user input with send before tools or dispatch. Acknowledge receipt, not completion.'}
+                elif completion_only and name == 'wake':
+                    result = {'ok': False, 'error': 'The service observes factory handoffs. Do not schedule product continuation checks; finish silently or report an exact verified result.'}
+                elif name == "send":
+                    if completion_only:
+                        result = {'ok': False, 'error': 'Use report_result with current verification evidence, or finish silently.'}
+                    else:
+                        sent = say(str(arguments.get("message", "")))
+                        sent_in_response |= sent
+                        result = ({"ok": True, "output": "sent"} if sent else
+                                  {'ok': False, 'error': 'A reply needs nonempty text.'})
+                elif name == 'report_result':
+                    try:
+                        ids = arguments.get('evidence_calls')
+                        if not isinstance(ids, list) or not ids or any(i not in verification for i in ids):
+                            raise ValueError('Cite successful fs_read/run_command call IDs from this turn that verify the actual deliverable')
+                        result = coin_reports.deliver(COIN_STATE / 'reports', user, chat,
+                            arguments['location'], arguments['milestone'], reply_text(arguments['message']),
+                            [verification[i] for i in ids],
+                            lambda text: deliver_text(token, user, chat, text))
+                    except (KeyError, TypeError, ValueError) as error:
+                        result = {'ok': False, 'error': f'{type(error).__name__}: {error}'}
                 elif name == "done":
-                    finished, result = True, {"ok": True, "output": "turn ended"}
+                    finished = not awaiting_reply or bool(reply_text(assistant.get('content') or ''))
+                    result = ({'ok': True, 'output': 'turn ended'} if finished else
+                              {'ok': False, 'error': 'Reply to the new user input before ending this turn.'})
                 elif round_number >= limit:
                     result = {"ok": False, "error": "out of steps: only `send` and `done` now"}
                 else:
                     signature = name + json.dumps(arguments, sort_keys=True)
+                    if name in ('run_agent', 'queue_item', 'update_work', 'wake'):
+                        signature += json.dumps(current_inputs, sort_keys=True)
                     report(True, name)
                     if signature in seen:
                         result = {**seen[signature], "note": "You already made this call; use this result."}
                     else:
                         try:
                             result = invoke(name, arguments, token, user, chat, knowledge,
-                                            **({'inputs': current_inputs} if name == 'attachment_route' else {}))
+                                            **({'inputs': current_inputs} if name in ('attachment_route', 'run_agent', 'queue_item', 'update_work', 'wake') else {}))
                         except Exception as error:  # a refusal or failure is a result the turn can use
                             result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
                         seen[signature] = result
+                    if name in ('fs_read', 'run_command') and result.get('ok') is True:
+                        verification[request['id']] = {'tool': name, 'arguments': arguments, 'result': result}
             messages.append({"role": "tool", "tool_call_id": request.get("id", ""), "name": name,
                              "content": json.dumps(result)[:20000], "at": time.time()})
         if finished:
-            if not any(request["function"]["name"] == "send" for request in calls):
+            if not sent_in_response and not any(request["function"]["name"] == 'report_result' for request in calls):
                 say(assistant.get("content") or "")
-            return
+            if not awaiting_reply:
+                return
+            messages.append({'role': 'user', 'content': 'No reply was delivered for the new user input. Use send before ending.'})
     raise RuntimeError("Coin exhausted its turn; requested work remains pending")
 
 
@@ -845,13 +1102,21 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
                 consumed.update(item['id'] for item in new)
             return new
 
-        report(True)
+        report(True, trigger=trigger_text(wake, texts))
+        outcome = None
         try:
             try:
                 if wake is None:
                     turn(token, user, chat, texts, arrivals, knowledge, input_chat=lambda: reply_chat)
                 elif wakeups.pending(COIN_STATE / 'wakes', wake['id']):
-                    turn(token, user, chat, texts, arrivals, knowledge, wake=wake, input_chat=lambda: reply_chat)
+                    if wake.get('agent'):
+                        outcome = start_wake_agent(wake)
+                    if outcome is None:
+                        turn(token, user, chat, texts, arrivals, knowledge, wake=wake, input_chat=lambda: reply_chat)
+                    elif 'refused' in outcome:
+                        notice = (f"A saved wake could not start its agent, so it did not run: {outcome['refused']}\n"
+                                  f"The wake is {wake['id']}: {wake['message']}\nTell the user plainly what failed and how to fix it.")
+                        turn(token, user, chat, texts, arrivals, knowledge, wake={**wake, 'message': notice}, input_chat=lambda: reply_chat)
             except Exception as error:
                 traceback.print_exc()
                 if wake is not None:
@@ -867,10 +1132,23 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
                 for ident in consumed:
                     input_retry.pop(ident, None)
                 if wake is not None:
-                    wakeups.ack(COIN_STATE / 'wakes', user, wake['id'])
+                    wakeups.ack(COIN_STATE / 'wakes', user, wake['id'], *([outcome] if outcome else []))
                     retry.pop(wake['id'], None)
         finally:
             report(False)
+
+
+def start_wake_agent(wake: dict) -> dict:
+    """Start a fired wake's agent, without a model turn. The occurrence makes a replay after an
+    interruption return the same task, and a previous occurrence still working is left alone.
+    A refusal is returned for the user to hear about; an unreachable daemon raises and retries."""
+    agent = wake["agent"]
+    brief = f"{agent['brief']}\n\nWhy this run started: {wake['event']['detail']}"
+    try:
+        started = call("run-agent", {**agent, "brief": brief, "occurrence": f"{wake['id']}:{wake['event']['at']}"})
+    except ValueError as error:
+        return {"refused": str(error)}
+    return {"task": started["task"], **({"already_running": True} if started.get("already_running") else {})}
 
 
 def explain_notification(user, text):

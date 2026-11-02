@@ -1,15 +1,15 @@
 ---
 status: green
-revised_at: "2026-10-15T23:47:48+11:00"
+revised_at: "2026-10-29T07:27:18+11:00"
 ---
 
 CointOS work has coherent, bounded behavior at every level; function counts do not determine boundaries. Every assignment consumes a bounded artifact/question and produces a checkable artifact, boundary and handoff. Planning, testing, implementation, integration, maintenance and recomposition all follow this invariant; no monolithic role sits above it.
 
-Managers expose one next boundary and retain the unexpanded product frontier. They publish bounded planning changes and use atomic handoff to queue children and complete planning together. Children continue independently. Integrators may propose one same-project managerial follow-up; scouts rediscover neglected approved work. Nonworkers may start an Operator when work has no pipeline route.
+Managers expose one next boundary and retain the unexpanded product frontier. A separate spec-to-test mapping assignment publishes the scoped scenario list; an independent map-review assignment checks its intentions and hands one line to each test author. They publish bounded planning changes and use atomic handoff to queue children and complete planning together. Children continue independently. Integrators may propose one same-project managerial follow-up; scouts rediscover neglected approved work. Nonworkers may start an Operator when work has no pipeline route.
 
 Product briefs describe behavior and acceptance. Workflow/task sizing belongs to CointOS policy and roles. Evaluate ordinary intake without manually supplying intermediate product work.
 
-Construction establishes small interface skeletons, then independently authored test/code packets from one contract. Integrators review tests before they satisfy prerequisites. Red reviewed tests stay hidden; code submission executes them and reveals failures. Code and tests land together under exact-candidate validation; passing tests can land immediately. Higher integration joins a few already-tested parts.
+Construction establishes small interface skeletons, independently reviewed test maps, then individual scenario authors and implementation packets from one scoped contract. Integrators review tests before they satisfy prerequisites. Red reviewed tests stay hidden; code submission executes them and reveals failures. Code and tests land together under exact-candidate validation; passing tests can land immediately. Higher integration joins a few already-tested parts.
 
 Detail owners:
 

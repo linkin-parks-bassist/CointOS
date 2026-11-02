@@ -40,7 +40,7 @@ def require_compatible_frontier(ledger, live):
 # CLI code is imported by clients/Coin, not the daemon. Existing client processes
 # retain imported code; new processes can receive it without replacing the daemon.
 DAEMON_PARTS = ('cointos', 'config', 'systemd')
-CLIENT_FILES = (Path('cointos/cli.py'),)
+CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'))
 COPIED = ('cointos', 'roles', 'web', 'bin', 'systemd', 'config')
 
 
@@ -79,9 +79,18 @@ def copy_client_files():
                 temporary.unlink(missing_ok=True)
 
 
+def retained_models(candidate, previous):
+    """Dashboard selection and discovered recipes are user-managed across upgrades."""
+    if isinstance(previous, dict) and previous.get('work_model') in previous.get('models', {}):
+        candidate['models'] = {**previous['models'], **candidate['models']}
+        candidate['work_model'] = previous['work_model']
+    return candidate
+
+
 def copy_runtime(names):
     projects_registry = target / 'config/projects.json'
     saved_projects = configuration.read_owned_text(projects_registry)
+    previous_models = configuration.read_owned_json(target / 'config/cointos.json', {})
     if saved_projects is not None:
         registry = json.loads(saved_projects, object_pairs_hook=configuration._fields)
         configuration.project_entries(registry.get('projects') if isinstance(registry, dict) else registry)
@@ -90,6 +99,10 @@ def copy_runtime(names):
         if dest.exists():
             shutil.rmtree(dest)
         shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    if 'config' in names:
+        path = target / 'config/cointos.json'
+        document = retained_models(configuration.read_owned_json(path), previous_models)
+        configuration.write_json(path, document, mode=path.stat().st_mode & 0o777)
     if saved_projects is not None:
         projects_registry.write_bytes(saved_projects.encode('utf-8'))
 
@@ -113,6 +126,7 @@ def install(live=False):
                       .replace('@SERVICE_RESTART_SECONDS@', str(config['service_restart_seconds'])))
                       for template in (source / 'systemd').glob('*.service')}
     installed_config = target / 'config/cointos.json'
+    retained_models(config, configuration.read_owned_json(installed_config, {}))
     if live:
         try:
             previous = configuration.read_owned_json(installed_config)

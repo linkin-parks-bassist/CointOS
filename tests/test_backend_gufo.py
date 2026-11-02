@@ -43,17 +43,64 @@ class GufoBackendTests(unittest.TestCase):
             self.assertEqual(captured, [{'op': 'prefill', 'lane': 0, 'tokens': [1, 2, 3],
                                         'held': 2, 'max_input_tokens': 4}])
 
+    def test_streamed_tokens_and_pieces_reach_the_caller_before_the_result(self):
+        path = self.config['models']['q']['gufo']['socket']
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+            server.bind(path)
+            server.listen()
+            def reply():
+                with server.accept()[0] as connection:
+                    connection.makefile('rb').readline()
+                    connection.sendall(b'{"stream":{"tokens":[3],"pieces":"YQ=="}}\n')
+                    connection.sendall(b'{"stream":{"tokens":[4],"pieces":"Yg=="}}\n')
+                    connection.sendall(b'{"result":{"tokens":[3,4],"held":4,"done":false,'
+                                       b'"generation_seconds":0.25}}\n')
+            worker = threading.Thread(target=reply)
+            worker.start()
+            try:
+                seen = []
+                result, streamed = gufo._call_stream(
+                    self.config, 'q', 'think', lambda new, pieces: seen.append((new, pieces)),
+                    lane=0, tokens=[1, 2], held=2, max_new=2, sampling={}, stream=True)
+            finally:
+                worker.join()
+        self.assertTrue(streamed)
+        self.assertEqual(seen, [([3], b'a'), ([4], b'b')])
+        self.assertEqual(result['tokens'], [3, 4])
+
+    def test_think_delivers_streamed_tokens_without_a_second_full_chunk(self):
+        event = {'tokens': [3, 4], 'held': 4, 'done': False, 'generation_seconds': 0.25}
+        seen = []
+        def stream(config, model, op, on_tokens, **kwargs):
+            on_tokens([3], b'a')
+            on_tokens([4], b'b')
+            return event, True
+        with patch.object(gufo, '_call_stream', side_effect=stream):
+            result = gufo.think(self.config, 'q', 0, [1, 2], 2, 2, {},
+                                lambda new, pieces: seen.append((new, pieces)))
+        self.assertEqual(seen, [([3], b'a'), ([4], b'b')])
+        self.assertEqual(result['held'], [1, 2, 3, 4])
+
+    def test_streamed_tokens_must_match_the_completed_step(self):
+        def stream(config, model, op, on_tokens, **kwargs):
+            on_tokens([3], b'a')
+            return {'tokens': [4], 'held': 4, 'done': False, 'generation_seconds': 1}, True
+        with patch.object(gufo, '_call_stream', side_effect=stream), self.assertRaises(RuntimeError):
+            gufo.think(self.config, 'q', 0, [1, 2], 2, 1, {}, lambda *_: None)
+
     def test_native_step_accounts_only_reported_generation(self):
         event = {'tokens': [3, 4], 'held': 4, 'done': False, 'generation_seconds': 0.25}
         seen = []
-        with patch.object(gufo, '_call', return_value=event) as request:
-            result = native.think(self.config, 'q', 0, [1, 2], 2, 2, {'temperature': 0}, seen.extend)
-        self.assertEqual(seen, [3, 4])
+        with patch.object(gufo, '_call_stream', return_value=(event, False)) as request:
+            result = native.think(self.config, 'q', 0, [1, 2], 2, 2, {'temperature': 0},
+                                  lambda new, pieces=None: seen.append((new, pieces)))
+        self.assertEqual(seen, [([3, 4], None)])
         self.assertEqual(result['held'], [1, 2, 3, 4])
         self.assertEqual(result['generation_seconds'], 0.25)
         self.assertEqual(result['sampling']['temperature'], 0)
         self.assertEqual(result['sampling'], request.call_args.kwargs['sampling'])
         self.assertEqual(request.call_args.kwargs['max_input_tokens'], 4)
+        self.assertTrue(request.call_args.kwargs['stream'])
 
     def test_complete_prefix_reuse_follows_each_backend_contract(self):
         for model in ('q', 'coin'):
@@ -67,16 +114,17 @@ class GufoBackendTests(unittest.TestCase):
     def test_configured_sampling_defaults_allow_per_request_override(self):
         self.config['models']['q']['gufo']['sampling'] = {'temperature': 1, 'top_k': 20}
         event = {'tokens': [3], 'held': 3, 'done': False, 'generation_seconds': 0.25}
-        with patch.object(gufo, '_call', return_value=event) as request:
-            gufo.think(self.config, 'q', 0, [1, 2], 2, 1, {'temperature': 0}, lambda _: None)
+        with patch.object(gufo, '_call_stream', return_value=(event, False)) as request:
+            gufo.think(self.config, 'q', 0, [1, 2], 2, 1, {'temperature': 0}, lambda *_: None)
         self.assertEqual(request.call_args.kwargs['sampling'], {'temperature': 0, 'top_k': 20})
 
     def test_incomplete_step_is_not_published(self):
         seen = []
         for event in ({'tokens': [1], 'held': 999, 'done': False, 'generation_seconds': 1},
                       {'tokens': [], 'held': 2, 'done': False, 'generation_seconds': 1}):
-            with patch.object(gufo, '_call', return_value=event), self.assertRaises(RuntimeError):
-                gufo.think(self.config, 'q', 0, [1, 2], 2, 1, {}, seen.extend)
+            with patch.object(gufo, '_call_stream', return_value=(event, False)), self.assertRaises(RuntimeError):
+                gufo.think(self.config, 'q', 0, [1, 2], 2, 1, {},
+                           lambda new, pieces=None: seen.extend(new))
         self.assertEqual(seen, [])
 
     def test_mixed_health_does_not_route_coin_to_gufo(self):
@@ -88,9 +136,10 @@ class GufoBackendTests(unittest.TestCase):
 
     def test_native_shape_mismatch_never_becomes_ready(self):
         info = {'protocol': 1, 'context': 256, 'lanes': 1, 'speculative': False,
+                'resident_switch': True, 'resident_state_bytes': 1234,
                 'identity': 'abc:1f97092333af10f29887b098d9cb8a041610004a:abi:256:control-v1'}
         with patch.object(gufo, '_call', return_value=info):
-            self.assertEqual(gufo.models({**self.config, 'models': {'q': self.config['models']['q']}}), {'q': {'lanes': 1}})
+            self.assertEqual(gufo.models({**self.config, 'models': {'q': self.config['models']['q']}}), {'q': {'lanes': 1, 'resident_state_bytes': 1234}})
             info['speculative'] = True
             self.assertIn('problems', gufo.models({**self.config, 'models': {'q': self.config['models']['q']}})['q'])
 
@@ -115,10 +164,11 @@ class GufoBackendTests(unittest.TestCase):
         shape['gufo']['dflash'] = {'model_path': '/unused/draft', 'sha256': 'draft-sha',
                                    'max_draft_tokens': 7, 'policy': 'adaptive'}
         info = {'protocol': 1, 'context': 256, 'lanes': 1, 'speculative': True,
+                'resident_switch': True, 'resident_state_bytes': 1234,
                 'identity': 'abc:1f97092333af10f29887b098d9cb8a041610004a:dflash:draft-sha:7:adaptive:abi:256:control-v1'}
         config = {**self.config, 'models': {'q': shape}}
         with patch.object(gufo, '_call', return_value=info):
-            self.assertEqual(gufo.models(config), {'q': {'lanes': 1}})
+            self.assertEqual(gufo.models(config), {'q': {'lanes': 1, 'resident_state_bytes': 1234}})
             shape['gufo']['dflash']['sha256'] = 'different-draft'
             self.assertIn('problems', gufo.models(config)['q'])
             shape['gufo']['dflash']['sha256'] = 'draft-sha'

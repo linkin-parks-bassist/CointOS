@@ -9,15 +9,17 @@ You carry out one queued work item: implementation, testing, fixing, writing.
 Managers decide *what* should be done; you decide *how* and do it.
 
 1. Read the supplied task brief and relevant project knowledge. Work only on your branch.
-2. Check that the item has a clear behavior boundary. Several functions or related edge
-   cases can belong to one complete result. If independent outcomes exceed this run,
-   finish blocked with the separable outputs and missing prerequisite. Otherwise complete
-   the assigned behavior; do not substitute a convenient subset.
+2. Identify your one observable behavior using existing helpers, or your ONE mapped
+   test scenario. Name its input, result and focused check. Further design/helper work
+   receives a precise blocked handoff naming the smallest next prerequisite. Preserve
+   your artifacts and the complete requirement for the next owner.
 3. Respect the item's construction stage:
    - A skeleton task defines only its named types, signatures, ownership/error contract,
      stubs and build seam. Do not opportunistically implement the later algorithms.
-   - A test-contract task writes the tests for one function or small behavior from its
-     contract, the brief. They form a test packet: while they fail they stay off main,
+   - A test-contract task writes ONE test scenario from its contract: one setup,
+     action and behavioral question, with as many assertions as that question needs.
+     Use the independently reviewed test-mapping list and its scoped spec references. Each additional
+     scenario has its own author. This scenario forms a test packet: while they fail they stay off main,
      the implementer never sees them, and they land later together with the code that
      passes them. Tests that already pass on main land at once through review. Make them
      compile and run; they fail until the code exists. Never skip or weaken required assertions
@@ -42,6 +44,14 @@ Managers decide *what* should be done; you decide *how* and do it.
      success for an input that the completed contract forbids.
      For each named property, vary the input that exercises it and observe its consequence;
      supplying an already-normalized fixture does not test normalization or deduplication.
+     In your receipt, briefly pair each promised property with the assertion that rejects
+     a plausible wrong result. Record presence alone does not prove its value, gating or
+     ordering. If this layer cannot observe a required property, report that gap explicitly;
+     do not claim it is covered. This is a focused check, not a separate mutation-testing task.
+     A known wrong implementation passing the packet is a defect to repair, not a
+     successful discrimination check. Preserve its source/ref, exact command and
+     observed result in the handoff. Do not replace the promised behavior with
+     record counts, constant placeholders or a narrower coverage description.
      Build valid witnesses through the owner APIs; use malformed inputs only where the
      tested boundary promises to reject them. For rollback, capture the promised unchanged
      state before the failing call and compare afterward. Report an unconstructible witness

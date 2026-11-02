@@ -1,7 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-11T11:33:59+11:00"
+revised_at: "2026-10-25T23:30:07+11:00"
 ---
+
+Atomic active-pointer selection of resident per-agent inference state is the governing requirement. Gufo V10 now implements resident selection; how/does/gufo/select/resident/agent/state.md owns current qualification/deployment. The comparison below is historical evidence, not a decision about whether to adopt resident switching. Qualification must show ordinary switches do no bulk copy/serialization/checksum/reload and preserve complete continuation state at execution boundaries.
 
 Compare one physical slot that saves/restores alternating histories against two physical slots holding those histories resident. Keep weights, sampling, per-history context allowance and generated-token budgets fixed; issue requests serially so resident capacity is not confused with concurrent batching. Measure copy time, prefix verification, generation, whole handoff time and memory separately. Inspect every returned retained prefix. Preserve production recipe, pin, tasks and autonomy in `finally`.
 
@@ -14,4 +16,4 @@ Compare one physical slot that saves/restores alternating histories against two 
 
 Resident handoffs improve this short fixture 13.3%, without improving raw generation. Single-slot snapshots start at 694,322,892 bytes. Per-handoff restore is roughly 0.10–0.12 seconds and save roughly 0.20–0.24. Generation-time inference-cgroup peaks are 37.45/38.06 GB; these are not complete GPU/whole-machine memory measurements.
 
-Exact retained-prefix assertions pass. Recipe, task/session/branch/worktree identities and autonomy restore; ten runtime checks pass. Output vectors and whole-task quality are not established. This is a serial native prototype, not deployed CointOS scheduling: validate occupied contexts, actual tools/reasoning, resident selection/eviction and paired GPU/host memory before adoption. The service owner explains current paired MTP snapshots; this comparison used target-only snapshots, and the backend benchmark owner holds decode comparisons. Thirty-second scheduler boundaries cause copies only when a different history replaces the lane, not whenever time expires.
+Exact retained-prefix assertions pass. Recipe, task/session/branch/worktree identities and autonomy restore; ten runtime checks pass. Output vectors and whole-task quality are not established. This is a serial native prototype, not deployed CointOS scheduling: validate occupied contexts, actual tools/reasoning, resident selection/eviction and paired GPU/host memory before adoption. The service owner explains historical paired MTP snapshots; this comparison used target-only snapshots, and the backend benchmark owner holds decode comparisons. In that historical one-slot arm, scheduler boundaries caused copies when another history replaced the slot; this is not V10's hot-switch path.

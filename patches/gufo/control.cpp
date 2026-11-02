@@ -48,6 +48,28 @@ Value JsonTokens(std::span<const TextRunnerToken> tokens) {
     result.push_back(static_cast<std::size_t>(token));
   return result;
 }
+std::string Base64(std::string_view bytes) {
+  std::string encoded(4 * ((bytes.size() + 2) / 3), '\0');
+  const int size = EVP_EncodeBlock(
+      reinterpret_cast<unsigned char*>(encoded.data()),
+      reinterpret_cast<const unsigned char*>(bytes.data()),
+      static_cast<int>(bytes.size()));
+  if (size < 0)
+    throw std::runtime_error("base64 encoding failed");
+  encoded.resize(static_cast<std::size_t>(size));
+  return encoded;
+}
+void EmitToken(const Control::Emit& emit, TextRunnerToken token,
+               std::string_view piece) {
+  if (!emit)
+    return;
+  auto frame = Value::object();
+  auto tokens = Value::array();
+  tokens.push_back(static_cast<std::size_t>(token));
+  frame["tokens"] = std::move(tokens);
+  frame["pieces"] = Base64(piece);
+  emit(frame);
+}
 const Value& Required(const Value& value, const std::string& name) {
   const auto* result = value.find(name);
   if (!result)
@@ -155,6 +177,8 @@ Control::Control(std::shared_ptr<const gufo::server::TextModelRunner> runner,
       identity_(std::move(identity)) {
   if (!runner_ || lanes == 0)
     throw std::invalid_argument("runner and lanes required");
+  for (auto& lane : lanes_)
+    lane = std::make_shared<Lane>();
   identity_ += ":" + runner_->Descriptor().state_abi + ":" +
                std::to_string(runner_->Descriptor().max_context) +
                ":control-v1";
@@ -377,11 +401,17 @@ Value Control::Metadata(const Value& request) const {
     result["protocol"] = 1;
     result["pid"] = static_cast<std::size_t>(getpid());
     result["identity"] = identity_;
+    result["upstream_revision"] = COINTOS_GUFO_REVISION;
     result["lanes"] = lanes_.size();
     result["context"] =
         static_cast<std::size_t>(runner_->Descriptor().max_context);
     result["speculative"] =
         runner_->Descriptor().capabilities.multi_token_decode;
+    result["resident_switch"] = true;
+    const auto claim = runner_->ResourceClaim();
+    result["resident_state_bytes"] =
+        claim.per_request_state_bytes.value_or(0) +
+        claim.temporary_scratch_bytes.value_or(0);
     return result;
   }
   if (op == "render")
@@ -398,12 +428,52 @@ Value Control::Metadata(const Value& request) const {
   }
   throw std::invalid_argument("operation requires model ownership");
 }
-Value Control::Call(const Value& request) {
+Value Control::Call(const Value& request, const Emit& emit) {
   const auto op = request.member_str("op");
   if (IsMetadata(op))
     return Metadata(request);
   auto result = Value::object();
-  auto& lane = lanes_.at(Integer(request, "lane"));
+  if (op == "residents") {
+    auto owners = Value::array();
+    for (const auto& [name, state] : residents_)
+      owners.push_back(name);
+    result["owners"] = std::move(owners);
+    return result;
+  }
+  if (op == "release_residents") {
+    // Lifecycle cleanup is separate from selecting the active execution state.
+    const auto& owners = Required(request, "owners");
+    if (!owners.is_array())
+      throw std::invalid_argument("owners must be an array");
+    for (const auto& name : owners.items()) {
+      if (!name.is_string())
+        throw std::invalid_argument("owner must be a string");
+      auto found = residents_.find(name.str());
+      if (found == residents_.end())
+        continue;
+      for (auto& active : lanes_)
+        if (active == found->second)
+          active = std::make_shared<Lane>();
+      residents_.erase(found);
+    }
+    return result;
+  }
+  auto& active = lanes_.at(Integer(request, "lane"));
+  if (op == "select") {
+    const auto owner = request.member_str("owner");
+    if (owner.empty() || owner.size() > 1024)
+      throw std::invalid_argument("resident owner required");
+    auto [found, inserted] = residents_.try_emplace(owner);
+    if (inserted)
+      found->second = std::make_shared<Lane>();
+    // ServeControl holds model ownership after the previous native step has
+    // completed. This reference assignment is the switch's linearization point.
+    active = found->second;
+    result["tokens"] = JsonTokens(active->tokens);
+    result["created"] = inserted;
+    return result;
+  }
+  auto& lane = *active;
   if (op == "save")
     return Save(lane, request.member_str("name"));
   if (op == "restore")
@@ -447,6 +517,7 @@ Value Control::Call(const Value& request) {
           fresh.push_back(selection.token);
           lane.tokens.push_back(selection.token);
           lane.sampler->Accept(selection.token);
+          EmitToken(emit, selection.token, selection.piece);
         }
         const auto position = runner_->CheckpointPosition(*lane.state);
         if (position > lane.tokens.size() ||

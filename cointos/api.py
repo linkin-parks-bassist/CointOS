@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 
-from cointos import contracts, frontier, git, landing, lifecycle, packets, projects, queues, replacement, schema, settings, snapshots, tasks, wakeups
+from cointos import contracts, frontier, git, landing, lifecycle, models, packets, projects, queues, replacement, schema, settings, snapshots, tasks, wakeups
 from cointos.config import ROOT
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
 
@@ -132,6 +132,7 @@ def _finishing(body):
                   and body.get("outcome") == "complete" and lifecycle.owns(task, run)
                   and not task.get("receipt") and git.clean(task["worktree"]))
         if tested:
+            packets.require_resolved(task)
             if STOPPING.is_set():
                 raise ApiError("daemon draining; finish again after replacement")
             if task.get("validating"):
@@ -147,6 +148,7 @@ def _finishing(body):
             submission = {'tree': git.run(where['path'], 'rev-parse', commit + '^{tree}').strip(),
                           'main': main, 'tests': tests, 'bundled': bundled, 'rules': deepcopy(rules),
                           'stage': task['stage'], 'version': task.get('record_version')}
+            retained = deepcopy(previous) if previous.get("inputs") == submission else {}
             task["validating"] = True
             ACTIVE["landings"] += 1
 
@@ -157,6 +159,8 @@ def _finishing(body):
 
     def settle(checked):
         with LOCK:
+            if tested:
+                packets.require_resolved(task)
             receipt = lifecycle.submit(task["id"], run, body.get("outcome"), body.get("detail", ""), checked)
             if tested:
                 task.pop('submission_failure', None)
@@ -166,6 +170,10 @@ def _finishing(body):
 
     if tested:
         try:
+            if retained.get('category') == 'product':
+                raise ValueError(retained['error'])
+            if retained.get('category') == 'composition':
+                raise contracts.CompositionError.retained(retained['error'], retained['composition'])
             checked = {"commit": commit, "tests": tests}
             if rules:
                 contracts.stage_history(where['path'], task, main, rules)
@@ -180,8 +188,12 @@ def _finishing(body):
                                                       CONFIG["timeouts"]["validation_seconds"],
                                                       CONFIG["memory"]["agent_limit_gb"]))
         except ValueError as error:
-            category = 'execution' if isinstance(error, contracts.ExecutionError) else 'product'
-            log('validation execution failed' if category == 'execution' else 'packet tests failed',
+            if isinstance(error, contracts.CompositionError):
+                error.evidence.update(main=main, candidate=commit)
+            category = ('execution' if isinstance(error, contracts.ExecutionError) else
+                        'composition' if isinstance(error, contracts.CompositionError) else 'product')
+            log({'execution': 'validation execution failed', 'composition': 'packet composition failed',
+                 'product': 'packet tests failed'}[category],
                 task=task['id'], commit=commit, reason=str(error)[:500])
             changed, blocked = False, None
             with LOCK:
@@ -197,9 +209,13 @@ def _finishing(body):
                     attempts = failure.get('attempts', 0) + 1 if same else 1
                     task['submission_failure'] = {'inputs': submission, 'attempts': attempts,
                                                   'category': category, 'error': str(error)}
+                    if category == 'composition':
+                        task['submission_failure']['composition'] = deepcopy(error.evidence)
                     changed = True
-                    if attempts >= 3:
-                        reason = (f'Validation infrastructure failed {attempts} unchanged submissions; no assertion evidence: '
+                    if category == 'composition' or attempts >= 3:
+                        reason = ('Accepted test packets cannot compose; request an independently reviewed '
+                                  'correct-tests replacement and preserve implementation artifacts: '
+                                  if category == 'composition' else f'Validation infrastructure failed {attempts} unchanged submissions; no assertion evidence: '
                                   if category == 'execution' else f'Unchanged candidate refused {attempts} submissions: ')
                         receipt = lifecycle.submit(task['id'], run, 'blocked',
                                                    reason + str(error))
@@ -652,24 +668,49 @@ def resume(body):
 
 
 def coin(body):
-    """Coin reports what it is doing, for its dashboard card: busy with a turn, and on what.
-    Its last words stay on the card until the next turn starts."""
-    state, busy = L["coin"], bool(body.get("busy"))
+    """Coin reports what it is doing, for its dashboard card and activity panel: busy with a
+    turn, the tool it is using, and its live worker identity. Its last words stay on the card
+    until the next turn starts."""
+    state, busy, at = L["coin"], bool(body.get("busy")), now()
     pid = body.get("pid")
     if type(pid) is int and pid > 0:
         process = wakeups.process(pid)
         if process is not None:
+            previous = (state.get("process") or {}).get("pid")
+            if (previous is not None and previous != pid) or not state.get("worker_since"):
+                if previous is not None and previous != pid:
+                    state["live"] = {}  # a different worker's last words are not this worker's
+                state["worker_since"] = at
             state["process"] = {"pid": pid, "start_ticks": process["start_ticks"], "boot_id": wakeups.boot_id()}
+    events = state.setdefault("recent", [])
+    def event(name, **fields):
+        events.append({"at": at, "event": name, **fields})
+        del events[:-CONFIG["history_length"]]
+    trigger = body.get("trigger")
+    if trigger is not None and (not isinstance(trigger, str) or not trigger.strip() or len(trigger) > 120):
+        trigger = None
     if busy != state["busy"]:
-        state.update(busy=busy, since=now())
+        state.update(busy=busy, since=at)
         if busy:
             state["live"] = {}
             state["gpu_seconds"] = 0
+            state["turns"] = state.get("turns", 0) + 1
+            state["turn_started_at"] = at
+            state["trigger"] = trigger.strip() if trigger else "Working"
+            event("turn started", turn=state["turns"], trigger=state["trigger"])
         else:
-            state["last_turn_at"] = now()
+            started = state.get("turn_started_at")
+            state["last_turn_at"] = at
+            state["last_turn_seconds"] = at - started if isinstance(started, (int, float)) else None
+            state["turn_started_at"] = None
+            state["last_trigger"] = state.get("trigger") or state.get("last_trigger")
+            state["trigger"] = None
+            event("turn ended", seconds=state["last_turn_seconds"], trigger=state.get("last_trigger"))
     doing = body.get("doing") if busy else None
     if state.get("doing") != doing:
-        state["doing_since"] = now()
+        state["doing_since"] = at
+        if doing:
+            event("tool", detail=doing)
     state["doing"] = doing
     return {"ok": True}
 
@@ -722,7 +763,13 @@ def run_agent(body):
     task, run = caller(body)
     spawner = (running(body), L["agents"][run]) if task is not None else None
     task = tasks.request_operator(body["name"], body["brief"], body.get("project"), body.get("abilities"),
-                                  body.get("reasoning_effort"), body.get("budget"), spawner)
+                                  body.get("reasoning_effort"), body.get("budget"), spawner,
+                                  station=body.get("station"), occurrence=body.get("occurrence"),
+                                  check_only=bool(body.get("check_only")))
+    if task is None:
+        return {"ok": True}
+    if body.get("occurrence") and task.get("occurrence") != body["occurrence"]:
+        return {"ok": True, "task": task["id"], "already_running": True}
     log("operator requested", task=task["id"], abilities=task["abilities"], spawned_by=task.get("spawned_by"))
     return {"ok": True, "task": task["id"]}
 
@@ -909,7 +956,7 @@ ACTIONS = {
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,
     "run-agent": run_agent, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
     "reasoning": reasoning, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
-    "viewers": viewers, "scheduler": scheduler,
+    "viewers": viewers, "scheduler": scheduler, "default-model": models.choose,
     "project-list": project_list, "project-new": project_new, "project-add": project_add,
     "project-set": project_set, "project-remove": project_remove,
 }

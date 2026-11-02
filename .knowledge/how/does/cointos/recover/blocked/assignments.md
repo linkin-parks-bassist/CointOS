@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-23T20:50:37+11:00"
+revised_at: "2026-10-28T23:59:48+11:00"
 ---
 
 Recovery belongs to a canonical assignment/version. frontier.py derives its obstruction, corrective handoffs and one independently funded, control-enabled Operator. Failed construction/planning, infrastructure admission holds and taskless invalid dependencies use this route. Controllers run serially per project; unrelated work remains eligible. No manager-to-Operator or Operator-of-Operator chain replenishes exhausted controllers.
@@ -11,12 +11,16 @@ An assignment or its current controller can propose continuation, including afte
 
 Launch and CLI/MCP inspection share current queue authority, binding tests and typed pending corrections. Historical briefs cannot override them. Ordinary packets claiming replacement in prose never change acceptance. Implementation/integration requires actual accepted test-contract edges; empty or obsolete receipts cannot authorize landing.
 
-Controllers repair scoped queue authority, resume after infrastructure repair and request independent correction of invalid accepted tests. Test placement and sequencing are engineering judgment: preserve every product obligation and later witness in the owning plan, settle the choice and establish a runnable continuation. They are not personal-authority forks. Old acceptance binds until review. Pending corrections prevent premature consumer admission while author/reviewer remain eligible; implementation artifacts and explicit holds survive activation.
+Controllers repair scoped queue authority, resume after infrastructure repair and request independent correction of invalid accepted tests. Test placement and sequencing are engineering judgment: preserve every product obligation and later witness in the owning plan, settle the choice and establish a runnable continuation. They are not personal-authority forks. Old acceptance binds until review. Pending corrections prevent consumer admission, completion, landing and incorporation while author/reviewer remain eligible; final gates recheck corrections arriving during validation. Implementation artifacts and explicit holds survive activation. Preserve known counterexamples with the original obligation, exact source/probe refs and command/result through interruption and handback. A passing wrong implementation cannot be cleared by narrowing its coverage description or promising verification after acceptance. An authorized requirement-owner scope change must be explicit.
 
 Complete repair requires an origin change with reachable continuation, cleared admission hold, checked maintenance or runnable independent correction. Revising another item alone is insufficient. cointos_replace validates existing-work closure and clean landed artifacts before repointing dependents and completing atomically. Unknown/cyclic/held/blocked replacements and actively reviewed dependents refuse before mutation. Exact retries replay; product acceptance is untouched. correct-tests similarly checks handback and completes recovery atomically; manager/ad-hoc correction requests remain nonterminal.
 
 Pending canonical drafts are an authority boundary. Preserve them regardless of author identity; ages, branches and process directories confer no authority. Without authorized reconciliation, return blocked. An inferred author or promised future investigation is not checked handback.
 
 Changed authorized assignments can restart exhausted workers on preserved artifacts; identical revisions cannot refill budgets. Revisions preserve explicit holds and revoke obsolete controllers. Withdrawal removes mutation authority but permits checked closure. Interruptions retain conversations; exhaustion preserves files/evidence. Construction and Operators default to zero fresh allowances. Unchanged product-validation refusals remain blockage; execution failures count separately.
+
+Source prelaunch and submission composition failures enter recovery directly. Structured refs, packet list, failed packet and paths are exposed by frontier.inspect for the worker and its recovery controller; prelaunch failures avoid infrastructure retries. Request a typed independently reviewed correct-tests repair; preserve code and retry after relevant inputs change. Deployment and native qualification remain pending.
+
+Operator guidance reuses exact failure evidence, reproduces only unresolved points and routes the smallest correction to its authorized owner. Distinguish product, contract, composition and execution causes before retrying; preserve valid artifacts and state verification limits. Broad suites need repetition only when changed inputs or repair justify it.
 
 Product acceptance remains separate from recovery handback. Evidence: frontier.py, recovery.py, the checked API controls, test_factory_frontier and the production-function simulator. Live-acceptance limits belong to their focused owner.

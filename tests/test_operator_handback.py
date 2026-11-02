@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from cointos import api, cli, client, lifecycle, mcp, opencode, queues, spawner, state, tasks
+from cointos import api, cli, client, lifecycle, mcp, opencode, queues, spawner, state, stations, tasks
 from tests import support
 
 
@@ -101,7 +101,7 @@ class OperatorHandback(unittest.TestCase):
         self.assertEqual(state.L['queue']['q:diagnose']['proposed_by'], operator['id'])
         self.assertEqual(operator['place'], 'system')
         self.assertIsNone(operator['branch'])
-        with patch.object(opencode, 'GLOBAL_CONFIG', Path(self.project['path']).parent / 'absent.json'):
+        with patch.object(stations, 'GLOBAL_CONFIG', Path(self.project['path']).parent / 'absent.json'):
             broad = opencode.settings(state.CONFIG, 'fixture-key', operator, [])['permission']
             ordinary = opencode.settings(state.CONFIG, 'fixture-key', {**operator, 'abilities': ['standard']}, [])['permission']
         for permission in ('read', 'edit', 'external_directory'):

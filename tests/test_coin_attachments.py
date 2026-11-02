@@ -193,14 +193,14 @@ class Attachments(unittest.TestCase):
                 self.assertIn('Save these for later', str(messages))
                 content = next(m['content'] for m in messages if m['role'] == 'user' and '<cointos-attachments>' in m['content'])
                 path = json.loads(content.split('<cointos-attachments>\n')[1].split('\n</')[0])['files'][0]['path']
-                return {'role': 'assistant', 'tool_calls': [call('fs_mkdir', {'path': str(organised)}),
+                return {'role': 'assistant', 'tool_calls': [call('send', {'message': 'Organising the picture.'}), call('fs_mkdir', {'path': str(organised)}),
                     call('fs_move', {'path': path, 'destination': str(organised / 'saved.jpg')})]}
             self.assertTrue(all(json.loads(m['content'])['ok'] for m in messages if m['role'] == 'tool'))
             return {'role': 'assistant', 'content': 'Saved the picture in photos.'}
         with patch.object(coin, 'complete', side_effect=model), patch.object(coin, 'send', side_effect=lambda *args: sent.append(args[-1])):
             coin.turn('token', 7, 70, [item], lambda: [], None)
         self.assertEqual((organised / 'saved.jpg').read_bytes(), self.payload)
-        self.assertEqual(sent, ['Saved the picture in photos.'])
+        self.assertEqual(sent, ['Organising the picture.', 'Saved the picture in photos.'])
 
     def test_poller_persists_album_then_worker_downloads_all_files_after_restart(self):
         first, second = copy.deepcopy(self.update), copy.deepcopy(self.update)

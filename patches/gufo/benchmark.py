@@ -29,7 +29,7 @@ def measure(run, backend, config, prompt, count, sampling):
     while len(fresh) < count:
         start = time.monotonic()
         result = backend.think(config, name, 0, tokens, held,
-                               min(96, count-len(fresh)), sampling, lambda _: None)
+                               min(96, count-len(fresh)), sampling, lambda *_: None)
         wall += time.monotonic() - start
         produced = result['tokens']; fresh += produced; tokens += produced
         held = len(result['held'])

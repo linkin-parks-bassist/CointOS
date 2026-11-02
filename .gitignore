@@ -7,3 +7,4 @@ projects/*
 !inbox/triaged/.gitkeep
 !projects/.gitkeep
 __pycache__/
+.rocprofv3/

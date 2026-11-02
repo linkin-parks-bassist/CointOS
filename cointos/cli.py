@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 from cointos import config as configuration, contracts, frontier, git, metrics, opencode, queues, schema
@@ -32,6 +33,25 @@ def ago(seconds: float) -> str:
     return f"{seconds}s" if seconds < 120 else f"{seconds // 60}m" if seconds < 7200 else f"{seconds // 3600}h"
 
 
+def coin_thought(state: dict) -> dict | None:
+    return next((t for t in (state.get("thoughts") or {}).values() if t.get("agent") == "coin"), None)
+
+
+def coin_phase(coin: dict, thought: dict | None) -> str:
+    """What Coin is actually doing, from its live thought before a retained tool name."""
+    if coin.get("alive") is False:
+        return "offline"
+    if thought and thought.get("reading"):
+        return "reading"
+    if thought:
+        return (coin.get("live") or {}).get("phase") or "thinking"
+    if coin.get("doing"):
+        return "tools"
+    if coin.get("busy"):
+        return "working"
+    return "idle"
+
+
 def status_text(state: dict) -> str:
     """Agents first, then the work, then the resources that serve them."""
     now = time.time()
@@ -43,6 +63,22 @@ def status_text(state: dict) -> str:
              f"{sum(a['state'] == 'waiting' for a in agents)} waiting, {sum(a['state'] == 'running' for a in agents)} running)",
              f"work     {count('running')} in progress  {count('waiting')} up next  {count('review')} in review  "
              f"{count('done')} done  {count('failed')} gave up"]
+    coin = state.get("coin") or {}
+    if coin:
+        phase = coin_phase(coin, coin_thought(state))
+        if coin.get("busy"):
+            label = coin.get("trigger") or phase
+            if phase.lower() not in (label.lower(), "working"):
+                label += f" · {phase}"
+            if phase == "tools" and coin.get("doing"):
+                label += f" · {coin['doing']}"
+        else:
+            label = "idle" + (f" · last: {coin['last_trigger']}" if coin.get("last_trigger") else "")
+        last = (f"last turn {ago(now - coin['last_turn_at'])} ago" if coin.get("last_turn_at")
+                else "no turns yet")
+        current = (f" · turn {ago(now - coin['turn_started_at'])}"
+                   if coin.get("busy") and coin.get("turn_started_at") else "")
+        lines.insert(1, f"coin     {label} · {coin.get('turns', 0)} turns{current} · {last}")
     frontier = state.get('work_frontier', [])
     if frontier:
         blocked = [row for row in frontier if row['status'] == 'blocked' and not row.get('held_by')]
@@ -364,8 +400,104 @@ def interactive(command: str) -> None:
                          "use `cointos agents`, `cointos jobs` or `cointos task` instead")
 
 
+def coin_banner(state: dict) -> str:
+    """One line naming what started Coin's turn and what it is doing now."""
+    coin = state.get("coin") or {}
+    thought = coin_thought(state)
+    phase = coin_phase(coin, thought)
+    model = (coin.get("model") or "").replace("-GGUF", "")
+    bits = []
+    if coin.get("busy"):
+        label = coin.get("trigger") or phase
+        bits.append("Coin · " + label)
+        if phase.lower() not in (label.lower(), "working"):
+            bits.append(phase)
+    else:
+        bits.append("Coin · idle")
+        if coin.get("last_trigger"):
+            bits.append("last: " + coin["last_trigger"])
+    if model:
+        bits.append(model)
+    return " · ".join(bits)
+
+
+def coin_header(state: dict) -> list[str]:
+    now = time.time()
+    coin = state.get("coin") or {}
+    facts = []
+    if coin.get("worker_since"):
+        facts.append(f"worker {ago(now - coin['worker_since'])} up")
+    facts.append(f"{coin.get('turns', 0)} turns")
+    if coin.get("busy") and coin.get("turn_started_at"):
+        facts.append(f"turn {ago(now - coin['turn_started_at'])}")
+    if coin.get("last_turn_at"):
+        facts.append(f"last turn {ago(now - coin['last_turn_at'])} ago")
+    gpu = (coin.get("gpu_seconds") or 0) + (max(0, now - coin["gpu_since"]) if coin.get("gpu_since") else 0)
+    if gpu:
+        facts.append(f"GPU {ago(gpu)}")
+    if coin.get("process"):
+        facts.append(f"pid {coin['process'].get('pid')}")
+    return [coin_banner(state), " · ".join(facts)]
+
+
+def _coin_event_key(entry: dict):
+    return (entry.get("at"), entry.get("event"), entry.get("detail"), entry.get("turn"), entry.get("seconds"))
+
+
+def _coin_event_line(entry: dict) -> str:
+    when = time.strftime("%H:%M:%S", time.localtime(entry["at"]))
+    if entry.get("event") == "turn started":
+        return f"{when}  started · {entry.get('trigger') or 'working'}"
+    if entry.get("event") == "tool":
+        return f"{when}  ⚙ {entry.get('detail') or 'tool'}"
+    if entry.get("event") == "turn ended":
+        spent = f" · {ago(entry['seconds'])}" if entry.get("seconds") is not None else ""
+        return f"{when}  turn ended{spent}"
+    return f"{when}  {entry['event']}"
+
+
+def _coin_live_states():
+    while True:
+        try:
+            request = urllib.request.Request(configuration.api_url(CONFIG) + "/api/live",
+                                             headers={"Accept": "text/event-stream"})
+            with urllib.request.urlopen(request, timeout=CONFIG["timeouts"]["api_seconds"]) as response:
+                for raw in response:
+                    line = raw.decode(errors="replace").strip()
+                    if line.startswith("data: "):
+                        yield json.loads(line[6:])
+        except (OSError, ValueError) as error:
+            yield {"_error": str(error)}
+            time.sleep(1)
+
+
+def _append_text(existing: str, value: str) -> str:
+    if value.startswith(existing):
+        return value[len(existing):]
+    for size in range(min(len(existing), len(value)), 0, -1):
+        if existing.endswith(value[:size]):
+            return value[size:]
+    return value
+
+
+def coin_log(stop=None) -> None:
+    """Show Coin's terminal monitor until the viewer slot changes."""
+    from cointos.coin_view import watch
+    watch(_coin_live_states(), stop)
+
+
+def coin_live() -> None:
+    """A standalone Coin log, or the body of a Coin viewer slot."""
+    interactive("coin")
+    coin_log()
+    print()
+
+
 def watch(agent_id: str | None) -> None:
-    """Open OpenCode's live view of an agent's session (the first live agent if none is named)."""
+    """Open OpenCode's live view of an agent's session (the first live agent if none is named),
+    or Coin's own live view when named `coin`."""
+    if agent_id == "coin":
+        return coin_live()
     interactive("watch")
     live = ledger()["agents"]
     if not live:
@@ -391,7 +523,10 @@ def view(slot: int) -> None:
             state = ledger()
         except (Unreachable, ValueError):
             return None
-        agent = state["agents"].get(state["viewers"].get(str(slot)))
+        target = state["viewers"].get(str(slot))
+        if target == "coin":
+            return {"id": "coin", "coin": True}
+        agent = state["agents"].get(target)
         return agent if agent and agent.get("url") and agent.get("session") else None
 
     idle_shown = False
@@ -405,6 +540,13 @@ def view(slot: int) -> None:
             time.sleep(CONFIG["viewers"]["poll_seconds"])
             continue
         idle_shown = False
+        if agent.get("coin"):
+            title(f"CointOS {slot}: Coin")
+            def still_coin():
+                current = assigned()
+                return not current or not current.get("coin")
+            coin_log(still_coin)
+            continue
         title(f"CointOS {slot}: {agent['id']} on {agent['place']}: {agent['title']}")
         child = subprocess.Popen(opencode.attach(agent))
         while child.poll() is None:
@@ -474,11 +616,13 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("stop", help="pause autonomous agents and return their unfinished work to waiting")
     sub.add_parser("kill", help="kill one run and hold unfinished work until explicitly resumed").add_argument("agent")
     sub.add_parser("resume", help="release a killed task for scheduling").add_argument("task")
-    sub.add_parser("watch", help="watch an agent live in OpenCode").add_argument("agent", nargs="?")
-    viewing = sub.add_parser("view", help="show agents live in pop-up windows: --all to open them, --off to stop")
+    sub.add_parser("watch", help="watch an agent live in OpenCode, or Coin's log").add_argument("agent", nargs="?")
+    sub.add_parser("coin", help="watch Coin's live log")
+    viewing = sub.add_parser("view", help="show agents and Coin in pop-up windows: --all to open them, --off to stop")
     viewing.add_argument("slot", type=int, nargs="?", help="be viewer window N (the daemon opens these)")
     viewing.add_argument("--all", action="store_true", help="open a viewer for every active agent, and for new ones")
     viewing.add_argument("--off", action="store_true", help="open no more viewers (open ones still show new agents)")
+    viewing.add_argument("--coin", action="store_true", help="enable viewer windows so Coin occupies a slot while active")
 
     finishing = sub.add_parser("finish", help="agent: submit this run's one completion receipt")
     disposition = finishing.add_mutually_exclusive_group(required=True)
@@ -597,6 +741,8 @@ def parser() -> argparse.ArgumentParser:
     scope = agent_run.add_mutually_exclusive_group()
     scope.add_argument("--project")
     scope.add_argument("--system", action="store_true", help="run from the installed CointOS runtime (default)")
+    agent_run.add_argument("--directory", help="station this agent in a directory; its writes are confined there")
+    agent_run.add_argument("--tool", action="append", default=[], help="a configured MCP server for its station, or '*' for all")
     agent_run.add_argument("--ability", action="append", choices=schema.ABILITIES, default=[])
     agent_run.add_argument("--reasoning-effort", choices=schema.EFFORTS)
     budget_options(agent_run)
@@ -653,12 +799,15 @@ def kill_command(agent: str) -> str:
 
 
 def view_command(args) -> str | None:
+    if args.coin:
+        call("viewers", {"show": True})
+        return "viewer windows on; Coin occupies a slot while it is active"
     if args.slot is not None:
         return view(args.slot)
     if not (args.all or args.off):
-        raise SystemExit("usage: cointos view --all | --off")
+        raise SystemExit("usage: cointos view --all | --off | --coin")
     call("viewers", {"show": args.all})
-    return "viewers: opening windows for active agents" if args.all else "viewers: no new windows"
+    return "viewers: opening windows for active agents and Coin" if args.all else "viewers: no new windows"
 
 
 COMMANDS = {
@@ -676,6 +825,7 @@ COMMANDS = {
     "halt": lambda args: halt(args.keep_coin),
     "restart": lambda args: restart(),
     "watch": lambda args: watch(args.agent),
+    "coin": lambda args: coin_live(),
     "view": view_command,
     "finish": lambda args: finish(*(("complete", args.complete) if args.complete is not None else ("blocked", args.blocked)),
                                   scout_result=args.scout_result_json),
@@ -719,7 +869,8 @@ COMMANDS = {
     "project": project_command,
     "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
                                              "abilities": args.ability or ["standard"],
-                                             "reasoning_effort": args.reasoning_effort, "budget": limits(args)})["task"],
+                                             "reasoning_effort": args.reasoning_effort, "budget": limits(args),
+                                             "station": {"directory": args.directory, "tools": args.tool}})["task"],
 }
 
 

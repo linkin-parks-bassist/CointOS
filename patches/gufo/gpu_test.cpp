@@ -137,6 +137,22 @@ int main() {
   try {
     Fixture fixture;
     CheckPersistentOverwrite(fixture);
+    {
+      cointos::Control control(fixture.Runner(), 2, path / "resident", "resident-hip");
+      const auto prompt = Parse("[3,5,7,9]");
+      control.Call(Parse(R"({"op":"select","lane":0,"owner":"a"})"));
+      const auto first = control.Call(Step(0, prompt, 0, 4));
+      const auto baseline = control.Call(Step(1, prompt, 0, 4));
+      Check(first.find("tokens")->dump() == baseline.find("tokens")->dump(), "resident native initial vector");
+      const auto history = Append(prompt, *first.find("tokens"));
+      control.Call(Parse(R"({"op":"select","lane":0,"owner":"b"})"));
+      control.Call(Step(0, Parse("[9,7,5,3]"), 0, 5));
+      control.Call(Parse(R"({"op":"select","lane":0,"owner":"a"})"));
+      const auto next = control.Call(Step(0, history, history.size(), 8));
+      const auto expected = control.Call(Step(1, history, history.size(), 8));
+      Check(next.find("tokens")->dump() == expected.find("tokens")->dump(), "resident native sampled continuation");
+      Check(std::filesystem::is_empty(path / "resident"), "resident switch persisted a snapshot");
+    }
     Value saved_tokens, expected;
     {
       cointos::Control control(fixture.Runner(), 2, path, "seeded-hip-qwen");

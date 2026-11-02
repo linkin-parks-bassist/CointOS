@@ -1,7 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-18T02:15:42+11:00"
+revised_at: "2026-10-29T07:27:17+11:00"
 ---
+
+Each test-author assignment receives one scenario from an independently reviewed spec-to-test map: one setup, action and behavioral question, with all assertions needed to establish its result. Each additional scenario receives its own author. Fixture prerequisites have separate owners. The mapping and sizing owners define the handoffs and collective coverage.
 
 Test writers challenge plausible shortcuts, boundaries, invalid inputs and state transitions against the specification, asserting only the contract. Build witnesses through owner APIs; malformed inputs require a promised rejection. Verify construction reaches the tested API; an unimplemented adapter is not a permanent error contract. Capture rollback state before the failing call. Unconstructible valid failure witnesses are contract mismatches, not permission to invent constructors or weaken assertions.
 

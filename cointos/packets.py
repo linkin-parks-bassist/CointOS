@@ -67,6 +67,19 @@ def require_current(worker: dict) -> None:
             raise ValueError('the test contract changed while its correction was reviewed')
 
 
+def require_resolved(worker: dict) -> None:
+    """Do not accept an in-flight run while its contract correction is unresolved.
+
+    Dispatch readiness is insufficient: a correction can arrive after a worker
+    starts or while validation runs. Caller holds the ledger lock.
+    """
+    record = queues.records().get(worker.get('record'))
+    if record and (corrections := pending(record)):
+        raise ValueError('unresolved test-contract correction: ' +
+                         ', '.join(queues.key(r) for r in corrections) +
+                         '; preserve the candidate and await independent correction review')
+
+
 def require_changed_tests(worker: dict, repo: str, commit: str, rules: dict) -> None:
     correction = (queues.records().get(worker.get('record')) or {}).get('correction')
     if correction:

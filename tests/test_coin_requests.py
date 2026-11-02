@@ -53,7 +53,8 @@ class Requests(unittest.TestCase):
         def complete(model, messages, **options):
             calls.append((copy.deepcopy(messages), options))
             if len(calls) == 1:
-                return {'role': 'assistant', 'tool_calls': [{'id': 'finish', 'function': {
+                return {'role': 'assistant', 'tool_calls': [{'id': 'ack', 'function': {
+                    'name': 'send', 'arguments': json.dumps({'message': 'Checking the final batch.'})}}, {'id': 'finish', 'function': {
                     'name': 'finish_request', 'arguments': json.dumps({'id': request['id']})}}]}
             return {'role': 'assistant', 'content': 'Verified.'}
         with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), patch.object(coin, 'report'):
@@ -72,7 +73,8 @@ class Requests(unittest.TestCase):
         def complete(model, messages, **options):
             rounds.append(copy.deepcopy(messages))
             if len(rounds) == 1:
-                return {'role': 'assistant', 'tool_calls': [{'id': 'retain', 'function': {
+                return {'role': 'assistant', 'tool_calls': [{'id': 'ack', 'function': {
+                    'name': 'send', 'arguments': json.dumps({'message': 'Received the ongoing instruction.'})}}, {'id': 'retain', 'function': {
                     'name': 'retain_request', 'arguments': json.dumps({'instruction': 'Save later batches to ~/album'})}}]}
             return {'role': 'assistant', 'content': 'Ready.'}
         with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), patch.object(coin, 'report'):

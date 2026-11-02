@@ -45,7 +45,7 @@ def reader(conversation: dict, text: str, tokenize) -> dict:
         if len(marker) != 1:
             raise ValueError("Reasoning budgets require a single closing-think special token")
         reader.update(reasoning_budget=conversation["reasoning_budget"], think_end=marker[0],
-                      think_close=tokenize("\n</think>\n\n"))
+                      think_close=tokenize("\n</think>\n\n"), think_close_text="\n</think>\n\n")
         if assistant != opening:
             reader["reasoning_used"] = max(0, len(tokenize(assistant)) - len(tokenize(opening)))
     return reader

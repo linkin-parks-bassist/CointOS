@@ -71,7 +71,13 @@ def inspect(task_id: str, ledger: dict, history: bool = False) -> dict:
                             and not r.get('done') and not r.get('replaced_by')]})
     queue_view = dict(owned) if owned else None
     result = {'task': execution(task), 'queue': queue_view, 'binding_tests': binding}
+    failure = (source or {}).get('composition_failure') or ((source or {}).get('submission_failure') or {}).get('composition')
+    if failure:
+        result['composition_failure'] = failure
     if task and task.get('repair_origin'):
+        origin_failure = (original or {}).get('composition_failure') or ((original or {}).get('submission_failure') or {}).get('composition')
+        if origin_failure:
+            result['composition_failure'] = origin_failure
         result['recovery_origin'] = dict(task['repair_origin'])
         result['origin_task'] = execution(original, compact=True)
         result['recovery_instruction'] = (

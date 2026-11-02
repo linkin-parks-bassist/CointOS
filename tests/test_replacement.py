@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from cointos import api, contracts, lifecycle, replacement, state
+from tests import support
 from tests.test_landing import Project
 
 
@@ -104,6 +105,10 @@ class RequestSettlementTests(Project):
             with self.assertRaisesRegex(api.ApiError, 'fixture rejection'):
                 self.finish()
         self.available()
+        # An unchanged candidate replays its retained refusal, so reaching publication needs a change.
+        path = self.tree / 'code.py'
+        path.write_text(path.read_text() + '# repaired\n')
+        support.commit(self.tree, 'repair a')
         with patch.object(api.queues, 'publish', side_effect=OSError('publication failed')):
             with self.assertRaisesRegex(OSError, 'publication failed'):
                 self.finish()

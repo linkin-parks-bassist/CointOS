@@ -23,18 +23,18 @@ structured tool fields. Dependencies are same-project item IDs; [] means none.
 Test-contract work also supplies relies_on: existing API identifiers verified on
 accepted main. Never use filenames or prose explanations as dependency IDs.
 
-Make a child small enough to complete within its stated generation budget: one
-coherent behavior or interface boundary with a checkable output. About five minutes
-of useful worker time is the initial sizing target, excluding lane waits and tools.
-Do not split a cohesive change merely to achieve a file/function count. Expose the
-whole product shape, but elaborate only the next boundary. Independent concerns
-can proceed in parallel; later work waits on real prerequisites.
+Make each child one observable behavior or one test scenario, using established
+interfaces and helpers. State its concrete input, result, focused check and exclusions.
+Explain why it is one job. Budget provides headroom for the small deliverable. Apply the shared
+small-assignment guidance. Keep every remaining requirement in the product frontier;
+missing design/helper/fixture work becomes its own bounded prerequisite. Elaborate only
+the next runnable boundary. Independent concerns can proceed in parallel.
 
 Construction follows these contracts:
 
 - Skeletons establish interfaces, ownership, stubs and build seams.
-- Independent test authors implement the behavioral contract and register executable
-  assertions in the project's test manifest. Verify that witness inputs can express
+- Each independent test author implements ONE scenario from the published test map
+  and registers its executable assertions in the project's test manifest. Verify that witness inputs can express
   the expected outputs. A temporary stub error is not a permanent product contract.
 - Independent implementers receive the same behavior contract and depend on its
   reviewed test packet. Hidden red tests become binding only after independent
@@ -70,3 +70,28 @@ A new personal-authority decision may require the user. Ordinary engineering jud
 verification and repair do not. State the evidence and exact unresolved question in a
 blocked receipt when such a decision is necessary. The terminal tool ends this run;
 there is no later cleanup or final message.
+
+## Test-mapping and independent-review handoffs
+
+For each decomposed subpart, queue a separate manager command to map its specification
+to test scenarios. Supply exact spec sources, scope and established interface contracts,
+with any skeleton dependency. The mapper publishes a list of single-line natural-language
+test scenarios and hands off a separate independent map-review command. Pin the list's
+committed artifact and specification sources in the review brief.
+
+As map reviewer, read the spec independently and check each obligation against the
+list's concrete setup/action and expected observation. Check that the collection
+expresses the scoped intentions, including applicable boundaries, errors, ownership
+and ordering. Publish the reviewed list and coverage assessment. On acceptance, hand
+off one test-author child per line with a dependency on this review assignment.
+Carry that line's scoped contract, accepted APIs/fixtures and expected outcome into
+its author brief. The implementation chain depends on the reviewed executable tests.
+
+An unresolved mapping obligation receives a focused mapping-revision task and a
+subsequent independent review. Keep all requirements and current artifacts with their
+owners. Use the shared small-assignment guidance for mapping, review and authorship.
+
+Apply the finite-handoff brief to every child: one deliverable, named seam, concrete acceptance evidence, established prerequisites and owners for further findings. Verify those boundaries before dispatch; preserve each additional obligation in its owning frontier.
+
+
+Use the Workflow stage marker defined in the shared guidance for each planning, mapping or map-review child.

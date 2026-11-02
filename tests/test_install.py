@@ -183,6 +183,22 @@ class LiveInstallBoundaryTests(unittest.TestCase):
                 if retained: contact.assert_not_called()
             self.assertEqual(path.read_bytes(), before)
 
+    def test_dashboard_model_selection_and_recipes_survive_real_config_copy(self):
+        source = Path(self.temporary.name) / 'source'
+        (source / 'config').mkdir(parents=True)
+        seed = {'models': {'original': {'revision': 'new'}}, 'work_model': 'original', 'policy': 'new'}
+        (source / 'config/cointos.json').write_text(json.dumps(seed))
+        previous = {'models': {'original': {'revision': 'old'}, 'downloaded': {'path': 'local.gguf'}},
+                    'work_model': 'downloaded', 'policy': 'old'}
+        self.write_installed_config(previous)
+        environment = self.install.__globals__
+        with mock.patch.dict(environment, source=source):
+            environment['copy_runtime'](['config'])
+        actual = json.loads((self.target / 'config/cointos.json').read_text())
+        self.assertEqual(actual, {'models': {'original': {'revision': 'new'},
+                                             'downloaded': {'path': 'local.gguf'}},
+                                  'work_model': 'downloaded', 'policy': 'new'})
+
     def setUp(self):
         self.script = runpy.run_path(str(INSTALL), run_name="cointos_install_test")
         self.install = self.script["install"]

@@ -35,3 +35,11 @@ if (ENGINE_ENABLE_HIP)
     endif()
   endforeach()
 endif()
+
+target_include_directories(cointos_gufo_backend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+  OUTPUT_VARIABLE COINTOS_GUFO_REVISION OUTPUT_STRIP_TRAILING_WHITESPACE
+  COMMAND_ERROR_IS_FATAL ANY)
+target_compile_definitions(cointos_gufo_control PRIVATE
+  COINTOS_GUFO_REVISION="${COINTOS_GUFO_REVISION}")

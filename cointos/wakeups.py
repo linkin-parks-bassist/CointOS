@@ -1,15 +1,24 @@
-"""Durable, owner-bound one-shot Coin wakes; delivery is replayable until acknowledgement.
+"""Durable, owner-bound Coin wakes; delivery is replayable until acknowledgement.
 
 The Coin service owns this registry. Observations never execute a caller's command.
 Process identities survive polling, not reboot; task/unit conditions use their declared
 logical identities. A pending event is not a claim on model or Telegram side effects.
+
+Deadline, process-exit, unit-state and task-state wakes are one-shot. Schedule and *-change wakes
+repeat until cancelled: each keeps a cursor (the next instant or the last observed state), fires
+on a new occurrence and re-arms when acknowledged. One pending event per wake means occurrences
+during downtime or a running turn collapse into one, never a burst.
+
+A wake with `agent` starts that stationed agent when it fires instead of a model turn.
 """
 from __future__ import annotations
 
+import builtins
 from contextlib import contextmanager
 import copy
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -19,12 +28,15 @@ import stat
 import subprocess
 import time
 import uuid
+from zoneinfo import ZoneInfo
 
-from cointos import schema, privatejson
+from cointos import cron, schema, privatejson
 
 
 UNIT_STATES = frozenset(('active', 'reloading', 'inactive', 'failed', 'activating', 'deactivating', 'maintenance', 'refreshing'))
 TASK_STATES = frozenset(schema.ACTIVE + schema.SETTLED)
+RECURRING = frozenset(('schedule', 'unit-change', 'task-change', 'path-change'))
+AGENT_FIELDS = frozenset(('name', 'brief', 'project', 'station', 'abilities', 'reasoning_effort', 'budget'))
 
 
 def clock() -> float:
@@ -74,6 +86,30 @@ def task_records() -> dict:
     return ledger['tasks']
 
 
+def local_zone() -> str:
+    """The workstation's named timezone, which a schedule needs to follow daylight saving."""
+    target = Path('/etc/localtime').resolve().as_posix()
+    if 'zoneinfo/' not in target:
+        raise ValueError('the workstation has no named timezone; give one explicitly')
+    return target.split('zoneinfo/', 1)[1]
+
+
+def path_state(path: str) -> str | None:
+    """A file's identity, or a directory's direct entries; nested changes are not seen."""
+    try:
+        target = Path(path)
+        if not target.is_dir():
+            found = target.stat()
+            return f'{found.st_mtime_ns}:{found.st_size}'
+        digest = hashlib.sha256()
+        for entry in sorted(target.iterdir()):
+            found = entry.lstat()
+            digest.update(f'{entry.name}:{found.st_mtime_ns}:{found.st_size}\0'.encode())
+        return digest.hexdigest()
+    except FileNotFoundError:
+        return None
+
+
 def _number(value) -> bool:
     try:
         return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
@@ -120,6 +156,39 @@ def _task(value):
         raise ValueError('task must be its logical task id')
 
 
+def _zone(value):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('timezone must be a named zone such as Australia/Sydney')
+    try:
+        ZoneInfo(value)
+    except (ValueError, OSError, KeyError) as error:
+        raise ValueError(f'unknown timezone {value!r}') from error
+
+
+def _instant(timestamp: float) -> str:
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+
+
+def _matching_tasks(condition: dict, tasks: dict) -> builtins.list:
+    """Tasks in the watched state. A wake's own agents are excluded, or it would trigger itself."""
+    return sorted(ident for ident, task in tasks.items()
+                  if isinstance(task, dict) and task.get('status') == condition['state']
+                  and not task.get('occurrence')
+                  and condition['project'] in (None, task.get('place')))
+
+
+def _cursor(condition: dict, now: float):
+    """Where a repeating wake starts watching from: only later occurrences count."""
+    kind = condition['kind']
+    if kind == 'schedule':
+        return _instant(cron.after(condition['cron'], condition['timezone'], now))
+    if kind == 'unit-change':
+        return unit_state(condition['unit'])['ActiveState']
+    if kind == 'task-change':
+        return _matching_tasks(condition, task_records())
+    return path_state(condition['path'])
+
+
 def _condition(condition: dict, now: float) -> dict:
     """Normalize user input and capture authoritative identity at registration."""
     if not isinstance(condition, dict):
@@ -139,7 +208,25 @@ def _condition(condition: dict, now: float) -> dict:
         else:
             raise ValueError('deadline requires exactly one of after_seconds or at')
         return {'kind': kind, 'at': at}
-    if kind == 'process-exit' and set(condition) == {'kind', 'pid'}:
+    if kind == 'schedule' and set(condition) <= {'kind', 'cron', 'timezone'} and 'cron' in condition:
+        captured = {'kind': kind, 'cron': condition['cron'], 'timezone': condition.get('timezone') or local_zone()}
+    elif kind == 'unit-change' and set(condition) == {'kind', 'unit', 'state'}:
+        _unit(condition['unit'])
+        if not isinstance(condition['state'], str) or condition['state'] not in UNIT_STATES:
+            raise ValueError('unknown unit ActiveState')
+        if unit_state(condition['unit'])['LoadState'] != 'loaded':
+            raise ValueError('unit must be loaded when the wake is registered')
+        captured = dict(condition)
+    elif kind == 'task-change' and set(condition) <= {'kind', 'state', 'project'} and 'state' in condition:
+        captured = {'kind': kind, 'state': condition['state'], 'project': condition.get('project')}
+    elif kind == 'path-change' and set(condition) == {'kind', 'path'}:
+        if not isinstance(condition['path'], str) or not condition['path'].strip():
+            raise ValueError('path must be a file or directory path')
+        path = Path(condition['path']).expanduser()
+        if not path.is_absolute():
+            raise ValueError('path must be absolute or start with ~')
+        captured = {'kind': kind, 'path': str(path)}
+    elif kind == 'process-exit' and set(condition) == {'kind', 'pid'}:
         pid = condition['pid']
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             raise ValueError('pid must be a positive integer')
@@ -196,8 +283,29 @@ def _stored_condition(condition):
         if (not isinstance(condition['state'], str) or condition['state'] not in TASK_STATES
                 or not _number(condition['created_at'])):
             raise ValueError('invalid stored task identity')
+    elif kind == 'schedule' and set(condition) == {'kind', 'cron', 'timezone'}:
+        cron.parse(condition['cron'])
+        _zone(condition['timezone'])
+    elif kind == 'unit-change' and set(condition) == {'kind', 'unit', 'state'}:
+        _unit(condition['unit'])
+        if not isinstance(condition['state'], str) or condition['state'] not in UNIT_STATES:
+            raise ValueError('invalid stored unit state')
+    elif kind == 'task-change' and set(condition) == {'kind', 'state', 'project'}:
+        if not isinstance(condition['state'], str) or condition['state'] not in TASK_STATES:
+            raise ValueError('unknown task status')
+        if condition['project'] is not None and not isinstance(condition['project'], str):
+            raise ValueError('project must be a project name')
+    elif kind == 'path-change' and set(condition) == {'kind', 'path'}:
+        if not isinstance(condition['path'], str) or not Path(condition['path']).is_absolute():
+            raise ValueError('invalid stored path')
     else:
         raise ValueError('invalid stored condition fields')
+
+
+def _agent(agent):
+    if (not isinstance(agent, dict) or not {'name', 'brief'} <= set(agent) or set(agent) - AGENT_FIELDS
+            or not isinstance(agent['name'], str) or not isinstance(agent['brief'], str) or not agent['brief'].strip()):
+        raise ValueError('agent needs a name and brief, and only run_agent fields')
 
 
 def _validate(data):
@@ -206,16 +314,24 @@ def _validate(data):
         raise ValueError('invalid wake registry')
     required = {'id', 'user', 'chat', 'message', 'condition', 'created_at'}
     outcomes = {'deadline': {'due'}, 'process-exit': {'exited', 'interrupted'},
-                'unit-state': {'matched', 'unavailable'}, 'task-state': {'matched', 'unavailable', 'replaced', 'cancelled'}}
+                'unit-state': {'matched', 'unavailable'}, 'task-state': {'matched', 'unavailable', 'replaced', 'cancelled'},
+                'schedule': {'due'}, 'unit-change': {'matched'}, 'task-change': {'matched'}, 'path-change': {'matched'}}
+    optional = {'event', 'agent', 'cursor', 'runs', 'last_run', 'paused'}
     for ident, record in data['wakeups'].items():
         _id(ident)
-        if not isinstance(record, dict) or set(record) not in (required, required | {'event'}) or record['id'] != ident:
+        if (not isinstance(record, dict) or not required <= set(record) or set(record) - required - optional
+                or record['id'] != ident):
             raise ValueError('invalid wake record')
         _identity(record['user'], 'user')
         _identity(record['chat'], 'chat')
         if not isinstance(record['message'], str) or not record['message'].strip() or not _number(record['created_at']):
             raise ValueError('invalid wake message or registration time')
         _stored_condition(record['condition'])
+        recurring = record['condition']['kind'] in RECURRING
+        if recurring != ('cursor' in record) or recurring != ('runs' in record) or (('last_run' in record or 'paused' in record) and not recurring):
+            raise ValueError('invalid repeating wake state')
+        if 'agent' in record:
+            _agent(record['agent'])
         if 'event' in record:
             event = record['event']
             if (not isinstance(event, dict) or set(event) != {'at', 'outcome', 'result', 'detail'}
@@ -256,11 +372,22 @@ def _registry(directory):
         yield value
 
 
-def create(directory, user, chat, message, condition):
+def _view(record):
+    """A copy for callers, with a schedule's next run on its own wall clock."""
+    view = copy.deepcopy(record)
+    if record['condition']['kind'] == 'schedule' and not record.get('paused'):
+        view['next_run'] = (datetime.fromisoformat(record['cursor'])
+                            .astimezone(ZoneInfo(record['condition']['timezone'])).isoformat())
+    return view
+
+
+def create(directory, user, chat, message, condition, agent=None):
     _identity(user, 'user')
     _identity(chat, 'chat')
     if not isinstance(message, str) or not message.strip():
         raise ValueError('wake message must be nonempty')
+    if agent is not None:
+        _agent(agent)
     with _registry(directory) as (descriptor, data):
         now = clock()
         captured = _condition(condition, now)
@@ -269,19 +396,23 @@ def create(directory, user, chat, message, condition):
             ident = uuid.uuid4().hex
         record = {'id': ident, 'user': user, 'chat': chat, 'message': message,
                   'condition': captured, 'created_at': now}
+        if agent is not None:
+            record['agent'] = copy.deepcopy(agent)
+        if captured['kind'] in RECURRING:
+            record.update(cursor=_cursor(captured, now), runs=0)
         data['wakeups'][ident] = record
         _write(descriptor, data)
-        return copy.deepcopy(record)
+        return _view(record)
 
 
 def list(directory, user):
     _identity(user, 'user')
     with _registry(directory) as (_, data):
-        return copy.deepcopy(sorted((record for record in data['wakeups'].values() if record['user'] == user),
-                                    key=lambda record: (record['created_at'], record['id'])))
+        return [_view(record) for record in sorted((record for record in data['wakeups'].values() if record['user'] == user),
+                                                   key=lambda record: (record['created_at'], record['id']))]
 
 
-def _remove(directory, user, ident, acknowledge):
+def _remove(directory, user, ident, acknowledge, outcome=None):
     _identity(user, 'user')
     _id(ident)
     with _registry(directory) as (descriptor, data):
@@ -289,9 +420,20 @@ def _remove(directory, user, ident, acknowledge):
         if record is not None:
             if record['user'] != user:
                 raise ValueError('wake belongs to another user')
+            recurring = acknowledge and record['condition']['kind'] in RECURRING
+            if recurring and 'event' not in record:
+                return False  # paused or already re-armed while its turn ran
             if acknowledge and 'event' not in record:
                 raise ValueError('wake has not triggered; cancel it instead')
-            del data['wakeups'][ident]
+            if recurring:
+                now = clock()
+                event = record.pop('event')
+                record['runs'] += 1
+                record['last_run'] = {'at': now, 'detail': event['detail'], **(outcome or {})}
+                if record['condition']['kind'] == 'schedule':
+                    record['cursor'] = _cursor(record['condition'], now)
+            else:
+                del data['wakeups'][ident]
         # An idempotent retry also makes absence durable before acknowledging it.
         _write(descriptor, data)
         return record is not None
@@ -301,8 +443,29 @@ def cancel(directory, user, id):
     return _remove(directory, user, id, False)
 
 
-def ack(directory, user, id):
-    return _remove(directory, user, id, True)
+def ack(directory, user, id, outcome=None):
+    """Finish this occurrence: a one-shot wake ends; a repeating one re-arms."""
+    return _remove(directory, user, id, True, outcome)
+
+
+def pause(directory, user, id, paused):
+    """Stop or restart a repeating wake, keeping it. Occurrences while paused do not count."""
+    _identity(user, 'user')
+    _id(id)
+    with _registry(directory) as (descriptor, data):
+        record = data['wakeups'].get(id)
+        if record is None or record['user'] != user:
+            raise ValueError('no such wake for this user')
+        if record['condition']['kind'] not in RECURRING:
+            raise ValueError('only a repeating wake can be paused; cancel a one-shot wake instead')
+        record.pop('event', None)
+        if paused:
+            record['paused'] = True
+        else:
+            record.pop('paused', None)
+            record['cursor'] = _cursor(record['condition'], clock())
+        _write(descriptor, data)
+        return _view(record)
 
 
 def pending(directory, id):
@@ -365,18 +528,55 @@ def _observe(condition, now, cache):
     return None
 
 
+def _observe_repeating(record, now, cache):
+    """Advance a repeating wake's cursor; an event means this observation is a new occurrence."""
+    condition, cursor = record['condition'], record['cursor']
+    kind = condition['kind']
+    if kind == 'schedule':
+        if now < _at(cursor)[1]:
+            return None
+        local = datetime.fromisoformat(cursor).astimezone(ZoneInfo(condition['timezone']))
+        return _event('due', f'Scheduled for {local.isoformat()}.', now)
+    if kind == 'unit-change':
+        key = ('unit', condition['unit'])
+        if key not in cache:
+            cache[key] = unit_state(condition['unit'])
+        if cache[key]['LoadState'] != 'loaded':
+            return None
+        record['cursor'] = cache[key]['ActiveState']
+        if record['cursor'] != cursor and record['cursor'] == condition['state']:
+            return _event('matched', f"The unit changed from {cursor} to {condition['state']}.", now)
+        return None
+    if kind == 'task-change':
+        if 'tasks' not in cache:
+            cache['tasks'] = task_records()
+        record['cursor'] = _matching_tasks(condition, cache['tasks'])
+        new = sorted(set(record['cursor']) - set(cursor))
+        if new:
+            return _event('matched', f"Newly {condition['state']}: {', '.join(new)}.", now)
+        return None
+    record['cursor'] = path_state(condition['path'])
+    if record['cursor'] != cursor:
+        state = 'is gone' if record['cursor'] is None else 'changed'
+        return _event('matched', f"{condition['path']} {state}.", now)
+    return None
+
+
 def ready(directory):
     """Persist new triggers, then replay every unacknowledged event at least once."""
     with _registry(directory) as (descriptor, data):
         changed, cache, now = False, {}, clock()
         for record in data['wakeups'].values():
-            if 'event' in record:
+            if 'event' in record or record.get('paused'):
                 continue
+            before = record.get('cursor')
             try:
-                event = _observe(record['condition'], now, cache)
+                event = (_observe_repeating(record, now, cache) if record['condition']['kind'] in RECURRING
+                         else _observe(record['condition'], now, cache))
             except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 # One temporarily unavailable observer must not block other due wakes.
                 continue
+            changed |= record.get('cursor') != before
             if event is not None:
                 record['event'] = event
                 changed = True

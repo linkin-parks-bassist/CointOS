@@ -1,0 +1,14 @@
+---
+status: green
+revised_at: "2026-10-31T16:56:36+11:00"
+---
+
+The 60–70+ tokens/s Gufo Qwen3.8-27B headline is a favorable DFlash2 workload, not a sustained mixed-work guarantee. Upstream BENCHMARKS.md at 192b75a reports Q4 mixed decode around 26.9 at empty depth, 19.8 at 32K and 15.3 at 131K; repetitive output reaches 64.7. Match sampling, occupied history, generated text and native generation denominator.
+
+Production selects ~/.local/share/cointos/gufo/192b75a-native-v13-20261031, upstream 192b75a (v0.28.0 plus two commits), with Qwen3.8-27B dense Q4_K_XL and Q4_K_M DFlash2 unchanged, adaptive maximum seven and production sampling. The >60 tokens/s target remains unmet and its broader investigation is paused. At a 100,838-token retained prefix plus a fixed 111-token coding turn, seeds 193/321 produce 447/441 tokens: V12 baseline 23.07/22.86, V13 23.00/22.73, repeated V12 22.87/22.66 tokens/s. All output vectors match. This supports no meaningful additional speed change on that workload, not universal throughput equivalence. Evidence: qwen-current-qualification-20261031/{comparison.json,qualification.json} beneath ~/.local/state/cointos/.
+
+The earlier attention-only backport improved the original pin by 2–3% at 30,029 tokens: baseline 21.67/18.63, candidate 22.16/19.17, repeat 21.66/18.64. At the same 100K coding fixture it improved 5–7%: baseline 21.68/21.22, candidate 22.78/22.63, repeat 21.39/21.15. All sampled vectors/draft counts match. Evidence: qwen-performance-20261031-{v2,long-code}/. Both merge functions pass independent cases; their generated self-test errors are unchanged. No general coding-quality improvement follows. V13 includes attention upstream, so the separate backport patch is removed.
+
+V13 passes native CPU/GPU tests, 37 focused Python checks, 25 exact resident switches at 78,859/75,794 tokens and a real sampled save/restore round trip. qwen-current-resident-20261031/recovery.json binds installed bytes and preserved client identities/sessions/spend. Qualification exposed two harness defects: unseeded prompt-only replay and shared mutable candidate/recovery configuration. The harness now seeds prompt-only fixtures and independently deep-copies configuration/options. The newer engine reads old snapshots, but V12 rejects newly written DFlash payloads; recovery uses the qualified new engine. The serialization owner retains that boundary.
+
+The standalone verification-geometry backport offered no dependable gain at 30K (21.84/18.50 versus stable controls); its private package was rejected. Current upstream includes that change as part of the qualified complete version. A 100K no-new-turn fixture ended after 34/12 tokens and cannot establish sustained speed. Initial passive 18.17 tokens/s evidence partly overlapped compilation. Tubo remains uninstalled. Never count proposed drafts as output or substitute copying fixtures for ordinary work.

@@ -61,7 +61,7 @@ class Turn(unittest.TestCase):
         sender.start()
         self.addCleanup(sender.stop)
         self.reports = []
-        reporter = patch.object(coin, "report", side_effect=lambda busy, doing=None: self.reports.append((busy, doing)))
+        reporter = patch.object(coin, "report", side_effect=lambda busy, doing=None, trigger=None: self.reports.append((busy, doing)))
         reporter.start()
         self.addCleanup(reporter.stop)
 
@@ -90,7 +90,7 @@ class Turn(unittest.TestCase):
         self.assertEqual([m["content"] for m in coin.recent(7)], ["How is it?", "Checking.", "All green."])
 
     def test_tool_results_answer_the_exact_model_call(self):
-        requests = self.run_turn([assistant(call("status", identifier="call-7")), assistant(call("done"))])
+        requests = self.run_turn([assistant(call('send', {'message': 'Checking.'}), call("status", identifier="call-7")), assistant(call("done"))])
         tool_result = next(m for m in reversed(requests[1][0]) if m["role"] == "tool")
         self.assertEqual((tool_result["role"], tool_result["tool_call_id"], tool_result["name"]),
                          ("tool", "call-7", "status"))
@@ -100,8 +100,8 @@ class Turn(unittest.TestCase):
         archived = 'An earlier caption\n\n<cointos-attachments>\n{"update_id": 1, "files": [{"path": "/old/photo.jpg"}]}\n</cointos-attachments>'
         coin.remember(7, 'user', archived, at=1, input_id=1)
         text = {'id': 2, 'text': 'Quick?', 'at': 2}
-        failed = self.run_turn([assistant(call('done'))], texts=[text])
-        retried = self.run_turn([assistant(call('done'))], texts=[text])
+        failed = self.run_turn([assistant(call('done'), content='Received.')], texts=[text])
+        retried = self.run_turn([assistant(call('done'), content='Received.')], texts=[text])
         prefix = failed[0][1]['cache_prefix_messages']
         self.assertEqual(failed[0][0][:prefix], retried[0][0][:prefix])
         for request in (failed[0][0], retried[0][0]):
@@ -111,7 +111,7 @@ class Turn(unittest.TestCase):
             self.assertIn('/old/photo.jpg', history)
             self.assertEqual(sum('<cointos-current-input update_id="2">' in m['content']
                                  for m in request if isinstance(m.get('content'), str)), 1)
-        self.assertEqual([m['content'] for m in coin.recent(7)], [archived, 'Quick?'])
+        self.assertEqual([m['content'] for m in coin.recent(7) if m['role'] == 'user'], [archived, 'Quick?'])
 
     def test_worker_clears_presence_when_knowledge_recovery_fails(self):
         inbox = queue.Queue()
@@ -164,7 +164,7 @@ class Turn(unittest.TestCase):
         headers = header + "\n<cointos-current-time>clock</cointos-current-time>\n"
         headers += "<cointos-message-times>timeline</cointos-message-times>\n"
         self.assertEqual(coin.reply_text(headers + "Ready."), "Ready.")
-        self.run_turn([assistant(content=headers)])
+        self.run_turn([assistant(content=headers)], texts=[])
         self.assertEqual(self.sent, [])
         self.assertFalse(any(m["role"] == "assistant" for m in coin.recent(7)))
 
@@ -217,7 +217,7 @@ class Turn(unittest.TestCase):
         later = iter([["actually, pigen too"], []])
         requests = self.run_turn([
             assistant(call("send", {"message": "On it."}), call("jobs")),
-            assistant(call("done")),
+            assistant(call("done"), content='Including pigen too.'),
         ], arrivals=lambda: next(later))
         self.assertEqual(requests[1][0][-1]["role"], "user")
         self.assertTrue(any(m["content"] == "actually, pigen too" and "at" in m for m in requests[1][0]))
@@ -244,6 +244,7 @@ class Turn(unittest.TestCase):
     def test_out_of_steps_allows_only_send_and_done(self):
         limit = coin.SETTINGS["max_tool_rounds"]
         replies = [assistant(call("jobs", {"n": n})) for n in range(limit)]
+        replies[0] = assistant(call('send', {'message': 'Checking.'}), call('jobs', {'n': 0}))
         replies += [assistant(call("halt")), assistant(call("send", {"message": "Ran long."}), call("done"))]
         executed = []
         requests = self.run_turn(replies, executed=lambda name, arguments: executed.append(name) or {"ok": True, "output": ""})
@@ -252,7 +253,7 @@ class Turn(unittest.TestCase):
         for _, options in requests[limit:]:
             self.assertEqual({entry["function"]["name"] for entry in options["tools"]}, {"send", "done"})
         self.assertTrue(any("out of steps" in (m.get("content") or "").lower() for m in requests[limit + 1][0]))
-        self.assertEqual(self.sent, ["Ran long."])
+        self.assertEqual(self.sent, ['Checking.', "Ran long."])
 
 
 
@@ -261,7 +262,7 @@ class Controls(unittest.TestCase):
         captured = []
         def respond(request, **kwargs):
             captured.append(json.loads(request.data))
-            return io.BytesIO(json.dumps({"choices": [{"message": assistant(content="ready")}]}).encode())
+            return io.BytesIO(b'data: {"choices":[{"delta":{"content":"ready"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
         messages = [{"role": "system", "content": "fixed"},
                     {"role": "user", "content": "old request", "at": 0},
                     {**assistant(call("status", identifier="identity"),
@@ -291,13 +292,34 @@ class Controls(unittest.TestCase):
         captured = []
         def respond(request, **kwargs):
             captured.append(json.loads(request.data))
-            return io.BytesIO(json.dumps(reply).encode())
+            return io.BytesIO(b'data: {"choices":[{"delta":{"content":"ready"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
         with patch.object(coin, "coin_key", return_value="test-key"), \
                 patch.object(coin.urllib.request, "urlopen", side_effect=respond):
             coin.complete(coin.CONFIG["work_model"], [], timeout=1)
-            coin.complete(coin.CONFIG["work_model"], [], timeout=1, reasoning_effort="medium")
-        self.assertEqual(captured[0]["reasoning_effort"], coin.CONFIG["reasoning"]["default"])
-        self.assertEqual(captured[1]["reasoning_effort"], "medium")
+            coin.complete(coin.CONFIG["work_model"], [], timeout=1, reasoning_effort="xhigh")
+        self.assertEqual(captured[0]["reasoning_effort"], "medium")
+        self.assertEqual(captured[1]["reasoning_effort"], "xhigh")
+
+    def test_stream_keepalives_and_fragmented_tools_preserve_complete_reply(self):
+        events = [b': waiting for a lane\n\n'] * 4
+        for delta, finish in [({'reasoning_content': 'Checked.'}, None),
+                              ({'content': 'Ready'}, None),
+                              ({'tool_calls': [{'index': 0, 'id': 'call-1', 'function': {'name': 'do', 'arguments': '{'}}]}, None),
+                              ({'tool_calls': [{'index': 0, 'function': {'name': 'ne', 'arguments': '}'}}]}, 'tool_calls')]:
+            events.append(b'data: ' + json.dumps({'choices': [{'delta': delta, 'finish_reason': finish}]}).encode() + b'\n\n')
+        raw = b''.join(events)
+        with patch.object(coin, 'coin_key', return_value='fixture'), patch.object(coin.urllib.request, 'urlopen') as opened:
+            opened.return_value = io.BytesIO(raw + b'data: [DONE]\n\n')
+            result = coin.complete('fixture', [], timeout=1)
+            self.assertTrue(json.loads(opened.call_args.args[0].data)['stream'])
+            self.assertEqual(result['content'], 'Ready')
+            self.assertEqual(result['tool_calls'][0]['function'], {'name': 'done', 'arguments': '{}'})
+            opened.return_value = io.BytesIO(raw)
+            with self.assertRaisesRegex(RuntimeError, 'disconnected'):
+                coin.complete('fixture', [], timeout=1)
+            opened.return_value = io.BytesIO(b'data: {"error":{"code":"incomplete_response"}}\n\n')
+            with self.assertRaisesRegex(RuntimeError, 'incomplete_response'):
+                coin.complete('fixture', [], timeout=1)
 
     def test_restart_uses_the_draining_control_and_reports_refusals(self):
         self.assertIn("restart", {t["function"]["name"] for t in coin.TOOLS})

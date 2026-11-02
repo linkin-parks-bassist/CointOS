@@ -68,6 +68,7 @@ def fresh(previous: dict) -> dict:
                      for digest in (task.get("system_context"), task.get("tool_context"))}
     system_contexts = {digest: text for digest, text in previous.get("system_contexts", {}).items()
                        if digest in live_contexts}
+    previous_coin = previous.get("coin") if isinstance(previous.get("coin"), dict) else {}
     return {
         'frontier_version': previous.get('frontier_version', 1),
         'work_frontier': [],
@@ -88,9 +89,19 @@ def fresh(previous: dict) -> dict:
         "next_alert": previous.get("next_alert", 0), "checks": [],
         "check_incidents": previous.get("check_incidents", {}),
         "user_last_thought": 0, "cadence": previous.get("cadence", {}), "trees": {},
-        # What Coin is doing, as it reports it, for its dashboard card; no turn outlives the daemon.
-        "coin": {"busy": False, "since": now(), "doing": None, "live": {},
-                 "last_turn_at": previous.get("coin", {}).get("last_turn_at")},
+        # What Coin is doing, as it reports it, for its dashboard card and panel. Activity and
+        # worker identity survive a daemon restart; Coin reports busy state again.
+        "coin": {"busy": False, "since": now(), "doing": None,
+                 "live": previous_coin.get("live", {}),
+                 "process": previous_coin.get("process"),
+                 "worker_since": previous_coin.get("worker_since"),
+                 "turns": previous_coin.get("turns", 0),
+                 "turn_started_at": None,
+                 "trigger": None,
+                 "last_trigger": previous_coin.get("last_trigger"),
+                 "last_turn_at": previous_coin.get("last_turn_at"),
+                 "last_turn_seconds": previous_coin.get("last_turn_seconds"),
+                 "recent": list(previous_coin.get("recent") or [])[-CONFIG["history_length"]:]},
     }
 
 

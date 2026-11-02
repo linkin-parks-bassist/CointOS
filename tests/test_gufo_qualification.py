@@ -1,5 +1,6 @@
 """The experimental parking transaction must preserve cache bytes through recovery."""
 import importlib.util
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -103,3 +104,67 @@ class CacheParking(unittest.TestCase):
              patch.object(qualification.subprocess,'check_output',return_value=
                           'ActiveState=active\nMainPID=123\nFreezerState=thawing\nControlGroup=/unit\n'):
             self.assertEqual(qualification.service('cointos-coin.service')['FreezerState'],'running')
+
+    def test_dashboard_cancellation_retires_only_the_cancelled_parked_unit(self):
+        run = self.parking
+        unit = 'cointos-agent-a.service'
+        run.journal.update(units={unit: {'MainPID': '123'}}, agents={'a': {'task': 'task-a'}},
+                           drained_ledger={'agents': {}, 'tasks': {'task-a': {
+                               'agent': None, 'cancelled': 'cancelled from the dashboard'}},
+                               'history': [{'event': 'task cancelled', 'task': 'task-a'}]})
+        with patch.object(qualification, 'service', return_value={'MainPID': '0', 'ActiveState': 'inactive'}):
+            run.check_parked_units()
+        self.assertNotIn(unit, run.journal['units'])
+        self.assertEqual(run.journal['retired_during_park'][unit]['agent'], 'a')
+
+    def test_unexplained_unit_loss_still_blocks_recovery(self):
+        run = self.parking
+        run.journal.update(units={'cointos-agent-a.service': {'MainPID': '123'}},
+                           agents={'a': {'task': 'task-a'}}, drained_ledger={'agents': {}, 'tasks': {}})
+        with patch.object(qualification, 'service', return_value={'MainPID': '0', 'ActiveState': 'inactive'}):
+            with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+                run.check_parked_units()
+
+    def test_retired_key_may_disappear_but_surviving_authority_cannot_change(self):
+        run = self.parking
+        digest = lambda value: hashlib.sha256(value.encode()).hexdigest()
+        run.journal.update(key_digests={'coin': digest('coin'), 'agents': {
+            'a': digest('retired'), 'b': digest('survivor')}},
+            retired_during_park={'unit-a': {'agent': 'a'}})
+        run.check_gateway_authority({'coin': 'coin', 'agents': {'b': 'survivor'}})
+        for keys in ({'coin': 'coin', 'agents': {'b': 'changed'}},
+                     {'coin': 'changed', 'agents': {'b': 'survivor'}},
+                     {'coin': 'coin', 'agents': {}}):
+            with self.assertRaisesRegex(RuntimeError, 'authority changed'):
+                run.check_gateway_authority(keys)
+
+
+class ResidentReplaySampling(unittest.TestCase):
+    def test_prompt_snapshot_gets_reproducible_draws(self):
+        from patches.gufo.resident import replay_sampling
+        self.assertEqual(replay_sampling({}), {'seed': 193})
+        self.assertEqual(replay_sampling({'sampling': {'seed': -1, 'temperature': 1}}),
+                         {'seed': 193, 'temperature': 1})
+
+    def test_saved_sampler_state_is_not_reseeded(self):
+        from patches.gufo.resident import replay_sampling
+        header = {'sampling': {'seed': -1, 'temperature': 1}, 'rng': '123'}
+        self.assertEqual(replay_sampling(header), header['sampling'])
+
+    def test_explicit_fixture_seed_is_preserved(self):
+        from patches.gufo.resident import replay_sampling
+        self.assertEqual(replay_sampling({'sampling': {'seed': 321}}), {'seed': 321})
+
+
+class QualificationConfigurationIsolation(unittest.TestCase):
+    def test_candidate_changes_cannot_change_production_or_callers_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            original = {'port': 1, 'snapshots': directory, 'models': {
+                'q': {'gufo': {'executable': 'production', 'sampling': {'seed': 193}}}}}
+            run = qualification.Run(Path(directory) / 'run', original, 'q', original['models']['q']['gufo'])
+            run.journal['options']['executable'] = 'candidate'
+            run.journal['options']['sampling']['seed'] = 321
+            self.assertEqual(run.config['models']['q']['gufo'], original['models']['q']['gufo'])
+            self.assertEqual(original['models']['q']['gufo']['executable'], 'production')
+            run.config['models']['q']['gufo']['executable'] = 'installed-change'
+            self.assertEqual(original['models']['q']['gufo']['executable'], 'production')

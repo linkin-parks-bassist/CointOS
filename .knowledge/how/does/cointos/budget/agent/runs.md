@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-23T20:49:46+11:00"
+revised_at: "2026-10-27T15:20:59+11:00"
 ---
 
-Tasks pin generation_seconds and generation_tokens from the configured common defaults, optional recovery.role_budgets and explicit task overrides, in that precedence order. Current source and installed defaults are 86,400 charged generation seconds or 2,000,000 generated tokens, with an empty role_budgets map: managers and Operators have no shorter configured allowance. Configuration edits do not rewrite existing tasks.
+Tasks pin generation_seconds and generation_tokens from the configured common defaults, optional recovery.role_budgets and explicit task overrides, in that precedence order. Source and installed defaults are 5,400 charged generation seconds (90 minutes) or 2,000,000 generated tokens, with an empty role_budgets map: the same allowance applies to workers, managers, integrators and Operators. Changing the default does not lower allowances already pinned to existing tasks. Configuration edits do not rewrite existing tasks.
 
-schema.spent charges generated time/tokens and granted Operator budgets. Waits, prefill and tools do not consume that budget. Either limit ends a run. warning_fraction sends one wrap-up warning within the remaining allowance; launch reports the effective limits, reasoning cap and fresh-retry allowance.
+schema.spent charges generated time/tokens and granted Operator budgets. Waits, prefill and tools do not consume that budget. Either limit ends a run. warning_fraction is 0.75, sending one wrap-up warning at 4,050 generation seconds (67.5 minutes) under the default time allowance; launch reports the effective limits, reasoning cap and fresh-retry allowance.
 
 The budget control sets waiting/undispatched limits and permits explicit monotonic increases for running tasks outside validation. It refuses live decreases, settled tasks and invalid inputs. An increase updates task and queue metadata while preserving generation already spent, grants, session, run count and artifacts; it notifies the task and re-arms its warning.
 

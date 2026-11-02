@@ -13,6 +13,9 @@ class Turns(unittest.TestCase):
     runs on through quick tool calls, so a burst of tool calls cannot hold a lane indefinitely."""
 
     def setUp(self):
+        # These fixtures exercise the checkpoint backend. Resident scheduling has
+        # independent tests with per-owner native-state metadata.
+        self.enterContext(patch.object(lanes.BACKEND, 'resident_states', return_value=False))
         previous = copy.deepcopy(state.L)
         self.addCleanup(lambda: (state.L.clear(), state.L.update(previous)))
         for table in (lanes.RUNS, lanes.BUSY, lanes.HELD):
@@ -381,12 +384,22 @@ class Turns(unittest.TestCase):
         self.assertEqual(lanes.RUNS['a']['generated'], [7] * 112)
         self.assertEqual(state.L['thoughts']['a']['generated'], 112)
 
+    def test_streamed_token_bytes_decode_across_step_boundaries(self):
+        thought = {'agent': 'a', 'generated': 0}
+        run = {'queue': queue.Queue(), 'generated': []}
+        with patch.dict(lanes.L, {'agents': {}}):
+            lanes.arrived(thought, run, [7], 'é'.encode()[:1])
+            lanes.arrived(thought, run, [8], 'é'.encode()[1:])
+        self.assertEqual(run['queue'].get_nowait(), ([7], ''))
+        self.assertEqual(run['queue'].get_nowait(), ([8], 'é'))
+
     def test_budget_closure_extends_warm_context_before_answer_generation(self):
         self.addCleanup(state.STOPPING.clear)
         self.thought('a', [1, 2, 3])
         run = lanes.RUNS['a']
         run.update(sampling={}, max=100, reader={'reasoning_budget': 2,
-                   'think_end': 99, 'think_close': [10, 99, 10]})
+                   'think_end': 99, 'think_close': [10, 99, 10],
+                   'think_close_text': '\n</think>\n\n'})
         lanes.schedule()
         self.read_done('a')
         calls, reads = [], []
@@ -409,7 +422,7 @@ class Turns(unittest.TestCase):
         streamed = []
         while not run['queue'].empty():
             streamed.append(run['queue'].get_nowait())
-        self.assertEqual(streamed, [[7, 8], [10, 99, 10], [42], {'end': 'done'}])
+        self.assertEqual(streamed, [[7, 8], ([10, 99, 10], '\n</think>\n\n'), [42], {'end': 'done'}])
 
     def test_declared_shared_prefix_is_saved_without_a_concurrent_peer(self):
         self.addCleanup(state.STOPPING.clear)

@@ -124,7 +124,7 @@ class HistoryPrefix(unittest.TestCase):
             {'role': 'assistant', 'content': 'old answer'}, {'role': 'user', 'content': 'new question'},
             {'role': 'user', 'content': 'fresh clock/timeline'}]}
         with patch.object(gateway.BACKEND, 'render', side_effect=lambda *args: next(rendered)) as render:
-            result = gateway.render_request(body, 'coin', state.CONFIG['coin']['model'], {})
+            result = gateway.render_request(body, 'coin', state.CONFIG['coin'].get('model', state.CONFIG['work_model']), {})
         self.assertEqual(result['shared'], [2])
         self.assertEqual(result['retained_prefix'], 4)
         self.assertEqual(render.call_args.args[2]['messages'], body['messages'][:3] + [{'role': 'user', 'content': ''}])
@@ -137,7 +137,7 @@ class HistoryPrefix(unittest.TestCase):
                 {'tokens': [1, 2, 31, 4, 5], 'reader': {}},
                 {'tokens': [1, 2, 30], 'reader': {}},
                 {'tokens': [1, 2, 31, 40], 'reader': {}}]):
-            result = gateway.render_request(body, 'coin', state.CONFIG['coin']['model'], {})
+            result = gateway.render_request(body, 'coin', state.CONFIG['coin'].get('model', state.CONFIG['work_model']), {})
         self.assertEqual(result['shared'], [2])
 
     def test_prefix_contract_cannot_name_an_invalid_or_non_coin_boundary(self):
@@ -145,4 +145,4 @@ class HistoryPrefix(unittest.TestCase):
         for agent, count in [('coin', 0), ('coin', 2), ('coin', True), ('coin', '1'), ('user', 1)]:
             with self.subTest(agent=agent, count=count), self.assertRaisesRegex(ValueError, 'cache_prefix_messages'):
                 gateway.render_request({'messages': messages, 'cache_prefix_messages': count}, agent,
-                                       state.CONFIG['coin']['model'], {})
+                                       state.CONFIG['coin'].get('model', state.CONFIG['work_model']), {})

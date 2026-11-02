@@ -1,9 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-19T23:15:03+11:00"
+revised_at: "2026-10-25T23:29:00+11:00"
 ---
 
 CointOS runs local OpenCode agents through pre-emptible model lanes. cointosd owns scheduling, durable assignments, receipts, validation and publication; Coin supplies Telegram intake/control. Configured native adapters control model execution; Lemonade remains an optional machine-level service. Source and installed runtime are distinct.
+
+Required inference architecture: retain per-agent inference state and atomically select its active pointer at a completed execution boundary. Bulk state must stay in place during ordinary agent switches. Persistence belongs to a separate lifecycle. Installed Gufo selects resident objects under model ownership; how/does/gufo/select/resident/agent/state.md owns the implementation and qualification. Checkpoint persistence is separate from ordinary switching.
 
 Tasks and queues are durable desired work; runs, thoughts, units and caches are execution state. Checked receipts/acceptance settle work. Conversations survive ordinary interruption; disposable cached tokens must match the next prompt. The daemon is the sole ledger writer; damaged authority refuses mutation/adoption.
 

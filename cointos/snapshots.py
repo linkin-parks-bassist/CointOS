@@ -16,10 +16,10 @@ import math
 import secrets
 import threading
 
-from cointos import memory, schema, snapshot_cleanup as cleanup
+from cointos import capacity, memory, schema, snapshot_cleanup as cleanup
 from cointos.state import BACKEND, CONFIG, LOCK, L, log, now
 
-RESERVED: dict[str, float] = {}  # in-flight saves, GB
+RESERVED: dict[str, float] = {}  # in-flight file plus native capture capacity, GB
 TRANSFERS: set[str] = set()  # file ownership survives a logical row's retirement
 UNTASKED = frozenset({"user", "coin", "shared"})  # owners that are conversations but not tasks
 
@@ -81,7 +81,7 @@ def room(need_gb: float, keep: str | None = None, replacing=()) -> bool:
     reclaimable = sum(map(size_gb, obsolete.values()))
     # Do not discard the fallback unless its removal can admit the replacement
     # now in both budgets. Other pending spills are not available memory yet.
-    headroom = L['memory'].get('headroom_gb', 0)
+    headroom = capacity.headroom_gb()
     if used - reclaimable + need_gb <= limit and headroom + reclaimable >= need_gb:
         reclaimed = 0
         for name, snapshot in obsolete.items():
@@ -107,10 +107,14 @@ def room(need_gb: float, keep: str | None = None, replacing=()) -> bool:
     return used + need_gb <= limit
 
 
-def make_room(need_gb: float) -> bool:
-    """Whether `need_gb` fits in the headroom, evicting the least recently run snapshots in
-    memory as needed. What fits is counted as taken until memory is next measured."""
-    headroom = L["memory"].get("headroom_gb", 0.0)
+def make_room(need_gb: float, *, claim: bool = True, resident_owner: str | None = None) -> bool:
+    """Reclaim disposable caches without spending admitted execution capacity.
+
+    Claims debit physical headroom until its next measurement. A new run instead
+    publishes its reservation in the agents table, so its check uses claim=False.
+    Native initialization spends its own pending state claim, retaining all others.
+    """
+    headroom = capacity.headroom_gb(resident_owner)
     leaving = memory.to_forget(in_memory(), need_gb, headroom + cleanup.occupied('memory'))
     if leaving is None:
         return False
@@ -118,7 +122,8 @@ def make_room(need_gb: float) -> bool:
     available = headroom + sum(evict(name) for name in leaving)
     if available < need_gb:
         return False
-    L["memory"]["headroom_gb"] = round(available - need_gb, 1)
+    L["memory"]["headroom_gb"] = round(available + capacity.pending_gb(resident_owner)
+                                       - (need_gb if claim else 0), 1)
     return True
 
 
@@ -298,24 +303,33 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
                     return True
             if not cleanup.ready('memory'):
                 return False
+            if not math.isfinite(capacity.headroom_gb()):
+                return False  # an adopted run's native capacity is not measured yet
             # Retiring the last sample must not turn this allocation's estimate into zero.
             need = max(need, memory.snapshot_gb(L["snapshots"], model, len(held)))
+            native_bytes = L['models'].get(model, {}).get('resident_state_bytes', 0)
+            if not need and native_bytes:
+                # An unmeasured native checkpoint is not a zero-byte allocation.
+                need = math.ceil(native_bytes / memory.GB * 100) / 100
+            # Native persistence captures immutable device state before writing
+            # the RAM file. Both coexist on a unified-memory machine.
+            host_need = need + native_bytes / memory.GB
             limit = CONFIG['memory'].get('snapshots_gb')
             used = sum(size_gb(s) for s in L['snapshots'].values() if s['tier'] in ('memory', 'moving')) + sum(RESERVED.values()) + cleanup.occupied('memory')
             if limit is not None and need > limit:
                 return False
             if reclaimed:
                 if ((limit is not None and used + need > limit)
-                        or L['memory'].get('headroom_gb', 0) < need):
+                        or capacity.headroom_gb() < host_need):
                     return False
-                admitted = make_room(need)  # no further eviction after this transaction's reclaim
+                admitted = make_room(host_need)  # no further eviction after this transaction's reclaim
             else:
-                admitted = room(need, replacing=superseded(owner, model, held, kind)) and make_room(need)
+                admitted = room(need, replacing=superseded(owner, model, held, kind)) and make_room(host_need)
             if admitted:
                 name = secrets.token_hex(6)
                 while name in L['snapshots'] or name in RESERVED or name in TRANSFERS or cleanup.pending(name):
                     name = secrets.token_hex(6)
-                RESERVED[name] = need
+                RESERVED[name] = host_need
                 break
             # Select reclaim work in physical bytes, avoiding a floating-point
             # boundary turning an exactly sufficient cache into an apparent miss.
@@ -323,7 +337,7 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
             used_bytes = sum(math.ceil(s['bytes']) for s in L['snapshots'].values() if s['tier'] in ('memory', 'moving'))
             used_bytes += math.ceil(sum(RESERVED.values()) * memory.GB)
             used_bytes += sum(math.ceil(e['bytes']) for e in cleanup.jobs().values() if e['tier'] == 'memory')
-            deficit = max(need_bytes - math.floor(L['memory'].get('headroom_gb', 0) * memory.GB),
+            deficit = max(math.ceil(host_need * memory.GB) - math.floor(capacity.headroom_gb() * memory.GB),
                           used_bytes + need_bytes - math.floor(limit * memory.GB) if limit is not None else 0)
             pending, release = set(), 0
             for identifier, entry in cleanup.jobs().items():

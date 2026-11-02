@@ -1,4 +1,4 @@
-"""A minimal stdio MCP client for the kt server, so Coin can use the same kt_* tools agents use.
+"""A minimal stdio MCP client: Coin's kt_* tools, and the other servers in its station.
 
 A session is plain data: the server process, the next request id, the server
 instructions, the function schemas and the set of tool names.
@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from pathlib import Path
 
 from cointos.config import load as load_config
@@ -31,22 +32,22 @@ def _request(session: dict, method: str, params: dict) -> dict:
     while True:
         line = session["process"].stdout.readline()
         if not line:
-            raise RuntimeError(f"kt-mcp exited during {method}")
+            raise RuntimeError(f"MCP server exited during {method}")
         message = json.loads(line)
         if message.get("id") != identifier or "method" in message:
             continue
         if "error" in message:
-            raise RuntimeError(message["error"].get("message", "kt-mcp error"))
+            raise RuntimeError(message["error"].get("message", "MCP server error"))
         return message.get("result") or {}
 
 
-def open_session(project: Path) -> dict | None:
-    """Start kt-mcp rooted at `project`, or return None so Coin stays available without it."""
-    if not SERVER.is_file():
+def connect(command: list[str], cwd: Path, env: dict, excluded=frozenset()) -> dict | None:
+    """Start and initialize one stdio server, or return None if it does not come up."""
+    try:
+        process = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.DEVNULL, text=True, env=env)
+    except OSError:
         return None
-    process = subprocess.Popen(
-        ["python3", str(SERVER)], cwd=project, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL, text=True, env={**os.environ, "KT_MCP_PROJECT_DIR": str(project)})
     session = {"process": process, "next_id": 0}
     try:
         initialized = _request(session, "initialize", {
@@ -62,13 +63,28 @@ def open_session(project: Path) -> dict | None:
         {"type": "function", "function": {
             "name": tool["name"], "description": tool.get("description", ""),
             "parameters": tool.get("inputSchema") or {"type": "object", "properties": {}}}}
-        for tool in listed if tool["name"] not in EXCLUDED]
+        for tool in listed if tool["name"] not in excluded]
     session["names"] = {tool["function"]["name"] for tool in session["tools"]}
     return session
 
 
-def call(session: dict, name: str, arguments: dict) -> dict:
-    result = _request(session, "tools/call", {"name": name, "arguments": arguments})
+def open_session(project: Path) -> dict | None:
+    """Start kt-mcp rooted at `project`, or return None so Coin stays available without it."""
+    if not SERVER.is_file():
+        return None
+    return connect(["python3", str(SERVER)], project, {**os.environ, "KT_MCP_PROJECT_DIR": str(project)}, EXCLUDED)
+
+
+def call(session: dict, name: str, arguments: dict, timeout: float | None = None) -> dict:
+    """Call one tool. A timeout kills the server, which ends the read; the caller reopens it."""
+    timer = threading.Timer(timeout, session["process"].kill) if timeout else None
+    if timer:
+        timer.start()
+    try:
+        result = _request(session, "tools/call", {"name": name, "arguments": arguments})
+    finally:
+        if timer:
+            timer.cancel()
     text = "\n".join(item.get("text", "") for item in result.get("content", []) if item.get("type") == "text")
     return {"ok": not result.get("isError", False), "output": text}
 

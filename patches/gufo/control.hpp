@@ -1,10 +1,12 @@
 #pragma once
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "src/cli/serve/text_model_runner.hpp"
@@ -16,7 +18,9 @@ public:
   Control(std::shared_ptr<const gufo::server::TextModelRunner> runner,
           std::size_t lanes, std::filesystem::path snapshots,
           std::string identity);
-  gufo::json::Value Call(const gufo::json::Value& request);
+  using Emit = std::function<void(const gufo::json::Value&)>;
+  gufo::json::Value Call(const gufo::json::Value& request,
+                         const Emit& emit = {});
   static bool IsMetadata(std::string_view op) {
     return op == "info" || op == "render" || op == "tokenize" || op == "text";
   }
@@ -33,7 +37,10 @@ private:
     std::size_t prompt_size = 0;
   };
   std::shared_ptr<const gufo::server::TextModelRunner> runner_;
-  std::vector<Lane> lanes_;
+  // Execution lanes select stable resident objects. Selecting one never moves
+  // tensors, tokens, sampler/RNG state or native request-local continuation data.
+  std::vector<std::shared_ptr<Lane>> lanes_;
+  std::unordered_map<std::string, std::shared_ptr<Lane>> residents_;
   std::filesystem::path snapshots_;
   std::string identity_;
   gufo::json::Value Render(const gufo::json::Value& request) const;

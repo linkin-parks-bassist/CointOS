@@ -3,12 +3,126 @@ import copy
 from pathlib import Path
 from unittest.mock import patch
 
-from cointos import api, git, landing, lifecycle, packets, queues, runs, spawner, state, tasks
+from cointos import api, contracts, git, landing, lifecycle, packets, queues, runs, spawner, state, tasks
 from tests import support
 from tests.test_landing import Project
 
 
 class Corrections(Project):
+    def test_running_consumer_cannot_submit_while_correction_is_pending(self):
+        code = self.implement()
+        correction = self.propose()['item']
+        queues.records()[correction]['held_by'] = 'user'
+        with patch.object(contracts, 'packet_check') as execute:
+            with self.assertRaisesRegex(ValueError, 'unresolved test-contract correction'):
+                self.finish()
+        execute.assert_not_called()
+        self.assertIsNone(self.worker.get('receipt'))
+        self.assertNotIn('submission_failure', self.worker)
+        self.assertEqual(git.head(self.tree), code)
+
+    def test_correction_arriving_during_submission_revokes_completion(self):
+        code = self.implement()
+        check = contracts.packet_check
+        def corrected_during_validation(*args, **kwargs):
+            result = check(*args, **kwargs)
+            self.propose()
+            return result
+        with patch.object(contracts, 'packet_check', side_effect=corrected_during_validation):
+            with self.assertRaisesRegex(ValueError, 'unresolved test-contract correction'):
+                self.finish()
+        self.assertIsNone(self.worker.get('receipt'))
+        self.assertNotIn('submission_failure', self.worker)
+        self.assertFalse(self.worker.get('validating'))
+        self.assertEqual(git.head(self.tree), code)
+
+    def test_review_cannot_land_after_correction_is_requested(self):
+        integration, candidate, submitted = self.landing()
+        self.propose()
+        with patch.object(contracts, 'suite') as execute:
+            with self.assertRaisesRegex(ValueError, 'unresolved test-contract correction'):
+                landing.land(integration['id'], candidate, 'integrator-1')
+        execute.assert_not_called()
+        self.assertEqual(git.head(self.repo, 'main'), self.base)
+        self.assertEqual(git.head(self.review), candidate)
+        self.assertEqual(git.head(self.tree), submitted)
+        self.assertNotIn('acceptance', self.worker)
+
+    def test_correction_arriving_during_landing_revokes_publication(self):
+        integration, candidate, submitted = self.landing()
+        suite = contracts.suite
+        def corrected_during_validation(*args, **kwargs):
+            result = suite(*args, **kwargs)
+            self.propose()
+            return result
+        with patch.object(contracts, 'suite', side_effect=corrected_during_validation):
+            with self.assertRaisesRegex(ValueError, 'unresolved test-contract correction'):
+                landing.land(integration['id'], candidate, 'integrator-1')
+        self.assertEqual(git.head(self.repo, 'main'), self.base)
+        self.assertEqual(git.head(self.review), candidate)
+        self.assertEqual(git.head(self.tree), submitted)
+        self.assertNotIn('acceptance', self.worker)
+
+    def test_restored_review_retains_correction_blocker_and_evidence(self):
+        integration, candidate, _ = self.landing()
+        correction = self.propose()['item']
+        expected = copy.deepcopy(queues.records()[correction]['correction'])
+        support.fresh_ledger(self, copy.deepcopy(state.L))
+        self.assertEqual(queues.records()[correction]['correction'], expected)
+        with self.assertRaisesRegex(ValueError, 'unresolved test-contract correction'):
+            landing.land(integration['id'], candidate, 'integrator-1')
+        self.assertEqual(git.head(self.repo, 'main'), self.base)
+
+    def test_correction_arriving_during_incorporation_revokes_acceptance(self):
+        _, candidate, submitted = self.landing()
+        git.run(self.repo, 'merge', '--ff-only', candidate)
+        incorporated = contracts.incorporated
+        def corrected_during_validation(*args, **kwargs):
+            incorporated(*args, **kwargs)
+            self.propose()
+        with patch.object(contracts, 'incorporated', side_effect=corrected_during_validation):
+            with self.assertRaisesRegex(ValueError, 'unresolved test-contract correction'):
+                landing.incorporate(self.worker['id'], candidate, submitted, 'integrator-1')
+        self.assertNotIn('acceptance', self.worker)
+        self.assertEqual(self.worker['status'], 'review')
+        self.assertEqual(git.head(self.repo, 'main'), candidate)
+
+    def test_binding_preflight_refuses_conflicting_packets_without_touching_worker(self):
+        second = self.packet('tests-conflict', {'tests/test_a.py': 'different witness\n'}, ['true'])
+        queues.records()[self.worker['record']]['depends'].append('tests-conflict')
+        code = self.implement()
+        draft = self.tree / 'diagnostic.txt'
+        draft.write_text('preserve me')
+        with patch.object(runs.opencode, 'launch') as launch:
+            with self.assertRaises(contracts.CompositionError) as caught:
+                runs.launch('worker-1', self.worker, 'fixture-key')
+        launch.assert_not_called()
+        self.assertIn(second, str(caught.exception))
+        self.assertIn(self.tests, str(caught.exception))
+        self.assertIn('tests/test_a.py', str(caught.exception))
+        self.assertEqual(caught.exception.evidence['main'], self.base)
+        self.assertEqual(caught.exception.evidence['packets'], [self.tests, second])
+        self.assertIn('tests/test_a.py', caught.exception.evidence['paths'])
+        self.assertEqual(git.head(self.tree), code)
+        self.assertEqual(draft.read_text(), 'preserve me')
+
+    def test_binding_preflight_allows_composable_hidden_packet_without_running_tests(self):
+        with patch.object(contracts, '_run') as execute, patch.object(runs.opencode, 'launch') as launch:
+            runs.launch('worker-1', self.worker, 'fixture-key')
+        execute.assert_not_called()
+        launch.assert_called_once()
+
+    def test_composition_failure_enters_recovery_without_infrastructure_retries(self):
+        with patch.dict(runs.keys.ISSUED, {'worker-1': 'fixture-key'}), \
+                patch.object(runs, 'launch', side_effect=contracts.CompositionError('conflicting contracts')), \
+                patch.object(runs.opencode, 'watch') as watch:
+            runs.follow('worker-1', self.worker, 'fixture-key')
+        watch.assert_not_called()
+        self.assertEqual(self.worker['status'], 'failed')
+        self.assertNotIn('launch_failures', self.worker)
+        self.assertIn('correct-tests', self.worker['note'])
+        self.assertEqual(queues.state(queues.records()[self.worker['record']])['status'], 'blocked')
+
     def recovery_request(self):
         lifecycle.submit(self.worker['id'], 'worker-1', 'blocked', 'The accepted witness contradicts the contract')
         lifecycle.release('worker-1', 'blocked')
@@ -107,6 +221,8 @@ class Corrections(Project):
         self.assertEqual(git.head(self.tree), code, 'review correction cannot rewrite the implementation')
         self.assertEqual(landing.tests_of(self.worker), [candidate])
         support.running(self.worker, 'worker-2')
+        with patch.object(runs.opencode, 'launch'):
+            runs.launch('worker-2', self.worker, 'fixture-key')
         receipt = api.dispatch('finish', {'caller': support.caller(self.worker, 'worker-2'),
                                          'outcome': 'complete', 'detail': 'Preserved implementation passes corrected contract'})['receipt']
         self.assertEqual(receipt['evidence']['commit'], code)

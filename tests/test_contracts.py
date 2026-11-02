@@ -139,6 +139,22 @@ class Contracts(unittest.TestCase):
                         self.fail("unsafe conflict was composed")
                 self.assertTrue(git.clean(self.repo))
 
+    def test_reviewed_non_code_conflicts_take_the_reviewed_side_without_blocking_tests(self):
+        original = (self.tree / "tests/test_code.py").read_text()
+        (self.tree / "tests/test_code.py").write_text("# packet helper\n" + original)
+        (self.tree / "notes.md").write_text("# packet notes\n")
+        packet = self.commit(self.tree)
+        (self.repo / "notes.md").write_text("# main notes\n")
+        main = self.commit(self.repo)
+        with self.assertRaisesRegex(ValueError, "do not merge"):
+            with contracts.combined(self.repo, main, [packet], self.rules):
+                self.fail("strict composition accepted an unrelated knowledge conflict")
+        with contracts.combined(self.repo, main, [packet], self.rules, non_code="ours") as (path, head):
+            self.assertEqual((path / "notes.md").read_text(), "# main notes\n")
+            self.assertEqual((path / "tests/test_code.py").read_text(), "# packet helper\n" + original)
+            test_worker = {**self.worker, "stage": "test-contract"}
+            contracts.packet_unchanged(self.repo, test_worker, main, head, [packet], self.rules)
+
     def test_protected_build_file_mismatch_identifies_content_not_stage(self):
         self.rules['protected'].append('Makefile')
         self.worker['stage'] = 'test-contract'

@@ -10,7 +10,7 @@ import shutil
 from pathlib import Path
 import subprocess
 
-REVISION = '1f97092333af10f29887b098d9cb8a041610004a'
+REVISION = '192b75a8b6079b498461b598b8514ecd05d71caf'
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -46,11 +46,12 @@ def package(binary, destination, runtime_library_dir):
         + '${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n'
         'exec "$GUFO_PACKAGE_DIR/gufo-control.bin" "$@"\n')
     launcher.chmod(0o700)
-    shutil.copyfile(ROOT / 'patches/gufo/native-control.patch', destination / 'native-control.patch')
+    for patch in (ROOT / 'patches/gufo').glob('*.patch'):
+        shutil.copyfile(patch, destination / patch.name)
     manifest = {'upstream': REVISION, 'binary_sha256': hashlib.sha256(installed.read_bytes()).hexdigest(),
                 'runtime_library_dir': str(runtime_library_dir), 'libraries': copied,
                 'source_sha256': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
-                    for path in sorted((ROOT / 'patches/gufo').iterdir()) if path.suffix in ('.cpp','.hpp','.patch')}}
+                    for path in sorted((ROOT / 'patches/gufo').iterdir()) if path.suffix in ('.cpp','.hpp','.inc','.patch')}}
     overlay = destination / 'cointos'; overlay.mkdir(mode=0o700)
     manifest['python_modules'] = {}
     for name in ('backend_chat.py','backend_gufo.py','backend_native.py','backend_llama.py'):
@@ -82,11 +83,12 @@ def main():
     actual = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=source, text=True).strip()
     if actual != REVISION:
         parser.error(f'Gufo must be checked out at {REVISION}, found {actual}')
-    dependency_patch = str(ROOT / 'patches/gufo/native-control.patch')
-    applied = subprocess.run(['git', 'apply', '--reverse', '--check', dependency_patch], cwd=source, capture_output=True)
-    if applied.returncode:
-        run('git', 'apply', '--check', dependency_patch, cwd=source)
-        run('git', 'apply', dependency_patch, cwd=source)
+    for name in ('native-control.patch',):
+        dependency_patch = str(ROOT / 'patches/gufo' / name)
+        applied = subprocess.run(['git', 'apply', '--reverse', '--check', dependency_patch], cwd=source, capture_output=True)
+        if applied.returncode:
+            run('git', 'apply', '--check', dependency_patch, cwd=source)
+            run('git', 'apply', dependency_patch, cwd=source)
     cmake = source / 'CMakeLists.txt'
     marker = '\n# CointOS external runner control\n'
     suffix = marker + f'add_subdirectory("{ROOT / "patches/gufo"}" cointos-control)\n'

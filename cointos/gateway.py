@@ -23,20 +23,29 @@ import urllib.error
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from cointos import api, journal, keys, lanes, lifecycle, memory, projects, prompts, queues, scheduler, snapshot_cleanup, startup, tool_history, schema, performance, wakeups
+from cointos import api, backend_chat, journal, keys, lanes, lifecycle, memory, models, projects, prompts, queues, scheduler, snapshot_cleanup, startup, tool_history, schema, performance, wakeups
 from cointos.config import ROOT
 from cointos.state import STARTUP, ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, now, log, _snapshot
 
 def coin_view():
-    """An old busy report cannot keep a stopped Coin visible as active."""
+    """Coin's current card/panel state; an old busy report cannot keep a stopped worker active."""
     value = dict(L['coin'])
+    value.setdefault('turns', 0)
+    value.setdefault('recent', [])
+    value['model'] = CONFIG['coin'].get('model') or CONFIG['work_model']
     identity = value.get('process')
+    alive = False
     if identity:
-        current = wakeups.process(identity['pid'])
-        if (current is None or current['state'] == 'Z'
-                or current['start_ticks'] != identity['start_ticks']
-                or identity['boot_id'] != wakeups.boot_id()):
-            value.update(busy=False, doing=None, gpu_since=None)
+        try:
+            current = wakeups.process(identity['pid'])
+        except Exception:
+            current = None
+        alive = bool(current is not None and current['state'] != 'Z'
+                     and current['start_ticks'] == identity['start_ticks']
+                     and identity['boot_id'] == wakeups.boot_id())
+    value['alive'] = alive
+    if not alive:
+        value.update(busy=False, doing=None, gpu_since=None)
     return value
 
 
@@ -472,12 +481,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path == "/api/models":
+            choices = models.catalog()
+            with LOCK:
+                current = models.status()
+            return self.reply(200, {"choices": choices, "default": current})
         if path == "/v1/models":
             return self.reply(200, {"object": "list", "data": [
-                {"id": name, "object": "model", "owned_by": "cointos"} for name in CONFIG["models"]]})
+                {"id": name, "object": "model", "owned_by": "cointos"} for name in ["default", *CONFIG["models"]]]})
         if path == "/api/ledger":
             with LOCK:
-                snapshot = _snapshot({**L, "performance": performance.snapshot(), "coin": coin_view(), "startup": dict(STARTUP), "gateway_coin": startup.coin_digest(keys.OWNERS), "queue": queues.view(),
+                snapshot = _snapshot({**L, "performance": performance.snapshot(), "default_model": models.status(), "coin": coin_view(), "startup": dict(STARTUP), "gateway_coin": startup.coin_digest(keys.OWNERS), "queue": queues.view(),
                                      "project_about": {p["name"]: projects.about(p) for p in L["projects"]}})
             return self.reply(200, snapshot)
         if path == "/api/live":
@@ -534,6 +548,8 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             if STOPPING.is_set():
                 return self.reply(503, {"error": {"message": "daemon restarting; retry shortly"}})
+            if models.changing():
+                return self.reply(503, {"error": {"message": "default model changing; retry shortly"}})
             ACTIVE["chats"] += 1
         try:
             return self.stream_thought(body)
@@ -555,7 +571,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(410, {"error": {"message": "this agent run has ended"}})
         agent, klass, conversation = identity(key, body.get("user"))
         klass = request_class(body, klass)
-        model = {"work": CONFIG["work_model"]}.get(body.get("model"), body.get("model"))
+        model = models.resolve(body.get("model"), body.get("required_model") or
+                               (CONFIG["coin"].get("model") if agent == "coin" else None))
         if model not in CONFIG["models"]:
             return self.reply(404, {"error": {"message": f"unknown model {model!r}"}})
         with LOCK:
@@ -598,6 +615,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-cache")
             self.end_headers()
         generated, sent, end = [], {"reasoning": "", "content": ""}, None
+        text = ""  # None once a non-streaming chunk makes the accumulated text incomplete
         try:
             while end is None:
                 # HTTP/1.0 carries one request per connection. A readable socket
@@ -614,8 +632,18 @@ class Handler(BaseHTTPRequestHandler):
                 if isinstance(item, dict):
                     end = item["end"]
                     continue
-                generated += item
-                current = BACKEND.read(CONFIG, model, rendered["reader"], generated, False)
+                if isinstance(item, tuple):
+                    new, pieces = item
+                    generated += new
+                    if text is not None:
+                        text += pieces
+                        current = backend_chat.read(rendered["reader"], text, False)
+                    else:
+                        current = BACKEND.read(CONFIG, model, rendered["reader"], generated, False)
+                else:
+                    text = None
+                    generated += item
+                    current = BACKEND.read(CONFIG, model, rendered["reader"], generated, False)
                 show(agent, current)
                 if stream:
                     self.send_new(reply_id, model, current, sent)

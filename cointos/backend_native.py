@@ -27,6 +27,11 @@ def launch(config, model): return _backend(config, model).launch(config, model)
 def kill(config, model): return _backend(config, model).kill(config, model)
 def render(config, model, conversation): return _backend(config, model).render(config, model, conversation)
 def can_continue(config, model, held, tokens): return _backend(config, model).can_continue(config, model, held, tokens)
+def resident_states(config, model): return _backend(config, model) is backend_gufo
+def select(config, model, lane, owner): return _backend(config, model).select(config, model, lane, owner)
+def release_residents(config, model, owners): return _backend(config, model).release_residents(config, model, owners)
+def residents(config, model): return _backend(config, model).residents(config, model)
+def resident_bytes(config, model): return _backend(config, model).resident_bytes(config, model)
 def prefill(config, model, lane, tokens, held): return _backend(config, model).prefill(config, model, lane, tokens, held)
 def think(config, model, lane, tokens, held, max_new, sampling, on_tokens):
     return _backend(config, model).think(config, model, lane, tokens, held, max_new, sampling, on_tokens)

@@ -128,8 +128,8 @@ class Routing(unittest.TestCase):
             route = next(m['content'] for m in messages if '<cointos-photo-route>' in m.get('content', ''))
             self.assertIn(str(self.dest), route)
             self.assertIn('"operation": "move"', route)
-            return {'role': 'assistant', 'content': ''}
-        with patch.object(coin, 'recent', return_value=[]), patch.object(coin, 'complete', side_effect=answer):
+            return {'role': 'assistant', 'content': 'Received your instruction.'}
+        with patch.object(coin, 'recent', return_value=[]), patch.object(coin, 'complete', side_effect=answer), patch.object(coin, 'send'):
             coin.turn('fixture-token', 7, 70, ['Stop the photo rule'], lambda: [], None)
 
 

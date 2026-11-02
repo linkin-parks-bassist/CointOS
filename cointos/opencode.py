@@ -21,13 +21,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from cointos import kt, schema
+from cointos import kt, schema, stations
 from cointos.config import ROOT, STATE, api_url, load as load_config, write_json
 
 TIMEOUTS = load_config()["timeouts"]
 OPENCODE = str(Path.home() / ".local/bin/opencode")
 COMPACTION_CLI_SHA = "572e9e9f838c0a150558c8b412a50c3130acea0edd07288ab8da73b3b0a2380e"
-GLOBAL_CONFIG = Path.home() / ".config/opencode/opencode.json"
 PROVIDER = "cointos"
 # Commands no agent may run; `control` ability lifts only the CointOS lifecycle ones.
 DENIED_COMMANDS = ["sudo *", "su *", "systemctl *", "apt *", "apt-get *", "dpkg *", "snap *",
@@ -49,20 +48,19 @@ def confined_writes(task: dict) -> bool:
     System Operators retain explicitly assigned infrastructure scope.
     """
     role = task.get('role')
-    return (any(kind['role'] == role and kind['lands'] is not None for kind in schema.KINDS.values())
-            and not (role == 'operator' and task.get('place') == 'system'))
+    return stations.stationed(task) or (
+        any(kind['role'] == role and kind['lands'] is not None for kind in schema.KINDS.values())
+        and not (role == 'operator' and task.get('place') == 'system'))
 
 
 def settings(config: dict, key: str, task: dict, protected: list[str], agent_id: str = "") -> dict:
-    """The run's OpenCode config: the gateway as its only provider, the CointOS and kt tools,
+    """The run's OpenCode config: the gateway as its only provider, its station's tools,
     and narrow denials."""
     work = config["work_model"]
     shape = config["models"][work]
     home = str(Path.home())
-    try:
-        servers = json.loads(GLOBAL_CONFIG.read_text()).get("mcp", {})
-    except (OSError, ValueError):
-        servers = {}
+    servers = stations.servers()
+    granted = task.get("tools") or []
     abilities = set(task.get("abilities") or ["standard"])
     denied = DENIED_COMMANDS + ([] if "control" in abilities else LIFECYCLE_COMMANDS)
     operator_control = task.get("role") == "operator" and "control" in abilities
@@ -80,20 +78,21 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
                 read_scope.update({str(origin / name): 'allow', f'{origin}/{name}/**': 'allow'})
     return {
         "$schema": "https://opencode.ai/config.json",
-        "model": f"{PROVIDER}/{work}",
+        "model": f"{PROVIDER}/default",
         "provider": {PROVIDER: {
             "npm": "@ai-sdk/openai-compatible", "name": "CointOS gateway",
             # A request can wait for a lane and then prefill for minutes before its first byte;
             # the daemon's silence check, not a client timeout, decides when an agent is stuck.
             "options": {"baseURL": api_url(config) + "/v1", "apiKey": key,
                         "timeout": False, "headerTimeout": False, "chunkTimeout": False},
-            "models": {work: {"name": work, "tool_call": True,
+            "models": {"default": {"name": "CointOS default", "tool_call": True,
                               "limit": {"context": shape["ctx_size"] // shape["lanes"],
                                         "output": config["scheduler"]["max_thought_tokens"]}}},
         }},
-        # Agents get the kt MCP server and CointOS's own tools; every other globally configured
-        # server is disabled.
-        "mcp": {**{name: {**server, "enabled": False} for name, server in servers.items() if name != "knowledgetrees"},
+        # Every agent gets the kt MCP server and CointOS's own tools. Other configured servers
+        # are enabled only by its station.
+        "mcp": {**{name: {**server, "enabled": stations.grants(granted, name)}
+                   for name, server in servers.items() if name not in stations.BASE},
                 "cointos": {"type": "local", "enabled": True, "command": [sys.executable, "-P", "-m", "cointos.mcp"],
                             "timeout": (config['timeouts']['validation_seconds'] + config['timeouts']['api_seconds'] * 2) * 1000,
                             "environment": {"PYTHONPATH": str(ROOT), "COINTOS_TASK_ID": task.get("id", ""),
@@ -118,11 +117,16 @@ def write_paths(task: dict, directory: Path) -> list[str] | None:
         return None
     checkout = Path(task['worktree']).resolve()
     kt.prepare(checkout)
-    common = subprocess.check_output(['git', '-C', str(checkout), 'rev-parse', '--path-format=absolute', '--git-common-dir'], text=True).strip()
+    # A station directory need not be a repository; a branch's checkout must be.
+    found = subprocess.run(['git', '-C', str(checkout), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+                           text=True, capture_output=True, check=task.get('branch') is not None)
+    common = found.stdout.strip() if found.returncode == 0 else None
     rewrite_state = STATE / 'knowledge-rewrites'
     rewrite_state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    paths = [checkout, Path(common), directory.resolve(), rewrite_state.resolve(), Path('/tmp'), Path('/var/tmp'), Path('/dev/null')]
-    if task['role'] != 'worker':
+    paths = [checkout, directory.resolve(), rewrite_state.resolve(), Path('/tmp'), Path('/var/tmp'), Path('/dev/null')]
+    if common:
+        paths.append(Path(common))
+    if common and task['role'] != 'worker':
         knowledge = Path(common).parent / '.knowledge'
         if knowledge.is_dir():
             paths.append(knowledge)
@@ -154,12 +158,12 @@ def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protect
     # left by another owner, including a symlink inside a damaged run directory.
     (directory / "scratch").mkdir(mode=0o700)
     command = [executable, "run", "--dir", task["worktree"], "--format", "json", "--auto",
-               "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/{config['work_model']}"]
+               "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/default"]
     if task.get("session"):
         command += ["--session", task["session"]]
     spec = {"task": {"id": task["id"], "worktree": task["worktree"]}, "command": command, "text": text,
             "structured_compaction": structured,
-            "session": task.get("session"), "model": {"providerID": PROVIDER, "modelID": config["work_model"]}}
+            "session": task.get("session"), "model": {"providerID": PROVIDER, "modelID": "default"}}
     with (directory / "run.json").open("x") as stream:
         spec['write_paths'] = write_paths(task, directory)
         stream.write(json.dumps(spec))

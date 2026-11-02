@@ -16,7 +16,8 @@ or even having the daemon replaced underneath them.
   explains the code, failure, responsible role and next action before asking you to choose.
 - **Schedules GPU time like CPU time.** A thought advances in bounded steps; between steps a
   higher-priority conversation (a chat with you) pre-empts background work, and equal agents
-  share lanes by time slice. Saved KV-cache snapshots make switching back cheap.
+  share lanes by time slice. Gufo selects resident per-agent state by pointer;
+  checkpoint persistence is separate from ordinary switching.
 - **Runs a software pipeline, not a chatbot.** Managers break work into small staged items;
   workers write adversarial test contracts first, then implementations on isolated branches;
   integrators review and land through a gate that re-runs the protected tests on the exact
@@ -38,6 +39,12 @@ or even having the daemon replaced underneath them.
   including acknowledgements and `/status`; no canned receipts or error replies are sent.
   Replies enter conversation history after Telegram accepts them, so failed sends stay
   unanswered on retry. Interrupted or partly delivered replies may still repeat.
+  Fresh input must receive an accepted nonempty reply before Coin invokes tools or
+  finishes silently. New work carries selected original message text into its assignment;
+  mixed batches require explicit input IDs so unrelated originals stay out of each job.
+  follow-up corrections use the existing owner's durable inbox without restarting it.
+  Owners remain visible outside rolling chat history. Acknowledgement, dispatch,
+  inbox consumption and verified completion are separate outcomes.
   Photos and file attachments (including albums and captions) are retained and downloaded
   to `~/.CointOS/state/coin/attachments/`. Captionless attachments are handled by a
   filesystem worker without model turns.
@@ -51,11 +58,16 @@ or even having the daemon replaced underneath them.
   Use `kt` to maintain knowledge and the API to manage running work.
   Attachments are stored without image understanding or audio transcription.
   Coin can save internal wakes for deadlines, task states, logical service states or an exact
-  process ending. Deadlines accept relative delays or offset-aware timestamps.
+  process ending. Deadlines accept relative delays or offset-aware timestamps. Wakes can also
+  repeat, on a cron schedule in a named timezone or on each unit, task or path change, and can
+  start a stationed agent directly instead of a model turn.
+  Every agent has a station: a working directory and a set of tools. An Operator can be stationed
+  in any directory, with writes confined there, and given configured MCP servers by name.
+  Coin's station is the user's home with every configured server.
   Its service reloads the disk registry after reboot; missed deadlines remain
   due, while interrupted processes have unknown results. Ordinary wakes bring up the model at background
   priority; work explanations and requested-work completion updates use Coin priority.
-  Routine mistakes and recoverable failures stay local. Unfixable problems and concrete workflow improvements queue durable model explanations without canned placeholders. Sizeable requested jobs get completion and significant usable-milestone updates with result locations; conversational dispatches are tracked durably. Coin uses its own `KT_ACTOR` identity
+  Routine mistakes and recoverable failures stay local. Unfixable problems and concrete workflow improvements queue durable model explanations without canned placeholders. Sizeable requested jobs get completion and significant usable-milestone updates with result locations; conversational dispatches are tracked durably. `report_result` records announced outcomes outside rolling history and suppresses repeated location/milestone keys across task changes. Completion wakes require current inspection call IDs and cannot bypass reporting through ordinary prose; evidence relevance still requires model judgment. Coin uses its own `KT_ACTOR` identity
   for knowledge access across registered trees, rather than a grant to its working folder.
   It avoids engagement questions; genuinely consequential decisions get contextual options and a recommendation. Routine engineering choices take the recommendation without stopping.
   Conversation history grows to `coin.history_messages` (20), then discards the oldest
@@ -71,6 +83,7 @@ or even having the daemon replaced underneath them.
 CointOS is a personal system built for one machine and is shared as-is. It expects:
 
 - Linux with systemd user services and Python 3.
+- Python Rich (`python3-rich` on Ubuntu) for Coin’s terminal monitor.
 - The native [Gufo](https://github.com/gufo-org/gufo) bridge serving Qwen3.8-27B
   UD-Q4_K_XL for Coin and construction on one shared 131k lane. The reference
   setup is a 128 GB unified-memory AMD workstation. Gufo uses DFlash2 with a
@@ -81,7 +94,21 @@ CointOS is a personal system built for one machine and is shared as-is. It expec
   server), which agents use for orientation, specs, plans and runtime state.
 
 Model names, lanes, memory sizes and paths live in `config/cointos.json`.
-`work_model` selects the agents' model; `coin.model` selects Coin's model from `models`.
+`work_model` is the shared default for agents, Coin and user sessions. Omit `coin.model`
+unless Coin explicitly requires another configured model. The dashboard's Machine panel
+discovers GGUF files under `model_directories` and offers a **Default model** chooser.
+It finishes current replies, unloads the previous default, checks headroom and loads
+the selection; a failed load restores the previous choice. Sessions and work survive.
+Draft/vision companions are excluded; unqualified architectures and split files are
+disabled with a reason. Newly discovered Qwen35 models use Gufo without an unqualified
+draft. Model hashes are checked before native use. Dashboard selections survive upgrades.
+
+For a user-driven GPU session, configure the OpenCode `cointos` provider with
+`@ai-sdk/openai-compatible`, base URL `http://127.0.0.1:4200/v1`, any user API key,
+disabled request/header/chunk timeouts, and model ID `default`. Run
+`opencode --model cointos/default`. It shares the loaded model and pre-empts background
+work at GPU step boundaries; Coin retains higher priority. Loading another engine
+through Lemonade bypasses that scheduler.
 The per-model dispatcher `cointos.backend_native` selects Gufo for Qwen and defaults
 other models to llama.cpp. Build the pinned native bridge in `patches/gufo` with
 `scripts/build-gufo-control --source GUFO_CHECKOUT --package DEST --runtime-library-dir SDK_LIB`.
@@ -99,6 +126,12 @@ and disk-to-RAM transfer), and native `restore_seconds` from `seconds` through
 the ledger update before final event logging.
 Transfer/restore durations include all attempted compatible candidates.
 `restore_tier` records the last attempted cache's tier; following prefill is separate.
+Gufo hot switches report `mode: resident` with zero save/transfer/restore time:
+the native process selects a stable object retaining tensors, tokens, sampler/RNG
+and speculative continuation state. New or changed histories may initialize from
+persistence hints. Admission protects process growth and native state capacity;
+independent cleanup retires task states after their runs/thoughts end, retaining
+histories and checkpoint hints. Shutdown separately persists live histories.
 Native DFlash2 continuation, tools, reasoning-budget closure and snapshot restore
 at 130,944 tokens have been qualified. Gufo launches in an independent systemd
 user scope so compatible daemon replacement can retain the model process.
@@ -108,6 +141,10 @@ continuations preserve learned draft length; starting a new request is separate 
 consuming a chunk's pending token or restoring its saved continuation.
 The scheduler uses each backend's continuation contract: Gufo can decode directly
 from its complete held token vector, while llama.cpp requires a strict extension.
+During a generation step, Gufo streams every selected token and decoded piece over
+the control socket. The gateway turns those frames into reply deltas and dashboard
+live words immediately; `chunk_tokens` remains only the scheduler's maximum step
+size and pre-emption boundary, not the display granularity.
 Qualification checks that path, repeated restores and restored decoding. During a
 model replacement, warm restored state and let host memory pressure settle before
 the daemon adopts it and resumes clients.
@@ -122,7 +159,7 @@ services or copying code. Independent repair requires an authenticated installed
 Startup reads these as regular, non-symlink JSON files; damage or unreadability refuses
 startup without replacing them with empty state. Only genuine absence initializes defaults.
 
-- **Full install** (first install, or model/gateway/backend identity changes): `cointos stop`,
+- **Full install** (first install, or manual gateway/backend/topology changes): `cointos stop`,
   wait until `cointos agents` shows none, run `scripts/install`, then `cointos up`, check with
   `cointos check`, and resume autonomy with `cointos go`.
 - **Live install** (code, prompts and daemon-policy config such as reasoning, recovery,
@@ -137,7 +174,9 @@ startup without replacing them with empty state. Only genuine absence initialize
   conflicting or foreign dependency metadata refuses installation before changes.
 - **Live settings:** GPU time slice and generation step (`scheduler.slice_seconds`,
   `scheduler.chunk_tokens`) change from the dashboard or `POST /api/scheduler` and apply
-  at the next GPU step. Other settings need a live install.
+  at the next GPU step. Default-model replacement uses the dashboard or
+  `POST /api/default-model` with a discovered `path` from `GET /api/models`; its phase
+  and any failure appear in the ledger. Other settings need a live install.
 - **Coin changes:** copied Coin code and startup settings take effect after a quiet
   Coin-only restart; live installation preserves its running process. Confirm no pending
   conversation work before restarting `cointos-coin.service`.
@@ -157,6 +196,8 @@ cointos project set NAME --priority N --enable|--disable
 cointos project list
 cointos queue PROJECT NAME "BRIEF" --kind queued|urgent|command
 cointos task PROJECT:ITEM           # current assignment, dependencies and receipts
+cointos coin                        # live Coin log: words, tools and turns
+cointos view --coin                 # enable viewers so Coin takes a slot while active
 ```
 
 Lower priority numbers run first within a class. Each project owns its orientation, spec,
@@ -283,8 +324,14 @@ authority remain unchanged.
 
 ## Tests as contracts
 
-Code travels with its tests. A test-contract worker writes a behavior's tests from its contract
-and registers their command in the project's manifest (normally `tests/contracts.json`).
+A scoped manager assignment maps the relevant specification to single-line natural-language
+test scenarios. A separate manager assignment independently reviews that list against each
+spec obligation and the available fixture APIs. The accepted list feeds one scenario to each
+test author through dependency-ordered handoffs. Mapping, review and authorship each have
+separate task identities and receipts. Existing construction-stage values remain unchanged.
+
+Code travels with its tests. Each test-contract worker writes one reviewed scenario and
+registers its command in the project's manifest (normally `tests/contracts.json`).
 Implementation and integration assignments under a test policy must depend on an accepted
 test-contract item. A packet named only in prose is not binding. Submission refuses an empty
 binding; landing and incorporation require the receipt's packet commits to match the current
@@ -298,7 +345,20 @@ implementation dependency. The exact reviewed candidate runs before acceptance; 
 and invalid execution cannot authorize hidden acceptance. That implementer's finish runs the packet and reveals only failing
 tests. Concurrent insertions in protected test files retain a whole block once when already
 present; otherwise current-side blocks precede packet blocks. Repeating review preserves the candidate;
-conflicting replacements still need review. Completion, review and landing use this same composition.
+conflicting replacements still need review. An integrator resolves ordinary knowledge/document
+conflicts in the review worktree; the gate composes only the protected test contract for
+exactness, so unrelated non-code conflicts do not return the packet or block recovery. A
+protected test/harness conflict still returns to the worker. Completion, review and landing
+use the same protected composition.
+
+A wrong implementation passing a behavioral packet is a failed semantic review.
+Return unaccepted tests with the violated requirement and reproducible counterexample;
+an already accepted defect needs a blocked handoff for independent `correct-tests`
+recovery. Recording a probe or renaming the checks as structural coverage does not
+resolve it. Genuine skeleton-only contracts can still promise structure alone.
+Pending typed corrections block running consumers at completion, landing and
+incorporation as well as dispatch. The final checks repeat after validation, so a
+new correction cannot be raced by a green in-flight run; candidates are preserved.
 
 Validation has separate clocks: `timeouts.command_seconds` bounds one command after its
 output lease is acquired (five minutes by default); `timeouts.validation_seconds` bounds
@@ -445,6 +505,11 @@ not trigger an earlier artifact checkpoint.
 ## Memory
 
 The workstation's 128 GiB unified RAM is one pool. The memory guard sheds snapshots first.
+Admission holds each active agent's full process cap (8 GiB with the current configuration)
+and its native state estimate until initialization. Snapshots cannot spend that capacity;
+physical headroom remains the guard's signal. Background concurrency follows what fits.
+Native state survives tool calls while a run is alive. A task waiting without a run or
+awaiting review keeps its history and checkpoint hints, rather than a full resident GPU state.
 Sustained pressure stops background agents; the work model unloads only if headroom stays
 negative after shedding. Saved contexts have a configured RAM budget (`memory.snapshots_gb`)
 and spill to a bounded disk tier; a cache miss only
@@ -484,7 +549,7 @@ and branch artifacts are unaffected.
 `http://127.0.0.1:4200`, pictured above. The header carries the run switch (**Pause
 everything** / **Resume agents**, the same as `cointos stop` / `cointos go`) and buttons to
 **Queue work**, **Run operator** and **Spawn scout**; one strip of tiles follows. Home and
-project pages lead with live agent cards (active Coin first), followed by Work: in progress,
+project pages lead with live agent cards (Coin appears while it is active), followed by Work: in progress,
 waiting for the integrator, up next and queued work, each row with its inline controls
 (pause, resume a held task, message, hold, reorder), then **Done** and **Failed** counts that
 open their lists. **Messages** lists what agents sent the user, with **Reply** to the sender's
@@ -499,9 +564,13 @@ Home shows project cards linking to each project's page, and **Add project** (an
 repository or a new one). A project page heads with its purpose, branch and repository and
 its settings: an **Enabled** switch (disabling stops its agents), priority (High, Normal or
 Low: 50, 100 or 200, lower runs first) and **Remove**; its pipeline shows the latest four
-landed items. Messages, Machine (GPU controls, viewer-window switch, lanes, memory and
-collapsed Diagnostics) and Recently (machine events switched off unless asked) sit beside
-the main column.
+landed items. A **Coin** panel leads the side column with its phase, trigger, model, turns,
+worker uptime, current/last turn, tokens, GPU, PID, last words and recent turn/tool events;
+its card title names what started the turn (answering a message, issuing a reminder,
+following up on work). **Open viewer** enables viewer windows so Coin occupies a slot while
+active; it uses a scrolling log because Coin is not an OpenCode session. Messages, Machine
+(GPU controls, viewer-window switch, lanes, memory and collapsed Diagnostics) and Recently
+(machine events switched off unless asked) sit beside the main column.
 Diagnostics describe failed checks as problems, link affected work to its drawer and show
 the current blocker. Technical details stay folded. Checks do not create additional recovery
 attempts or refill exhausted budgets; the normal recovery lifecycle owns corrective work.
@@ -510,6 +579,8 @@ removes terminal records no unfinished work still references. It retains task ev
 sessions for transitive prerequisites, recovery work and workers of waiting integrators.
 
 The page fetches `/api/ledger` and streams `/api/live` from the address serving the page.
+Agent words and token counts advance from each streamed model token; the 10 Hz live
+stream repaints them while the ledger supplies the remaining panels each second.
 A reverse proxy to another machine shows that machine's runtime; the viewing device
 does not need a local CointOS installation. Large JSON/HTML replies support gzip.
 Ledger responses capture a consistent snapshot under the daemon lock, then encode and
@@ -538,6 +609,10 @@ registrations or packets without new commands run their registered suite, dedupl
 across packets. Distinct new packet commands remain scoped. The manifest describes
 production coverage, not test-file ownership; unchanged command names cannot justify
 skipping assertions in changed harnesses.
+Submission and landing compare failures with pinned main. Only a command already
+registered and failing there is exempt; new commands must pass and execution errors
+block. Submission retains `packet_gate` counts. This command-level comparison does
+not distinguish different failing assertions inside an already-red command.
 Revisions preserve user and other owners' holds; only the revising task's own hold ends.
 User holds require explicit release.
 An origin revision by another owner cancels stale recovery controllers while preserving

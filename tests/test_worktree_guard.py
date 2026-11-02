@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from cointos.config import ROOT
 from cointos import opencode
 from cointos.kt_mcp import SERVER
 
@@ -78,7 +79,7 @@ class WriteBoundary(unittest.TestCase):
             knowledge=main/'.knowledge';knowledge.mkdir()
             self.assertNotIn(str(knowledge),opencode.write_paths(task,run))
             self.assertIn(str(knowledge),opencode.write_paths({**task,'role':'integrator'},run))
-            self.assertIsNone(opencode.write_paths({**task,'role':'operator','place':'system'},run))
+            self.assertIsNone(opencode.write_paths({**task,'role':'operator','place':'system','worktree':str(ROOT)},run))
 
     def test_branch_maintenance_cannot_overwrite_preserved_worker_artifacts(self):
         for role in ('operator', 'gardener', 'tree-auditor'):

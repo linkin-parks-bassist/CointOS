@@ -1,11 +1,13 @@
 ---
 status: green
-revised_at: "2026-10-19T19:32:47+11:00"
+revised_at: "2026-10-26T07:02:05+11:00"
 ---
 
 An agent is waiting, reading, reasoning, writing or running a tool. Reading/reasoning/writing require a lane; tools do not.
 
 A thought advances in bounded steps: up to `read_chunk_tokens` while establishing context, then up to `chunk_tokens` while generating. Scheduling decisions occur between steps; a running backend request is not torn in half.
+
+During a generation step, Gufo streams each selected token and its raw decoded piece over the control socket before returning the step result. `lanes.arrived` decodes those bytes incrementally across steps, queues token/text fragments, and the gateway sends each text delta to OpenCode while dashboard live words repaint at 10 Hz. This changes display latency only: the step remains the scheduling and pre-emption boundary.
 
 Gufo receives the read-step budget as max_input_tokens. Control::Prefill rejects an extension larger than that budget and loops until native progress consumes the requested suffix. The Qwen runner separately caps each inner batch at QwenGpuArena::GetMaxBatch, 4,096 in pinned arena.cpp; an outer request can contain several inner batches. Current CointOS read steps are 1,024, so they cannot exercise a 4,096-row inner batch. Increasing the read budget may improve batching but lengthens an uninterruptible backend call. No gain is established: qualify matched prompt work, continuation correctness, memory and foreground blocking before changing it. Evidence: backend_gufo.prefill, patches/gufo/control.cpp and pinned Gufo inference_backend.cpp/hip/arena.cpp.
 

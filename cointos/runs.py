@@ -7,7 +7,7 @@ from __future__ import annotations
 import secrets
 import threading
 
-from cointos import git, keys, lifecycle, opencode, packets, prompts, queues, tasks
+from cointos import contracts, git, landing, keys, lifecycle, opencode, packets, prompts, queues, schema, tasks
 from cointos.state import CONFIG, LOCK, L, log, now
 
 
@@ -58,6 +58,15 @@ def follow(agent_id: str, task: dict | None, key: str | None) -> None:
         if task is not None:
             launch(agent_id, task, key)
         facts = opencode.watch(agent_id, lambda kind, value: observed(agent_id, kind, value))
+    except contracts.CompositionError as error:
+        with LOCK:
+            current = L["tasks"].get(task["id"])
+            if lifecycle.owns(current, agent_id):
+                current['composition_failure'] = error.evidence
+                lifecycle.refuse_dispatch(current, str(error) + "\nRequest an independently reviewed "
+                    "correct-tests replacement of the conflicting contract; preserve implementation artifacts. "
+                    "Retry only after bindings or main change.")
+        facts = {"finish": None, "code": None, "error": str(error)}
     except Ended:
         facts = None
     except Exception as error:
@@ -73,6 +82,7 @@ def follow(agent_id: str, task: dict | None, key: str | None) -> None:
 def launch(agent_id: str, task: dict, key: str) -> None:
     """Prepare the task's worktree and start its run's unit. Runs outside LOCK."""
     where = tasks.place(task)
+    preflight_bindings(task, where)
     correction = (queues.records().get(task.get('record')) or {}).get('correction')
     if task["branch"] is not None:
         if correction:
@@ -90,6 +100,29 @@ def launch(agent_id: str, task: dict, key: str) -> None:
         with LOCK:
             L["tasks"][task["id"]]["base_commit"] = task["base_commit"] = base
     opencode.launch(CONFIG, agent_id, task, key, prompts.launch_text(task, where), protected(task, where))
+
+
+def preflight_bindings(task: dict, project: dict) -> None:
+    """Compose the complete current contract before model launch, outside LOCK.
+
+    No tests execute and no worker checkout is touched. Acceptance remains the
+    authority for changed bindings/main after this early feasibility check.
+    """
+    rules = project.get('test_policy')
+    if task['kind'] != 'item' or task['stage'] not in schema.TESTED or not rules:
+        return
+    with LOCK:
+        if not lifecycle.owns(L['tasks'].get(task['id']), task['agent']):
+            raise Ended
+        commits = landing.tests_of(task, required=True)
+    main = git.head(project['path'], project['main_branch'])
+    with contracts.combined(project['path'], main, commits, rules, non_code="ours"):
+        pass
+    with LOCK:
+        current = L["tasks"].get(task["id"])
+        if not lifecycle.owns(current, task["agent"]):
+            raise Ended
+        current.pop("composition_failure", None)
 
 
 def protected(task: dict, where: dict) -> list[str]:

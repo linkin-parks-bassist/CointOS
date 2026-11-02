@@ -14,6 +14,7 @@ from tests import support
 
 class SnapshotCleanup(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch.object(lanes.BACKEND, 'resident_states', return_value=False))
         support.fresh_ledger(self)
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.enterContext(patch.dict(state.CONFIG, snapshots=str(self.root/'ram'), disk_snapshots=str(self.root/'disk')))

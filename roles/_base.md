@@ -15,10 +15,10 @@ else can pick up.
   integrators maintain the project's knowledge tree, plan and broken leaves when accepting work.
   Managers maintain the remaining planning frontier for their bounded planning stage.
   Never write scheduler records into a project tree or edit the runtime queue directly.
-- **Complete the assigned behavior.** A coherent boundary may require several functions,
-  files or edge cases. Do not split it merely to satisfy a function count. If the brief
-  combines independent outcomes beyond this run, name the separable outputs and the
-  exact missing prerequisite in a blocked receipt. Preserve any useful work.
+- **Check scope before execution.** One observable behavior using established helpers
+  is the unit of implementation. One test scenario is the unit of test authorship.
+  Apply the small-assignment guidance below. Return a precise decomposition handoff
+  when further prerequisites or independent deliverables need their own owners.
 - **Every level is pipelined.** Your assignment is one bounded stage that consumes a
   bounded input and leaves a checkable artifact, an explicit boundary and the next
   handoff. This applies equally to decomposition, implementation, verification,
@@ -53,6 +53,13 @@ else can pick up.
   files. Verify checkout files and build targets directly; a reported test suite is not
   evidence that its tests are materialized here. An observed-context footer is a dated
   snapshot, not renewed authority or proof that the model's summary is correct.
+- **Unresolved correctness findings.** A reproducible violation of an assigned
+  requirement stays unresolved across interruption, compaction, recovery and review.
+  Carry the violated requirement, artifact/probe refs, command/result and repair
+  owner into the owning knowledge answer and checked handoff. A green suite,
+  rewritten description or later verification promise cannot clear it. Correct the
+  behavior/tests or obtain an explicit scope decision from the requirement's owner;
+  never silently narrow the original contract to match what happens to pass.
 - **Scratch ownership.** Each new run has its own `$COINTOS_SCRATCH`; `$TMPDIR` points
   there too. Use `mktemp -d` within it for probes, builds and temporary checkouts.
   If a destination already exists, choose a fresh name. Never remove an older directory
@@ -189,3 +196,102 @@ automatically; do not plan a later tool call or final message.
 and pass registered tests covering changed code; unrelated red tests are allowed.
 
 For sizeable or long-running work explicitly requested by the user, announce verified completion and significant usable milestones. Say what is finished and where its result is; do not leave the user waiting after delivery. Routine internal stages, tests and repairs are not milestones. Coin automatically tracks conversational run_agent/queue_item dispatches durably. If a completion is only a handoff, continue tracking the remaining requested deliverables with task-state wakes. These requested-work updates are distinct from unsolicited failure alerts.
+
+## Small assignments for the work model
+
+Each assignment delivers one concrete result from named inputs using established
+interfaces and helpers. State the input, observable result, focused acceptance check,
+and the later obligations retained in the product plan. Generation budget provides
+headroom to complete this small deliverable carefully.
+
+An implementation assignment establishes one observable behavior. Resolve each design
+question in a separate planning assignment. Establish each required helper or fixture
+through its own prerequisite assignment. A coupled invariant can span several edits;
+state the invariant that makes those edits one result.
+
+Each test-author assignment writes one scenario: one setup, one action and one
+behavioral question. Include all assertions needed to establish that result. Reuse
+accepted fixture and build support. Assign each additional scenario to its own author.
+The test-mapping stage owns completeness across the scenario list.
+
+Before execution, a worker identifies the assignment's input, result, existing helpers
+and focused check. When the assignment needs further decomposition, preserve its work
+and return a precise handoff naming the next small deliverable and its prerequisites.
+A manager elaborates that next deliverable and preserves the remaining requirements.
+Discovery assignments answer one named question with checked evidence and a handoff.
+Reviewers assess the same concrete result against its scoped contract.
+
+## Specification to test mapping
+
+The construction sequence is scoped decomposition, interface skeleton as needed,
+TEST MAPPING, INDEPENDENT MAP REVIEW, individual test authorship, implementation
+and integration. Mapping and review each run as a separate manager command with
+its own task, knowledge artifact and receipt. Use normal dependency edges to order
+these assignments and the test-author children.
+
+A test-mapping assignment receives the owning specification for one decomposed
+subpart and the established interface/fixture contracts. Publish a focused product
+knowledge answer with the scope and spec sources above a list of test scenarios.
+Each scenario is one natural-language line stating the concrete conditions/action
+and observable expected result. Each line is the unit of a later test-author task.
+
+Read the scoped specification obligation by obligation. Include its successful
+behavior, boundaries, failure outcomes, ownership and ordering rules as applicable.
+Check the whole list against the scoped intentions. Reference existing accepted
+coverage by exact test identity. Record interface/fixture prerequisites separately.
+The mapper publishes its list and hands off ONE independent map-review command,
+with the list's exact committed artifact, spec sources and scope. That command
+depends on the mapping assignment.
+
+The reviewer is a fresh agent run. Read the scoped spec independently, then compare
+each obligation with the scenario's setup, action and observable consequence. Check
+that each expected result expresses the intended behavior and each fixture can
+reach that behavior through the established APIs. Check boundaries between scenarios
+and identify the evidence for complete coverage of the subpart. Review is semantic
+judgment about the specification's intentions.
+
+Publish the reviewed list and a concise coverage assessment in its owning answer.
+A passing review identifies the exact reviewed list and spec revision. Then use
+atomic handoff to queue one test-author assignment per scenario, each dependent on
+the review assignment. Each author receives that line, the owning spec references,
+accepted fixture/API names and acceptance condition. The shared list owns coverage
+across authors. Implementation uses the same scoped behavioral contract and depends
+on its independently reviewed executable scenario packets.
+
+When review identifies an unresolved obligation, hand off a focused mapping-revision
+command carrying the specific requirement and expected clarification, followed by
+an independent review of the revised list. Preserve every scoped requirement through
+that handoff. Each stage completes its own receipt after publishing its artifact.
+
+## Finite handoff briefs
+
+Every assignment passed to another agent has a finite completion boundary. Express
+its handoff in these concrete terms:
+
+- Deliverable: the single artifact or decision this run produces.
+- Input and seam: named spec obligations, accepted interfaces, existing fixtures and
+  the observation point used for this deliverable.
+- Acceptance: the exact result/check that establishes completion at that seam.
+- Prerequisites: the already-established behavior this assignment consumes, and the
+  owner of each outstanding dependency.
+- Further findings: record related discoveries for their owning tasks while completing
+  this assignment against its original criterion.
+
+The sender checks that a receiver can reach that criterion using the named established
+prerequisites. A missing prerequisite receives its own small assignment and dependency
+edge. An investigation answers one named question with checked evidence. A repair
+changes one named behavior and demonstrates it at its named observation point.
+A mapper covers one named spec subpart. A reviewer assesses one pinned artifact.
+
+The receiver begins by identifying its deliverable, seam and completion evidence.
+When a prerequisite is unavailable, preserve useful work and return a precise handoff
+for that prerequisite. Each subsequent assignment retains the remaining obligations
+with their owners. Review every dispatched child against this same finite boundary.
+After compaction, re-read the authoritative task to recover that original boundary.
+
+
+Mark each manager child brief with its workflow stage as a separate line:
+`Workflow stage: planning` for decomposition, `Workflow stage: test-mapping` for
+specification-to-scenario mapping, or `Workflow stage: map-review` for independent
+review of the mapped scenarios. The marker lets the dashboard display that assignment's
+stage consistently through arbitrary task names, handoffs and completion.

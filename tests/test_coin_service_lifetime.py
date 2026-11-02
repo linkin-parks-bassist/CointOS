@@ -45,7 +45,7 @@ coin.kt_mcp.open_session=opener
 coin.credentials=lambda:('fixture-opaque-token',{7})
 coin.remember=lambda *args:None
 coin.send=lambda *args:{'message_id':101}
-coin.report=lambda busy:finished.set() if not busy and mode in ('routine_worker','replay') and (
+coin.report=lambda busy, doing=None, trigger=None:finished.set() if not busy and mode in ('routine_worker','replay') and (
     (root/'caught-turn-failure').exists() or (root/'delivered-wake').exists()) else None
 def turn(*args,**options):
     if mode == 'replay':

@@ -11,7 +11,7 @@ import functools
 import subprocess
 from copy import deepcopy
 
-from cointos import frontier, git, lanes, lifecycle, queues, runs, schema, tasks, trees
+from cointos import capacity, models, frontier, git, lanes, lifecycle, queues, runs, schema, snapshots, tasks, trees
 from cointos.config import managed_trees
 from cointos.state import CONFIG, STOPPING, LOCK, L, alert, log, now
 
@@ -51,17 +51,17 @@ def repair_work(scanned: dict) -> None:
 
 def spawn() -> None:
     """Start runs while there is room, work and memory."""
-    if (STOPPING.is_set() or L["restarting"] or L["paused"] or lanes.blocked()
+    if (STOPPING.is_set() or models.changing() or L["restarting"] or L["paused"] or lanes.blocked()
             or not L["models"][CONFIG["work_model"]]["up"]
             or now() - L["user_last_thought"] < CONFIG["spawner"]["user_quiet_seconds"]):
         return
-    headroom = L["memory"].get("headroom_gb", 0.0)
-    while len(L["agents"]) < CONFIG["spawner"]["max_agents"] and headroom >= CONFIG["memory"]["agent_memory_gb"]:
+    while len(L["agents"]) < CONFIG["spawner"]["max_agents"]:
         task = next_task()
         if task is None:
             return
+        if not snapshots.make_room(capacity.agent_gb(task['id']), claim=False):
+            return
         runs.start(task)
-        headroom -= CONFIG["memory"]["agent_memory_gb"]
 
 
 def next_task() -> dict | None:

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-24T10:42:31+11:00"
+revised_at: "2026-10-26T07:02:07+11:00"
 ---
 
 The active runtime owns two scheduler settings that change without process replacement:
@@ -11,6 +11,8 @@ The active runtime owns two scheduler settings that change without process repla
 Change them through the dashboard Machine panel or `POST /api/scheduler` with either or both fields. The API validates the complete resulting pair and persists it before applying it. Direct edits to the active runtime's `config/cointos.json` are noticed each daemon tick. Editing source does not affect installed runtime.
 
 `slice_seconds` must be finite and positive. `chunk_tokens` must be a positive integer, never a boolean. Invalid/partial configuration retains the last valid pair and exposes `config_error`. The ledger's `scheduler` object is the authority for effective values.
+
+Token streaming is independent of step size. A streaming Gufo step still generates up to `chunk_tokens` before the scheduler can move the lane; each token is displayed as it arrives, so lowering `chunk_tokens` for smoother display is unnecessary and adds transport, step-boundary and pending-token overhead.
 
 The installed scheduler counts reads and generation from admission; a reader yields to equals only with a reusable partial checkpoint. Existing turns retain their clocks. A shorter slice takes effect at a completed GPU step; no in-flight request is cut. Tool grace never extends past the slice end. Workers read `chunk_tokens` at step start: an in-flight step finishes at its old size, and the next uses the new value without losing tokens.
 

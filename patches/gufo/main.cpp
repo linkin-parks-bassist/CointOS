@@ -50,6 +50,8 @@ int main(int argc, char** argv) {
       throw std::invalid_argument("invalid model shape");
     gufo::server::InferenceBackend backend;
     gufo::server::TextSpeculativeConfig speculation;
+    // Snapshot compatibility namespace, not the current engine revision.
+    // Kept stable only while import/continuation qualification passes.
     std::string identity =
         std::string(argv[6]) + ":1f97092333af10f29887b098d9cb8a041610004a";
     if (argc == 11) {

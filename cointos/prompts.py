@@ -13,7 +13,7 @@ import json
 import time
 from pathlib import Path
 
-from cointos import frontier, queues, schema
+from cointos import frontier, queues, schema, stations
 from cointos.config import ROOT
 from cointos.state import CONFIG, L
 
@@ -90,6 +90,15 @@ def identity(task: dict) -> str:
 
 
 def location(task: dict, where: dict) -> str:
+    granted = stations.of(task)["tools"]
+    reach = f"\nStation tools beyond the standard set: {', '.join(granted)}." if granted else ""
+    return place_text(task, where) + reach
+
+
+def place_text(task: dict, where: dict) -> str:
+    if stations.stationed(task):
+        return (f"Station: {task['worktree']}. This is your working directory; your writes are confined to it, "
+                "and you have no project, branch or review. Check what is already there before changing it.")
     if task["branch"] is None:
         return (f"Scope: the installed CointOS runtime ({task['worktree']}) and the explicitly named accessible paths. "
                 "This is a system task with no project, branch or worktree.")

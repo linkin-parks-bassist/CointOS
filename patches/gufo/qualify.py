@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -122,7 +123,7 @@ class Run:
             self.journal = json.loads(self.path.read_text())
         else:
             if self.path.exists(): raise ValueError('existing qualification journal; use --recover or a new output')
-            self.journal = {'config': config, 'model': model, 'options': options, 'phase': 'prepared',
+            self.journal = {'config': copy.deepcopy(config), 'model': model, 'options': copy.deepcopy(options), 'phase': 'prepared',
                             'units': {}, 'caches': [], 'slots': [], 'daemon_stopped': False, 'draining': False,
                             'original_models': [], 'test': {}, 'restored': False}
             self.save()
@@ -181,6 +182,10 @@ class Run:
         key_data = json.loads((Path.home()/'.CointOS/state/keys.json').read_text())
         self.journal['key_entries'] = sorted(hashlib.sha256(json.dumps([key,value],sort_keys=True).encode()).hexdigest()
                                              for key,value in key_data.items())
+        self.journal['key_digests'] = {
+            'coin': hashlib.sha256(key_data['coin'].encode()).hexdigest(),
+            'agents': {name: hashlib.sha256(key.encode()).hexdigest()
+                       for name, key in key_data['agents'].items()}}
         self.journal['agents'] = {name: {k:a.get(k) for k in ('task','session','pid','generation_seconds','generation_tokens')}
                                   for name,a in ledger['agents'].items()}
         self.journal['draining'] = True; self.save()
@@ -287,7 +292,7 @@ class Run:
         return held
 
     def think(self, tokens, count, sampling):
-        return gufo.think(self.trial, self.journal['model'], 0, tokens, len(tokens), count, sampling, lambda _: None)
+        return gufo.think(self.trial, self.journal['model'], 0, tokens, len(tokens), count, sampling, lambda *_: None)
 
     def prepare_production(self):
         """Finish native allocation and let host pressure settle before guard adoption."""
@@ -300,8 +305,12 @@ class Run:
             snapshots = self.journal.get('drained_ledger', {}).get('snapshots', {})
             candidates = [(s['bytes'], key) for key, s in snapshots.items()
                           if s['model'] == name and s['tier'] == 'memory' and s['tokens']]
-            if candidates and not gufo.restore(self.config, name, 0, max(candidates)[1]):
-                raise RuntimeError('production prefix warm restore failed')
+            if candidates:
+                key = max(candidates)[1]
+                if info.get('resident_switch'):
+                    gufo.select(self.config, name, 0, snapshots[key]['owner'])
+                if not gufo.restore(self.config, name, 0, key):
+                    raise RuntimeError('production prefix warm restore failed')
         deadline = time.monotonic() + self.config['timeouts']['model_launch_seconds']
         while True:
             measured = memory.measure()
@@ -411,6 +420,51 @@ class Run:
                 raise RuntimeError('reused executor changed deep continuation')
         self.journal['test']['repeated_restores']={'passed':True,'count':5,'seconds':restore_seconds};self.save()
 
+    def check_parked_units(self):
+        self.journal['preserved_units'] = {name: service(name) for name in self.journal['units']}
+        for name, before in list(self.journal['units'].items()):
+            current = self.journal['preserved_units'][name]
+            if current['MainPID'] == before['MainPID']:
+                continue
+            agent = name.removeprefix('cointos-agent-').removesuffix('.service')
+            task_id = self.journal.get('agents', {}).get(agent, {}).get('task')
+            drained = self.journal.get('drained_ledger', {})
+            task = drained.get('tasks', {}).get(task_id, {})
+            cancelled = (name.startswith('cointos-agent-') and task_id
+                         and agent not in drained.get('agents', {})
+                         and task.get('agent') is None
+                         and task.get('cancelled') == 'cancelled from the dashboard'
+                         and current['MainPID'] == '0' and current['ActiveState'] == 'inactive'
+                         and any(e.get('event') == 'task cancelled' and e.get('task') == task_id
+                                 for e in drained.get('history', [])))
+            if not cancelled:
+                raise RuntimeError('parked process identity changed: ' + name)
+            self.journal.setdefault('retired_during_park', {})[name] = {
+                'agent': agent, 'task': task_id, 'original_unit': before,
+                'current_unit': current, 'reason': task['cancelled']}
+            del self.journal['units'][name]
+            self.save()
+        self.journal['unit_identities_checked'] = True
+        self.save()
+
+    def check_gateway_authority(self, key_data):
+        if expected := self.journal.get('key_digests'):
+            if hashlib.sha256(key_data['coin'].encode()).hexdigest() != expected['coin']:
+                raise RuntimeError('prior Coin gateway authority changed')
+            retired = {entry['agent'] for entry in self.journal.get('retired_during_park', {}).values()
+                       if entry.get('agent')}
+            for name, digest in expected['agents'].items():
+                key = key_data['agents'].get(name)
+                if key is None and name in retired:
+                    continue
+                if key is None or hashlib.sha256(key.encode()).hexdigest() != digest:
+                    raise RuntimeError('prior agent gateway authority changed: ' + name)
+        else:
+            entries = {hashlib.sha256(json.dumps([key,value],sort_keys=True).encode()).hexdigest()
+                       for key,value in key_data.items()}
+            if not set(self.journal.get('key_entries',[])).issubset(entries):
+                raise RuntimeError('prior gateway authority changed')
+
     def recover(self):
         if self.journal.get('restored'):
             print('production was already restored', flush=True)
@@ -457,10 +511,7 @@ class Run:
             self.restore_files('caches')
             self.journal['caches_restored']=True; self.save()
         if not self.journal.get('unit_identities_checked'):
-            self.journal['preserved_units']={name:service(name) for name in self.journal['units']}
-            for name,before in self.journal['units'].items():
-                if self.journal['preserved_units'][name]['MainPID']!=before['MainPID']: raise RuntimeError('parked process identity changed: '+name)
-            self.journal['unit_identities_checked']=True; self.save()
+            self.check_parked_units()
         if self.journal['daemon_stopped']:
             self.phase('warming production model before daemon memory-guard adoption')
             self.prepare_production()
@@ -493,8 +544,7 @@ class Run:
                     if time.monotonic()>=deadline: raise
                     time.sleep(self.config['tick_seconds'])
         key_data = json.loads((Path.home()/'.CointOS/state/keys.json').read_text())
-        entries = {hashlib.sha256(json.dumps([key,value],sort_keys=True).encode()).hexdigest() for key,value in key_data.items()}
-        if not set(self.journal.get('key_entries',[])).issubset(entries): raise RuntimeError('prior gateway authority changed')
+        self.check_gateway_authority(key_data)
         for name in self.journal['units']: systemctl('thaw',name)
         self.journal['draining']=False
         self.journal['authority_after']={path:sha256(path) for path in self.journal.get('authority',{})}

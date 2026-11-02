@@ -11,7 +11,9 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     rank, created_at, updated_at         admission order and times
     status, runs, agent, session, note   lifecycle: waiting | running | review | done | failed
     receipt, result, acceptance          how it ended (see what/is/the/agent/completion/model.md)
-    worktree, branch, base_commit        where it works; system tasks have no branch
+    worktree, tools                      its station (see stations.py): where it works and what it can reach
+    branch, base_commit                  its work's Git identity; system tasks have no branch
+    occurrence                           the wake occurrence that started it, at most one task each
     stage, reasoning_effort, budget      pinned metadata; `stage` only for items
     prompt_date, system_context          fixed system-prefix identity (content is deduplicated in the ledger)
     abilities, spawned_by                an operator's permissions; the task whose run started it
@@ -34,7 +36,7 @@ import re
 import time
 from pathlib import Path
 
-from cointos import frontier, names, queues, schema
+from cointos import frontier, names, queues, schema, stations
 from cointos.config import ROOT, managed_trees
 from cointos.state import CONFIG, L, log, now
 
@@ -104,6 +106,7 @@ def create(kind: str, where: dict, name: str, brief: str, rank: list, *, item: s
         "receipt": None, "result": None, "revision": None,
         "worktree": str(ROOT) if system else str(Path(where["path"]).parent / ".worktrees" / Path(where["path"]).name / name),
         "branch": None if system else f"work/{name}",
+        "tools": [],
         "stage": record["stage"] if kind == "item" else None,
         "prompt_date": time.strftime("%a %b %d %Y", time.localtime(created)),
         **fields,
@@ -133,13 +136,38 @@ def last_created(kind: str, place_name: str) -> float:
     return L["cadence"].get(f"{kind}:{place_name}", 0)
 
 
+def requested_station(station, project: str | None, abilities: list, spawner: tuple[dict, dict] | None) -> tuple[str | None, list]:
+    """The directory (None keeps the scope's own) and tools an Operator request may have."""
+    station = station or {}
+    if not isinstance(station, dict) or set(station) - {'directory', 'tools'}:
+        raise ValueError('station has only a directory and tools')
+    directory = stations.directory(station['directory']) if station.get('directory') else None
+    tools = stations.tools(station.get('tools'))
+    if directory and project:
+        raise ValueError("a project's agents work in their checkouts; give a station directory or a project, not both")
+    if directory and 'control' in abilities:
+        raise ValueError('a station directory confines an agent; the control ability belongs to system Operators')
+    if spawner:
+        task = spawner[0]
+        if not stations.covers(task.get('tools') or [], tools):
+            raise ValueError('an operator gets no station tool its spawner lacks')
+        if stations.stationed(task):
+            home = Path(task['worktree']).resolve()
+            directory = directory or str(home)
+            if not Path(directory).is_relative_to(home):
+                raise ValueError(f'a stationed agent can only start agents inside {home}')
+    return directory, tools
+
+
 def request_operator(name: str, brief: str, project: str | None, abilities, reasoning_effort, budget,
-                     spawner: tuple[dict, dict] | None = None) -> dict:
+                     spawner: tuple[dict, dict] | None = None, *, station: dict | None = None,
+                     occurrence: str | None = None, check_only: bool = False) -> dict | None:
     """One explicitly requested ad-hoc operator task. Caller holds LOCK.
 
     An agent run may start one too, as (its task, its agent). A worker may not: its work is
-    reviewed, and an operator would land it unreviewed. The operator gets no ability its
-    spawner lacks, and its budget comes out of the spawner's run."""
+    reviewed, and an operator would land it unreviewed. The operator gets no ability or station
+    tool its spawner lacks, and its budget comes out of the spawner's run. `occurrence` makes a
+    replayed start return the task it already made; `check_only` validates without creating."""
     if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
         raise ValueError("operator name must use letters, numbers, dot, underscore or dash")
     if not isinstance(brief, str) or not brief.strip():
@@ -162,13 +190,26 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
             raise ValueError(f"this run has only {left['generation_tokens']:,} tokens and "
                              f"{left['generation_seconds']:.0f} seconds left to give")
     where = project_named(project) if project else SYSTEM
+    directory, tools = requested_station(station, project, abilities, spawner)
+    if check_only:
+        schema.effort(reasoning_effort)
+        schema.budget(CONFIG, budget, role="operator")
+        return None
+    if occurrence is not None:
+        started = next((t for t in L["tasks"].values() if t.get("occurrence") == occurrence), None)
+        if started:
+            return started
     known = next((t for t in L["tasks"].values() if t["kind"] == "operator" and t["place"] == where["name"]
                   and t["title"] == f"operator-{name}" and active(t)), None)
     if known:
+        if occurrence is not None:  # the previous occurrence is still working on this
+            return known
         raise ValueError(f"operator task {known['id']} is already active")
     operator = create("operator", where, f"operator-{name}", brief, [schema.KINDS["operator"]["rank"], where.get("priority", 0)],
                       abilities=abilities, reasoning_effort=reasoning_effort, budget=budget,
-                      spawned_by=spawner[0]["id"] if spawner else None)
+                      spawned_by=spawner[0]["id"] if spawner else None, tools=tools,
+                      **({"worktree": directory} if directory else {}),
+                      **({"occurrence": occurrence} if occurrence else {}))
     if spawner:
         granted = spawner[1].setdefault("granted", {})
         for key in schema.BUDGET_KEYS:

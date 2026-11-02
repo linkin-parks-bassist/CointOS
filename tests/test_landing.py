@@ -103,6 +103,51 @@ class Project(unittest.TestCase):
 
 
 class Packets(Project):
+    def shared_packet_with_existing_main_failure(self):
+        (self.repo / 'code.py').write_text(CODE.replace('return 7', 'return 0'))
+        self.base = support.commit(self.repo, 'existing unrelated B failure')
+        git.run(self.tree, 'merge', '--ff-only', self.base)
+        packet = self.packet('shared-with-main-red', {
+            'tests/test_code.py': TESTS + '\n# shared harness update\n',
+            'tests/test_a.py': TESTS_A}, A)
+        state.L['queue'][self.worker['record']]['depends'] = ['shared-with-main-red']
+        return packet
+
+    def test_submission_and_landing_agree_on_preexisting_shared_manifest_red(self):
+        packet = self.shared_packet_with_existing_main_failure()
+        self.implement()
+        receipt = self.finish()
+        self.assertEqual(receipt['disposition'], 'complete')
+        self.assertEqual(receipt['evidence']['tests'], [packet])
+        self.assertEqual(receipt['evidence']['packet_gate'], {'suite': 2, 'failed': 1, 'red_on_main': 1})
+        with contracts.combined(self.repo, git.head(self.tree), [packet], RULES, non_code='ours') as (_, head):
+            counts, caused = contracts.suite(self.repo, self.base, head, RULES, 10)
+        self.assertEqual(counts, receipt['evidence']['packet_gate'])
+        self.assertEqual(caused, [])
+
+    def test_new_binding_failure_is_not_exempted_by_unrelated_main_red(self):
+        self.shared_packet_with_existing_main_failure()
+        self.implement('41')
+        with self.assertRaises(api.ApiError) as failed:
+            self.finish()
+        self.assertIn('tests.test_a.A', str(failed.exception))
+        self.assertNotIn('Failing test: ' + ' '.join(B), str(failed.exception))
+        self.assertIsNone(self.worker['receipt'])
+
+    def test_baseline_execution_failure_cannot_authorize_submission(self):
+        self.shared_packet_with_existing_main_failure()
+        self.implement()
+        run = contracts._run
+        def execution(path, commit, command, deadline, memory_gb=None):
+            if commit == self.base:
+                raise contracts.ExecutionError('baseline command timed out')
+            return run(path, commit, command, deadline, memory_gb)
+        with patch.object(contracts, '_run', side_effect=execution):
+            with self.assertRaisesRegex(api.ApiError, 'baseline command timed out'):
+                self.finish()
+        self.assertIsNone(self.worker['receipt'])
+        self.assertEqual(self.worker['submission_failure']['category'], 'execution')
+
     def test_hold_during_intent_persistence_revokes_git_publication(self):
         integration, candidate, _ = self.landing()
         persist = landing.save
@@ -277,6 +322,37 @@ class Packets(Project):
         with self.assertRaisesRegex(ValueError, "have not run on this commit"):
             lifecycle.submit(self.worker["id"], "worker-1", "complete", "A implemented")
 
+    def test_unchanged_product_refusal_reuses_evidence_before_validation(self):
+        self.implement('41')
+        with patch.object(contracts, 'packet_check', wraps=contracts.packet_check) as check:
+            with self.assertRaises(api.ApiError): self.finish()
+            with self.assertRaises(api.ApiError): self.finish()
+            self.assertEqual(check.call_count, 1)
+            (self.tree / 'code.py').write_text((self.tree / 'code.py').read_text().replace('return 41', 'return 42'))
+            support.commit(self.tree, 'repair candidate')
+            self.assertEqual(self.finish()['disposition'], 'complete')
+            self.assertEqual(check.call_count, 2)
+
+    def test_composition_refusal_blocks_immediately_with_structured_evidence(self):
+        self.implement()
+        error = contracts.CompositionError('conflicting packets', main=self.base,
+            packets=[self.tests], failed_packet=self.tests, paths=['tests/contracts.json'])
+        with patch.object(contracts, 'packet_check', side_effect=error) as check:
+            receipt = self.finish()
+            self.assertIs(self.finish(), receipt)
+        self.assertEqual(check.call_count, 1)
+        self.assertEqual(receipt['disposition'], 'blocked')
+        self.assertEqual(self.worker['submission_failure']['category'], 'composition')
+        self.assertIn('correct-tests', receipt['summary'])
+        self.assertEqual(api.frontier.inspect(self.worker['id'], state.L)['composition_failure'], error.evidence)
+        self.assertEqual(self.worker['submission_failure']['attempts'], 1)
+        restored = state.fresh(json.loads(json.dumps(state.L)))
+        state.L.clear()
+        state.L.update(restored)
+        self.worker = state.L['tasks'][self.worker['id']]
+        recovery, _ = tasks.request_repair(self.worker)
+        self.assertEqual(api.frontier.inspect(recovery['id'], state.L)['composition_failure'], error.evidence)
+
     def test_execution_failures_escalate_separately_from_product_refusals(self):
         self.implement()
         with patch.object(contracts, 'packet_check', side_effect=contracts.ExecutionError('command budget timed out')):
@@ -289,6 +365,8 @@ class Packets(Project):
                 self.finish()
         self.assertEqual(self.worker['submission_failure']['attempts'], 1)
         self.assertEqual(self.worker['submission_failure']['category'], 'product')
+        (self.tree / 'code.py').write_text((self.tree / 'code.py').read_text() + '\n# changed inputs\n')
+        support.commit(self.tree, 'new validation episode')
         with patch.object(contracts, 'packet_check', side_effect=contracts.ExecutionError('command budget timed out')):
             for _ in range(2):
                 with self.assertRaisesRegex(api.ApiError, 'timed out'):

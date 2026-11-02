@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-24T10:42:38+11:00"
+revised_at: "2026-10-25T23:30:06+11:00"
 ---
 
-Production uses Gufo Qwen3.8-27B UD-Q4_K_XL with DFlash2 Q4_K_M, adaptive maximum seven. Installed configuration: 32 tokens/10 seconds; source: 32/30. Verify effective values through the daemon. Short greedy peaks do not establish ordinary sampled or sustained factory throughput. Draft-precision comparisons have their own owner: what/are/the/qwen/draft/precision/measurements/for/cointos.md.
+The earlier abliterated target-only observation measured 8.61–9.40 native tokens/s at ~67k/96k contexts with zero drafts (/tmp/cointos-speed-live-a.json). Its twelve checkpoint switches had medians 4.039 seconds save, 2.889 restore and 6.896 total, using ~6.57/4.76 GB RAM snapshots; component serialization/checksum/copy costs were not isolated. That path violated the resident-pointer requirement. Canonical Qwen with DFlash is selected again, and V10 resident switching is deployed; how/does/gufo/select/resident/agent/state.md owns its exact-continuation and ~11 ms native-call qualification. These are different model/settings observations, not a matched decode comparison. Draft precision retains its focused owner.
 
 A captured-agent v7 trace at 38,080 occupied tokens is 96.76% GPU-kernel busy during generation: 61.6% of summed kernel time in quantized verification and 23.5% in attention. Normal/profiled/normal vectors and draft counts match; unprofiled controls range 17.03–19.29 native tokens/s. This establishes neither speedup nor precise profiler overhead (native-profile-20261019/replay-kernels/{run,profile-summary}.json).
 

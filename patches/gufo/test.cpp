@@ -11,6 +11,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 
 #include "control.hpp"
@@ -30,7 +31,7 @@ struct Snapshot : TextRunnerSnapshot {
   std::size_t PayloadBytes() const noexcept override { return sizeof(data); }
 };
 struct Runner : TextModelRunner {
-  mutable std::size_t reads = 0, states_created = 0;
+  mutable std::size_t reads = 0, states_created = 0, saves = 0, restores = 0;
   bool fail_restore = false;
   std::function<void()> before_prefill;
   TextRunnerDescriptor Descriptor() const override {
@@ -91,7 +92,9 @@ struct Runner : TextModelRunner {
       gufo::sampling::SamplerState& sampler) const override {
     std::array<float, 8> logits{0, 1, 2, 3, 4, 5, 6, 7};
     logits[dynamic_cast<State&>(state).sum % logits.size()] += 1;
-    return {.token = sampler.Sample(logits)};
+    const auto token = sampler.Sample(logits);
+    return {.token = token,
+            .piece = std::string(1, static_cast<char>(token))};
   }
   void Advance(TextRunnerState& state, TextRunnerToken token) const override {
     auto& s = dynamic_cast<State&>(state);
@@ -112,6 +115,7 @@ struct Runner : TextModelRunner {
   std::size_t SerializePersistentSnapshot(
       const TextRunnerSnapshot& snapshot,
       std::span<std::uint8_t> out) const override {
+    ++saves;
     if (out.size() != 16)
       throw std::runtime_error("size");
     std::memcpy(out.data(),
@@ -120,6 +124,7 @@ struct Runner : TextModelRunner {
   }
   void RestorePersistentSnapshot(
       TextRunnerState& state, std::span<const std::uint8_t> in) const override {
+    ++restores;
     if (in.size() != 16)
       throw std::runtime_error("size");
     std::array<std::uint64_t, 2> data{};
@@ -230,6 +235,54 @@ int main() {
   auto path = std::filesystem::temp_directory_path() /
               ("gufo-control-test-" + std::to_string(getpid()));
   try {
+    {
+      auto runner = std::make_shared<Runner>();
+      cointos::Control control(runner, 1, path / "stream", "stream-test");
+      std::vector<Value> frames;
+      const auto result =
+          control.Call(Step(0, Parse("[11,12,13]"), 7),
+                       [&](const Value& frame) { frames.push_back(frame); });
+      std::vector<TextRunnerToken> streamed;
+      for (const auto& frame : frames) {
+        Check(frame.find("pieces")->is_string(), "stream frame has pieces");
+        for (const auto& token : frame.find("tokens")->items())
+          streamed.push_back(static_cast<TextRunnerToken>(token.as_size()));
+      }
+      const auto& expected = *result.find("tokens");
+      Check(streamed.size() == expected.size(), "stream frame count");
+      for (std::size_t index = 0; index < streamed.size(); ++index)
+        Check(streamed[index] == expected.items()[index].as_size(),
+              "streamed tokens match the completed step");
+    }
+    {
+      auto runner = std::make_shared<SpeculativeRunner>();
+      cointos::Control selected(runner, 1, path / "resident", "resident-test");
+      cointos::Control uninterrupted(runner, 1, path / "reference", "resident-test");
+      const auto prompt = Parse("[11,12,13]");
+      selected.Call(Parse(R"({"op":"select","lane":0,"owner":"a"})"));
+      const auto first = selected.Call(Step(0, prompt, 7));
+      const auto reference = uninterrupted.Call(Step(0, prompt, 7));
+      Check(first.find("tokens")->dump() == reference.find("tokens")->dump(), "resident initial tokens");
+      auto history = Append(prompt, *first.find("tokens"));
+      selected.Call(Parse(R"({"op":"select","lane":0,"owner":"b"})"));
+      selected.Call(Step(0, Parse("[21,22,23]"), 4));
+      const auto states = runner->states_created;
+      const auto reads = runner->reads;
+      for (int i = 0; i < 10; ++i) {
+        selected.Call(Parse(R"({"op":"select","lane":0,"owner":"a"})"));
+        selected.Call(Parse(R"({"op":"select","lane":0,"owner":"b"})"));
+      }
+      auto picked = selected.Call(Parse(R"({"op":"select","lane":0,"owner":"a"})"));
+      Check(picked.find("tokens")->dump() == history.dump(), "resident token identity");
+      const auto next = selected.Call(Step(history.size(), history, 8));
+      const auto expected = uninterrupted.Call(Step(history.size(), history, 8));
+      Check(next.find("tokens")->dump() == expected.find("tokens")->dump(), "resident sampled continuation changed");
+      Check(runner->states_created == states && runner->reads == reads, "resident selection rebuilt/reread state");
+      Check(runner->saves == 0 && runner->restores == 0, "resident selection serialized state");
+      Check(runner->boundaries == 0, "resident selection reset speculative request state");
+      selected.Call(Parse(R"({"op":"release_residents","owners":["b"]})"));
+      Check(selected.Call(Parse(R"({"op":"residents"})")).find("owners")->size() == 1, "resident lifecycle retirement");
+    }
     {
       auto speculative = std::make_shared<SpeculativeRunner>();
       cointos::Control controlled(speculative, 1, path / "spec", "draft-A");
@@ -481,6 +534,75 @@ int main() {
     }
     Check(metadata_refused_model, "metadata endpoint admitted a mutable operation");
     Check(stopped.find("ok")->as_bool(), "native socket shutdown");
+    {
+      const auto stream_path = (path / "stream.sock").string();
+      int stream_listener = socket(AF_UNIX, SOCK_STREAM, 0);
+      sockaddr_un stream_address{};
+      stream_address.sun_family = AF_UNIX;
+      std::memcpy(stream_address.sun_path, stream_path.c_str(),
+                  stream_path.size() + 1);
+      Check(bind(stream_listener,
+                 reinterpret_cast<sockaddr*>(&stream_address),
+                 sizeof(stream_address)) == 0 &&
+                listen(stream_listener, 5) == 0,
+            "stream socket bind");
+      auto stream_runner = std::make_shared<Runner>();
+      cointos::Control stream_control(stream_runner, 1,
+                                      path / "socket-stream",
+                                      "stream-socket");
+      auto stream_server = std::async(std::launch::async, [&] {
+        cointos::ServeControl(stream_listener, stream_control);
+      });
+      int client = socket(AF_UNIX, SOCK_STREAM, 0);
+      Check(connect(client, reinterpret_cast<sockaddr*>(&stream_address),
+                    sizeof(stream_address)) == 0,
+            "stream socket connect");
+      auto request = Step(0, Parse("[11,12,13]"), 4);
+      request["stream"] = true;
+      const auto bytes = request.dump() + "\n";
+      Check(write(client, bytes.data(), bytes.size()) ==
+                static_cast<ssize_t>(bytes.size()),
+            "stream socket write");
+      std::string response;
+      char buffer[4096];
+      while (true) {
+        const auto n = read(client, buffer, sizeof(buffer));
+        if (n <= 0)
+          break;
+        response.append(buffer, n);
+      }
+      close(client);
+      std::istringstream lines(response);
+      std::string line;
+      int frames = 0;
+      bool completed = false;
+      while (std::getline(lines, line)) {
+        if (line.empty())
+          continue;
+        const auto message = Parse(line.c_str());
+        if (message.contains("stream")) {
+          ++frames;
+          Check(message.find("stream")->find("tokens")->size() > 0,
+                "empty stream frame");
+        } else if (message.contains("result")) {
+          completed = true;
+        }
+      }
+      Check(frames > 0 && completed,
+            "socket stream frames or final result missing");
+      int control_client = socket(AF_UNIX, SOCK_STREAM, 0);
+      Check(connect(control_client,
+                    reinterpret_cast<sockaddr*>(&stream_address),
+                    sizeof(stream_address)) == 0,
+            "stream control connect");
+      const std::string shutdown = R"({"op":"shutdown"})" "\n";
+      Check(write(control_client, shutdown.data(), shutdown.size()) ==
+                static_cast<ssize_t>(shutdown.size()),
+            "stream control write");
+      close(control_client);
+      stream_server.get();
+      close(stream_listener);
+    }
     std::filesystem::remove_all(path);
     std::cout << "native control contract passed\n";
     return 0;
