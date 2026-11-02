@@ -74,30 +74,6 @@ def settled(task_id, ledger):
     return True
 
 
-REPORT_CHARS = 8000
-
-
-def reports(task_id, ledger):
-    """What the agents on this work said in their receipts, newest assignment first."""
-    tasks, records = ledger.get('tasks', {}), ledger.get('queue', {})
-    pending, seen, parts = [task_id], set(), []
-    while pending:
-        key = pending.pop(0)
-        if key in seen:
-            continue
-        seen.add(key)
-        record = records.get(key) or {}
-        pending.extend(f"{record['project']}:{name}" for name in record.get('replaced_by') or [])
-        owners = {name: t for name, t in tasks.items() if name == key or t.get('record') == key or t.get('worker') == key}
-        for name, owner in owners.items():
-            summary = (owner.get('receipt') or {}).get('summary')
-            if summary:
-                parts.append(f"{name} ({owner.get('role')}): {summary}")
-        pending.extend(k for k, r in records.items() if r.get('proposed_by') in owners)
-    text = '\n\n'.join(dict.fromkeys(parts))[:REPORT_CHARS]
-    return f'What the agents reported:\n{text}\n\n' if text else ''
-
-
 def observe(directory, wakes, ledger, allowed):
     """Successful task settlement queues model verification; failures remain local."""
     with _registry(directory) as (fd, data):
@@ -106,7 +82,7 @@ def observe(directory, wakes, ledger, allowed):
                 continue
             if not settled(item['task'], ledger):
                 continue
-            message = (reports(item['task'], ledger) + 'Report completion of requested work. This is a verification trigger, not proof of completion. The user asked for: ' + item['description']
+            message = ('Report completion of requested work. This is a verification trigger, not proof of completion. The user asked for: ' + item['description']
                 + '\nTask: ' + item['task'] + '\nFollow-up: ' + key
                 + '\nRead the current task receipt and verify the deliverables exist before replying. '
                   'Read exact returned evidence paths; delegate implementation/diff and behaviour verification. A plan-only commit, '
@@ -120,8 +96,8 @@ def observe(directory, wakes, ledger, allowed):
                   'Keep routine mistakes and recovery chatter local. Check reported-results context and archive '
                   'before reporting; reuse the same location/milestone for the same user deliverable across task IDs. '
                   'A repeated verification or cleared internal blocker merits no new announcement. Finish silently '
-                  'when there is no new verified user deliverable. Either way, then see that ~/.knowledge records what '
-                  'this work changed or taught you in well-named leaves; dispatch an Operator if it is more than a quick note.')
+                  'when there is no new verified user deliverable. Either way, then see that your own tree can point you to '
+                  'this work and what it changed, in well-named leaves; dispatch an Operator if it is more than a quick note.')
             if not any(r['message'] == message for r in wakeups.list(wakes, item['user'])):
                 wakeups.create(wakes, item['user'], item['chat'], message,
                                {'kind': 'deadline', 'after_seconds': 0})
