@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-03T00:28:48+11:00"
+revised_at: "2026-11-03T00:33:33+11:00"
 ---
 
 Remaining work, next first. Stored plans grant no authority.
@@ -28,6 +28,6 @@ Paused: the sustained >60 tokens/s investigation with Qwen3.8-27B dense fixed. T
 
 Open decision: what/are/the/cointos/agent/capability/gaps.md records accidental agent-capability restrictions (kt write paths, operator handoff, compaction, read-only command denials, toolchain access, landing granularity, infrastructure retries). Choose which to correct and in what order. Deliberate guards remain knowledge-leaf friction, reasoning caps, test-contract integrity and explicit user holds.
 
-Open decision: how much knowledge upkeep an integrator should do while landing. It took about two thirds of the generated tokens in the first post-cleanup landing; why/does/submission/validation/take/so/long/on/pigen.md owns the measurement.
+A landing stays atomic: integrators update knowledge in the same landing as the code, by the user's decision, even though that upkeep is most of a landing's generation.
 
 Preserve source changes, branches, artifacts, user work, Coin and live sessions. Existing host-watch, backend/LFM, snapshot/cache and wake investigations retain their focused owners. OpenCode V2 adoption, Sole Survivor, unapproved ambient/focused modes, mutable priorities and memory reshaping/forking remain deferred or excluded.
