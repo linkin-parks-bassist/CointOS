@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-03T07:01:34+11:00"
+revised_at: "2026-11-03T07:06:44+11:00"
 ---
 
-A Supervisor (`roles/supervisor.md`, task kind `supervise`) watches over a run. Its default, by the user's direction, is to wait and look in occasionally; stepping in is the exception. The user's rough hope is mostly staying and watching, with retiring and intervening each uncommon. Those proportions are deliberately kept out of its prompt so it does not treat them as quotas.
+A Supervisor (`roles/supervisor.md`, task kind `supervise`) watches over a run. The user wants basically every run under about 30 GPU minutes where possible, so long runs are not normal, though the default worker budget remains 90 minutes. A Supervisor often just waits and looks in, but it must judge what the time is going on rather than how reasonable the agent sounds: the first one retired after seeing an implementer debug its own simulation of hidden tests. The user's rough hope is mostly staying and watching, with retiring and intervening each uncommon. Those proportions are deliberately kept out of its prompt so it does not treat them as quotas.
 
 `recovery.supervise` requests one when a run's GPU generation passes each multiple of `recovery.supervise_every_seconds` (1,200) if none is live, for every role but itself, gardeners and tree auditors, and never for a run past its budget. GPU time is used because wall time mostly measures waiting. A run a Supervisor retired from therefore gets a second one at 40 GPU minutes. Any agent can also dispatch one with `task`.
 
