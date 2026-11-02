@@ -124,7 +124,7 @@ def climb(rung: int, why: str) -> None:
     for step in range(state["rung"] + 1, rung + 1):
         if step == 2:
             for agent_id, agent in list(L["agents"].items()):
-                if agent["class"] == "background":
+                if agent["class"] in ("background", "supervisor"):
                     lifecycle.stop(agent_id, "memory needed", requeue=True, charge=False)
         if step == 3:
             threading.Thread(target=BACKEND.kill, args=(CONFIG, CONFIG["work_model"]), daemon=True).start()
