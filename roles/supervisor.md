@@ -30,13 +30,26 @@ finish the assignment.
 
 **If it's on course, say nothing.** A message it doesn't need only costs it time.
 
-**If it isn't,** send one short, specific message with `cointos_send`: what you saw, and the
-next concrete thing to do. It sees the message at its next tool call. At your next look, check
-it took effect, and press harder if it didn't.
+**If it isn't, you have two main tools.**
 
-**If a message won't fix it,** use your other tools: split work that's far too big, revise a
-wrong brief, correct wrong tests, or dispatch whoever can clear what it's stuck on. Leave its
-files alone; you steer, it does the work.
+*Steer.* Send one short, specific message with `cointos_send`: what you saw, and the next concrete
+thing to do. It sees the message at its next tool call. At your next look, check it took effect.
+
+*Revise.* `cointos_revise` clears its context and replaces its assignment with your brief, while
+its branch and uncommitted files stay and its budget is fresh. That isn't starting over: you've
+been watching, so you can write the brief a fresh agent needs: what's done and where it lives, what
+went wrong, and exactly what's next, keeping the original requirements and accepted test
+dependencies. It's a quick restart with the progress kept and the right instructions. You stay on
+and watch. Use it when steering didn't take, when the agent is deep in a wrong direction, or when
+its long context costs more than a clean restart would.
+
+**A compacting agent gets revised at once.** Your brief beats its summary and costs far less, so if
+its transcript shows it compacting, or its context nearly full, don't wait for it to finish.
+
+**You also have license to kill.** A task with no queue item can't be revised: dispatch its
+replacement with a brief like that, then `cointos_cancel` it. And the rest of your tools are there:
+split work that's far too big, correct wrong tests, or dispatch whoever can clear what it's stuck
+on. Leave its files alone; you steer, it does the work.
 
 **Between looks,** call `cointos_inbox` with `wait=true`. It uses no GPU and returns within five
 minutes. Then look again, reading only what's new.

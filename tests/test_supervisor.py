@@ -64,6 +64,19 @@ class Supervisors(unittest.TestCase):
         other = opencode.settings(state.CONFIG, 'key', {'abilities': ['standard']}, [])['permission']
         self.assertNotIn('*probe*', other['bash'])
 
+    def test_a_revise_replaces_the_run_and_the_supervisor_stays_on(self):
+        self.agent['generation_seconds'] = 1800
+        recovery.enforce()
+        supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
+        with patch.object(lifecycle.opencode, 'stop'):
+            api.dispatch('revise', {'item': self.worker['id'], 'brief': 'Summary: a long job for this test\nDo it.\nDone so far: half.',
+                                    'reason': 'it was compacting', 'caller': support.caller(supervisor, 'supervisor-1')})
+            lifecycle.reconcile()
+        self.assertEqual(self.worker['status'], 'waiting')
+        self.assertIsNone(self.worker['session'])
+        self.assertNotIn('worker-1', state.L['agents'])
+        self.assertEqual(supervisor['status'], 'running')
+
     def test_a_supervisor_is_stood_down_when_its_run_ends(self):
         self.agent['generation_seconds'] = 1800
         recovery.enforce()
