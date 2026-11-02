@@ -251,13 +251,15 @@ def request_supervisor(target: dict, spent_seconds: float) -> dict:
         if task["kind"] == "supervise" and task.get("supervises") == target["id"] and pending(task):
             return task
     brief = (f"{target['id']} ({target['role']}{', ' + target['name'] if target.get('name') else ''}) has spent "
-             f"{spent_seconds / 60:.0f} minutes generating. Look at what it is actually doing and steer it.\n"
+             f"{spent_seconds / 60:.0f} minutes of GPU generating. Look at what it is actually doing and steer it.\n"
              f"Its assignment: cointos_task {target['id']}.\n"
              f"Everything it thought, said and ran: cointos transcript {target['id']}.\n"
              f"Message it with cointos_send to {target['id']}.")
     task = create("supervise", SYSTEM, "supervise-" + queues.slug(target["id"]), brief,
                   [schema.KINDS["supervise"]["rank"]], supervises=target["id"],
                   reasoning_effort=CONFIG["reasoning"].get("manager", CONFIG["reasoning"]["default"]))
+    L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": target["id"], "read": False,
+        "text": f"{task['id']} is supervising this run. Message it with cointos_send if you're stuck or need a decision."}]
     log("supervisor requested", task=task["id"], supervises=target["id"], seconds=round(spent_seconds))
     return task
 

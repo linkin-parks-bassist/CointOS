@@ -10,18 +10,21 @@ class Supervisors(unittest.TestCase):
     def setUp(self):
         support.fresh_ledger(self)
         self.project = support.project(self, Path('/tmp/p'))
-        self.enterContext(patch.dict(state.CONFIG['recovery'], supervise_every_seconds=1800))
+        self.enterContext(patch.dict(state.CONFIG['recovery'], supervise_every_seconds=1200))
         self.worker = support.running(support.queued(self.project, 'long', 'Summary: a long job for this test\nDo it.'), 'worker-1', worktree=False)
         self.agent = state.L['agents']['worker-1']
+
+    def run_for(self, seconds):
+        self.agent['generation_seconds'] = seconds
 
     def supervisors(self):
         return [t for t in state.L['tasks'].values() if t['kind'] == 'supervise']
 
     def test_a_long_run_gets_one_supervisor_per_threshold(self):
-        self.agent['generation_seconds'] = 1799
+        self.run_for(1100)
         recovery.enforce()
         self.assertEqual(self.supervisors(), [])
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         recovery.enforce()
         found = self.supervisors()
@@ -31,7 +34,7 @@ class Supervisors(unittest.TestCase):
         self.assertEqual(found[0]['budget']['generation_seconds'], state.CONFIG['recovery']['role_budgets']['supervisor']['generation_seconds'])
 
     def test_a_supervisor_is_not_itself_supervised(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         state.L['agents']['supervisor-1']['generation_seconds'] = 400
@@ -41,8 +44,21 @@ class Supervisors(unittest.TestCase):
         self.assertEqual([t['supervises'] for t in self.supervisors()], [self.worker['id']])
         self.assertEqual(supervisor['role'], 'supervisor')
 
+    def test_its_subject_is_told_who_is_watching(self):
+        self.run_for(1200)
+        recovery.enforce()
+        note = state.L['messages'][-1]
+        self.assertEqual(note['to'], self.worker['id'])
+        self.assertIn(self.supervisors()[0]['id'], note['text'])
+
+    def test_small_bounded_passes_get_no_supervisor(self):
+        self.worker['role'] = 'gardener'
+        self.run_for(5000)
+        recovery.enforce()
+        self.assertEqual(self.supervisors(), [])
+
     def test_a_supervisor_cannot_complete_while_its_run_is_going(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         with self.assertRaisesRegex(ValueError, 'you stay until it ends'):
@@ -52,7 +68,7 @@ class Supervisors(unittest.TestCase):
         self.assertEqual(supervisor['receipt']['disposition'], 'complete')
 
     def test_a_supervisor_that_stops_needs_no_first_responder(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         lifecycle.submit(supervisor['id'], 'supervisor-1', 'blocked', 'this run needs no supervising')
@@ -65,7 +81,7 @@ class Supervisors(unittest.TestCase):
         self.assertNotIn('*probe*', other['bash'])
 
     def test_a_revise_replaces_the_run_and_retires_the_supervisor(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         with patch.object(lifecycle.opencode, 'stop'):
@@ -80,7 +96,7 @@ class Supervisors(unittest.TestCase):
         self.assertNotIn('supervisor-1', state.L['agents'])
 
     def test_a_supervisor_can_send_a_malformed_assignment_to_recovery(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         with patch.object(lifecycle.opencode, 'stop'):
@@ -90,7 +106,7 @@ class Supervisors(unittest.TestCase):
         self.assertIn('contradicts itself', frontier.reason(self.worker))
 
     def test_a_supervisor_is_stood_down_when_its_run_ends(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = self.supervisors()[0]
         self.worker['status'] = 'done'
@@ -98,7 +114,7 @@ class Supervisors(unittest.TestCase):
         self.assertEqual(supervisor['status'], 'failed', 'an unstarted one just goes')
 
     def test_a_running_supervisor_gets_a_short_wrap_up_when_its_run_ends(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         self.worker['status'] = 'done'
@@ -111,7 +127,7 @@ class Supervisors(unittest.TestCase):
         self.assertEqual(supervisor['status'], 'failed')
 
     def test_a_supervisor_starts_past_a_full_house(self):
-        self.agent['generation_seconds'] = 1800
+        self.run_for(1200)
         recovery.enforce()
         supervisor = self.supervisors()[0]
         started = []

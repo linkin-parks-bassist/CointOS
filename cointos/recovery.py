@@ -39,10 +39,13 @@ def enforce() -> None:
             lifecycle.retry_fresh(agent_id, reason, packet(agent_id, task, agent))
 
 
+UNSUPERVISED = ("supervisor", "gardener", "tree-auditor")  # small bounded passes, and supervisors themselves
+
+
 def supervise(task: dict, agent: dict, spent_seconds: float) -> None:
-    """Every so much generation, someone looks at what a long run is actually doing."""
+    """A run that has spent this much GPU generation gets someone watching what it's actually doing."""
     every = CONFIG["recovery"].get("supervise_every_seconds")
-    if not every or task["role"] == "supervisor" or spent_seconds < every * (agent.get("supervisions", 0) + 1):
+    if not every or task["role"] in UNSUPERVISED or spent_seconds < every * (agent.get("supervisions", 0) + 1):
         return
     agent["supervisions"] = agent.get("supervisions", 0) + 1
     tasks.request_supervisor(task, spent_seconds)
