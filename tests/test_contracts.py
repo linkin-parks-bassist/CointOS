@@ -120,6 +120,38 @@ class Contracts(unittest.TestCase):
             contracts.packet_unchanged(self.repo, self.worker, main, altered, [packet], self.rules)
         self.assertEqual(git.head(self.repo), main)
 
+    def compose_both_sides(self, base, ours, theirs):
+        """Main and a packet each rewrite tests/test_code.py from one base; returns the composition."""
+        name = self.tree / "tests/test_code.py"
+        name.write_text(base)
+        start = self.commit(self.tree)
+        name.write_text(theirs)
+        packet = self.commit(self.tree)
+        git.run(self.repo, "reset", "--hard", start)
+        (self.repo / "tests/test_code.py").write_text(ours)
+        main = self.commit(self.repo)
+        with contracts.combined(self.repo, main, [packet], self.rules) as (path, _):
+            return (path / "tests/test_code.py").read_text()
+
+    def test_similar_helpers_inserted_at_one_spot_compose_as_whole_blocks(self):
+        """Git aligns the two insertions with each other and reports a non-empty conflict; they are not."""
+        head, tail = "import unittest\n", "class A(unittest.TestCase):\n    pass\n"
+        block = "def {}(x):\n    for y in x:\n        if y == {}:\n            return 1\n    return 0\n\n"
+        one, two = block.format("port", "'a'"), block.format("gates", "'b'")
+        self.assertEqual(self.compose_both_sides(head + tail, head + one + tail, head + two + tail),
+                         head + one + two + tail)
+
+    def test_a_reindent_overlapping_an_insertion_keeps_both_insertions(self):
+        before = "if a:\n    if b:\n        one()\n        two()\n"
+        ours = "if a:\n    if b:\n        one()\n        mine()\n        two()\n"
+        theirs = "if a:\n    if b:\n      one()\n      two()\n    theirs()\n"
+        self.assertEqual(self.compose_both_sides(before, ours, theirs),
+                         "if a:\n    if b:\n        one()\n        mine()\n        two()\n    theirs()\n")
+
+    def test_two_edits_of_one_line_still_refuse(self):
+        with self.assertRaisesRegex(ValueError, "do not merge"):
+            self.compose_both_sides("a = 1\nb = 2\n", "a = 3\nb = 2\n", "a = 4\nb = 2\n")
+
     def test_packet_replacements_and_non_test_insertions_require_review(self):
         for name, replace in (("tests/test_code.py", True), ("notes.md", False)):
             with self.subTest(name=name):

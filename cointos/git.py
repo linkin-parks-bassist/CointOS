@@ -197,17 +197,72 @@ def changed(repo, before: str, after: str) -> list[str]:
     return [path for path in run(repo, "diff", "--no-renames", "--name-only", "-z", before, after).split("\0") if path]
 
 
-def resolve_insertions(repo, paths: list[str]) -> None:
-    """Compose concurrent insertions, current side first, without choosing between edits.
+_HUNK = re.compile(rb"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
 
-    Only regular files with identical modes and empty ancestor conflict regions qualify.
-    A whole inserted block already present in the other side is retained once, so squash
-    merges can be repeated without relying on the packet commit's ancestry.
-    Recompute from index blobs, not editable conflict markers. A replacement, deletion,
-    binary file or ambiguous marker stays unresolved for its owner.
+
+def _hunks(base: bytes, side: bytes, *flags: str) -> list[tuple[int, int, list[bytes]]]:
+    """One side's own changes against the base: (first base line, end, new lines)."""
+    with tempfile.TemporaryDirectory(prefix="cointos-merge-") as temp:
+        old, new = Path(temp) / "old", Path(temp) / "new"
+        old.write_bytes(base)
+        new.write_bytes(side)
+        diff = subprocess.run(["git", "diff", "--no-index", "--no-color", "-U0", "--diff-algorithm=histogram",
+                               *flags, "--", str(old), str(new)], capture_output=True).stdout
+    lines, found = side.splitlines(keepends=True), []
+    for hunk in _HUNK.finditer(diff):
+        start, removed, at, added = int(hunk[1]), int(hunk[2] or 1), int(hunk[3]), int(hunk[4] or 1)
+        first = start if removed == 0 else start - 1
+        found.append((first, first + removed, lines[at - 1:at - 1 + added] if added else []))
+    return found
+
+
+def _compose(base: bytes, current: bytes, packet: bytes, *flags: str) -> bytes | None:
+    """Apply both sides' changes to the base, or None if they edit the same base lines.
+
+    Each side is diffed against the base on its own. Git's merge also aligns the two
+    sides with each other, so similar new helpers inserted at one spot shatter into
+    overlapping regions. Inserted against the base they are two whole blocks, current first.
     """
-    conflict = re.compile(r"^<<<<<<< current\n(.*?)^\|\|\|\|\|\|\| base\n(.*?)^=======\n(.*?)^>>>>>>> packet\n",
-                          re.MULTILINE | re.DOTALL)
+    def includes(lines, block):
+        return any(lines[n:n + len(block)] == block for n in range(len(lines) - len(block) + 1))
+
+    lines = base.splitlines(keepends=True)
+    ours, theirs, out, position = _hunks(base, current, *flags), _hunks(base, packet, *flags), [], 0
+    while ours or theirs:
+        mine, other = ours[0] if ours else None, theirs[0] if theirs else None
+        if mine and other and mine[:2] == other[:2]:
+            ours, theirs = ours[1:], theirs[1:]
+            if mine[2] == other[2]:
+                new = mine[2]
+            elif mine[0] != mine[1]:  # two different replacements of one region
+                return None
+            elif includes(mine[2], other[2]):  # already present: retain the block once
+                new = mine[2]
+            elif includes(other[2], mine[2]):
+                new = other[2]
+            else:
+                new = mine[2] + other[2]
+            hunk = (mine[0], mine[1], new)
+        elif mine and other and mine[0] < other[1] and other[0] < mine[1]:
+            return None
+        elif mine and (not other or mine[:2] <= other[:2]):
+            hunk, ours = mine, ours[1:]
+        else:
+            hunk, theirs = other, theirs[1:]
+        out += lines[position:hunk[0]] + hunk[2]
+        position = hunk[1]
+    return b"".join(out + lines[position:])
+
+
+def resolve_insertions(repo, paths: list[str]) -> None:
+    """Compose concurrent changes to protected files without choosing between edits.
+
+    Only regular files with identical modes qualify. A whole inserted block already
+    present in the other side is retained once, so squash merges can be repeated without
+    relying on the packet commit's ancestry. Recompute from index blobs, not editable
+    conflict markers. If only a reindent overlaps, the current side's whitespace stands;
+    two real edits of the same lines, a deletion or a binary file stay for their owner.
+    """
     for name in paths:
         entries = [line.split("\t", 1)[0].split() for line in
                    run(repo, "ls-files", "-u", "--", name).splitlines()]
@@ -215,36 +270,16 @@ def resolve_insertions(repo, paths: list[str]) -> None:
             continue
         if len({e[0] for e in entries}) != 1 or entries[0][0] not in {"100644", "100755"}:
             continue
-        with tempfile.TemporaryDirectory(prefix="cointos-merge-") as temp:
-            files = []
-            for stage in (2, 1, 3):
-                path = Path(temp) / str(stage)
-                path.write_bytes(subprocess.check_output(["git", "-C", str(repo), "show", f":{stage}:{name}"]))
-                files.append(str(path))
-            merged = subprocess.run(["git", "merge-file", "-p", "--diff3", "-L", "current",
-                                     "-L", "base", "-L", "packet", *files], capture_output=True)
-        if merged.returncode <= 0 or b"\0" in merged.stdout:
+        current, base, packet = (subprocess.check_output(["git", "-C", str(repo), "show", f":{stage}:{name}"])
+                                 for stage in (2, 1, 3))
+        if b"\0" in current + base + packet:
             continue
-        try:
-            body = merged.stdout.decode("utf-8")
-        except UnicodeDecodeError:
+        composed = _compose(base, current, packet)
+        if composed is None:
+            composed = _compose(base, current, packet, "--ignore-all-space")
+        if composed is None:
             continue
-        chunks = list(conflict.finditer(body))
-        if not chunks or any(c[2] for c in chunks):
-            continue
-        def compose(chunk):
-            current, packet = chunk[1].splitlines(keepends=True), chunk[3].splitlines(keepends=True)
-            def includes(lines, block):
-                return any(lines[n:n + len(block)] == block for n in range(len(lines) - len(block) + 1))
-            if includes(current, packet):
-                return chunk[1]
-            if includes(packet, current):
-                return chunk[3]
-            return chunk[1] + chunk[3]
-        composed = conflict.sub(compose, body)
-        if re.search(r"^(?:<<<<<<<|\|\|\|\|\|\|\||=======|>>>>>>>)", composed, re.MULTILINE):
-            continue
-        (Path(repo) / name).write_text(composed)
+        (Path(repo) / name).write_bytes(composed)
         run(repo, "add", "--", name)
 
 
