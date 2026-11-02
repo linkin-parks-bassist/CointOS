@@ -76,6 +76,8 @@ class Supervisors(unittest.TestCase):
         self.assertIsNone(self.worker['session'])
         self.assertNotIn('worker-1', state.L['agents'])
         self.assertEqual(supervisor['status'], 'running')
+        lifecycle.submit(supervisor['id'], 'supervisor-1', 'complete', 'revised it; my brief is the handoff')
+        self.assertEqual(supervisor['receipt']['disposition'], 'complete')
 
     def test_a_supervisor_is_stood_down_when_its_run_ends(self):
         self.agent['generation_seconds'] = 1800

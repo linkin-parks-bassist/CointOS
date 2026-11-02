@@ -39,7 +39,7 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
     before it completes; a test packet changes only tests; tested work has passed its check."""
     found = {}
     watched = L["tasks"].get(task.get("supervises")) if task["kind"] == "supervise" else None
-    if watched and tasks.active(watched) and disposition == "complete":
+    if watched and tasks.active(watched) and disposition == "complete" and not task.get("revised_its_run"):
         raise ValueError(f"{watched['id']} is still running, and you stay until it ends. Wait with cointos_inbox "
                          "wait=true, then look at what it has done since. Finish blocked, saying why, only if "
                          "this run truly does not need supervising.")

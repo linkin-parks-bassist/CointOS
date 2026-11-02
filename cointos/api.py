@@ -533,6 +533,9 @@ def revise(body):
     lifecycle.revise(key, by, body.get("reason", ""), body.get("brief", ""), body.get("stage"),
                      body.get("reasoning_effort"), body.get("budget"), dependency_ids=body.get("dependencies"),
                      summary=body.get("summary"), reliances=body.get("relies_on"))
+    caller_task = L["tasks"].get(by)
+    if caller_task and caller_task.get("supervises") == key:
+        caller_task["revised_its_run"] = True  # its brief is the handoff; the next threshold brings another
     return {"ok": True, "item": key}
 
 
