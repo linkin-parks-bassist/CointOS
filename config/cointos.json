@@ -22,6 +22,7 @@
   "finishing_rounds": 8,
   "history_messages": 20,
   "history_trim_messages": 7,
+  "journal_bytes": 8000000,
   "long_poll_seconds": 25,
   "max_tool_rounds": 128,
   "model_seconds": 600,
@@ -129,8 +130,14 @@
   "handoff_chars": 6000,
   "reorient_after_seconds": 10800,
   "retire_per_tick": 4,
-  "role_budgets": {},
+  "role_budgets": {
+   "first-responder": {
+    "generation_seconds": 1800,
+    "generation_tokens": 30000
+   }
+  },
   "role_fresh_retries": {
+   "first-responder": 0,
    "integrator": 0,
    "manager": 0,
    "operator": 0,

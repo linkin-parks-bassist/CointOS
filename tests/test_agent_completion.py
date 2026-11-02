@@ -585,7 +585,7 @@ class Completion(unittest.TestCase):
         self.assertEqual((queues.status(record), queues.state(record)["recoverable"]), ("blocked", True))
         self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt the user")
         manager = spawner.next_task()
-        self.assertEqual((manager["role"], manager["item"]), ("operator", "parser"))
+        self.assertEqual((manager["role"], manager["item"]), ("first-responder", "parser"))
         self.assertIn("Contract mismatch", manager["brief"])
         view = frontier.inspect(manager['id'], state.L)
         self.assertEqual(view['origin_task']['receipt'], worker['receipt'])
@@ -602,7 +602,7 @@ class Completion(unittest.TestCase):
         worker = support.queued(self.project, "exhausted", "Build one bounded concern")
         lifecycle.fail(worker, "fresh retries exhausted")
         manager = spawner.next_task()
-        self.assertEqual((manager["kind"], manager["item"]), ("operator", "exhausted"))
+        self.assertEqual((manager["kind"], manager["item"]), ("first-response", "exhausted"))
         lifecycle.fail(manager, "manager retries exhausted")
         self.assertFalse(queues.state(queues.records()[worker["record"]])["recoverable"])
         self.assertNotEqual((spawner.next_task() or {}).get("kind"), "decompose")
@@ -615,8 +615,8 @@ class Completion(unittest.TestCase):
         lifecycle.fail(worker, "fresh retries exhausted")
         with patch.dict(state.CONFIG["reasoning"], manager="medium"):
             manager = spawner.next_task()
-        self.assertEqual(manager["kind"], "operator")
-        self.assertEqual(manager["budget"], schema.budget(state.CONFIG, role="operator"))
+        self.assertEqual(manager["kind"], "first-response")
+        self.assertEqual(manager["budget"], schema.budget(state.CONFIG, role="first-responder"))
         self.assertEqual(manager["reasoning_effort"], "medium")
         self.assertEqual(worker["budget"], {"generation_seconds": 1, "generation_tokens": 200})
 
@@ -638,7 +638,7 @@ class Completion(unittest.TestCase):
         worker = support.queued(self.project, "wrong-edge", "Depends on: missing\nBuild core")
         lifecycle.fail(worker, "bad prerequisite")
         manager = spawner.next_task()
-        self.assertEqual((manager["kind"], manager["item"]), ("operator", "wrong-edge"))
+        self.assertEqual((manager["kind"], manager["item"]), ("first-response", "wrong-edge"))
 
     # ------------------------------------------------ daemon replacement
 

@@ -437,7 +437,7 @@ class Turns(unittest.TestCase):
 
         with patch.object(lanes.BACKEND, 'prefill', side_effect=prefill), \
              patch.object(lanes.snapshots, 'shared', return_value=False), \
-             patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens: saved.append(list(tokens))):
+             patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens, for_owner=None: saved.append(list(tokens))):
             lanes.worker(0)
         self.assertEqual(saved, [[1, 2, 3]])
 
@@ -457,7 +457,7 @@ class Turns(unittest.TestCase):
 
         with patch.object(lanes.BACKEND, 'prefill', side_effect=prefill), \
              patch.object(lanes.snapshots, 'shared', side_effect=lambda model, tokens: len(tokens) == 4), \
-             patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens: saved.append(len(tokens))):
+             patch.object(lanes.snapshots, 'keep_shared', side_effect=lambda position, tokens, for_owner=None: saved.append(len(tokens))):
             lanes.worker(0)
         self.assertEqual(saved, [2, 6])  # 4 already exists, so it is read through, not saved again
         self.assertEqual(reads[:2], [(2, 0), (6, 2)])

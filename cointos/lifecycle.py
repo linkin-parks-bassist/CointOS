@@ -12,6 +12,7 @@ state and write a queue record's one terminal fact, `done`. Callers hold LOCK.
 """
 from __future__ import annotations
 
+import re
 import threading
 from pathlib import Path
 
@@ -612,6 +613,70 @@ def stop(agent_id: str, reason: str, requeue: bool, charge: bool = True) -> None
     threading.Thread(target=opencode.stop, args=(agent_id,), daemon=True).start()
 
 
+def splittable(task: dict | None, record: dict | None) -> bool:
+    """Implementers and Operators can be too big in this sense; other roles keep ordinary recovery."""
+    return bool(task) and (task["role"] == "operator" or (task["role"] == "worker" and bool(record)
+                                                          and record.get("stage") == "implementation"))
+
+
+def split(task_id: str, reason: str, by: str) -> dict:
+    """This work was too big for one agent: stop it and hand it to a manager to cut up.
+
+    Its branch and files stay. For queued work the manager item replaces the assignment, so
+    dependents wait for the pieces, and nothing keeps trying to finish the old job."""
+    task = L["tasks"].get(task_id)
+    if task is None:
+        raise ValueError(f"no task {task_id}")
+    origin = task.get("repair_origin")
+    key = origin["task"] if origin else task.get("record")
+    record = queues.records().get(key) if key else None
+    assignment = L["tasks"].get(origin["task"]) if origin else task
+    place = record["project"] if record else task["place"]
+    project = next((p for p in CONFIG["projects"] if p["name"] == place), None)
+    if project is None:
+        raise ValueError(f"{task_id} has no registered project for a manager to work in")
+    if not (splittable(task, record) or splittable(assignment, record)):
+        raise ValueError(f"{task_id} is not an implementer or Operator; only those are split")
+    if record is not None and (record.get("done") or record.get("replaced_by")):
+        raise ValueError(f"{key} is already finished or replaced")
+    # Whoever is recovering it would keep at the old job, so they stop with it.
+    stopping = {task["id"], *({assignment["id"]} if assignment else ())}
+    if origin or (record is not None and assignment):
+        identity = origin or frontier.origin(assignment)
+        stopping |= {t["id"] for t in L["tasks"].values() if t.get("repair_origin") == identity}
+    for agent_id, agent in list(L["agents"].items()):
+        if agent["task"] in stopping:
+            stop(agent_id, f"too big for one agent: {reason}", requeue=False)
+    for stopped in stopping:
+        if L["tasks"][stopped]["status"] not in schema.SETTLED:
+            fail(L["tasks"][stopped], f"too big for one agent: {reason}")
+    source = assignment or task
+    title = re.sub(r"^(operator-repair|first-response)-", "", source["title"])
+    name, attempt = f"split-{title}", 1
+    while f"{project['name']}:{queues.slug(name)}" in queues.records():
+        attempt += 1
+        name = f"split-{title}-{attempt}"
+    places = "\n".join(f"- {t['id']}: branch {t.get('branch') or 'none'}, checkout {t.get('worktree') or 'none'}"
+                       for t in (L["tasks"][s] for s in sorted(stopping)))
+    brief = (f"{source['id']} was far too big for one agent and has been stopped: {reason}\n\n"
+             f"Preserved work, including any uncommitted files in those checkouts:\n{places}\n"
+             f"Full evidence: cointos task {source['id']} --history.\n\n"
+             "Do not try to finish this job or send one agent back at it. Look at what those places already "
+             "hold and keep anything valuable by naming it in the piece that owns it. Then cut everything "
+             "that remains into many far smaller pieces, far more than feels necessary: each one a job its "
+             "author could picture whole before starting. If a piece still needs a list to describe it, it "
+             "is several pieces. Keep its accepted test dependencies. Publish only the next runnable pieces "
+             "and leave the rest in the product frontier.\n\n"
+             f"The assignment being replaced:\n{record['brief'] if record else source['brief']}")
+    item = queues.add(project, "command", name, brief)
+    if record is not None:
+        replace(record, [item], by, f"too big for one agent: {reason}")
+        if assignment:
+            assignment["replaced_by"] = record["replaced_by"]
+    log("work split", task=source["id"], by=by, reason=reason, manager=f"{project['name']}:{item}")
+    return {"task": f"{project['name']}:{item}", "item": item, "replaces": source["id"]}
+
+
 def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
     """A run spent its budget. That ends the run, never the assignment: its work stays on the
     branch and files, and the task continues in a new session (with a bounded evidence packet)
@@ -621,7 +686,7 @@ def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
     task = L["tasks"][L["agents"][agent_id]["task"]]
     fresh = task.get("fresh_retries", 0)
     if fresh >= schema.fresh_limit(CONFIG, task):
-        task.update(recovery_note=reason, recovery_context=packet)  # the controller's preserved evidence
+        task.update(recovery_note=reason, recovery_context=packet, exhausted=True)  # the controller's preserved evidence
         stop(agent_id, reason + "; fresh retries exhausted", requeue=False)
         return
     task.update(session=None, fresh_retries=fresh + 1, recovery_note=reason, recovery_context=packet)

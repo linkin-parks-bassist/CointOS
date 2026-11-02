@@ -196,6 +196,23 @@ class GatewayDelivery(unittest.TestCase):
             result=gateway._prepare_tool_history('fixture-agent','q',continuation,fixture.canonical)
             self.assertEqual(result['tokens'],[10,11,20,21,1,5,6])
 
+    def test_coin_tool_cycle_keeps_native_tokens_without_a_task(self):
+        fixture=ExactHistory();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        clock={'role':'user','content':'<cointos-current-time>clock</cointos-current-time>'}
+        after={**fixture.after,'messages':fixture.after['messages']+[clock]}
+        with patch.dict(state.CONFIG,models=fixture.config['models']),patch.object(gateway,'log'):
+            prepared=gateway._prepare_tool_history('coin','q',fixture.before,{'tokens':[10,11]})
+            gateway._remember_tool_history('coin','q',prepared,[20,21],fixture.parsed,fixture.delivered,'done')
+            self.assertEqual(gateway._prepare_tool_history('coin','q',after,fixture.canonical)['tokens'],[10,11,20,21,1,5,6])
+            # A task's cache pruning leaves Coin's record, which belongs to no task.
+            gateway.TOOL_HISTORY.clear()
+            gateway._prepare_tool_history('fixture-agent','q',fixture.before,fixture.canonical)
+            gateway.TOOL_HISTORY.pop('fixture-agent',None)
+            self.assertIsNotNone(tool_history.load_cache(self.root,gateway.COIN_HISTORY))
+            # Another user's transcript cannot match the digest.
+            other={**after,'messages':[{'role':'user','content':'Another user.'},*after['messages'][1:]]}
+            self.assertEqual(gateway._prepare_tool_history('coin','q',other,fixture.canonical)['tokens'],fixture.canonical['tokens'])
+
     def test_cache_is_ready_before_done_and_rolled_back_if_final_delivery_fails(self):
         fixture=ExactHistory();fixture.setUp();self.addCleanup(fixture.doCleanups)
         record=fixture.capture();test=self

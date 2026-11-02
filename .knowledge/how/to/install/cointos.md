@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-29T07:27:50+11:00"
+revised_at: "2026-11-02T16:53:44+11:00"
 ---
 
 Run scripts/install into absent or marked ~/.CointOS. Installation and independent repair share state/repairs/owner.lock; refuse before contact/copy when repair owns it. Hold ownership through copying/start; release it before failure restoration.
@@ -11,7 +11,9 @@ Full installation requires paused autonomy and no active agent units. Stop Coin/
 
 Recovery-frontier migration requires full installation; --live refuses old schema before effects. Legacy decomposition becomes Operators with canonical origin/version; current sessions become previous_sessions and prompts/tools restart fresh. Collapse duplicate owners with evidence retained. Terminal origins become former_repair_origin for one evaluation with new controls. Preserve identities, receipts, branches and acceptance. Migration is idempotent; active recovery refuses.
 
-Compatible --live requires a reachable daemon and unchanged backend/model/topology/gateway/snapshot identity. When daemon modules/config/units and migration match, refresh roles/web/bin/runtime guidance and atomically replace client modules (cli.py and coin_view.py) without restart. The Coin terminal monitor requires Python Rich. Clients retain imported code. Inventory excludes CLI/enrollment. Daemon replacement requires exclusive state/replacement.lock; validation, receipt saving and queue publication share it. Conflict refuses without waiting or task mutation. Separate repair ownership permits non-daemon refresh during validation. Bootstrap legacy daemons at a verified quiet boundary with clients held, then restore them. Otherwise stop/save lanes/cut replies, copy/migrate/reload/start, preserving compatible agents/models/sessions. Failed preflight forbids installation. Alias migration preserves authority; failure after stopping requests restoration.
+Compatible --live requires a reachable daemon and unchanged backend/model/topology/gateway/snapshot identity. When daemon modules/config/units and migration match, ignoring retained model recipes and the selected default, refresh roles/web/bin/runtime guidance and atomically replace client modules (cli.py, coin_view.py and coin_mirror.py) without restart. Clients retain imported code, so open viewer windows need reopening. Inventory excludes CLI/enrollment. Daemon replacement requires exclusive state/replacement.lock; validation, receipt saving and queue publication share it. Conflict refuses without waiting or task mutation. Separate repair ownership permits non-daemon refresh during validation. Bootstrap legacy daemons at a verified quiet boundary with clients held, then restore them. Otherwise stop/save lanes/cut replies, copy/migrate/reload/start, preserving compatible agents/models/sessions. Failed preflight forbids installation. Alias migration preserves authority; failure after stopping requests restoration.
+
+Daemon replacement costs running work: --live does not wait for Coin, so check it is idle first, and a state refused at shutdown is read again. Prefer at most two running agents; how/does/cointos/protect/workstation/memory.md owns the admission failure a third can hit.
 
 Startup retains an owned regular transfer copy of recorded length, preferring RAM in the configured model's namespace. It cleans the other copy; native restore still validates state. Partial-only/discarded/retired copies remain misses. Shutdown may start spills, so prior quietness alone proves no preservation. Verify recovery events and resumed generation; a retried prompt can legitimately reject recovered state. Storage owns crash/live bounds.
 

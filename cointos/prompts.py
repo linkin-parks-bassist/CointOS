@@ -134,6 +134,12 @@ def what(task: dict, where: dict) -> str:
         return f"Command {task['item']}:\n\n{task['brief']}"
     if kind == "garden":
         return f"Verify only these selected root-relative leaves (brown first when present):\n\n{task['brief']}"
+    if kind == "first-response":
+        current = frontier.inspect(task['id'], L)
+        current.pop('task')
+        return ('Find out what went wrong with this assignment and dispatch the right agent with the right brief. '
+                'Old execution evidence is retained separately; old repair briefs carry no authority.\n\n'
+                + json.dumps(current, indent=2))
     if kind == "operator":
         if task.get('repair_origin'):
             current = frontier.inspect(task['id'], L)
@@ -182,9 +188,9 @@ def ending(task: dict, where: dict) -> str:
     if task['role'] == 'manager':
         text += 'Use `cointos handoff` to queue children and submit your complete receipt atomically.\n\n'
     if task.get('repair_origin'):
-        text += ('Use `cointos replace` to hand this origin to existing items, or `cointos correct-tests` '
-                 'to request independent contract correction. Both check your handback and submit the complete '
-                 'receipt atomically, ending your recovery run without a separate finish call.\n\n')
+        text += ('Use `cointos replace` to hand this assignment to existing items, or `cointos correct-tests` '
+                 'to request independent contract correction. Both check your handoff and submit the complete '
+                 'receipt atomically, ending your run without a separate finish call.\n\n')
     return text + ("Your run ends with exactly one receipt: `cointos finish --complete \"EVIDENCE\"` when this bounded "
                    "assignment is done, or `cointos finish --blocked \"SPECIFIC BLOCKER\"`. The daemon checks it against "
                    "your artifacts and refuses it with the reason if they do not match; fix that and finish again. "

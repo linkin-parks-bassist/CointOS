@@ -40,7 +40,7 @@ def require_compatible_frontier(ledger, live):
 # CLI code is imported by clients/Coin, not the daemon. Existing client processes
 # retain imported code; new processes can receive it without replacing the daemon.
 DAEMON_PARTS = ('cointos', 'config', 'systemd')
-CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'))
+CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'), Path('cointos/coin_mirror.py'))
 COPIED = ('cointos', 'roles', 'web', 'bin', 'systemd', 'config')
 
 
@@ -53,7 +53,15 @@ def files(root):
 def daemon_changed():
     """Whether the candidate differs from the installed runtime in anything the daemon runs."""
     mine, theirs = files(source), files(target)
-    return mine.keys() != theirs.keys() or any(mine[k].read_bytes() != theirs[k].read_bytes() for k in mine)
+    if mine.keys() != theirs.keys():
+        return True
+    # Installed configuration retains the user's model selection and discovered recipes.
+    settings = Path('config/cointos.json')
+    if settings in mine:
+        installed = json.loads(theirs[settings].read_text())
+        if retained_models(json.loads(mine[settings].read_text()), installed) != installed:
+            return True
+    return any(mine[k].read_bytes() != theirs[k].read_bytes() for k in mine if k != settings)
 
 
 def copy_client_files():

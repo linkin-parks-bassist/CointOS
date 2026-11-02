@@ -178,7 +178,7 @@ class Admission(Queue):
         self.failed("big", "Big.")
         self.add("after", "Depends on: big\n\nAfter.")
         task = spawner.next_task()
-        self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("operator", "operator", "big", None))
+        self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("first-response", "first-responder", "big", None))
         self.assertIn("worker gave up", task["brief"])
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
         task["status"] = "running"
@@ -217,7 +217,7 @@ class Admission(Queue):
         queues.add(self.project, "queued", "bad", "Relies on: pigen_present, pigen_pres, other.h::pigen_presently, nope.h\nTest.",
                    "test-contract")
         task = spawner.next_task()
-        self.assertEqual((task["kind"], task["item"]), ("operator", "bad"), "the refused item's manager runs next")
+        self.assertEqual((task["kind"], task["item"]), ("first-response", "bad"), "the refused item's manager runs next")
         refused = state.L["tasks"]["p:bad"]
         self.assertEqual((refused["status"], refused["runs"]), ("failed", 0), "no worker run was spent")
         found = queues.state(state.L["queue"]["p:bad"])

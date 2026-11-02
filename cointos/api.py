@@ -277,7 +277,7 @@ def replace(body):
 # Who may propose queue work: roles, whether they are bound to their own project, and which
 # queue kinds they may submit (None: any).
 PROPOSERS = {"manager": (True, None), "integrator": (True, ("command",)),
-             "steward": (False, ("command",)), "test-auditor": (False, ("command",)), "operator": (True, None)}
+             "steward": (False, ("command",)), "test-auditor": (False, ("command",)), "operator": (True, None), "first-responder": (True, None)}
 
 
 def queue(body):
@@ -287,12 +287,12 @@ def queue(body):
     if by is not None:
         own_project, kinds = PROPOSERS.get(by["role"], (True, ()))
         if (kinds is not None and kind not in kinds) or (own_project and by["place"] != project["name"]
-                and not (by["role"] == "operator" and controls_project(by, project["name"]))):
+                and not (by["role"] in schema.CONTROLLERS and controls_project(by, project["name"]))):
             raise ApiError("queue proposer must be an unfinished same-project manager/integrator, "
                            "or a scout/auditor proposing a command")
         if kind in ("queued", "urgent") and body.get("summary") is None:
             queues.require_summary(body["brief"])
-    if by is not None and by["role"] == "operator" and not controls_project(by, project["name"]):
+    if by is not None and by["role"] in schema.CONTROLLERS and not controls_project(by, project["name"]):
         raise ApiError("queue repair requires a control-enabled Operator in its assigned project")
     item = queues.add(project, kind, body["name"], body["brief"], body.get("stage"),
                       body.get("reasoning_effort"), body.get("budget"),
@@ -490,7 +490,7 @@ def controls_project(task: dict, project: str) -> bool:
     """Queue repair authority preserves project scope and the user's explicit holds."""
     if task["role"] == "manager":
         return task["place"] == project
-    if task["role"] != "operator" or "control" not in task.get("abilities", []):
+    if task["role"] not in schema.CONTROLLERS or "control" not in task.get("abilities", []):
         return False
     if task["place"] not in (project, "system"):
         return False
@@ -508,7 +508,7 @@ def controls_project(task: dict, project: str) -> bool:
 
 
 def require_operator_release(task: dict | None, record: dict) -> None:
-    if task and task["role"] == "operator" and record.get("held_by") not in (None, task["id"]):
+    if task and task["role"] in schema.CONTROLLERS and record.get("held_by") not in (None, task["id"]):
         raise ApiError("work is explicitly held by another owner; an Operator cannot release or revise that hold")
 
 
@@ -735,7 +735,7 @@ def resume_task(body):
     by = running(body)
     target = L["tasks"].get(body["task"])
     if by is not None:
-        if target is None or not controls_project(by, target["place"]) or by["role"] != "operator":
+        if target is None or not controls_project(by, target["place"]) or by["role"] not in schema.CONTROLLERS:
             raise ApiError("resuming infrastructure repair requires a control-enabled Operator in scope")
         if target.get("admission_hold") != "repeated infrastructure launch failure":
             raise ApiError("explicit user holds require the user's own resume control")
@@ -759,7 +759,47 @@ def cancel_restart(body):
     return {"ok": True}
 
 
+def run_role(body, role):
+    """Any other role, for the user and for a First Responder, whose job is to call the right
+    one. Other agents propose work through the queue. Coin is no dispatchable role at all."""
+    by = running(body)
+    if by is not None and by["role"] != "first-responder":
+        raise ApiError("only the user and First Responders start this role directly; agents propose work through the queue")
+    if by is not None and role == "first-responder":
+        raise ApiError("a First Responder does not call another First Responder; dispatch whoever can fix it")
+    if body.get("check_only"):
+        return {"ok": True}
+    if role in ("manager", "worker"):
+        if not body.get("project"):
+            raise ApiError(f"a {role} works in a registered project: name it, or create one with project_new first")
+        request = {"project": body["project"], "kind": "command" if role == "manager" else "queued", "name": body["name"],
+                   "brief": body["brief"], "stage": body.get("stage"), "reasoning_effort": body.get("reasoning_effort"),
+                   "budget": body.get("budget"), **({"caller": body["caller"]} if by else {})}
+        item = queue(request)["item"]
+        return {"ok": True, "task": f"{body['project']}:{item}", "item": item}
+    from cointos import spawner
+    task = spawner.request_role(role, body)
+    log("agent requested", task=task["id"], role=role)
+    return {"ok": True, "task": task["id"]}
+
+
+def split(body):
+    """Stop work that is too big for one agent and hand it to a manager to cut up."""
+    by = running(body)
+    target = L["tasks"].get(body.get("task", ""))
+    if target is None:
+        raise ApiError(f"no task {body.get('task')!r}")
+    if by is not None and not controls_project(by, target["place"]):
+        raise ApiError("splitting requires the user, the owning manager or a control-enabled Operator")
+    return {"ok": True, **lifecycle.split(target["id"], body.get("reason") or "the user stopped it as too big", by["id"] if by else "user")}
+
+
 def run_agent(body):
+    role = body.get("role", "operator")
+    if role != "operator":
+        if role not in {spec["role"] for spec in schema.KINDS.values()}:
+            raise ApiError(f"unknown role {role!r}")
+        return run_role(body, role)
     task, run = caller(body)
     spawner = (running(body), L["agents"][run]) if task is not None else None
     task = tasks.request_operator(body["name"], body["brief"], body.get("project"), body.get("abilities"),
@@ -954,7 +994,7 @@ ACTIONS = {
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "coin": coin, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,
-    "run-agent": run_agent, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
+    "run-agent": run_agent, "split": split, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
     "reasoning": reasoning, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
     "viewers": viewers, "scheduler": scheduler, "default-model": models.choose,
     "project-list": project_list, "project-new": project_new, "project-add": project_add,

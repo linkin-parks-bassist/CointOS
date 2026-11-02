@@ -35,10 +35,40 @@ KINDS = {
                    "receipts": ("complete", "blocked"), "lands": None},
     "operator": {"role": "operator", "rank": 1, "scope": "either", "record": False,
                  "receipts": ("complete", "blocked"), "lands": "merge"},
+    "first-response": {"role": "first-responder", "rank": 1, "scope": "either", "record": False,
+                       "receipts": ("complete", "blocked"), "lands": "merge"},
 }
+
+# Roles holding queue and lifecycle controls over a project's work.
+CONTROLLERS = ("operator", "first-responder")
 
 # The queue kinds agents and the user submit, and the task kind that carries each.
 QUEUE_KINDS = {"queued": "item", "urgent": "item", "command": "breakdown"}
+
+# The one tool that starts an agent. Everyone who can start agents gets this same definition;
+# the daemon decides what a caller may do from who is calling.
+INPUT_IDS = {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1,
+             "description": "Current update_ids belonging to this assignment. Required when multiple inputs are present; exclude unrelated requests."}
+AGENT_PROPERTIES = {
+    "name": {"type": "string"}, "brief": {"type": "string"}, "project": {"type": "string"},
+    "station": {"type": "object", "additionalProperties": False, "description": "Where the agent works and what it can reach. Omit for no project: the runtime with standard tools.", "properties": {
+        "directory": {"type": "string", "description": "An existing directory to work in; its writes are confined there. Not combined with project."},
+        "tools": {"type": "array", "items": {"type": "string"}, "description": "Configured MCP servers it can use beyond the standard tools, from mcp_tools, or * for all."}}},
+    "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network"]}},
+    "reasoning_effort": {"type": "string", "enum": ["low", "medium", "xhigh"]},
+    "generation_seconds": {"type": "number"}, "generation_tokens": {"type": "integer"}, "input_ids": INPUT_IDS}
+DISPATCH_DESCRIPTION = (
+    "Start an agent of any role. The brief is everything it will know. operator (the default) does one direct job "
+    "with explicit scope, station, abilities, reasoning and budget. manager breaks a project goal into small work; "
+    "worker does one small piece in a project, at stage. integrator lands the reviewed work named by task. "
+    "first-responder works out what went wrong with the failed run named by task and dispatches the fix. gardener "
+    "and tree-auditor tend the tree named by project. steward and test-auditor take the brief across the system. "
+    "What you may start depends on who you are, and a refusal says why.")
+DISPATCH_PROPERTIES = {
+    **AGENT_PROPERTIES,
+    "role": {"type": "string", "enum": sorted({kind["role"] for kind in KINDS.values()})},
+    "task": {"type": "string", "description": "for integrator: the reviewed worker task; for first-responder: the failed task"},
+    "stage": {"type": "string", "enum": ["skeleton", "test-contract", "implementation", "integration"], "description": "for worker: its construction stage"}}
 
 # A task's status: unfinished (waiting for or holding a run, or in review), or settled for good.
 ACTIVE, PENDING, SETTLED = ("waiting", "running", "review"), ("waiting", "running"), ("done", "failed")

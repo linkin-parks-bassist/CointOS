@@ -18,7 +18,7 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     prompt_date, system_context          fixed system-prefix identity (content is deduplicated in the ledger)
     abilities, spawned_by                an operator's permissions; the task whose run started it
     replacements                         a recovery controller's replacement children
-    repair_origin                        automatic Operator's originating task/record and version
+    repair_origin                        First Responder's originating task/record and version
     revision                             why and by whom its item was last revised
     review, rejections                   the integrator's latest return notes and their count
     fresh_retries, recovery_note, recovery_context   budget recovery state
@@ -180,15 +180,17 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
                              "finish blocked with the evidence instead")
         if set(abilities) - set(task.get("abilities") or ["standard"]):
             raise ValueError("an operator gets no ability its spawner lacks")
-        used = schema.spent(agent)
-        left = {key: task["budget"][key] - used[key] for key in schema.BUDGET_KEYS}
-        if not budget or set(budget) != set(schema.BUDGET_KEYS):
-            raise ValueError(f"give the operator both budget limits from what this run has left: "
-                             f"{left['generation_tokens']:,} tokens and {left['generation_seconds']:.0f} seconds")
-        schema.budget(CONFIG, budget)
-        if any(budget[key] > left[key] for key in schema.BUDGET_KEYS):
-            raise ValueError(f"this run has only {left['generation_tokens']:,} tokens and "
-                             f"{left['generation_seconds']:.0f} seconds left to give")
+        # A First Responder calls in help; its own small budget is for diagnosis, not for funding it.
+        if task["role"] != "first-responder":
+            used = schema.spent(agent)
+            left = {key: task["budget"][key] - used[key] for key in schema.BUDGET_KEYS}
+            if not budget or set(budget) != set(schema.BUDGET_KEYS):
+                raise ValueError(f"give the operator both budget limits from what this run has left: "
+                                 f"{left['generation_tokens']:,} tokens and {left['generation_seconds']:.0f} seconds")
+            schema.budget(CONFIG, budget)
+            if any(budget[key] > left[key] for key in schema.BUDGET_KEYS):
+                raise ValueError(f"this run has only {left['generation_tokens']:,} tokens and "
+                                 f"{left['generation_seconds']:.0f} seconds left to give")
     where = project_named(project) if project else SYSTEM
     directory, tools = requested_station(station, project, abilities, spawner)
     if check_only:
@@ -210,7 +212,7 @@ def request_operator(name: str, brief: str, project: str | None, abilities, reas
                       spawned_by=spawner[0]["id"] if spawner else None, tools=tools,
                       **({"worktree": directory} if directory else {}),
                       **({"occurrence": occurrence} if occurrence else {}))
-    if spawner:
+    if spawner and spawner[0]["role"] != "first-responder":
         granted = spawner[1].setdefault("granted", {})
         for key in schema.BUDGET_KEYS:
             granted[key] = granted.get(key, 0) + budget[key]
@@ -228,7 +230,7 @@ def newer_attempt(source: dict) -> dict | None:
 
 
 def request_repair(source: dict) -> tuple[dict | None, bool]:
-    """One capable recovery controller for the unchanged work assignment. Caller holds LOCK."""
+    """One First Responder for the unchanged work assignment. Caller holds LOCK."""
     origin = frontier.origin(source)
     known = frontier.controller(source)
     if known is not None:
@@ -248,27 +250,20 @@ def request_repair(source: dict) -> tuple[dict | None, bool]:
             return None, False  # its tree is no longer configured
     else:
         return None, False
-    brief = (f"Restore progress on {origin['task']} (assignment version {origin['version']}).\n"
-             f"Origin place: {place_name}. Accessible repair scope: {scope}.\n\n"
-             f"Current blocker, verify independently:\n{reason[:1000]}\n\n"
+    brief = (f"An agent's run on {origin['task']} (assignment version {origin['version']}) went wrong. "
+             f"Find out what happened and dispatch the right agent to deal with it.\n"
+             f"Place: {place_name}. Scope: {scope}.\n\n"
+             f"What was reported, which may not be the real story:\n{reason[:1000]}\n\n"
              f"Current assignment and binding contracts: cointos task {origin['task']}.\n"
-             f"Full preserved execution evidence: cointos task {origin['task']} --history.\n\n"
-             "Inspect the owning contracts, live ledger, receipts, branches and logs. Repair the cause and "
-             "establish a runnable continuation. Use correct_tests for invalid accepted tests, resume for repaired "
-             "infrastructure admission, and revise/supersede for mistaken assignments. Queue and "
-             "supersede corrective stages as needed. Any queued continuation must address the independently "
-             "verified obstruction, not arbitrary new work. Do not stop at repeating the diagnosis. Use the normal "
-             "worker receipt and landing gates for product implementation and test packets; do not mark "
-             "unverified work accepted. Preserve explicit user holds, knowledge-tree access policy and normal task write scope. "
-             "Finish complete only with evidence that this episode's condition changed and work can continue.")
-    name = "operator-repair-" + queues.slug(origin["task"])
-    rank = [schema.KINDS["operator"]["rank"], where.get("priority", 0)]
-    task = create("operator", where, name, brief, rank, repair_origin=origin,
+             f"Full preserved execution evidence: cointos task {origin['task']} --history.")
+    name = "first-response-" + queues.slug(origin["task"])
+    rank = [schema.KINDS["first-response"]["rank"], where.get("priority", 0)]
+    task = create("first-response", where, name, brief, rank, repair_origin=origin,
                   item=source.get('item'),
                   record_version=origin['version'],
                   abilities=list(schema.ABILITIES),
                   reasoning_effort=CONFIG["reasoning"].get("manager", CONFIG["reasoning"]["default"]))
-    log("repair operator requested", task=task["id"], origin=origin)
+    log("first responder requested", task=task["id"], origin=origin)
     return task, True
 
 

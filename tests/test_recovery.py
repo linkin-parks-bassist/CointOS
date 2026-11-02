@@ -93,7 +93,7 @@ class Budgets(unittest.TestCase):
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
 
-    def test_production_worker_default_preserves_work_and_hands_exhaustion_to_manager(self):
+    def test_exhausted_implementer_preserves_work_and_gets_a_first_responder(self):
         configured = config.load()['recovery']['role_fresh_retries']
         self.assertEqual(schema.fresh_limit({'recovery': {'role_fresh_retries': configured,
                                                         'fresh_retries': 2}}, self.task), 0)
@@ -110,9 +110,9 @@ class Budgets(unittest.TestCase):
             self.assertTrue(queues.state(state.L['queue']['p:item'])['recoverable'])
             state.L['paused'] = False
             with patch.object(spawner, 'periodic', return_value=[]), patch.object(spawner, 'tree_work', return_value=[]):
-                manager = spawner.next_task()
-            self.assertEqual(manager['kind'], 'operator')
-            self.assertEqual(manager['repair_origin']['task'], self.task['record'])
+                responder = spawner.next_task()
+            self.assertEqual(responder['kind'], 'first-response')
+            self.assertEqual(responder['repair_origin']['task'], self.task['record'])
             self.assertEqual(self.task['runs'], 1, 'no second worker run was funded')
 
     def test_an_overrunning_worker_item_continues_and_its_finished_work_can_still_be_submitted(self):

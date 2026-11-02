@@ -107,14 +107,16 @@ def room(need_gb: float, keep: str | None = None, replacing=()) -> bool:
     return used + need_gb <= limit
 
 
-def make_room(need_gb: float, *, claim: bool = True, resident_owner: str | None = None) -> bool:
+def make_room(need_gb: float, *, claim: bool = True, resident_owner: str | None = None,
+              cache_owner: str | None = None) -> bool:
     """Reclaim disposable caches without spending admitted execution capacity.
 
     Claims debit physical headroom until its next measurement. A new run instead
     publishes its reservation in the agents table, so its check uses claim=False.
     Native initialization spends its own pending state claim, retaining all others.
     """
-    headroom = capacity.headroom_gb(resident_owner)
+    spare = capacity.conversation_cache_gb(cache_owner)
+    headroom = capacity.headroom_gb(resident_owner) + spare
     leaving = memory.to_forget(in_memory(), need_gb, headroom + cleanup.occupied('memory'))
     if leaving is None:
         return False
@@ -122,7 +124,7 @@ def make_room(need_gb: float, *, claim: bool = True, resident_owner: str | None 
     available = headroom + sum(evict(name) for name in leaving)
     if available < need_gb:
         return False
-    L["memory"]["headroom_gb"] = round(available + capacity.pending_gb(resident_owner)
+    L["memory"]["headroom_gb"] = round(available - spare + capacity.pending_gb(resident_owner)
                                        - (need_gb if claim else 0), 1)
     return True
 
@@ -276,7 +278,7 @@ def superseded(owner: str, model: str, held: list[int], kind: str) -> list[str]:
             and s['digest'] == digest(held[:s['tokens']])]
 
 
-def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
+def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str | None = None) -> bool:
     """Save the lane's state (holding exactly `held`) as a snapshot of `owner`'s conversation, if
     it fits. A *checkpoint* is a committed prompt prefix saved before generation; it may end
     before the prompt's tail and supersedes older checkpoints/suspensions. A *prefix*
@@ -286,8 +288,11 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
     that is abandoned. Shared starts serve different histories, so longer shared states do not
     supersede shorter tiers. Under budget pressure a superseded cache can be discarded before
     saving; a failed replacement then rereads instead of retaining that old hint. Runs outside
-    LOCK; returns whether it was saved."""
+    LOCK; returns whether it was saved. `for_owner` is whose request needs the state, when
+    it is stored under another owner."""
     need, reclaimed = 0.0, False
+    requester = for_owner or owner
+    spare = capacity.conversation_cache_gb(requester)
     wanted = digest(held)
     while True:
         with LOCK:
@@ -320,11 +325,14 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
                 return False
             if reclaimed:
                 if ((limit is not None and used + need > limit)
-                        or capacity.headroom_gb() < host_need):
+                        or capacity.headroom_gb() + spare < host_need):
+                    log('snapshot refused', owner=owner, model=model, tokens=len(held), need_gb=round(host_need, 2),
+                        headroom_gb=round(capacity.headroom_gb() + spare, 2))
                     return False
-                admitted = make_room(host_need)  # no further eviction after this transaction's reclaim
+                admitted = make_room(host_need, cache_owner=requester)  # no further eviction after this transaction's reclaim
             else:
-                admitted = room(need, replacing=superseded(owner, model, held, kind)) and make_room(host_need)
+                admitted = (room(need, replacing=superseded(owner, model, held, kind))
+                            and make_room(host_need, cache_owner=requester))
             if admitted:
                 name = secrets.token_hex(6)
                 while name in L['snapshots'] or name in RESERVED or name in TRANSFERS or cleanup.pending(name):
@@ -337,7 +345,7 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
             used_bytes = sum(math.ceil(s['bytes']) for s in L['snapshots'].values() if s['tier'] in ('memory', 'moving'))
             used_bytes += math.ceil(sum(RESERVED.values()) * memory.GB)
             used_bytes += sum(math.ceil(e['bytes']) for e in cleanup.jobs().values() if e['tier'] == 'memory')
-            deficit = max(math.ceil(host_need * memory.GB) - math.floor(capacity.headroom_gb() * memory.GB),
+            deficit = max(math.ceil(host_need * memory.GB) - math.floor((capacity.headroom_gb() + spare) * memory.GB),
                           used_bytes + need_bytes - math.floor(limit * memory.GB) if limit is not None else 0)
             pending, release = set(), 0
             for identifier, entry in cleanup.jobs().items():
@@ -348,6 +356,8 @@ def keep(position: int, held: list[int], owner: str, kind: str) -> bool:
                 if release >= deficit:
                     break
             if reclaimed or not pending or release < deficit:
+                log('snapshot refused', owner=owner, model=model, tokens=len(held), need_gb=round(host_need, 2),
+                    headroom_gb=round(capacity.headroom_gb() + spare, 2))
                 return False
         # Only RAM release needed for this save may delay it. Disk disposal is
         # independent, and neither operation can retain the state lock.
@@ -392,9 +402,9 @@ def retain_prefix(model: str, tokens: list[int], owner: str) -> bool:
         return False
 
 
-def keep_shared(position: int, tokens: list[int]) -> None:
+def keep_shared(position: int, tokens: list[int], for_owner: str | None = None) -> None:
     """Save a lane holding exactly a context start that several contexts share. Runs outside LOCK."""
-    if keep(position, tokens, "shared", "checkpoint"):
+    if keep(position, tokens, "shared", "checkpoint", for_owner=for_owner):
         with LOCK:
             log("shared prefix saved", model=L["lanes"][position]["model"], tokens=len(tokens))
 

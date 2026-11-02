@@ -41,12 +41,21 @@ def repair_work(scanned: dict) -> None:
     if L["paused"]:
         return
     for source in list(L["tasks"].values()):
+        if source.get("exhausted") and source["role"] == "first-responder":
+            source["exhausted"] = False  # one decision per exhaustion; a refusal is not retried
+            try:  # when even the diagnosis runs out, cut an oversized job up anyway
+                lifecycle.split(source["id"], "its First Responder ran out of budget before dispatching", "service")
+            except ValueError as error:
+                log("split unavailable", task=source["id"], detail=str(error))
+            continue
         if frontier.reason(source) is not None and not draft_blocked(source):
             tasks.request_repair(source)
     for records in scanned.values():
         for record in records:
-            if frontier.reason(record) is not None:
-                tasks.request_repair(record)
+            # A split above may have replaced what this earlier scan still shows as failed.
+            current = queues.records().get(queues.key(record), record)
+            if frontier.reason(current) is not None:
+                tasks.request_repair(current)
 
 
 def spawn() -> None:
@@ -251,6 +260,44 @@ def tree_work() -> list:
             rank = [schema.KINDS["tree-audit"]["rank"]]
             options.append((rank, functools.partial(tasks.create, "tree-audit", tree, "tree-audit", "", rank)))
     return options
+
+
+def request_role(role: str, body: dict) -> dict:
+    """A role the scheduler normally starts, started now by the user. Caller holds LOCK."""
+    kind = next(k for k, spec in schema.KINDS.items() if spec["role"] == role)
+    if role == "first-responder":
+        source = L["tasks"].get(body.get("task", ""))
+        known = frontier.controller(source) if source else None
+        if known and known["role"] != "first-responder":
+            # An Operator left over from before this role gives way; only the user can ask for this.
+            for agent_id, agent in list(L["agents"].items()):
+                if agent["task"] == known["id"]:
+                    lifecycle.stop(agent_id, "replaced by a First Responder", requeue=False)
+            if known["status"] not in schema.SETTLED:
+                lifecycle.fail(known, "replaced by a First Responder")
+            known["former_repair_origin"] = known.pop("repair_origin")
+        responder = tasks.request_repair(source)[0] if source else None
+        if responder is None:
+            raise ValueError("a first-responder needs task: an assignment whose run went wrong")
+        return responder
+    effort = {"reasoning_effort": body["reasoning_effort"]} if body.get("reasoning_effort") else {}
+    if role in ("steward", "test-auditor"):
+        return tasks.create(kind, tasks.SYSTEM, body["name"], body["brief"], [schema.KINDS[kind]["rank"]], budget=body.get("budget"), **effort)
+    if role == "integrator":
+        worker = L["tasks"].get(body.get("task", ""))
+        if worker is None or not review_ready(worker):
+            raise ValueError("an integrator needs task: a reviewed worker task ready to land")
+        project = tasks.project_named(worker["place"])
+        rank = [schema.KINDS[kind]["rank"], project.get("priority", 100)]
+        return tasks.create(kind, project, f"integrate-{worker['title']}", worker["brief"], rank, item=worker["item"],
+                            worker=worker["id"], budget=body.get("budget"), **effort)
+    tree = next((t for t in managed_trees(CONFIG) if t["name"] == body.get("project")), None)
+    if tree is None:
+        raise ValueError(f"a {role} needs project: one of {', '.join(t['name'] for t in managed_trees(CONFIG))}")
+    health = tree_health(tree) or {}
+    fields = {"health_hash": health.get("hash")} if kind == "garden" else {}
+    return tasks.create(kind, tree, kind, body["brief"], trees.rank(health) if health else [schema.KINDS[kind]["rank"] or 0],
+                        budget=body.get("budget"), **effort, **fields)
 
 
 def periodic() -> list:

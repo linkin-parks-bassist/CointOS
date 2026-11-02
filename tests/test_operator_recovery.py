@@ -26,10 +26,10 @@ class OperatorRecovery(unittest.TestCase):
     def test_blocked_planner_gets_independently_funded_control_enabled_operator(self):
         worker, manager = self.blocked_manager()
         repair = spawner.next_task()
-        self.assertEqual(repair["kind"], "operator")
+        self.assertEqual(repair["kind"], "first-response")
         self.assertEqual(repair["repair_origin"], {"task": manager["id"], "version": 1})
         self.assertEqual(repair["abilities"], list(schema.ABILITIES))
-        self.assertEqual(repair["budget"], schema.budget(state.CONFIG, role="operator"))
+        self.assertEqual(repair["budget"], schema.budget(state.CONFIG, role="first-responder"))
         self.assertEqual(repair["reasoning_effort"], state.CONFIG["reasoning"]["manager"])
         self.assertNotIn("granted", state.L["agents"]["manager-1"])
         self.assertEqual(worker["receipt"]["disposition"], "blocked")
@@ -76,7 +76,7 @@ class OperatorRecovery(unittest.TestCase):
         child = spawner.next_task()
         lifecycle.fail(child, 'child failed')
         ordinary = spawner.next_task()
-        self.assertEqual(ordinary['role'], 'operator')
+        self.assertEqual(ordinary['role'], 'first-responder')
         lifecycle.fail(ordinary, 'ordinary child recovery failed')
         self.assertIsNotNone(frontier.reason(manager))
 
@@ -105,7 +105,7 @@ class OperatorRecovery(unittest.TestCase):
         same, created = tasks.request_repair(state.L["tasks"][manager["id"]])
         self.assertFalse(created)
         self.assertEqual(same["id"], repair["id"])
-        self.assertEqual(sum(t["kind"] == "operator" for t in state.L["tasks"].values()), 1)
+        self.assertEqual(sum(t["kind"] == "first-response" for t in state.L["tasks"].values()), 1)
 
     def test_changed_assignment_can_have_a_new_recovery_episode(self):
         worker, manager = self.blocked_manager()
@@ -124,7 +124,7 @@ class OperatorRecovery(unittest.TestCase):
                             ("cycle", "Depends on: cycle\nResolve the cycle")):
             queues.add(self.project, "queued", name, brief)
         spawner.refresh()
-        operators = [t for t in state.L["tasks"].values() if t["kind"] == "operator"]
+        operators = [t for t in state.L["tasks"].values() if t["kind"] == "first-response"]
         self.assertEqual({t["repair_origin"]["task"] for t in operators}, {"p:unknown", "p:cycle"})
         self.assertNotIn("p:unknown", state.L["tasks"])
         self.assertNotIn("p:cycle", state.L["tasks"])

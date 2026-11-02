@@ -19,6 +19,7 @@ from pathlib import Path
 
 from cointos import config as configuration, contracts, frontier, git, metrics, opencode, queues, schema
 from cointos.client import Unreachable, call, ledger
+from cointos.config import ROOT
 
 CONFIG = configuration.load()
 UNITS = ["cointosd.service", "cointos-coin.service"]
@@ -481,9 +482,15 @@ def _append_text(existing: str, value: str) -> str:
 
 
 def coin_log(stop=None) -> None:
-    """Show Coin's terminal monitor until the viewer slot changes."""
-    from cointos.coin_view import watch
-    watch(_coin_live_states(), stop)
+    """Show Coin in OpenCode's viewer until the slot changes; the monitor if that cannot start."""
+    from cointos import coin_mirror
+    state = ROOT / "state/coin"
+    try:
+        coin_mirror.show(state / "turns.jsonl", state / f"mirror-{os.getpid()}", opencode.OPENCODE, _coin_live_states(), stop)
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"OpenCode view unavailable ({error}); showing Coin's monitor.", file=sys.stderr)
+        from cointos.coin_view import watch
+        watch(_coin_live_states(), stop)
 
 
 def coin_live() -> None:
@@ -734,6 +741,9 @@ def parser() -> argparse.ArgumentParser:
     policy_options(project_set)
     project_sub.add_parser("remove", help="remove an idle project from CointOS (the repository remains)").add_argument("name")
 
+    splitting = sub.add_parser("split", help="stop an implementer or Operator whose job is too big; a manager salvages it and cuts it up")
+    splitting.add_argument("task")
+    splitting.add_argument("--reason", default="the user stopped it as too big")
     agent = sub.add_parser("agent", help="run one ad-hoc operator with explicit scope and abilities")
     agent_run = agent.add_subparsers(dest="agent_command", required=True).add_parser("run")
     agent_run.add_argument("name")
@@ -744,6 +754,9 @@ def parser() -> argparse.ArgumentParser:
     agent_run.add_argument("--directory", help="station this agent in a directory; its writes are confined there")
     agent_run.add_argument("--tool", action="append", default=[], help="a configured MCP server for its station, or '*' for all")
     agent_run.add_argument("--ability", action="append", choices=schema.ABILITIES, default=[])
+    agent_run.add_argument("--role", choices=sorted({kind["role"] for kind in schema.KINDS.values()}), default="operator")
+    agent_run.add_argument("--task", help="for an integrator: the reviewed worker task; for a first-responder: the failed task")
+    agent_run.add_argument("--stage", choices=schema.STAGES)
     agent_run.add_argument("--reasoning-effort", choices=schema.EFFORTS)
     budget_options(agent_run)
     return top
@@ -867,7 +880,9 @@ COMMANDS = {
     "reasoning": lambda args: json.dumps(call("reasoning", {"task": args.task, "effort": args.effort})),
     "budget": lambda args: json.dumps(call("budget", {"task": args.task, "budget": limits(args) or {}})),
     "project": project_command,
+    "split": lambda args: json.dumps(call("split", {"task": args.task, "reason": args.reason})),
     "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
+                                             "role": args.role, "task": args.task, "stage": args.stage,
                                              "abilities": args.ability or ["standard"],
                                              "reasoning_effort": args.reasoning_effort, "budget": limits(args),
                                              "station": {"directory": args.directory, "tools": args.tool}})["task"],

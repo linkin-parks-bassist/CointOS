@@ -104,22 +104,16 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .agent .track i { flex: 1; height: 2px; margin: 0 6px; background: var(--dark-line); min-width: 6px; }
 .agent .track.upkeep { color: var(--c); font-weight: 800; }
 @container (max-width: 470px) { .agent .track span:not(.here) { font-size: 0; gap: 0; } }
-/* The agent's words as they stream, bottom-anchored like a terminal; the one part of the card that grows. */
-.agent .live { position: relative; flex: 1 0 auto; height: 7.9em; overflow: hidden; display: flex; flex-direction: column;
-  justify-content: flex-end; font: 12.5px/1.45 ui-monospace, monospace; background: var(--dark-2); border: 1px solid var(--dark-line); padding: 8px 10px; }
-/* The oldest words fade into the box; the box itself keeps its edges. */
-.agent .live::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2.8em; z-index: 1;
-  background: linear-gradient(color-mix(in oklab, var(--dark-2) 80%, transparent), transparent); pointer-events: none; }
+/* The agent's words as they stream, bottom-anchored like a terminal; the one part of the card that grows. Scrolling up holds the view. */
+.agent .live { position: relative; flex: 1 0 auto; height: 7.9em; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
+  scrollbar-color: var(--c) var(--dark-2); overflow-anchor: none; font: 12.5px/1.45 ui-monospace, monospace; background: var(--dark-2); border: 1px solid var(--dark-line); padding: 8px 10px; }
 .agent .live i { color: var(--dark-soft); opacity: .75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent .live p { margin: 6px 0 0; color: var(--dark-text); white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent .live p.tool { color: var(--c); }
 
 .agent .live-wrap { position: relative; flex: 1 0 auto; height: 7.9em; min-height: 0; }
 .agent .live-wrap .live { height: 100%; box-sizing: border-box; }
-.agent.r-operator .live { display: block; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin;
-  scrollbar-color: var(--c) var(--dark-2); overflow-anchor: none; }
-.agent.r-operator .live::before { display: none; }
-.agent.r-operator .live:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+.agent .live:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
 .agent .return-live { position: absolute; right: 9px; bottom: 7px; z-index: 2; padding: 4px 9px;
   border: 1px solid var(--c); background: var(--dark); color: var(--dark-text); font: 700 11px/1.4 ui-sans-serif, system-ui, sans-serif;
   box-shadow: 0 2px 8px #0005; cursor: pointer; }
@@ -210,7 +204,7 @@ h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em; color: v
 .history .alert-line .what { color: var(--accent); font-weight: 700; }
 /* Each role has its own colour, shared by its agent cards, its pipeline step and its badge. */
 .agent.r-worker { --c: var(--accent-bright); } .agent.r-integrator { --c: #8fc7b5; } .agent.r-manager { --c: #f2c46b; }
-.agent.r-steward, .agent.r-gardener, .agent.r-tree-auditor, .agent.r-test-auditor, .agent.r-operator { --c: #c9b3e0; }
+.agent.r-steward, .agent.r-gardener, .agent.r-tree-auditor, .agent.r-test-auditor, .agent.r-operator, .agent.r-first-responder { --c: #c9b3e0; }
 .agent.r-coin { --c: #8ab8e6; cursor: default; } .agent.r-coin .ctl { display: none; }
 
 /* Construction stages, followed by their independent execution status. */
@@ -596,15 +590,15 @@ function setText(el, value) { if (el.textContent !== value) el.textContent = val
 function setHTML(el, value) { if (el.dataset.html !== value) { el.dataset.html = value; el.innerHTML = value; } }
 
 // Scrolling up freezes the displayed snapshot; incoming output waits behind Return to live.
-function updateLivePreview(wrap, words, scrollable) {
+function updateLivePreview(wrap, words) {
   const viewport = wrap.querySelector('.live'), output = viewport.firstElementChild;
   const button = wrap.querySelector('.return-live');
   wrap.latestWords = words;
-  if (scrollable && !wrap.previewReady) {
+  if (!wrap.previewReady) {
     wrap.previewReady = true;
     viewport.tabIndex = 0;
     viewport.setAttribute('role', 'region');
-    viewport.setAttribute('aria-label', 'Operator output preview');
+    viewport.setAttribute('aria-label', 'Output preview');
     wrap.returnToLive = () => {
       wrap.previewPaused = false;
       setHTML(output, wrap.latestWords);
@@ -618,9 +612,9 @@ function updateLivePreview(wrap, words, scrollable) {
     });
     button.onclick = event => { event.preventDefault(); event.stopPropagation(); wrap.returnToLive(); viewport.focus({preventScroll: true}); };
   }
-  if (scrollable && wrap.previewPaused) return;
+  if (wrap.previewPaused) return;
   setHTML(output, words);
-  if (scrollable) viewport.scrollTop = viewport.scrollHeight;
+  viewport.scrollTop = viewport.scrollHeight;
 }
 
 // Balance rows with the smaller rows first; each row still fills the full width.
@@ -688,7 +682,7 @@ function renderAgents(S) {
       ((kind === "tools" || !(live.reasoning || live.content)) && a.doing ? `<p class="tool">⚙ ${esc(a.doing)}</p>` : "");
     const preview = q(".live-wrap"), shown = words || preview.previewPaused ? "" : "none";
     if (preview.style.display !== shown) preview.style.display = shown;
-    updateLivePreview(preview, words, a.role === "operator");
+    updateLivePreview(preview, words);
     q(".live").classList.toggle("stale", a.role === "coin" && !a.busy);
     const thought = Object.values(S.thoughts).find(t => t.agent === a.id);
     const activityKey = JSON.stringify([kind, label, thought?.id, kind === "tools" ? a.doing : null]);
@@ -852,11 +846,11 @@ function landedMix(items) {
 const TRACK = [["ready", "Queued"], ["building", "Active"], ["review", "Review"], ["integrating", "Integrate"], ["landed", "Landed"]];
 // How a card says who is on its task: "being carried out by Qunos (worker)".
 const BY_VERB = {worker: "carried out", integrator: "reviewed", manager: "planned", steward: "looked after",
-  gardener: "tended", "tree-auditor": "audited", "test-auditor": "audited", operator: "carried out"};
+  gardener: "tended", "tree-auditor": "audited", "test-auditor": "audited", operator: "carried out", "first-responder": "dispatched"};
 const ROLE_VERB = {worker: "building", integrator: "reviewing & landing", manager: "planning", steward: "tidying loose ends",
-  gardener: "gardening knowledge", "tree-auditor": "auditing knowledge", "test-auditor": "auditing tests", operator: "operating"};
+  gardener: "gardening knowledge", "tree-auditor": "auditing knowledge", "test-auditor": "auditing tests", operator: "operating", "first-responder": "responding"};
 const KIND_LABEL = {steward: "loose ends", garden: "garden", "tree-audit": "tree audit", "test-audit": "test audit",
-  decompose: "planning", breakdown: "planning", operator: "operator"};
+  decompose: "planning", breakdown: "planning", operator: "operator", "first-response": "recovery"};
 const capital = s => s ? s[0].toUpperCase() + s.slice(1) : "";
 const pretty = s => String(s || "").replace(/-/g, " ");
 // A work item's slug as a headline plus its context: "elastic-rtl-task-5-test-contract-fix-s6" in pigen
@@ -888,11 +882,12 @@ const stageName = s => s ? s.split("-").map(word).join(" ") : "";
 function stageBadge(task = {}, reviewed = null) {
   const role = task.role || (task.kind === "command" ? "manager" : "");
   const key = role === "integrator" || task.kind === "integrate" ? workflowStage(task, {}, reviewed)
+    : role === "first-responder" ? "recovery"
     : role === "operator" ? (task.repair_origin || /recover|repair/.test(task.title || "") ? "recovery" : "operator")
     : role === "manager" ? workflowStage(task, task.kind === "command" ? task : {}) : role === "coin" ? "coin"
     : task.stage || (role === "worker" || task.kind === "queued" || task.kind === "item" ? "implementation" : role);
   const labels = {"test-mapping": "Map tests", "map-review": "Review test map", "test-review": "Review tests", "test-contract": "Writing tests", implementation: "Implementation", skeleton: "Skeleton",
-    integration: "Review & integrate", recovery: "Recovery", planning: "Planning", operator: "Operator", coin: "Coin"};
+    integration: "Review & integrate", recovery: "First Responder", planning: "Planning", operator: "Operator", coin: "Coin"};
   if (!key) return "";
   return `<span class="stage-badge stage-${esc(key)}">${esc(labels[key] || stageName(key))}</span>`;
 }
@@ -1026,7 +1021,7 @@ window.addEventListener("hashchange", readRoute);
 $("drawer-close").onclick = closeDetail; $("scrim").onclick = closeDetail;
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeDetail(); });
 document.addEventListener("click", e => {
-  if (e.target.closest(".r-operator .live-wrap")) return;
+  if (e.target.closest(".agent .live-wrap")) return;
   const workflow = e.target.closest('[data-workflow]');
   if (workflow) { openDetail('workflow:' + workflow.dataset.workflow); return; }
   const more = e.target.closest("[data-step]");

@@ -65,7 +65,8 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
     denied = DENIED_COMMANDS + ([] if "control" in abilities else LIFECYCLE_COMMANDS)
     operator_control = task.get("role") == "operator" and "control" in abilities
     network = "allow" if "network" in abilities else "deny"
-    edit_scope = ({"*": "deny", f"{Path(task['worktree']).resolve()}/**": "allow"}
+    edit_scope = ({"*": "deny"} if task.get("role") == "first-responder"  # it dispatches; it doesn't do the work
+                  else {"*": "deny", f"{Path(task['worktree']).resolve()}/**": "allow"}
                   if confined_writes(task) and task.get('worktree')
                   else {"*": "allow"})
     read_scope = {}

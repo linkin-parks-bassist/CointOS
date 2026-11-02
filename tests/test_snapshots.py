@@ -36,7 +36,7 @@ class Snapshots(unittest.TestCase):
         self.enterContext(mock.patch.object(snapshots.BACKEND, 'delete_snapshot_file', self.delete))
         self.enterContext(mock.patch.object(snapshots.BACKEND, "restore", lambda config, model, index, name: True))
         self.real_make_room = snapshots.make_room
-        self.enterContext(mock.patch.object(snapshots, "make_room", lambda need: True))
+        self.enterContext(mock.patch.object(snapshots, "make_room", lambda need, **_: True))
         self.while_saving = lambda: None
         self.ram_released = 0
         self.enterContext(mock.patch.object(snapshots.BACKEND, 'budget', return_value=None))

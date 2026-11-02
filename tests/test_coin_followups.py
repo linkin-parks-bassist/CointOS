@@ -12,7 +12,7 @@ class CompletionFollowups(unittest.TestCase):
 
     def test_dispatch_registers_queue_and_operator_results_with_transport_identity(self):
         for name, arguments, result, task in [
-                ('run_agent', {'brief': 'Transcribe the recording'}, {'ok': True, 'task': 'system:audio'}, 'system:audio'),
+                ('dispatch', {'brief': 'Transcribe the recording'}, {'ok': True, 'task': 'system:audio'}, 'system:audio'),
                 ('queue_item', {'project': 'p', 'brief': 'Build the requested feature'}, {'ok': True, 'item': 'build'}, 'p:build')]:
             with patch.object(coin, 'execute', return_value=result):
                 reply = coin.invoke(name, arguments, 'not-a-token', 7, 70, None)

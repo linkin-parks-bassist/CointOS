@@ -85,6 +85,30 @@ class HistoryBlocks(unittest.TestCase):
         self.assertEqual(requests[1][1]['cache_prefix_messages'], 13)
         self.assertEqual(first[:13], requests[1][0][:13])
 
+    def test_requests_within_a_turn_only_grow_at_their_end(self):
+        requests = []
+        def complete(model, messages, **options):
+            requests.append(copy.deepcopy(messages))
+            if len(requests) < 3:
+                return {'role': 'assistant', 'content': '', 'reasoning_content': f'thinking {len(requests)}',
+                        'tool_calls': [{'id': f'status-{len(requests)}', 'type': 'function',
+                                        'function': {'name': 'status', 'arguments': '{}'}}]}
+            return {'role': 'assistant', 'content': 'Checked.'}
+        coin.remember(7, 'assistant', 'earlier', at=1)
+        with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), \
+                patch.object(coin, 'report'), patch.object(coin, 'execute', return_value={'ok': True}):
+            coin.turn('token', 7, 70, ['now'], lambda: [], None)
+        for earlier, later in zip(requests, requests[1:]):
+            self.assertEqual(later[:len(earlier)], earlier)
+        # The native tokens of a tool cycle are reused only if its reasoning is echoed.
+        self.assertEqual(requests[1][len(requests[0])]['reasoning_content'], 'thinking 1')
+        # Every message is timed once, beside the clock.
+        first, second = requests[0][-1]['content'], requests[1][-1]['content']
+        self.assertIn('<cointos-current-time>', first)
+        self.assertIn('Message 2 (assistant)', first)
+        self.assertNotIn('Message 2 (assistant)', second)
+        self.assertIn(f'Message {len(requests[0]) + 1} (assistant)', second)
+
     def test_damaged_final_record_does_not_shift_the_block_counter(self):
         for count in range(1, 20):
             coin.remember(7, 'user', str(count))

@@ -95,6 +95,51 @@ class Capacity(unittest.TestCase):
             self.assertFalse(snapshots.keep(0, [1, 2], 'coin/user', 'checkpoint'))
         save.assert_not_called()
 
+    def test_waiting_conversation_cache_is_not_blocked_by_process_caps(self):
+        for owner in ('a', 'b', 'c'):
+            self.agent(owner)
+            lanes.RESIDENT[self.model, owner] = [1]
+        state.L['snapshots']['sample'] = {'model': self.model, 'tokens': 2, 'bytes': 1e9,
+            'tier': 'disk', 'owner': 'shared', 'last_run': 1, 'digest': 'other'}
+        state.L['memory']['headroom_gb'] = 24.4  # below three process caps
+        with patch.object(snapshots.BACKEND, 'save', return_value={'bytes': 1e9}) as save, \
+             patch.dict(snapshots.RESERVED, {}, clear=True), patch.object(snapshots, 'log') as log:
+            self.assertFalse(snapshots.keep(0, [1, 2], 'a', 'checkpoint'))
+            save.assert_not_called()
+            self.assertEqual(log.call_args.args[0], 'snapshot refused')
+            self.assertTrue(snapshots.keep(0, [1, 2], 'coin/user', 'checkpoint'))
+            self.assertEqual(save.call_count, 1)
+            # Capture and file are debited from physical headroom, not the caps.
+            self.assertEqual(state.L['memory']['headroom_gb'], 12.4)
+
+    def test_waiting_conversation_cache_still_respects_the_physical_reserve(self):
+        self.agent('a')
+        lanes.RESIDENT[self.model, 'a'] = [1]
+        state.L['memory']['headroom_gb'] = 5  # the capture alone would enter the reserve
+        with patch.object(snapshots.BACKEND, 'save') as save:
+            self.assertFalse(snapshots.keep(0, [1, 2], 'coin/user', 'checkpoint'))
+        save.assert_not_called()
+
+    def test_waiting_conversation_state_is_not_starved_by_process_caps(self):
+        for owner in ('a', 'b', 'c'):
+            self.agent(owner)
+            lanes.RESIDENT[self.model, owner] = [1]
+        position = next(iter(state.L['lanes'])) if isinstance(state.L['lanes'], dict) else 0
+        state.CONFIG['timeouts']['server_seconds'], saved = 0, state.CONFIG['timeouts']['server_seconds']
+        self.addCleanup(state.CONFIG['timeouts'].__setitem__, 'server_seconds', saved)
+        # Physical room for one state, but less than it after three process caps.
+        measured = {'available_gb': state.CONFIG['memory']['reserve_gb'] + 34.4, 'psi': 0}
+        with patch.object(lanes.memory, 'measure', return_value=measured), \
+             patch.object(lanes.memory, 'headroom_gb', return_value=34.4), \
+             patch.object(lanes.BACKEND, 'budget', return_value=None), \
+             patch.object(lanes.BACKEND, 'select', return_value=[]), \
+             patch.object(lanes.BACKEND, 'can_continue', return_value=False), \
+             patch.object(lanes.BACKEND, 'resident_bytes', return_value=11_350_000_000), \
+             patch.object(lanes.snapshot_cleanup, 'drain'), patch.object(lanes, 'log'):
+            lanes.switch(position, [1, 2], 'coin/user')
+            with self.assertRaises(MemoryError):
+                lanes.switch(position, [1, 2], 'new-task')
+
     def test_pending_save_survives_a_fresh_physical_measurement(self):
         self.enterContext(patch.dict(snapshots.RESERVED, {'capture': 13}, clear=True))
         state.L['memory']['headroom_gb'] = 15

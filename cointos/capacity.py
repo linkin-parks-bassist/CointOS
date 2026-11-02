@@ -43,5 +43,15 @@ def agent_gb(owner: str) -> float:
     return process_gb() + (0.0 if initialized(model, owner) else resident_gb(model))
 
 
+def conversation_cache_gb(owner: str | None) -> float:
+    """Process caps a waiting user's conversation cache need not stay clear of.
+
+    Process caps protect long-lived growth. This cache is disposable, and the guard sheds
+    it first if the processes do grow. Other pending claims and the reserve still apply.
+    """
+    from cointos import snapshots
+    return len(L['agents']) * process_gb() if snapshots.coin_conversation(owner) else 0.0
+
+
 def headroom_gb(resident_owner: str | None = None) -> float:
     return L['memory'].get('headroom_gb', 0.0) - pending_gb(resident_owner)

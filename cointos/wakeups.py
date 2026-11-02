@@ -305,7 +305,7 @@ def _stored_condition(condition):
 def _agent(agent):
     if (not isinstance(agent, dict) or not {'name', 'brief'} <= set(agent) or set(agent) - AGENT_FIELDS
             or not isinstance(agent['name'], str) or not isinstance(agent['brief'], str) or not agent['brief'].strip()):
-        raise ValueError('agent needs a name and brief, and only run_agent fields')
+        raise ValueError('agent needs a name and brief, and only dispatch fields')
 
 
 def _validate(data):

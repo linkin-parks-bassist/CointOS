@@ -61,7 +61,7 @@ class ConversationFlow(unittest.TestCase):
         with patch.object(coin, 'send', side_effect=OSError('offline')), patch.object(coin, 'execute') as execute:
             with self.assertRaisesRegex(OSError, 'offline'):
                 self.turn([assistant(call('send', {'message': 'Passing that on.'}),
-                                     call('run_agent', {'name': 'records', 'brief': 'Update records.'}))])
+                                     call('dispatch', {'name': 'records', 'brief': 'Update records.'}))])
         execute.assert_not_called()
 
     def test_empty_send_is_not_a_receipt_and_done_content_is_delivered_once(self):
@@ -78,7 +78,7 @@ class ConversationFlow(unittest.TestCase):
         inputs = [{'id': 1, 'at': 10, 'text': 'press 42.5x6'},
                   {'id': 2, 'at': 11, 'text': '... 42.5x6, 42.5x9'}]
         for name, arguments, result in [
-                ('run_agent', {'name': 'fitness', 'brief': 'Update workout.'}, {'ok': True, 'task': 'system:fitness-1'}),
+                ('dispatch', {'name': 'fitness', 'brief': 'Update workout.'}, {'ok': True, 'task': 'system:fitness-1'}),
                 ('queue_item', {'project': 'p', 'brief': 'Update behaviour.'}, {'ok': True, 'item': 'behaviour'})]:
             with self.subTest(name=name), patch.object(coin, 'execute', return_value=result) as execute:
                 reply = coin.invoke(name, {**arguments, 'input_ids': [1, 2]}, 'fixture', 7, 70, None, inputs=inputs)

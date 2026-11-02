@@ -97,10 +97,10 @@ class BlockedWork(unittest.TestCase):
         self.assertEqual(self.manager["session"], None)
         operator = spawner.next_task()
         self.assertEqual(operator["repair_origin"]["task"], self.manager["id"])
-        self.assertEqual(operator["budget"], schema.budget(state.CONFIG, role="operator"))
+        self.assertEqual(operator["budget"], schema.budget(state.CONFIG, role="first-responder"))
         lifecycle.fail(operator, "external decision remains")
         self.assertIsNone(spawner.next_task())
-        self.assertEqual(sum(t["kind"] == "operator" for t in state.L["tasks"].values()), 1)
+        self.assertEqual(sum(t["kind"] == "first-response" for t in state.L["tasks"].values()), 1)
 
     def test_identical_revision_preserves_failure_budget_evidence_and_version(self):
         worker = support.queued(self.project, "failed", "Implement one slice")

@@ -14,7 +14,7 @@ from cointos.config import ROOT
 
 EVERYTHING = '*'
 GLOBAL_CONFIG = Path.home() / '.config/opencode/opencode.json'
-# Always present, so never a grant: the kt server's access tools stay the user's decision.
+# Always present, so never a grant.
 BASE = frozenset(('knowledgetrees', 'cointos'))
 COIN = {'directory': str(Path.home()), 'tools': [EVERYTHING]}
 

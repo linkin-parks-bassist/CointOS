@@ -146,14 +146,14 @@ class CoinMonitorReplay(unittest.TestCase):
         base = {'worker_since': 10, 'turns': 2, 'busy': True, 'alive': True,
                 'model': 'Qwen', 'trigger': 'Answering a message'}
         monitor.update({'coin': {**base, 'live': {'content': '**Saved** the requested entry.'}}})
-        monitor.update({'coin': {**base, 'doing': 'run_agent', 'live': {}}})
+        monitor.update({'coin': {**base, 'doing': 'dispatch', 'live': {}}})
         monitor.update({'_error': 'Temporary disconnect'})
         output = io.StringIO()
         console = Console(file=output, width=52, color_system=None)
         console.print(monitor.render(52, 32))
         rendered = output.getvalue()
         self.assertIn('Saved', rendered)
-        self.assertIn('run_agent', rendered)
+        self.assertIn('dispatch', rendered)
         self.assertIn('Reconnecting', rendered)
         self.assertTrue(all(len(line) <= 52 for line in rendered.splitlines()))
         monitor.update({'coin': {**base, 'busy': False, 'live': {}}})

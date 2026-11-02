@@ -137,7 +137,7 @@ def maintenance_history(where, task, main, *, include_worktree=False):
             return False
         if path.startswith(prefix) and path.endswith('.md'):
             return True
-        return task['role'] == 'operator' and rules and matches(path, rules.get('non_code', []))
+        return task['role'] in ('operator', 'first-responder') and rules and matches(path, rules.get('non_code', []))
 
     head = git.head(repo, task['branch'])
     for commit in git.run(repo, 'rev-list', f'{main}..{head}').splitlines():

@@ -51,9 +51,13 @@ def coin_view():
 
 KT_STARTUP = "Knowledge-tree startup:"
 TOOL_HISTORY: dict[str, dict] = {}  # private recovery-cache mirrors, never task authority
+COIN_HISTORY = ('coin', 'conversation', None)
 
 
 def _history_owner(agent):
+    if agent == 'coin':
+        # One cycle at a time; the record's conversation digest binds it to one user's transcript.
+        return COIN_HISTORY
     task = L['tasks'].get((L['agents'].get(agent) or {}).get('task'))
     if task and task.get('agent') == agent and task['status'] == 'running':
         return agent, task['id'], task.get('record_version', 1)
@@ -70,6 +74,8 @@ def _prepare_tool_history(agent, model, conversation, rendered):
     if owner is None:
         return rendered
     def owner_of(cached_owner):
+        if cached_owner == COIN_HISTORY:
+            return cached_owner
         with LOCK:
             task = L['tasks'].get(cached_owner[1])
             # During startup, durable task ownership precedes process adoption.

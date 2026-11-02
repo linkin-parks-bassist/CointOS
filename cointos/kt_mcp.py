@@ -17,7 +17,6 @@ SERVER = Path.home() / ".knowledge/.tools/kt-mcp"
 CLOSE_SECONDS = load_config()["timeouts"]["mcp_close_seconds"]
 PROTOCOL = "2025-06-18"
 # Knowledge-root access changes are the user's decision at a terminal, not Coin's.
-EXCLUDED = {"kt_access_request", "kt_access_confirm", "kt_access_revoke"}
 
 
 def _send(session: dict, message: dict) -> None:
@@ -72,7 +71,7 @@ def open_session(project: Path) -> dict | None:
     """Start kt-mcp rooted at `project`, or return None so Coin stays available without it."""
     if not SERVER.is_file():
         return None
-    return connect(["python3", str(SERVER)], project, {**os.environ, "KT_MCP_PROJECT_DIR": str(project)}, EXCLUDED)
+    return connect(["python3", str(SERVER)], project, {**os.environ, "KT_MCP_PROJECT_DIR": str(project)})
 
 
 def call(session: dict, name: str, arguments: dict, timeout: float | None = None) -> dict:

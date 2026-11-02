@@ -129,7 +129,7 @@ class Turn(unittest.TestCase):
                 coin.worker("token", inbox, {7})
         self.assertEqual(self.reports, [(False, None), (True, None), (False, None)])
 
-    def test_the_prompt_is_fixed_and_carries_only_the_kt_tools_coin_needs(self):
+    def test_the_prompt_is_fixed_and_carries_every_kt_tool(self):
         knowledge = {"names": {"kt_read", "kt_init"}, "tools": [
             {"type": "function", "function": {"name": "kt_read"}},
             {"type": "function", "function": {"name": "kt_init"}}]}
@@ -138,8 +138,7 @@ class Turn(unittest.TestCase):
         self.assertEqual(first[0][0][0], second[0][0][0])
         self.assertEqual(first[0][1]["tools"], second[0][1]["tools"])
         names = {t["function"]["name"] for t in first[0][1]["tools"]}
-        self.assertIn("kt_read", names)
-        self.assertNotIn("kt_init", names)
+        self.assertLessEqual({"kt_read", "kt_init"}, names)
 
     def test_plain_content_is_sent_and_ends_the_turn(self):
         self.run_turn([assistant(content="Morning.")], texts=["hi"])
@@ -275,15 +274,16 @@ class Controls(unittest.TestCase):
             coin.complete("fixture", messages, timeout=1)
         rendered = captured[0]["messages"]
         self.assertEqual(rendered[0], messages[0])
-        self.assertEqual([m["content"] for m in rendered[1:-1]],
+        self.assertEqual([m["content"] for m in rendered[1:]],
                          ["old request", "Checking.", "green", "undated"])
         self.assertEqual(rendered[2]["tool_calls"], messages[2]["tool_calls"])
         self.assertEqual(rendered[3]["tool_call_id"], "identity")
-        self.assertEqual(rendered[-1]["role"], "user")
+        times = coin.message_times(messages, 0)
         for line in ["Message 2 (user): 1970-01-01T00:00:00+00:00",
                      "Message 3 (assistant): 1970-01-01T00:00:01+00:00",
                      "Message 4 (tool): 1970-01-01T00:00:02+00:00", "Message 5 (user): unknown"]:
-            self.assertIn(line, rendered[-1]["content"])
+            self.assertIn(line, times)
+        self.assertNotIn("Message 2 (user)", coin.message_times(messages, 2))
         self.assertFalse(any("at" in entry for entry in rendered))
         self.assertEqual(messages, original)
 

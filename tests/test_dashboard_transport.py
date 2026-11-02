@@ -209,21 +209,21 @@ const wrap = {querySelector: name => name === '.live' ? viewport : button};
 const context = {setHTML: (el, value) => { el.innerHTML = value; }};
 vm.createContext(context);
 vm.runInContext(html.slice(html.indexOf('function updateLivePreview('), html.indexOf('// Balance rows')), context);
-context.updateLivePreview(wrap, 'a'.repeat(1000), true);
+context.updateLivePreview(wrap, 'a'.repeat(1000));
 assert.equal(top, 900);
 viewport.scrollTop = 300; events.scroll();
 assert.equal(button.hidden, false);
-context.updateLivePreview(wrap, 'b'.repeat(1500), true);
+context.updateLivePreview(wrap, 'b'.repeat(1500));
 assert.equal(output.innerHTML, 'a'.repeat(1000), 'stream updates preserve the snapshot being read');
 assert.equal(top, 300);
-context.updateLivePreview(wrap, '', true);
+context.updateLivePreview(wrap, '');
 assert.equal(output.innerHTML, 'a'.repeat(1000), 'a cleared stream preserves the snapshot too');
-context.updateLivePreview(wrap, 'latest'.repeat(300), true);
+context.updateLivePreview(wrap, 'latest'.repeat(300));
 button.onclick({preventDefault() {}, stopPropagation() {}});
 assert.equal(output.innerHTML, 'latest'.repeat(300));
 assert.equal(top, 1700);
 assert.equal(button.hidden, true);
-context.updateLivePreview(wrap, 'newest'.repeat(400), true);
+context.updateLivePreview(wrap, 'newest'.repeat(400));
 assert.equal(top, 2300, 'live following resumes');
 """
         subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],

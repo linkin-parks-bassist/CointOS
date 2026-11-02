@@ -298,9 +298,9 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
                     measured = memory.measure()
                     L['memory'].update(measured, headroom_gb=memory.headroom_gb(
                         CONFIG, measured, BACKEND.budget(CONFIG)))
-                    enough = capacity.headroom_gb(owner) >= need
+                    enough = capacity.headroom_gb(owner) + capacity.conversation_cache_gb(owner) >= need
                     if not enough:
-                        snapshots.make_room(need, resident_owner=owner, claim=False)
+                        snapshots.make_room(need, resident_owner=owner, claim=False, cache_owner=owner)
                 if enough:
                     break
                 snapshot_cleanup.drain('memory', wait=True)
@@ -469,7 +469,7 @@ def worker(position: int) -> None:
                 BACKEND.prefill(CONFIG, model, index, upto, held)
                 prefill_measurement = (len(upto) - held, time.monotonic() - prefill_started)
                 if keep_shared:  # the start other contexts share: save it once, for all of them
-                    snapshots.keep_shared(position, upto)
+                    snapshots.keep_shared(position, upto, thought['owner'])
                 elif prefix is not None:
                     snapshots.keep(position, upto, thought['owner'], 'prefix')
                 elif len(upto) == checkpoint_at and snapshots.live(thought["owner"]):

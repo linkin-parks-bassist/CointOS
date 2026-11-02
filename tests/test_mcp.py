@@ -134,9 +134,9 @@ class Tools(unittest.TestCase):
         self.assertNotIn("land", self.names("worker"))
         self.assertTrue({"finish", "task", "send", "inbox"} <= self.names("worker"))
         self.assertEqual(mcp.invoke("land", {"summary": "x"}, "worker"), ("unknown tool 'land' for this role", True))
-        self.assertIn("operator", self.names("manager"))
-        self.assertIn("operator", self.names("steward"))
-        self.assertNotIn("operator", self.names("worker"))
+        self.assertIn("dispatch", self.names("manager"))
+        self.assertIn("dispatch", self.names("steward"))
+        self.assertNotIn("dispatch", self.names("worker"))
         self.assertIn('handoff', self.names('manager'))
         self.assertIn('correct_tests', self.names('manager'))
         self.assertTrue({'correct_tests', 'resume', 'replace'} <= self.names('operator'))
@@ -182,7 +182,7 @@ class Tools(unittest.TestCase):
         lifecycle.fail(worker, "contract mismatch")
         with patch.object(spawner, "tree_work", return_value=[]), patch.object(spawner, "periodic", return_value=[]):
             recovery = spawner.next_task()
-        self.assertEqual(recovery["kind"], "operator")
+        self.assertEqual(recovery["kind"], "first-response")
         self.assertNotEqual(recovery["id"], worker["record"])
         api.dispatch("revise", {"item": worker["id"], "brief": "Corrected assignment\nDepends on: plan",
                                 "reason": "The user corrected the false premise"})

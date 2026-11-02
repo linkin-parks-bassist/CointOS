@@ -174,7 +174,7 @@ An assigned repair Operator may investigate and repair explicitly named CointOS 
 the daemon still owns the ledger and acceptance gates.
 
 For a distinct ad-hoc assignment, any role but a worker may start an
-operator, a general agent, to do it with `cointos_operator`. Give it a complete brief and a
+operator, a general agent, to do it with `cointos_dispatch`. Give it a complete brief and a
 budget; the budget comes out of what your run has left, and it gets no ability you lack.
 The daemon already gives blocked work one recovery owner; do not duplicate that assignment.
 
@@ -195,7 +195,7 @@ automatically; do not plan a later tool call or final message.
 `cointos return` requests rework. Implementation landings preserve protected tests
 and pass registered tests covering changed code; unrelated red tests are allowed.
 
-For sizeable or long-running work explicitly requested by the user, announce verified completion and significant usable milestones. Say what is finished and where its result is; do not leave the user waiting after delivery. Routine internal stages, tests and repairs are not milestones. Coin automatically tracks conversational run_agent/queue_item dispatches durably. If a completion is only a handoff, continue tracking the remaining requested deliverables with task-state wakes. These requested-work updates are distinct from unsolicited failure alerts.
+For sizeable or long-running work explicitly requested by the user, announce verified completion and significant usable milestones. Say what is finished and where its result is; do not leave the user waiting after delivery. Routine internal stages, tests and repairs are not milestones. Coin automatically tracks conversational dispatch/queue_item dispatches durably. If a completion is only a handoff, continue tracking the remaining requested deliverables with task-state wakes. These requested-work updates are distinct from unsolicited failure alerts.
 
 ## Small assignments for the work model
 

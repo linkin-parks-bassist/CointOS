@@ -60,6 +60,19 @@ class LiveInstallBoundaryTests(unittest.TestCase):
         native.assert_not_called()
         self.assertEqual(path.read_bytes(), before)
 
+    def test_retained_model_recipes_alone_do_not_replace_the_daemon(self):
+        environment = self.install.__globals__
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = Path(directory, 'source'), Path(directory, 'target')
+            settings = {'work_model': 'q', 'models': {'q': {'lanes': 1}}, 'other': 1}
+            for root, document in ((source, settings), (target, {**settings, 'models': {**settings['models'], 'found': {'lanes': 1}}})):
+                (root / 'config').mkdir(parents=True)
+                (root / 'config/cointos.json').write_text(json.dumps(document))
+            with mock.patch.dict(environment, source=source, target=target):
+                self.assertFalse(environment['daemon_changed']())
+                (source / 'config/cointos.json').write_text(json.dumps({**settings, 'other': 2}))
+                self.assertTrue(environment['daemon_changed']())
+
     def test_alias_migration_requires_stopped_daemon_even_when_runtime_bytes_match(self):
         self.write_installed_config(config.load())
         ledger = self.alias_ledger()

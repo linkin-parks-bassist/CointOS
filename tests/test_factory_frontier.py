@@ -21,7 +21,7 @@ class Frontier(unittest.TestCase):
         worker = support.queued(self.project, 'build')
         lifecycle.fail(worker, 'The independent test contradicts the contract')
         repair = spawner.next_task()
-        self.assertEqual(repair['role'], 'operator')
+        self.assertEqual(repair['role'], 'first-responder')
         self.assertEqual(repair['repair_origin'], {'task': worker['id'], 'version': 1})
         self.assertEqual(repair['abilities'], list(schema.ABILITIES))
         for source in (worker, queues.records()[worker['record']]):

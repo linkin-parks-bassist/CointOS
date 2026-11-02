@@ -435,7 +435,7 @@ class Simulation:
         if self.fault.intersection(('worker_blocked', 'manager_unresolved')):
             assert not spawner.integrations(), "blocked worker consumed an unnecessary integrator run"
             manager = spawner.next_task()
-            assert manager and manager["kind"] == "operator", "blocked worker stranded without recovery controller"
+            assert manager and manager["kind"] == "first-response", "blocked worker stranded without recovery controller"
             assert spawner.next_task() is manager, "duplicate recovery controller"
             self.start(manager, "manager")
             if 'manager_unresolved' in self.fault:
@@ -1192,7 +1192,7 @@ print(json.dumps(refused))
             ready = {'sim': queues.readiness(scanned['sim'], set())}
             spawner.repair_work(scanned)
             controller = tasks.request_repair(w)[0]
-            assert controller and controller['role'] == 'operator', 'blocked contract lacked recovery ownership'
+            assert controller and controller['role'] == 'first-responder', 'blocked contract lacked recovery ownership'
             return 'hidden-blocked-review-to-controller'
         if 'hidden_rejected_review' in self.fault:
             lifecycle.returned(integration, 'integrator', 'repair contract ownership and assertion')
@@ -1759,7 +1759,7 @@ print(json.dumps(refused))
         repairs = [t for t in state.L['tasks'].values() if t.get('repair_origin')]
         assert len(repairs) == 1, 'failure did not create exactly one broad repair'
         repair = repairs[0]
-        assert repair['budget'] == tasks.schema.budget(state.CONFIG, role='operator'), 'repair inherited exhausted source budget'
+        assert repair['budget'] == tasks.schema.budget(state.CONFIG, role='first-responder'), 'repair inherited exhausted source budget'
         assert set(repair['abilities']) == set(tasks.schema.ABILITIES), 'repair lacks independent broad abilities'
         # Keep the real retirement/obsolescence pass in this coverage: ordinary
         # pending records must survive it without exceptions or lost ownership.

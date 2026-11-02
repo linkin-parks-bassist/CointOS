@@ -249,7 +249,7 @@ class PeriodicSteward(unittest.TestCase):
         with patch.dict(state.CONFIG, spawner={**state.CONFIG["spawner"], "steward_every_seconds": 10}):
             task = spawner.next_task()
             self.assertTrue(spawner.periodic(), "recovery ownership does not suppress periodic discovery")
-        self.assertEqual(task["kind"], "operator")
+        self.assertEqual(task["kind"], "first-response")
         found = queues.state(state.L["queue"]["p:dead"])
         self.assertEqual(found["status"], "blocked")
         self.assertIn("Task failed", found["blocker"])

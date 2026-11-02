@@ -40,6 +40,20 @@ def flags(arguments: dict, names: dict) -> list[str]:
     return argv
 
 
+def dispatch_argv(a: dict) -> list[str]:
+    """The same tool Coin has. The CLI names this run as the caller, and the daemon decides."""
+    station = a.get("station") or {}
+    argv = ["agent", "run", a["name"], a["brief"]] + flags({**a, **station}, {
+        "project": "--project", "role": "--role", "task": "--task", "stage": "--stage", "directory": "--directory",
+        "reasoning_effort": "--reasoning-effort", "generation_seconds": "--generation-seconds",
+        "generation_tokens": "--generation-tokens"})
+    for ability in a.get("abilities") or []:
+        argv += ["--ability", ability]
+    for tool in station.get("tools") or []:
+        argv += ["--tool", tool]
+    return argv
+
+
 QUEUE_FIELDS = {
     "dependencies": {"type": "array", "items": {"type": "string"},
                      "description": "prerequisite item IDs, optionally PROJECT:ITEM; [] means none"},
@@ -64,10 +78,10 @@ WORK = {"stage": choice(cli.schema.STAGES, "construction stage of a worker item"
 WORK_FLAGS = {"stage": "--stage", "reasoning_effort": "--reasoning-effort"}
 
 MANAGERS = ("manager",)
-REPAIRERS = MANAGERS + ("operator",)
+REPAIRERS = MANAGERS + ("operator", "first-responder")
 SCOUTS = ("steward", "test-auditor")
 LANDERS = ("manager", "gardener", "tree-auditor", "operator")
-SPAWNERS = ("manager", "integrator", "steward", "test-auditor", "gardener", "tree-auditor", "operator")
+SPAWNERS = ("manager", "integrator", "steward", "test-auditor", "gardener", "tree-auditor", "operator", "first-responder")
 EVERYONE = None
 
 
@@ -144,7 +158,7 @@ TOOLS = {
                      lambda a: ['correct-tests', a['project'], a['packet'], a['name'], a['brief'],
                                 '--reason', a['reason'], '--summary', a['summary'],
                                 '--relies-on-json', json.dumps(a['relies_on'])]),
-    'resume': (('operator',), 'Release a repaired infrastructure admission hold in your scope. '
+    'resume': (('operator', 'first-responder'), 'Release a repaired infrastructure admission hold in your scope. '
                'Explicit user holds remain under user authority.', {'task': text('PROJECT:TASK')}, ['task'],
                lambda a: ['resume', a['task']]),
     "check_work": (REPAIRERS + SCOUTS + ("integrator", "worker"),
@@ -176,7 +190,7 @@ TOOLS = {
                {"items": {"type": "array", "items": {"type": "string"}, "description": "PROJECT:ITEM ids"},
                 "reason": text("why")}, ["items", "reason"],
                lambda a: ["cancel", *a["items"], "--reason", a["reason"]]),
-    "replace": (("operator",), "Hand this recovery controller's origin to existing same-project queue items, "
+    "replace": (("operator", "first-responder"), "Hand this recovery controller's origin to existing same-project queue items, "
                 "repointing dependents and recording your complete receipt atomically, without duplicating work. "
                 "Commit and merge your own changes first. This ends your run; no separate finish call is needed. "
                 "Revising another item alone does not establish this handoff.",
@@ -188,12 +202,7 @@ TOOLS = {
                   lambda a: ["supersede", a["task"], *a["replacements"], "--reason", a["reason"]]),
     "budget": (REPAIRERS, "Set waiting or undispatched generation limits, or increase a running task's allowance without resetting usage.",
                {"task": text("PROJECT:TASK"), **BUDGET}, ["task"], lambda a: ["budget", a["task"]] + flags(a, BUDGET_FLAGS)),
-    "operator": (SPAWNERS, "Start an operator: a general agent for work the pipeline has no route for. Its budget "
-                 "comes out of what this run has left, and it gets no ability this run lacks.",
-                 {"name": text("short operator name"), "brief": text("its complete assignment"),
-                  "project": text("project it works in; omit for system scope"), **BUDGET},
-                 ["name", "brief", "generation_tokens", "generation_seconds"],
-                 lambda a: ["agent", "run", a["name"], a["brief"]] + flags(a, {"project": "--project", **BUDGET_FLAGS})),
+    "dispatch": (SPAWNERS, cli.schema.DISPATCH_DESCRIPTION, cli.schema.DISPATCH_PROPERTIES, ["name", "brief"], dispatch_argv),
 }
 
 
