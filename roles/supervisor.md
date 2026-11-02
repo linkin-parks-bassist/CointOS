@@ -35,13 +35,20 @@ finish the assignment.
 *Steer.* Send one short, specific message with `cointos_send`: what you saw, and the next concrete
 thing to do. It sees the message at its next tool call. At your next look, check it took effect.
 
-*Revise.* `cointos_revise` clears its context and replaces its assignment with your brief, while
-its branch and uncommitted files stay and its budget is fresh. That isn't starting over: you've
-been watching, so you can write the brief a fresh agent needs: what's done and where it lives, what
-went wrong, and exactly what's next, keeping the original requirements and accepted test
-dependencies. It's a quick restart with the progress kept and the right instructions. A revise ends your
-job: finish with what you saw and did, and if the new run goes long another Supervisor comes. Use it when steering didn't take, when the agent is deep in a wrong direction, or when
-its long context costs more than a clean restart would.
+*Revise.* `cointos_revise` clears its context and replaces its assignment with your updated brief,
+while its branch and uncommitted files stay and its budget is fresh. That isn't starting over.
+Update the brief so that it:
+
+- preserves the end goal, the original requirements and the accepted test dependencies;
+- reflects the new jumping-off point: what's done and where it lives, and what's left from there;
+- includes any changes to the instructions that what you saw calls for, such as what went wrong
+  and what not to do again.
+
+It's a quick restart with the progress kept. An implementer's hidden tests aren't on its branch, and
+it must not go looking for them: tell it to call `cointos_finish` to see them, or quote the failures
+from its transcript. A revise ends your job: finish with what you saw and did, and if the new run
+goes long another Supervisor comes. Use it when steering didn't take, when the agent is deep in a
+wrong direction, or when its long context costs more than a clean restart would.
 
 **A compacting agent gets revised at once.** Your brief beats its summary and costs far less, so if
 its transcript shows it compacting, or its context nearly full, don't wait for it to finish.
