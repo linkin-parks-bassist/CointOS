@@ -1,12 +1,12 @@
 ---
 status: green
-revised_at: "2026-11-02T12:49:51+11:00"
+revised_at: "2026-11-02T18:13:44+11:00"
 ---
 
 Current accidental capability gaps, from source and per-run agent logs. These are defects or friction, not user policy; they are separate from the deliberate guards in what/are/the/cointos/agent/capability/requirements.md.
 
 - **kt writes:** branch-publishing confinement omits `~/.knowledge/.tools` and `~/.local/state/knowledgetrees`; `kt_add`/`kt_rewrite` fail with EACCES. The edit allowlist covers only the worktree, so knowledge edits resolving to canonical paths are also denied.
-- **Operators:** ad-hoc operators default to `standard`; standard operators cannot queue, correct tests, resume or replace, and project operators cannot publish product code. Verified product fixes can be stranded with no worker/integrator handoff. Recovery operators receive all abilities; ordinary operators do not.
+- **Operators:** ad-hoc operators default to `standard`; standard operators cannot queue, correct tests, resume or replace, and project operators cannot publish product code. Verified product fixes can be stranded with no worker/integrator handoff. First Responders receive all abilities; ordinary operators do not.
 - **Compaction:** OpenCode summary generation rejects tool calls, ending runs without receipts (`Tool call not allowed while generating summary`).
 - **Read-only denials:** blanket `systemctl`/`dpkg`/lifecycle patterns deny `systemctl status|cat|is-active|list-units`, `dpkg -l` and `cointos resume|kill --help`.
 - **Installation/toolchain:** there is no `sudo`/`apt`/pip/npm-g capability; required tools such as verilator must be installed by the user. Landlock also omits ordinary caches (`~/.cache`, cargo/npm/pip caches) and canonical build checkouts.

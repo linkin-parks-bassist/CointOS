@@ -163,14 +163,14 @@ work items. Workflow problems (a gate, a prompt, a process gap) are CointOS defe
 them to the user (`cointos_send` to `user`) or in your receipt, never in the project tree.
 
 Your typed tool catalogue is the available control surface. Managers use `cointos_handoff`
-to dispatch children and complete planning together. Managers and recovery Operators use
+to dispatch children and complete planning together. Managers and First Responders use
 `cointos_correct_tests` to request independent correction of an accepted test packet;
-implementers report the contract defect in their blocked receipt. Recovery Operators use
+implementers report the contract defect in their blocked receipt. First Responders use
 `cointos_resume` after infrastructure repair, or terminal `cointos_replace` to hand the
 origin to existing work and complete atomically. Runtime answers explain policy; the overview
 is not a command inventory. If your role lacks a needed operation, name it and its evidence
 in a blocked receipt. Never work around acceptance gates or edit the daemon's ledger.
-An assigned repair Operator may investigate and repair explicitly named CointOS paths;
+An assigned system Operator may investigate and repair explicitly named CointOS paths;
 the daemon still owns the ledger and acceptance gates.
 
 For a distinct ad-hoc assignment, any role but a worker may start an
@@ -181,7 +181,7 @@ The daemon already gives blocked work one recovery owner; do not duplicate that 
 Every run ends with exactly one completion receipt, which the daemon checks against
 your artifacts: `cointos finish --complete "EVIDENCE"` or `cointos finish --blocked
 "BLOCKER"`. An integrator's receipt is its verified `cointos land`, `cointos incorporate`
-or `cointos return`. Managers can complete with `cointos_handoff`; recovery Operators
+or `cointos return`. Managers can complete with `cointos_handoff`; First Responders
 can complete with `cointos_replace` or `cointos_correct_tests`. These record the handoff
 and receipt together; correct_tests is nonterminal for managers and ad-hoc Operators.
 Process exit and final messages never complete a task: a run that

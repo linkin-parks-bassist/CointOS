@@ -190,7 +190,7 @@ TOOLS = {
                {"items": {"type": "array", "items": {"type": "string"}, "description": "PROJECT:ITEM ids"},
                 "reason": text("why")}, ["items", "reason"],
                lambda a: ["cancel", *a["items"], "--reason", a["reason"]]),
-    "replace": (("operator", "first-responder"), "Hand this recovery controller's origin to existing same-project queue items, "
+    "replace": (("operator", "first-responder"), "Hand this First Responder's origin to existing same-project queue items, "
                 "repointing dependents and recording your complete receipt atomically, without duplicating work. "
                 "Commit and merge your own changes first. This ends your run; no separate finish call is needed. "
                 "Revising another item alone does not establish this handoff.",

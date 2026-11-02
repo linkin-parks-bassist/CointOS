@@ -259,7 +259,7 @@ def replace(body):
     """Atomically hand recovery to existing children and complete its controller."""
     task, run = caller(body)
     if task is None or not task.get('repair_origin'):
-        raise ApiError('only a running recovery controller replaces its origin')
+        raise ApiError('only a running First Responder replaces its origin')
     receipt = task.get('receipt')
     if receipt and receipt['run'] == run:
         if (receipt['disposition'] != 'complete' or 'replacement' not in receipt['evidence']
@@ -316,7 +316,7 @@ def correct_tests(body):
     project = tasks.project_named(body.get('project', ''))
     running(body)
     if by is not None and not controls_project(by, project['name']):
-        raise ApiError('test-contract correction requires the owning manager or recovery controller')
+        raise ApiError('test-contract correction requires the owning manager or First Responder')
     before = deepcopy(L['queue']) if by and by.get('repair_origin') else None
     try:
         record = packets.propose(project, body['packet'], body['name'], body['brief'],

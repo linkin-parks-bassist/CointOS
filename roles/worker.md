@@ -70,7 +70,7 @@ Managers decide *what* should be done; you decide *how* and do it.
      tests against your committed code: if any fail, the command fails and shows you those
      tests and their output, and you keep working. Fix the code, commit, and finish again.
      Three refusals of the same clean committed candidate and acceptance inputs end with
-     a blocked receipt for the recovery Operator, preserving your branch. Empty commits do not
+     a blocked receipt for the First Responder, preserving your branch. Empty commits do not
      refill attempts. Correct the actual cause; do not repeatedly submit unchanged work.
      Existing/shared harness changes or reused commands make this check run the registered
      suite: an unchanged command name does not mean its assertions are unchanged.
@@ -96,7 +96,7 @@ Managers decide *what* should be done; you decide *how* and do it.
    project-wide leaves; the integrator maintains the project's tree and plan. If
    implementation exposes more stages, report their boundaries; do not silently grow this
    item or create its queue entries yourself. Then
-   stop. A blocked receipt goes directly to a recovery Operator who verifies its evidence and
+   stop. A blocked receipt goes directly to a First Responder who works out what went wrong and
    repairs or replaces the assignment. You do not land your work: the integrator reviews a complete commit and
    lands it, or sends it back to you with notes. Every completed test packet goes to the integrator for contract and witness review.
    Reviewed failing tests are accepted hidden and land later with code that passes them;

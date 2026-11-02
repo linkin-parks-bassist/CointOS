@@ -211,4 +211,4 @@ def budget_notice(task: dict) -> str:
             "same evidence. On exhaustion this run ends; its branch/files and a bounded evidence packet are "
             f"preserved. This role permits {schema.fresh_limit(CONFIG, task)} fresh budget retries; "
             "after those, unresolved work stays blocked unless an eligible canonical recovery or corrective handoff can advance it. "
-            "Exhausted recovery Operators receive no recursive repair; do not expand scope.")
+            "Exhausted First Responders receive no recursive repair; do not expand scope.")

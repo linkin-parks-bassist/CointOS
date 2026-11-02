@@ -223,10 +223,10 @@ def upgrade(ledger: dict, registry: list[dict]) -> dict:
                         and t["status"] in ("waiting", "running")]
         if any(t["status"] == "running" for t in integrations):
             continue
-        worker.update(status="failed", agent=None, note="blocked receipt awaits recovery controller")
+        worker.update(status="failed", agent=None, note="blocked receipt awaits First Responder")
         for integration in integrations:
             integration.update(status="failed", agent=None,
-                               note="blocked receipt routed directly to recovery controller")
+                               note="blocked receipt routed directly to First Responder")
     ledger.pop("incidents", None)
     for name in [n for n, snapshot in ledger.get("snapshots", {}).items() if snapshot.get("owner") == "coin"]:
         del ledger["snapshots"][name]

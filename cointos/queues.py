@@ -3,7 +3,7 @@
 A record holds what is asked for (brief, dependencies, stage, effort, budget, order, holds) and
 one terminal fact written once by the lifecycle: `done`. Everything else about its state is
 derived from its tasks by `state`, never stored: a record whose current task failed is blocked;
-a failed assignment has one recovery controller. `version` counts revisions of what
+a failed assignment has one First Responder. `version` counts revisions of what
 is asked; a task made for an older version no longer speaks for the record. All mutations run
 under the daemon lock; the runtime tree's queue leaves are a readable projection.
 """
@@ -79,7 +79,7 @@ def current(record: dict) -> dict | None:
 
 
 def blocker(task: dict) -> str:
-    """The original evidence for the assignment's recovery controller."""
+    """The original evidence for the assignment's First Responder."""
     receipt = task["receipt"] or {}
     report = (f"Assignment: {task['id']}\n\n{task['brief']}\n\n"
               f"Worker receipt: {receipt.get('summary', 'No completion receipt')}\n"
@@ -176,7 +176,7 @@ def readiness(items: list[dict], done: set[str]) -> dict[str, str]:
     """Each live item's readiness from its dependencies: "ready" once every item it depends on is
     done; "waiting" while any is still wanted; otherwise the problem that keeps it from ever
     becoming ready (an unknown or blocked dependency, or a cycle). A blocked dependency awaiting
-    its recovery controller keeps dependents waiting while that controller repairs the assignment.
+    its First Responder keeps dependents waiting while that controller repairs the assignment.
     Pending test corrections are admission prerequisites; the old acceptance stays immutable."""
     by_name = {item["item"]: item for item in items}
     edges = {item['item']: list(dict.fromkeys([*item.get('depends', []),

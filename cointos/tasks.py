@@ -17,7 +17,7 @@ through its lifecycle only by `cointos/lifecycle.py`. Its fields:
     stage, reasoning_effort, budget      pinned metadata; `stage` only for items
     prompt_date, system_context          fixed system-prefix identity (content is deduplicated in the ledger)
     abilities, spawned_by                an operator's permissions; the task whose run started it
-    replacements                         a recovery controller's replacement children
+    replacements                         a First Responder's replacement children
     repair_origin                        First Responder's originating task/record and version
     revision                             why and by whom its item was last revised
     review, rejections                   the integrator's latest return notes and their count

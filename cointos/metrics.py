@@ -58,7 +58,7 @@ def summary(entries: list[dict], hours: float) -> str:
     lines.append("Gate returns:         " + (", ".join(f"{s} {n}" for s, n in sorted(rejected.items())) or "none"))
     lines.append(f"Infeasible briefs:    {len(infeasible)} caught at dispatch before any worker ran")
     lines.append(f"Worker items started: {created['item']}")
-    lines.append(f"Recovery controllers: {repairs}")
+    lines.append(f"First Responders: {repairs}")
     lines.append(f"Legacy manager passes: {created['decompose']}")
     lines.append(f"Planning assignments: {created['breakdown']}")
     lines.append(f"Integrations:         {created['integrate']}")

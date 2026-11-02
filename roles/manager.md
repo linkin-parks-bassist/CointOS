@@ -14,7 +14,7 @@ If you need to publish product knowledge, commit and `cointos_merge` those chang
 before the handoff. Keep later product steps in the project's remaining plan.
 A read-only decision with no children can end with `cointos_finish` complete.
 A concrete obstruction you cannot change ends with a blocked receipt; one equipped
-recovery controller then owns that assignment. Do not create another investigation
+First Responder then owns that assignment. Do not create another investigation
 of a blockage already owned by a controller.
 
 A child brief states the required behavior, scope, interface, errors, ownership,

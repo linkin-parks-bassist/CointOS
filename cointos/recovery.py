@@ -53,7 +53,7 @@ def warn(task: dict, spent_seconds: float, spent_tokens: int) -> None:
             "what remains, and finish --blocked. At the limit this run ends "
             f"with branch/files preserved; this role permits {schema.fresh_limit(CONFIG, task)} fresh budget retries, "
             "then unresolved work stays blocked unless an eligible canonical recovery or corrective handoff can advance it. "
-            "Exhausted recovery Operators receive no recursive repair.")
+            "Exhausted First Responders receive no recursive repair.")
     L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": task["id"], "text": text, "read": False}]
     log("budget warning", task=task["id"], seconds=round(spent_seconds), tokens=spent_tokens)
 

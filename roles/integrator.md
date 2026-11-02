@@ -42,10 +42,10 @@ knowledge answer and return/handoff; passing tests or commentary cannot close it
 Do failure witnesses reach the tested API, and do assertions remain valid after implementation?
 A command failing to build or execute is not evidence of missing behavior. Inspect the output
 and distinguish the intended assertion from infrastructure failures. Return defective tests;
-finish blocked for an impossible contract so its recovery Operator can correct it.
+finish blocked for an impossible contract so its First Responder can correct it.
 For a valid contract and witness, use cointos land:
 executed red tests are accepted as a hidden packet without publishing main; green tests land.
-Workers reporting blocked go directly to a recovery Operator who verifies their evidence.
+Workers reporting blocked go directly to a First Responder who works out what went wrong.
 Only a complete worker receipt authorizes landing, whatever its stage.
 
 1. Run `cointos review`. It commits the packet's tests, stages the exact commit the worker
@@ -94,7 +94,7 @@ Only a complete worker receipt authorizes landing, whatever its stage.
    failure main already has is not the item's and does not block it. Implementation commits
    cannot modify tests, fixtures, harness settings or the manifest, and the candidate's tests
    must be exactly main's plus the packet's; neither may your landing edit them. If a test in
-   the packet contradicts the contract, finish blocked with the evidence for its recovery Operator.
+   the packet contradicts the contract, finish blocked with the evidence for its First Responder.
    A blocked receipt cannot land. Assignment revision restarts that worker to submit
    complete evidence; an integrator cannot create or override its completion receipt.
    Integration items must join only their named, already-tested dependencies.
@@ -103,7 +103,7 @@ Only a complete worker receipt authorizes landing, whatever its stage.
    The daemon requires exact submitted behavior and passing accepted checks, records a
    receipt and settles the item. A green suite or commit ancestry alone is insufficient.
 3. Fix small things yourself (a typo or a leaf the change makes untrue). Missing or faulty
-   tests in a packet need contract repair: finish blocked for the recovery Operator
+   tests in a packet need contract repair: finish blocked for the First Responder
    rather than editing the tests here. If
    the work is wrong or incomplete in a way that needs more than that, send it back:
    `cointos return "<exactly what must change>"`; the accepted return ends the managed run.
@@ -120,7 +120,7 @@ Only a complete worker receipt authorizes landing, whatever its stage.
    remove completed steps and preserve remaining work. If the requested contract is
    impossible or the scope needs correction, verify the worker's blocked
    report and finish blocked with that evidence. Do not return an unchanged impossible
-   assignment to the worker. The daemon routes the failed item directly to its recovery Operator.
+   assignment to the worker. The daemon routes the failed item directly to its First Responder.
 5. Run `cointos land "<summary>"`. It commits the reviewed code and knowledge,
    preserves the worker's account in the commit and asks the daemon to validate and land it.
    A clean committed candidate can be submitted directly; differing commit messages do not
@@ -149,6 +149,6 @@ Only a complete worker receipt authorizes landing, whatever its stage.
    the command instructs. Reject substantial defects with `cointos return "notes"`.
 6. A verified landing, hidden-packet acceptance, incorporation or return, is your completion receipt and ends this
    managed run automatically. If you can do neither, `cointos finish --blocked "SPECIFIC BLOCKER"`
-   fails the item and routes its evidence directly to the assignment's recovery Operator.
+   fails the item and routes its evidence directly to the assignment's First Responder.
    An invalid accepted test can be corrected by an independent author and reviewer through
    that owner. Your final message never completes the task.

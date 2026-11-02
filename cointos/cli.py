@@ -642,7 +642,7 @@ def parser() -> argparse.ArgumentParser:
     handing.add_argument('--items-json', type=json.loads, required=True)
     sub.add_parser("land", help="integrator: land the reviewed item").add_argument("summary")
     sub.add_parser("return", help="integrator: send the item back to its worker").add_argument("notes")
-    sub.add_parser("replace", help="recovery Operator: hand off to existing items and complete atomically").add_argument("children", nargs="+")
+    sub.add_parser("replace", help="First Responder: hand off to existing items and complete atomically").add_argument("children", nargs="+")
     incorporated = sub.add_parser("incorporate", help="integrator: settle an implementation already present on main")
     incorporated.add_argument("task", help="project:task in review")
     incorporated.add_argument("--commit", required=True, help="exact current main commit SHA")
@@ -665,7 +665,7 @@ def parser() -> argparse.ArgumentParser:
     queue.add_argument("--dependencies-json", type=json.loads, help="structured array of prerequisite item IDs")
     queue.add_argument("--relies-on-json", type=json.loads, help="structured array of existing API names")
     queue.add_argument("--summary", help="short dashboard description")
-    correcting = sub.add_parser('correct-tests', help='request independent test correction; atomically completes recovery controllers')
+    correcting = sub.add_parser('correct-tests', help='request independent test correction; atomically completes First Responders')
     for name in ('project', 'packet', 'name', 'brief'):
         correcting.add_argument(name)
     correcting.add_argument('--reason', required=True)

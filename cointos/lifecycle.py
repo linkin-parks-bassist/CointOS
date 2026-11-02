@@ -281,7 +281,7 @@ def _receive(task: dict, run: str | None, disposition: str, summary: str, found:
     note = f"{disposition}: {summary}"[:CONFIG["result_chars"]]
     record = queues.records().get(task["record"]) if task["record"] else None
     if task["kind"] == "item" and disposition == "blocked":
-        # The recovery controller owns brief repair and verifies the mismatch. An
+        # The First Responder owns brief repair and verifies the mismatch. An
         # integrator cannot repair it, so spending a review run first adds no
         # authority or artifact to this recovery path.
         _settle(task, "failed", note, receipt=receipt, result=summary)
@@ -682,7 +682,7 @@ def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
     branch and files, and the task continues in a new session (with a bounded evidence packet)
     whose first job is to establish where that work stands. Only that session can submit what
     the last one finished, or report what remains as a blocker. After the role's fresh retry limit
-    such sessions the task fails; a failed assignment reaches its recovery controller with the packet."""
+    such sessions the task fails; a failed assignment reaches its First Responder with the packet."""
     task = L["tasks"][L["agents"][agent_id]["task"]]
     fresh = task.get("fresh_retries", 0)
     if fresh >= schema.fresh_limit(CONFIG, task):
@@ -812,7 +812,7 @@ def receipt_delivered(task_id: str, agent_id: str) -> None:
 
 def refuse_dispatch(task: dict, reason: str) -> None:
     """A new task whose brief cannot be carried out as written fails before any run: its record
-    goes to its recovery controller like any other failed item."""
+    goes to its First Responder like any other failed item."""
     _settle(task, "failed", reason)
 
 

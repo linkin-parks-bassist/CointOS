@@ -33,7 +33,7 @@
   "telegram_seconds": 40
  },
  "dashboard": {
-  "live_chars": 600,
+  "live_chars": 20000,
   "live_hz": 10,
   "model_discovery_seconds": 15
  },

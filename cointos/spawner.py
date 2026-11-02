@@ -37,7 +37,7 @@ def refresh() -> tuple[dict, dict]:
 
 
 def repair_work(scanned: dict) -> None:
-    """Reconcile one repair Operator per unchanged failure, including taskless bad dependencies."""
+    """Reconcile one First Responder per unchanged failure, including taskless bad dependencies."""
     if L["paused"]:
         return
     for source in list(L["tasks"].values()):
