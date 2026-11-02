@@ -146,7 +146,7 @@ class Corrections(Project):
         self.assertEqual(queues.state(record)['status'], 'queued')
 
     def test_a_correction_handed_to_a_successor_still_rebinds_its_consumers(self):
-        record = queues.records()[f"p:{self.propose()['item']}"] if ':' not in self.propose()['item'] else queues.records()[self.propose()['item']]
+        record = queues.records()[self.propose()['item']]
         support.queued(self.project, 'successor', 'Finish the correction\nRelies on: a', stage='test-contract')
         lifecycle.replace(record, ['successor'], 'operator', 'handed on')
         self.assertEqual(queues.records()['p:successor']['correction'], record['correction'])

@@ -861,12 +861,29 @@ def recover_landings() -> int:
     return recovered
 
 
+def stand_down(supervisor: dict) -> None:
+    """A supervisor ends with its run: at once if unstarted, else after a short wrap-up."""
+    watched = L["tasks"].get(supervisor.get("supervises"))
+    if watched and tasks.active(watched):
+        return
+    if supervisor["status"] != "running":
+        cancel_task(supervisor, 'cointos', 'the run it was watching has ended')
+    elif "standing_down" not in supervisor:
+        supervisor["standing_down"] = now()
+        L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": supervisor["id"], "read": False,
+            "text": "The run you were watching has ended. Dispatch any follow-up it needs now, then finish."}]
+    elif now() - supervisor["standing_down"] >= CONFIG["recovery"].get("supervise_wrap_up_seconds", 120):
+        cancel_task(supervisor, 'cointos', 'the run it was watching has ended')
+
+
 def reconcile() -> None:
     """Retire caches whose conversations have ended and settled work's worktrees."""
     recover_landings()
     for task in list(L["tasks"].values()):
         if tasks.active(task) and frontier.obsolete(task):
             cancel_task(task, 'cointos', 'origin assignment revised by another owner')
+        if task["kind"] == "supervise" and tasks.active(task):
+            stand_down(task)
         if task.get("repair_origin") and task["status"] == "waiting" and not task["runs"]:
             origin = task["repair_origin"]
             source = L["tasks"].get(origin["task"])

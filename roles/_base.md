@@ -170,7 +170,11 @@ implementers report the contract defect in their blocked receipt. First Responde
 origin to existing work and complete atomically. Runtime answers explain policy; the overview
 is not a command inventory. Every agent has the queue, hold, revise, cancel, correct_tests, resume
 and dispatch tools: when you find the next step, take it yourself instead of reporting that
-someone else should. Never work around acceptance gates or edit the daemon's ledger.
+someone else should. Implementers alone cannot replace their own acceptance tests, and no agent
+raises its own budget. CointOS merges test packets onto main itself however old their base, so
+never queue a rebase; "do not merge" means two sides changed the same lines differently.
+The local main branch is the truth. A remote such as `origin` is usually far behind it, so never
+fetch from it or compare against it. Never work around acceptance gates or edit the daemon's ledger.
 An assigned system Operator may investigate and repair explicitly named CointOS paths;
 the daemon still owns the ledger and acceptance gates.
 

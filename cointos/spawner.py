@@ -116,6 +116,10 @@ def spawn() -> None:
             or not L["models"][CONFIG["work_model"]]["up"]
             or now() - L["user_last_thought"] < CONFIG["spawner"]["user_quiet_seconds"]):
         return
+    # A supervisor takes a slot at once, past max_agents, while memory allows it.
+    for task in [t for t in L["tasks"].values() if t["kind"] == "supervise" and t["status"] == "waiting"]:
+        if snapshots.make_room(capacity.agent_gb(task['id']), claim=False):
+            runs.start(task)
     while len(L["agents"]) < CONFIG["spawner"]["max_agents"]:
         task = next_task()
         if task is None:
@@ -332,6 +336,12 @@ def request_role(role: str, body: dict) -> dict:
         if responder is None:
             raise ValueError("a first-responder needs task: an assignment whose run went wrong")
         return responder
+    if role == "supervisor":
+        target = L["tasks"].get(body.get("task", ""))
+        if target is None or not tasks.active(target):
+            raise ValueError("a supervisor needs task: a live agent's task to look at")
+        return tasks.request_supervisor(target, schema.spent(L["agents"][target["agent"]])["generation_seconds"]
+                                        if target.get("agent") in L["agents"] else 0)
     effort = {"reasoning_effort": body["reasoning_effort"]} if body.get("reasoning_effort") else {}
     if role in ("steward", "test-auditor"):
         return tasks.create(kind, tasks.SYSTEM, body["name"], body["brief"], [schema.KINDS[kind]["rank"]], budget=body.get("budget"), **effort)

@@ -14,6 +14,7 @@
  "classes": [
   "coin",
   "user",
+  "supervisor",
   "background"
  ],
  "coin": {
@@ -134,15 +135,22 @@
    "first-responder": {
     "generation_seconds": 1800,
     "generation_tokens": 30000
+   },
+   "supervisor": {
+    "generation_seconds": 600,
+    "generation_tokens": 12000
    }
   },
   "role_fresh_retries": {
    "first-responder": 0,
+   "supervisor": 0,
    "integrator": 0,
    "manager": 0,
    "operator": 0,
    "worker": 0
   },
+  "supervise_every_seconds": 1800,
+  "supervise_wrap_up_seconds": 120,
   "warning_fraction": 0.75
  },
  "reserved_lanes": [],

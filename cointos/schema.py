@@ -37,6 +37,8 @@ KINDS = {
                  "receipts": ("complete", "blocked"), "lands": "merge"},
     "first-response": {"role": "first-responder", "rank": 1, "scope": "either", "record": False,
                        "receipts": ("complete", "blocked"), "lands": "merge"},
+    "supervise": {"role": "supervisor", "rank": 1, "scope": "system", "record": False,
+                  "receipts": ("complete", "blocked"), "lands": None},
 }
 
 # Roles holding queue and lifecycle controls over a project's work.
@@ -61,13 +63,14 @@ DISPATCH_DESCRIPTION = (
     "Start an agent of any role. The brief is everything it will know. operator (the default) does one direct job "
     "with explicit scope, station, abilities, reasoning and budget. manager breaks a project goal into small work; "
     "worker does one small piece in a project, at stage. integrator lands the reviewed work named by task. "
-    "first-responder works out what went wrong with the failed run named by task and dispatches the fix. gardener "
+    "first-responder works out what went wrong with the failed run named by task and dispatches the fix. "
+    "supervisor reads the transcript of the running agent named by task and steers it. gardener "
     "and tree-auditor tend the tree named by project. steward and test-auditor take the brief across the system. "
     "What you may start depends on who you are, and a refusal says why.")
 DISPATCH_PROPERTIES = {
     **AGENT_PROPERTIES,
     "role": {"type": "string", "enum": sorted({kind["role"] for kind in KINDS.values()})},
-    "task": {"type": "string", "description": "for integrator: the reviewed worker task; for first-responder: the failed task"},
+    "task": {"type": "string", "description": "for integrator: the reviewed worker task; for first-responder: the failed task; for supervisor: the running task"},
     "stage": {"type": "string", "enum": ["skeleton", "test-contract", "implementation", "integration"], "description": "for worker: its construction stage"},
     "summary": {"type": "string", "description": "for worker: 5-20 plain words saying what the task is for, shown on the dashboard"},
     "dependencies": {"type": "array", "items": {"type": "string"}, "description": "for worker: prerequisite item IDs; [] means none"},

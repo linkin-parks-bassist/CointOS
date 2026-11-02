@@ -33,11 +33,12 @@ def start(task: dict) -> str:
         # leaves the task untouched; an unregistered follower exits without stopping
         # any unit. Keep the directory reserved, including failed admissions.
         threading.Thread(target=follow, args=(agent_id, dict(task), None), daemon=True).start()
-        keys.issue(agent_id, "background")
+        klass = "supervisor" if task["role"] == "supervisor" else "background"  # it takes the GPU at once
+        keys.issue(agent_id, klass)
         lifecycle.start(task, agent_id)
         L["agents"][agent_id] = {
             "id": agent_id, "role": task["role"], "place": task["place"], "task": task["id"], "title": task["title"],
-            "class": "background", "state": "starting", "pid": None, "url": None, "session": task["session"],
+            "class": klass, "state": "starting", "pid": None, "url": None, "session": task["session"],
             "doing": None, "thoughts": 0, "generated": 0, "engaged": False,
             "repeats": 0, "last_thought": None, "last_activity": now(),
             "started_at": now(), "stage": task["stage"], "reasoning_effort": task["reasoning_effort"]}

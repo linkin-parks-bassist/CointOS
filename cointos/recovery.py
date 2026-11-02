@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from cointos import git, lifecycle, opencode, schema
+from cointos import git, lifecycle, opencode, schema, tasks
 from cointos.state import CONFIG, L, log, now
 
 
@@ -32,9 +32,20 @@ def enforce() -> None:
         if not exhausted and not agent.get("budget_warned") and warned(task, spent_seconds, spent_tokens):
             agent["budget_warned"] = True
             warn(task, spent_seconds, spent_tokens)
+        if not exhausted:
+            supervise(task, agent, spent_seconds)
         if exhausted:
             reason = f"generation budget reached ({spent_seconds:.0f}s, {spent_tokens} tokens); branch and files preserved"
             lifecycle.retry_fresh(agent_id, reason, packet(agent_id, task, agent))
+
+
+def supervise(task: dict, agent: dict, spent_seconds: float) -> None:
+    """Every so much generation, someone looks at what a long run is actually doing."""
+    every = CONFIG["recovery"].get("supervise_every_seconds")
+    if not every or task["role"] == "supervisor" or spent_seconds < every * (agent.get("supervisions", 0) + 1):
+        return
+    agent["supervisions"] = agent.get("supervisions", 0) + 1
+    tasks.request_supervisor(task, spent_seconds)
 
 
 def warned(task: dict, spent_seconds: float, spent_tokens: int) -> bool:

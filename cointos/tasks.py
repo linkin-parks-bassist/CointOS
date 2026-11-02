@@ -245,6 +245,23 @@ def request_repair(source: dict) -> tuple[dict | None, bool]:
     return task, True
 
 
+def request_supervisor(target: dict, spent_seconds: float) -> dict:
+    """One supervisor looking at a running task: the live one, or a new one now."""
+    for task in L["tasks"].values():
+        if task["kind"] == "supervise" and task.get("supervises") == target["id"] and pending(task):
+            return task
+    brief = (f"{target['id']} ({target['role']}{', ' + target['name'] if target.get('name') else ''}) has spent "
+             f"{spent_seconds / 60:.0f} minutes generating. Look at what it is actually doing and steer it.\n"
+             f"Its assignment: cointos_task {target['id']}.\n"
+             f"Everything it thought, said and ran: cointos transcript {target['id']}.\n"
+             f"Message it with cointos_send to {target['id']}.")
+    task = create("supervise", SYSTEM, "supervise-" + queues.slug(target["id"]), brief,
+                  [schema.KINDS["supervise"]["rank"]], supervises=target["id"],
+                  reasoning_effort=CONFIG["reasoning"].get("manager", CONFIG["reasoning"]["default"]))
+    log("supervisor requested", task=task["id"], supervises=target["id"], seconds=round(spent_seconds))
+    return task
+
+
 def request_steward() -> tuple[dict, bool]:
     """The one system-wide loose-end scout: the live one, or a new one now."""
     existing = [t for t in L["tasks"].values() if t["kind"] == "steward" and pending(t)]
