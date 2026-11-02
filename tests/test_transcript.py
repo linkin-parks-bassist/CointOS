@@ -39,6 +39,30 @@ class Transcript(unittest.TestCase):
         self.assertIn("error: nope", text)
         self.assertNotIn("step-start", text)
 
+    def test_the_log_is_an_index_with_entries_by_number(self):
+        found = transcript.entries(self.database, ["s1"])
+        self.assertEqual([e["kind"] for e in found], ["user", "thought", "reply", "tool"])
+        self.assertEqual({e["turn"] for e in found[1:]}, {1})
+        index = transcript.view(found)
+        self.assertIn("#2 t1 thought", index)
+        self.assertIn("getting out of hand", transcript.view(found, show="2"))
+        self.assertNotIn("Do the job", transcript.view(found, show="2-3"))
+        only = transcript.view(found, kind="reply")
+        self.assertIn("#3", only)
+        self.assertNotIn("#2 ", only)
+        self.assertIn("#1", transcript.view(found, grep="the job"))
+
+    def test_coins_own_turns_read_the_same_way(self):
+        journal = self.root / "turns.jsonl"
+        journal.write_text("\n".join(json.dumps(row) for row in (
+            {"kind": "user", "content": "what was my squat"},
+            {"kind": "assistant", "reasoning": "check the log", "content": ""},
+            {"kind": "tool", "name": "fs_read", "input": {"path": "x"}, "output": "50x3"},
+            {"kind": "assistant", "content": "50x3"})) + "\nnot json\n")
+        found = transcript.coin_entries(journal)
+        self.assertEqual([e["kind"] for e in found], ["user", "thought", "tool", "reply"])
+        self.assertIn("fs_read", found[2]["text"])
+
     def test_a_missing_session_says_so(self):
         self.assertIn("no messages on record", transcript.render(self.database, ["gone"])[0])
 

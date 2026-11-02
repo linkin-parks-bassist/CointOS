@@ -224,6 +224,7 @@ class ConversationLoop(unittest.TestCase):
             coin.turn('fixture-token', 7, 70, ['What happened?'], lambda: [], None)
 
     def test_internal_wakes_do_not_displace_telegram_messages_from_the_agreed_window(self):
+        self.enterContext(patch.dict(coin.SETTINGS, history_messages=20, history_trim_messages=7))
         for i in range(19): coin.remember(7, 'assistant', 'Telegram ' + str(i), at=i+1)
         for i in range(30): coin.remember(7, 'user', '<cointos-wake>internal</cointos-wake>', at=i+100)
         self.assertEqual(len(coin.recent(7)), 19)

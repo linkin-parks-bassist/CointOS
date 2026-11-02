@@ -127,6 +127,14 @@ class Tools(unittest.TestCase):
         self.assertTrue(failed)
         self.assertIn('invented_target', output)
 
+    def test_the_log_tool_goes_to_supervisors_and_whoever_is_granted_it(self):
+        self.assertIn("log", self.names("supervisor"))
+        self.assertIn("log", self.names("first-responder"))
+        self.assertNotIn("log", self.names("gardener"))
+        with patch.dict(os.environ, COINTOS_TASK_ID="p:g"), \
+                patch.object(mcp, "ledger", return_value={"tasks": {"p:g": {"abilities": ["logs"]}}}):
+            self.assertIn("log", self.names("gardener"))
+
     def test_each_role_sees_its_own_tools(self):
         self.assertIn("queue", self.names("manager"))
         self.assertIn("land", self.names("integrator"))

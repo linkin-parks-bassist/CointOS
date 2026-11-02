@@ -766,9 +766,13 @@ def run_role(body, role):
                    "budget": body.get("budget"), "summary": body.get("summary"), "dependencies": body.get("dependencies"),
                    "relies_on": body.get("relies_on"), **({"caller": body["caller"]} if by else {})}
         item = queue(request)["item"]
+        if body.get("abilities"):
+            queues.records()[f"{body['project']}:{item}"]["abilities"] = schema.abilities(body["abilities"])
         return {"ok": True, "task": f"{body['project']}:{item}", "item": item}
     from cointos import spawner
     task = spawner.request_role(role, body)
+    if body.get("abilities"):
+        task["abilities"] = schema.abilities(body["abilities"])
     log("agent requested", task=task["id"], role=role)
     return {"ok": True, "task": task["id"]}
 

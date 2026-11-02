@@ -56,7 +56,8 @@ AGENT_PROPERTIES = {
     "station": {"type": "object", "additionalProperties": False, "description": "Where the agent works and what it can reach. Omit for no project: the runtime with standard tools.", "properties": {
         "directory": {"type": "string", "description": "An existing directory to work in; its writes are confined there. Not combined with project."},
         "tools": {"type": "array", "items": {"type": "string"}, "description": "Configured MCP servers it can use beyond the standard tools, from mcp_tools, or * for all."}}},
-    "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network"]}},
+    "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network", "logs"]},
+                  "description": "logs gives any role the log tool, to read agents' records and yours; Operators also use control and network."},
     "reasoning_effort": {"type": "string", "enum": ["low", "medium", "xhigh"]},
     "generation_seconds": {"type": "number"}, "generation_tokens": {"type": "integer"}, "input_ids": INPUT_IDS}
 DISPATCH_DESCRIPTION = (
@@ -83,7 +84,7 @@ STAGES = ("skeleton", "test-contract", "implementation", "integration")
 # Stages whose code travels with a test packet: the accepted test-contract items they depend on.
 TESTED = ("implementation", "integration")
 EFFORTS = ("low", "medium", "xhigh")
-ABILITIES = ("standard", "control", "network")
+ABILITIES = ("standard", "control", "network", "logs")
 BUDGET_KEYS = ("generation_seconds", "generation_tokens")
 
 
@@ -135,5 +136,5 @@ def spent(agent: dict) -> dict:
 def abilities(value) -> list[str]:
     chosen = list(dict.fromkeys(value or ["standard"]))
     if not chosen or any(ability not in ABILITIES for ability in chosen):
-        raise ValueError("abilities must be standard, control and/or network")
+        raise ValueError("abilities must be standard, control, network and/or logs")
     return chosen

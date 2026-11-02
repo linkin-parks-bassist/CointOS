@@ -226,8 +226,8 @@ def queued_work(scanned: dict, ready: dict) -> list:
 def dispatch(kind: str, project: dict, record: dict, rank: list) -> dict | None:
     """Create a queue record's task. A test-contract brief whose `Relies on:` APIs are absent
     from main is refused at once (None), before any worker spends generation on it."""
-    task = tasks.create(kind, project, record["item"], record["brief"], rank,
-                        item=record["item"], record_version=record["version"])
+    task = tasks.create(kind, project, record["item"], record["brief"], rank, item=record["item"],
+                        record_version=record["version"], **({"abilities": record["abilities"]} if record.get("abilities") else {}))
     missing = unfounded(project, record) if record.get("stage") == "test-contract" else None
     if not missing:
         return task

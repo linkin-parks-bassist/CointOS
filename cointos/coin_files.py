@@ -121,9 +121,6 @@ def execute(name, arguments):
         return {'ok': True, 'path': str(target), 'start_line': start, 'total_lines': len(lines),
                 'content': ''.join(lines[start - 1:None if count is None else start - 1 + count])}
     if name == 'fs_search':
-        if target.resolve() in (Path.home().resolve(), Path(target.anchor)):
-            raise ValueError('not searching your whole home or filesystem. Check your records section and the '
-                             'knowledge tree with different words, list a likely folder, or ask the user where it is')
         matches = []
         pattern, text = arguments.get('glob', '*'), arguments.get('text')
         # A search answers within a turn: unreadable and generated trees don't stop it, and
@@ -149,7 +146,7 @@ def execute(name, arguments):
                         continue
         if incomplete:
             return {'ok': True, 'matches': matches, 'incomplete': f'stopped after {SEARCH_SECONDS} seconds; '
-                    'search a narrower path, or find where these records live with a knowledge lookup'}
+                    'search a narrower path, or ask the user'}
         return {'ok': True, 'matches': matches}
     if name == 'fs_mkdir':
         target.mkdir(parents=True, exist_ok=True, mode=0o700)

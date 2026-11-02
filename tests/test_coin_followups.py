@@ -72,3 +72,15 @@ class CompletionFollowups(unittest.TestCase):
         self.assertFalse(coin_followups.settled('p:old', ledger))
         ledger['queue']['p:new']['done'] = {'commit': 'landed'}
         self.assertTrue(coin_followups.settled('p:old', ledger))
+
+
+class Reports(unittest.TestCase):
+    def test_the_wake_carries_what_the_agents_on_the_work_reported(self):
+        ledger = {'tasks': {'p:a': {'id': 'p:a', 'role': 'worker', 'receipt': {'summary': 'built the thing'}},
+                            'p:i': {'id': 'p:i', 'role': 'integrator', 'worker': 'p:a', 'receipt': {'summary': 'landed it'}},
+                            'p:c': {'id': 'p:c', 'role': 'worker', 'receipt': {'summary': 'child work'}}},
+                  'queue': {'p:a': {'project': 'p'}, 'p:c': {'project': 'p', 'proposed_by': 'p:a'}}}
+        text = coin_followups.reports('p:a', ledger)
+        for said in ('built the thing', 'landed it', 'child work'):
+            self.assertIn(said, text)
+        self.assertEqual(coin_followups.reports('p:none', ledger), '')

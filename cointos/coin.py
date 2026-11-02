@@ -543,7 +543,7 @@ def output(value: str) -> dict:
 def run_command(arguments: dict) -> dict:
     result = subprocess.run(arguments['command'], shell=True, executable='/bin/bash',
                             cwd=Path(arguments.get('cwd', '~')).expanduser(),
-                            capture_output=True, text=True, errors='replace', timeout=arguments.get('timeout'))
+                            capture_output=True, text=True, errors='replace', timeout=arguments.get('timeout', COMMAND_SECONDS))
     return {'ok': result.returncode == 0, 'exit_code': result.returncode,
             'stdout': result.stdout, 'stderr': result.stderr}
 
@@ -682,28 +682,30 @@ def invoke(name: str, arguments: dict, token: str, user: int, chat: int, knowled
     return result
 
 
-RECORDS = Path.home() / '.knowledge/where/are/my/personal/records.md'
+ORIENTATION = None
+COMMAND_SECONDS = 300  # a turn is for answering; longer work is dispatched or asks for more
 
 
-def personal_records() -> str:
-    """Where the user's own records live, so that finding them never takes a search."""
-    try:
-        body = RECORDS.read_text(encoding='utf-8')
-    except OSError:
-        return ''
-    if body.startswith('---\n'):
-        body = body.split('\n---\n', 1)[-1]
-    return '\n\n## The user\'s records\n\n' + body.strip()
+def orientation() -> str:
+    """What `kt info` says from Coin's station, read once so the prompt prefix stays fixed."""
+    global ORIENTATION
+    if ORIENTATION is None:
+        try:
+            found = subprocess.run([str(Path.home() / '.knowledge/.tools/kt'), 'info', '--no-prove'], cwd=Path.home(),
+                                   capture_output=True, text=True, errors='replace', timeout=30)
+            ORIENTATION = ('\n\n## Your knowledge orientation\n\n' + found.stdout.strip()) if found.returncode == 0 else ''
+        except (OSError, subprocess.SubprocessError):
+            ORIENTATION = ''
+    return ORIENTATION
 
 
 def system_prompt(knowledge: dict | None) -> tuple[str, list[dict]]:
     """The fixed prompt and tools: nothing in them changes between turns, so they stay cached."""
     kt = knowledge["tools"] if knowledge else []
-    records = personal_records()
     archive = (f'\n\nThe durable conversation archives are in {COIN_STATE}, named conversation-<user>.jsonl. '
                'The prompt contains only a recent window; older messages remain in that archive. '
                'Use fs_read/fs_search to retrieve earlier messages.')
-    return ROLE + records + archive, TOOLS + kt
+    return ROLE + orientation() + archive, TOOLS + kt
 
 
 def time_context() -> str:

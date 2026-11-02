@@ -199,6 +199,7 @@ class DurableIntakeIntegration(unittest.TestCase):
         self.assertEqual([item['id'] for item in coin_input.pending(self.directory)], list(range(294)))
 
     def test_new_arrivals_are_bounded_without_losing_deferred_input(self):
+        self.enterContext(patch.dict(coin.SETTINGS, history_messages=20, history_trim_messages=7))
         self.poll([self.update])
         def turn(token, user, chat, texts, arrivals, knowledge, **kwargs):
             for ident in range(124, 154):

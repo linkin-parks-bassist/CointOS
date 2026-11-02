@@ -196,6 +196,14 @@ TOOLS = {
                 "Revising another item alone does not establish this handoff.",
                 {"children": {"type": "array", "items": {"type": "string"}, "description": "existing item names without project prefixes"}},
                 ["children"], lambda a: ["replace", *a["children"]]),
+    "log": (("supervisor", "first-responder"), "Read an agent's record, or Coin's with task coin. With no show: a numbered "
+            "index of its thoughts, replies and tool calls, newest last, filtered by kind, turn or grep. With show N or N-M: "
+            "those entries in full.",
+            {"task": text("PROJECT:TASK, or coin"), "show": text("entry N or range N-M to read in full"),
+             "kind": choice(("thought", "reply", "tool", "user", "compaction"), "only this kind"),
+             "turn": {"type": "integer", "description": "only this turn"}, "grep": text("only entries containing this text"),
+             "last": {"type": "integer", "description": "how many index lines (default 40)"}}, ["task"],
+            lambda a: ["log", a["task"]] + flags(a, {"show": "--show", "kind": "--kind", "turn": "--turn", "grep": "--grep", "last": "--last"})),
     "split": (EVERYONE, "This job is too big for one agent: stop an implementer or Operator and hand its work, branch "
               "and files to a manager to cut up much smaller.",
               {"task": text("PROJECT:TASK"), "reason": text("why it is too big and what is worth keeping")}, ["task", "reason"],
@@ -324,11 +332,24 @@ def role() -> str | None:
         return None
 
 
+GRANTS = {"log": "logs"}  # a tool an agent also gets when whoever dispatched it gave it that ability
+
+
+def granted(name: str) -> bool:
+    task = identity()["task"]
+    if name not in GRANTS or not task:
+        return False
+    try:
+        return GRANTS[name] in ((ledger()["tasks"].get(task) or {}).get("abilities") or [])
+    except Unreachable:
+        return False
+
+
 def catalogue(for_role: str | None) -> list[dict]:
     tools = [{"name": name, "description": description,
               "inputSchema": {"type": "object", "properties": properties, "required": required}}
              for name, (roles, description, properties, required, _) in TOOLS.items()
-             if roles is EVERYONE or for_role in roles]
+             if roles is EVERYONE or for_role in roles or granted(name)]
     if for_role == 'steward':
         finish = next(tool for tool in tools if tool['name'] == 'finish')
         finish['inputSchema']['properties'] = {**finish['inputSchema']['properties'], 'scout_result': {
@@ -360,7 +381,7 @@ def invoke(name: str, arguments: dict, for_role: str | None) -> tuple[str, bool]
         if problem := missing(MESSAGE_TOOLS[name][2], arguments):
             return problem, True
         result, failed = message_tool(name, arguments)
-    elif name in TOOLS and (TOOLS[name][0] is EVERYONE or for_role in TOOLS[name][0]):
+    elif name in TOOLS and (TOOLS[name][0] is EVERYONE or for_role in TOOLS[name][0] or granted(name)):
         if name == "finish" and bool(arguments.get("complete")) == bool(arguments.get("blocked")):
             return "give exactly one of complete or blocked", True
         if problem := missing(TOOLS[name][3], arguments):

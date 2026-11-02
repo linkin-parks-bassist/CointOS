@@ -11,20 +11,15 @@ class Filesystem(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-    def test_a_search_of_the_whole_home_is_refused(self):
-        with patch.object(coin_files.Path, 'home', return_value=self.root):
-            with self.assertRaisesRegex(ValueError, 'whole home'):
-                self.run_tool('fs_search', self.root)
-
-    def test_coins_prompt_carries_where_the_users_records_live(self):
-        leaf = self.root / 'records.md'
-        leaf.write_text('---\nstatus: green\n---\n\nWorkouts: ~/log.json\n')
-        with patch.object(coin, 'RECORDS', leaf):
-            prompt = coin.system_prompt(None)[0]
-        self.assertIn('Workouts: ~/log.json', prompt)
-        self.assertNotIn('status: green', prompt)
-        with patch.object(coin, 'RECORDS', self.root / 'absent.md'):
-            self.assertNotIn("## The user's records", coin.system_prompt(None)[0])
+    def test_coins_prompt_starts_with_its_knowledge_orientation(self):
+        with patch.object(coin, 'ORIENTATION', None), patch.object(coin.subprocess, 'run') as run:
+            run.return_value.returncode, run.return_value.stdout = 0, 'Personal documents are in ~/Documents/'
+            first, second = coin.system_prompt(None)[0], coin.system_prompt(None)[0]
+        self.assertIn('Personal documents are in ~/Documents/', first)
+        self.assertEqual(first, second, 'the prefix stays fixed for the life of the process')
+        run.assert_called_once()
+        with patch.object(coin, 'ORIENTATION', None), patch.object(coin.subprocess, 'run', side_effect=OSError):
+            self.assertIn('# Coin', coin.system_prompt(None)[0])
 
     def test_a_search_skips_generated_trees_survives_unreadable_ones_and_stops_in_time(self):
         folder = self.root / 'find'

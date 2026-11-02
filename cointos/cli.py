@@ -501,6 +501,19 @@ def write_transcript(task_id: str, out: str | None) -> str:
     return f"{path}: {messages} messages in {len(sessions)} session(s), {len(text):,} characters. Search it, or read the parts you need."
 
 
+def read_log(args) -> str:
+    """An index of an agent's thoughts, replies and tool calls, or entries from it by number."""
+    from cointos import transcript
+    if args.task == "coin":
+        found = transcript.coin_entries(ROOT / "state/coin/turns.jsonl")
+    else:
+        task = ledger()["tasks"].get(args.task)
+        if task is None:
+            raise SystemExit(f"no task {args.task}")
+        found = transcript.entries(transcript.database(), transcript.sessions_of(task, ROOT / "state/agents"))
+    return transcript.view(found, show=args.show, kind=args.kind, turn=args.turn, grep=args.grep, last=args.last)
+
+
 def coin_log(stop=None) -> None:
     """Show Coin in OpenCode's viewer until the slot changes; the monitor if that cannot start."""
     from cointos import coin_mirror
@@ -639,6 +652,13 @@ def parser() -> argparse.ArgumentParser:
     transcribing = sub.add_parser("transcript", help="write a task's complete agent transcript, including reasoning and tool output, to a file")
     transcribing.add_argument("task")
     transcribing.add_argument("--out", help="file to write; default is this run's scratch directory or the current one")
+    logging_ = sub.add_parser("log", help="read an agent's record, or Coin's with task coin: an index, or entries by number")
+    logging_.add_argument("task")
+    logging_.add_argument("--show", help="the full text of entry N, or entries N-M")
+    logging_.add_argument("--kind", choices=("thought", "reply", "tool", "user", "compaction"))
+    logging_.add_argument("--turn", type=int)
+    logging_.add_argument("--grep")
+    logging_.add_argument("--last", type=int, default=40, help="how many index lines (default 40)")
     task = sub.add_parser("task", help="show current work, binding tests, receipts and dependencies")
     task.add_argument("task")
     task.add_argument("--history", action="store_true", help="include full historical execution narratives")
@@ -860,6 +880,7 @@ COMMANDS = {
     "metrics": lambda args: metrics.report(args.hours),
     "task": lambda args: show_task(args.task, args.history),
     "transcript": lambda args: write_transcript(args.task, args.out),
+    "log": lambda args: read_log(args),
     "go": lambda args: resume(),
     "stop": stop_command,
     "kill": lambda args: kill_command(args.agent),

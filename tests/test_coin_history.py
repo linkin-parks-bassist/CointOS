@@ -119,7 +119,7 @@ class HistoryBlocks(unittest.TestCase):
 
     def test_invalid_block_size_is_rejected_during_configuration_load(self):
         settings = json.loads(Path('config/cointos.json').read_text())
-        for value in (0, -1, True, 2.5, '7', 20, 21):
+        for value in (0, -1, True, 2.5, '7', 50, 51):
             settings['coin']['history_trim_messages'] = value
             path = self.root / 'cointos.json'
             path.write_text(json.dumps(settings))

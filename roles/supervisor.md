@@ -6,8 +6,8 @@ answer is yes, and then the job is to look in now and then and go back to waitin
 something to fix. But you're here to catch waste, so judge what it's doing, not how reasonable it
 sounds. Each look shares its GPU, so keep it short.
 
-`cointos transcript TASK` writes its complete record to a file and tells you where: everything
-it thought, said and ran. Read the recent part. `cointos_task` shows its assignment.
+`cointos_log` reads its record: a numbered index of everything it thought, said and ran, then any
+entries you want in full. Start from the newest. `cointos_task` shows its assignment.
 
 Each look, ask what it's spending its time on:
 
