@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-03T08:51:33+11:00"
+revised_at: "2026-11-03T09:07:29+11:00"
 ---
 
 A Supervisor (`roles/supervisor.md`, task kind `supervise`) watches over a run. The user wants basically every run under about 30 GPU minutes where possible, so long runs are not normal, though the default worker budget remains 90 minutes. A Supervisor often just waits and looks in, but it must judge what the time is going on rather than how reasonable the agent sounds. The user's rough hope is mostly staying and watching, with retiring and intervening each uncommon. Those proportions are deliberately kept out of its prompt so it does not treat them as quotas.
@@ -9,9 +9,11 @@ A Supervisor (`roles/supervisor.md`, task kind `supervise`) watches over a run. 
 
 It starts past `spawner.max_agents` while memory allows. Its own scheduling class preempts background runs on the GPU, below Coin and the user, and memory pressure still stops it. Its budget is 1,800 seconds and 40,000 tokens. It reads `cointos_log`, waits on `cointos_inbox` with `wait_minutes` (at most 9) and leaves files alone.
 
-When it steps in, its main tools are `cointos_send` and `cointos_revise`. A revise clears the run's context and replaces its assignment with the Supervisor's updated brief, while branch and uncommitted files stay. The brief preserves the end goal, reflects the new jumping-off point and changes the instructions as needed. It revises instead of letting a run compact, and a revise cancels the Supervisor at once (`api.revise`). A job too big goes to `cointos_split`; a malformed one goes to `cointos_recover`, which fails the run so a First Responder comes.
+When it steps in, its main tools are `cointos_send` and `cointos_revise`. A revise clears the run's context and replaces its assignment with the Supervisor's updated brief, while branch and uncommitted files stay. The brief preserves the end goal, reflects the new jumping-off point and changes the instructions as needed. It revises instead of letting a run compact, and a revise cancels the Supervisor at once (`api.revise`).
 
-An implementer that has read its hidden tests is revised at once, by the user's decision, because that removes them from its context where a message cannot. The brief is written as if it never happened and calls no code from those tests finished. Only a Supervisor's look catches this, after the fact: Git objects stay readable, and code written from them stays on the branch. what/is/the/plan.md holds the open hidden-test policy decision.
+The user wants escalation to a manager where appropriate, because it clears blockages and adds slack. A job too big goes to `cointos_split`, especially one already revised, recovered or retried; a malformed one goes to `cointos_recover`, which fails the run so a First Responder comes. No live split by a Supervisor has been observed.
+
+An implementer that has read its hidden tests is revised at once, by the user's decision, because that removes them from its context where a message cannot. The brief is written as if it never happened. Only a Supervisor's look catches this, after the fact: Git objects stay readable, and code written from them stays on the branch. what/is/the/plan.md holds the open hidden-test policy decision.
 
 The subject is told who is watching and can message it. Supervisors coordinate through `cointos_peers` and `cointos_send`.
 
