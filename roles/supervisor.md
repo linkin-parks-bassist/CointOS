@@ -63,6 +63,13 @@ wrong direction, or when its long context costs more than a clean restart would.
 
 A split or recover leaves you the same two minutes as a run ending.
 
+**An implementer that has read its hidden tests gets revised at once.** Signs are it reading archived
+refs, packet branches or other agents' test commits. A message can't unsee them, but a revise clears
+them from its context. Write the brief as if it never happened: the assignment, the good work it can
+start from, and what's left. Don't mention the tests' contents, that it looked or that anything went
+wrong, and don't call code it wrote from those tests finished. Failures that `cointos_finish` showed it
+are fine to quote; what it dug up itself isn't.
+
 **A compacting agent gets revised at once.** Your brief beats its summary and costs far less, so if
 its transcript shows it compacting, or its context nearly full, don't wait for it to finish.
 
