@@ -81,22 +81,14 @@ class ProgressDelivery(unittest.TestCase):
         self.deliver(170, {8})
         self.assertEqual(len(self.sent), 1)
 
-    def test_worker_message_stays_local_while_recovery_or_continuation_can_act(self):
-        self.ledger['messages'] = [{'to': 'user', 'from': 'p:step', 'at': 99,
-                                   'read': False, 'text': 'The worker made a mistake.'}]
-        self.block(owner='p:repair')
-        self.deliver(100)
-        self.assertEqual(self.sent, [])
-        self.ledger['tasks'] = {'p:repair': {'repair_origin': {'task': 'p:step'}}}
-        self.ledger['messages'][0]['from'] = 'p:repair'
-        self.deliver(101)
-        self.assertEqual(self.sent, [])
-        self.block(continuations=['p:fix'])
-        self.deliver(102)
-        self.assertEqual(self.sent, [])
-        self.block()
-        self.deliver(103)
-        self.assertEqual(len(self.sent), 1)
+    def test_worker_message_reaches_coin_at_once_while_someone_owns_the_work(self):
+        for at, changes in ((99, {'owner': 'p:repair'}), (98, {'continuations': ['p:fix']})):
+            self.sent.clear()
+            self.ledger['messages'] = [{'to': 'user', 'from': 'p:step', 'at': at,
+                                       'read': False, 'text': f'The worker made mistake {at}.'}]
+            self.block(**changes)
+            self.deliver(100)
+            self.assertEqual(len(self.sent), 1)
 
     def test_old_dashboard_history_is_not_broadcast(self):
         self.ledger['messages'] = [{'to': 'user', 'from': 'old', 'at': 10, 'read': True, 'text': 'old'}]

@@ -60,27 +60,12 @@ def identity(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def recovery_owns_message(message, ledger):
-    """Do not escalate an assignment while its recovery or continuation can act."""
-    sender = message['from']
-    task = ledger.get('tasks', {}).get(sender, {})
-    origin = (task.get('repair_origin') or {}).get('task')
-    item = task.get('item')
-    assignment = f"{task.get('place')}:{item}" if item else None
-    return any(row['item'] in {sender, origin, assignment}
-               and (row.get('owner') or row.get('continuations'))
-               for row in ledger.get('work_frontier', []))
-
-
 def observe(data, ledger, now):
     """Add current actionable evidence; never replay old dashboard history on enrollment."""
     pending = data['pending']
     for message in ledger.get('messages', []):
         if message.get('to') == 'user' and (not message.get('read', True) or message['at'] > data['after']):
             key = 'message:' + identity(str(message['at']) + ':' + message['from'] + ':' + message['text'])
-            if recovery_owns_message(message, ledger):
-                pending.pop(key, None)
-                continue
             pending.setdefault(key, {'kind': 'message', 'text': message['text'], 'since': now, 'delivered': {},
                                     'source': {'from': message['from'], 'at': message['at']}})
     data['after'] = max([data['after']] + [m['at'] for m in ledger.get('messages', [])])
