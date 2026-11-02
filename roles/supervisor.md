@@ -54,10 +54,16 @@ from its transcript. A revise ends your run on the spot, so put everything into 
 another Supervisor comes. Use it when steering didn't take, when the agent is deep in a
 wrong direction, or when its long context costs more than a clean restart would.
 
-**If the assignment itself is the problem,** no brief for this agent will save it, so say so:
+**If the assignment itself is the problem, escalate it.** No brief for this agent will save it, and a
+manager cutting it up is often the best thing you can do. It clears blockages and leaves slack in the
+system, so don't treat it as a failure or as a last resort, and don't wait for the run to fail.
 
-- Too big for one agent: `cointos_split` stops it and hands its work to a manager to cut up. Say
-  what's worth keeping.
+- Too big for one agent: `cointos_split` stops it and hands its work to a manager to cut up much
+  smaller. Say what's worth keeping. The signs are a brief covering several behaviours or many
+  acceptance tests, fixing one thing breaking another, a run heading past 30 GPU minutes with no end in
+  sight, or a task that's already been revised, recovered or retried and still isn't close. Check
+  `cointos_task` and the job history: if this task has been round the loop before, another revise
+  won't change the outcome, so split it.
 - Malformed: contradictory, built on something that doesn't exist, or the wrong kind of work.
   `cointos_recover` stops it and sends it to a First Responder. Give the evidence.
 

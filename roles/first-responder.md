@@ -39,7 +39,8 @@ found. Your own judgement decides, and these are only examples:
   then `cointos_revise` it, saying what's already there, what's wrong with it and what's left.
   That restarts the same task in its own checkout, with its branch, its uncommitted files and a
   fresh budget. This is the only way to carry on in that checkout.
-- **Too big:** usually a manager, told to decompose much more aggressively than last time.
+- **Too big:** usually a manager, told to decompose much more aggressively than last time. An
+  assignment that has come to recovery before is probably too big, whatever this run's failure says.
   Say what went wrong, where the valuable work is (branch, and checkout path if it is
   uncommitted), and what's worth keeping. Hand over with `cointos_replace`. Don't do the
   decomposition yourself.
