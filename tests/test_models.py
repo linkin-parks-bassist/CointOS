@@ -58,6 +58,20 @@ class ModelSelection(unittest.TestCase):
         self.assertNotIn('draft-DFlash2', choices)
         self.assertNotIn('partial.gguf', choices)
 
+    def test_discovery_parses_each_unchanged_file_once_and_rereads_a_changed_one(self):
+        self.enterContext(patch.dict(models.PARSED, clear=True))
+        broken = self.root / 'broken.gguf'; broken.write_bytes(b'GGUF')
+        real = models.parse
+        with patch.object(models, 'parse', side_effect=real) as parse:
+            first = models.catalog()
+            parsed = parse.call_count
+            self.assertEqual(models.catalog(), first)  # neither good nor broken files are reparsed
+            self.assertEqual(parse.call_count, parsed)
+            gguf(broken, 'unqualified')  # completed in place: new size and mtime
+            choices = {e['name']: e for e in models.catalog()}
+            self.assertEqual(parse.call_count, parsed + 1)
+        self.assertEqual(choices['broken']['architecture'], 'unqualified')
+
     def test_replacement_drains_replies_preserves_agents_and_persists_only_model_fields(self):
         state.L['agents']['survivor'] = {'session': 'retained'}
         state.ACTIVE['chats'] = 1

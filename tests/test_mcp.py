@@ -423,3 +423,32 @@ class Tools(unittest.TestCase):
         self.assertGreater(server['timeout'],
                            (state.CONFIG['timeouts']['validation_seconds'] + state.CONFIG['timeouts']['api_seconds']) * 1000)
         json.dumps(server)
+
+
+class InboxWait(unittest.TestCase):
+    """A wait outlasts a daemon that is briefly slow or being replaced."""
+
+    def test_wait_rides_through_transient_unreachability(self):
+        replies = iter([client.Unreachable('cointosd is not reachable (timed out)'), {'messages': []},
+                        client.Unreachable('cointosd is not reachable (refused)'),
+                        {'messages': [{'from': 'manager', 'text': 'go on'}]}])
+        def call(action, body):
+            reply = next(replies)
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+        with patch.object(mcp, 'call', call), patch.object(mcp.time, 'sleep'):
+            text, failed = mcp.message_tool('inbox', {'wait': True, 'wait_minutes': 1})
+        self.assertFalse(failed)
+        self.assertIn('go on', text)
+
+    def test_lasting_unreachability_and_unwaited_reads_still_report_it(self):
+        def call(action, body):
+            raise client.Unreachable('cointosd is not reachable (refused)')
+        clock = iter(range(0, 10_000, 30))
+        with patch.object(mcp, 'call', call), patch.object(mcp.time, 'sleep'), \
+                patch.object(mcp.time, 'monotonic', lambda: next(clock)):
+            self.assertEqual(mcp.message_tool('inbox', {'wait': True, 'wait_minutes': 1}),
+                             ('cointosd is not reachable (refused)', True))
+        with patch.object(mcp, 'call', call):
+            self.assertEqual(mcp.message_tool('inbox', {}), ('cointosd is not reachable (refused)', True))

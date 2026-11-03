@@ -11,7 +11,35 @@ from cointos import config as configuration, lanes, memory, replacement, snapsho
 from cointos.state import ACTIVE, BACKEND, CONFIG, LOCK, L, STOPPING, log, now, save
 
 
+PARSED: dict[str, tuple[tuple, dict | ValueError]] = {}  # path -> (file identity, metadata or refusal)
+PARSED_LOCK = threading.Lock()
+
+
 def metadata(path: Path) -> dict:
+    """GGUF metadata, parsed once per file identity.
+
+    Parsing skips tokenizer arrays string by string: seconds of GIL-held Python per
+    file. Discovery polls repeat it, so recomputing an unchanged file's answer would
+    starve the daemon's other threads. A replaced, grown or rewritten file is reparsed.
+    """
+    stat = path.stat()
+    identity = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    key = str(path)
+    with PARSED_LOCK:
+        cached = PARSED.get(key)
+    if cached is None or cached[0] != identity:
+        try:
+            result: dict | ValueError = parse(path)
+        except (ValueError, struct.error) as error:
+            result = ValueError(str(error))
+        with PARSED_LOCK:
+            PARSED[key] = cached = (identity, result)
+    if isinstance(cached[1], ValueError):
+        raise ValueError(str(cached[1]))
+    return dict(cached[1])
+
+
+def parse(path: Path) -> dict:
     """Read GGUF metadata without loading tensors or large tokenizer arrays."""
     with path.open('rb') as stream:
         def number(fmt):

@@ -303,11 +303,20 @@ def message_tool(name: str, arguments: dict) -> tuple[str, bool]:
         if name == "send":
             result = call("send", {**identity(), "to": arguments["to"], "text": arguments["text"]})
             return f"sent to {result['to']}", False
-        messages = call("inbox", identity())["messages"]
         deadline = time.monotonic() + 60 * max(0, min(float(arguments.get("wait_minutes") or 5), 9))
-        while arguments.get("wait") and not messages and time.monotonic() < deadline:
+        while True:
+            try:
+                messages, missed = call("inbox", identity())["messages"], None
+            except Unreachable as error:
+                # A wait rides through a slow or replaced daemon; only lasting absence is an error.
+                if not arguments.get("wait"):
+                    raise
+                messages, missed = [], error
+            if not arguments.get("wait") or messages or time.monotonic() >= deadline:
+                break
             time.sleep(2)
-            messages = call("inbox", identity())["messages"]
+        if missed is not None:
+            raise missed
         return ("\n\n".join(f"From {m['from']}:\n{m['text']}" for m in messages) or "no unread messages"), False
     except (Unreachable, ValueError, KeyError) as error:
         return str(error), True
