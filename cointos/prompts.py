@@ -77,8 +77,23 @@ def assignment(task: dict, where: dict) -> str:
                      "under any name; `cointos revise`, `cointos hold` or `cointos cancel` it instead:\n" +
                      "\n".join(f"- {r['project']}:{r['item']} ({'landed' if queues.status(r) == 'done' else queues.status(r)})"
                                f"{': ' + r['summary'] if r.get('summary') else ''}" for r in proposed))
+    if task['role'] == 'manager' and (unbound := unbound_tests(task['place'])):
+        parts.append("Accepted tests in this project that no item depends on yet. Before queuing a test author, check "
+                     "whether one of these already covers that scenario: an implementation item can depend on it "
+                     "directly, so don't author it again:\n" +
+                     "\n".join(f"- {r['item']}{': ' + r['summary'] if r.get('summary') else ''}" for r in unbound))
     parts.append(ending(task, where))
     return "\n\n".join(parts)
+
+
+def unbound_tests(project_name: str, limit: int = 40) -> list[dict]:
+    """Accepted test packets nothing depends on: a planner that can't see them writes them again."""
+    mine = [r for r in queues.records().values() if r['project'] == project_name]
+    wanted = {name for r in mine if not r.get('replaced_by') for name in r.get('depends', [])}
+    # Accepted via tests: held off main as hidden tests until an implementation depends on them.
+    unbound = [r for r in mine if r.get('stage') == 'test-contract' and (r.get('done') or {}).get('via') == 'tests'
+               and not r.get('correction') and r['item'] not in wanted]
+    return sorted(unbound, key=lambda r: -r['done'].get('at', 0))[:limit]
 
 
 def identity(task: dict) -> str:
