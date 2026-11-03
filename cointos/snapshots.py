@@ -278,6 +278,18 @@ def superseded(owner: str, model: str, held: list[int], kind: str) -> list[str]:
             and s['digest'] == digest(held[:s['tokens']])]
 
 
+SKIPPING: set[str] = set()  # owners whose saves are being skipped, so a streak logs once
+
+
+def skipped(owner: str, model: str, tokens: int, need_gb: float, headroom_gb: float) -> None:
+    """A save that didn't fit is skipped, not a failure: the run continues and its context is
+    reread if the lane switches away. Logged once per streak, not on every thought."""
+    if owner not in SKIPPING:
+        SKIPPING.add(owner)
+        log('snapshot skipped', owner=owner, model=model, tokens=tokens, need_gb=round(need_gb, 2),
+            headroom_gb=round(headroom_gb, 2), reason='not enough memory to cache it; it is reread if needed')
+
+
 def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str | None = None) -> bool:
     """Save the lane's state (holding exactly `held`) as a snapshot of `owner`'s conversation, if
     it fits. A *checkpoint* is a committed prompt prefix saved before generation; it may end
@@ -326,8 +338,7 @@ def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str |
             if reclaimed:
                 if ((limit is not None and used + need > limit)
                         or capacity.headroom_gb() + spare < host_need):
-                    log('snapshot refused', owner=owner, model=model, tokens=len(held), need_gb=round(host_need, 2),
-                        headroom_gb=round(capacity.headroom_gb() + spare, 2))
+                    skipped(owner, model, len(held), host_need, capacity.headroom_gb() + spare)
                     return False
                 admitted = make_room(host_need, cache_owner=requester)  # no further eviction after this transaction's reclaim
             else:
@@ -356,8 +367,7 @@ def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str |
                 if release >= deficit:
                     break
             if reclaimed or not pending or release < deficit:
-                log('snapshot refused', owner=owner, model=model, tokens=len(held), need_gb=round(host_need, 2),
-                    headroom_gb=round(capacity.headroom_gb() + spare, 2))
+                skipped(owner, model, len(held), host_need, capacity.headroom_gb() + spare)
                 return False
         # Only RAM release needed for this save may delay it. Disk disposal is
         # independent, and neither operation can retain the state lock.
@@ -380,6 +390,7 @@ def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str |
         L["snapshots"][name] = {"owner": owner, "model": model, "tokens": len(held), "digest": wanted, "kind": kind,
                                 "bytes": saved["bytes"], "last_run": now(), "tier": "memory"}
         room(0.0)  # reconcile the server's actual size against the estimate
+        SKIPPING.discard(owner)
     return True
 
 

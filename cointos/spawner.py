@@ -72,7 +72,7 @@ def retry_composition(project: dict, key: str, attempt: tuple, rules: dict) -> N
         with contracts.combined(project['path'], attempt[2], list(attempt[3]), rules, non_code='ours'):
             pass
     except Exception as error:  # still a real clash, or an unusable repository
-        log('composition retry refused', item=key, error=str(error)[:300])
+        log('composition still clashes', item=key, error=str(error)[:300])
         return
     with LOCK:
         record = queues.records().get(key)
@@ -136,11 +136,13 @@ def next_task() -> dict | None:
     exiting = {agent["task"] for agent in L["agents"].values()}  # a receipt settles before its run exits
     waiting = [t for t in L["tasks"].values() if t["status"] == "waiting" and not t.get("replaced_by")
                and t["id"] not in exiting and runnable(t, ready)]
-    if waiting:
-        return min(waiting, key=lambda t: (t["rank"], t["created_at"]))
+    best = min(waiting, key=lambda t: (t["rank"], t["created_at"]), default=None)
     options = queued_work(scanned, ready) + integrations() + tree_work() + periodic()
+    # A new task outranking every waiting one goes first: an integration drains review and
+    # unblocks dependents, so it must not queue behind test authoring for the one slot.
+    options = [option for option in options if best is None or option[0] < best["rank"]]
     if not options:
-        return None
+        return best
     created = min(options, key=lambda option: option[0])[1]()
     # A dispatch refused before it ran failed its item; what that changed (its controller
     # is now due) decides the next choice.

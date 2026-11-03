@@ -103,10 +103,10 @@ class Capacity(unittest.TestCase):
             'tier': 'disk', 'owner': 'shared', 'last_run': 1, 'digest': 'other'}
         state.L['memory']['headroom_gb'] = 24.4  # below three process caps
         with patch.object(snapshots.BACKEND, 'save', return_value={'bytes': 1e9}) as save, \
-             patch.dict(snapshots.RESERVED, {}, clear=True), patch.object(snapshots, 'log') as log:
+             patch.dict(snapshots.RESERVED, {}, clear=True), patch.object(snapshots, 'SKIPPING', set()), patch.object(snapshots, 'log') as log:
             self.assertFalse(snapshots.keep(0, [1, 2], 'a', 'checkpoint'))
             save.assert_not_called()
-            self.assertEqual(log.call_args.args[0], 'snapshot refused')
+            self.assertEqual(log.call_args.args[0], 'snapshot skipped')
             self.assertTrue(snapshots.keep(0, [1, 2], 'coin/user', 'checkpoint'))
             self.assertEqual(save.call_count, 1)
             # Capture and file are debited from physical headroom, not the caps.
