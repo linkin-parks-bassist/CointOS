@@ -1,6 +1,7 @@
 ---
 status: green
 revised_at: "2026-10-19T20:00:35+11:00"
+checked_at: '2026-11-04T01:32:56+11:00'
 ---
 
 Replay the actual OpenCode request before attributing a restart cache miss to native inference. Keep session exports and token vectors private; they contain conversation and product material.
