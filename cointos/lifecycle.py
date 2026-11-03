@@ -870,8 +870,10 @@ def recover_landings() -> int:
 
 def stand_down(supervisor: dict) -> None:
     """A supervisor ends with its run: at once if unstarted, else after a short wrap-up."""
-    watched = L["tasks"].get(supervisor.get("supervises"))
-    if watched and tasks.active(watched):
+    # The run, not the task: a subject waiting in review has no run to watch, and a supervisor
+    # kept for it holds a slot and memory the review itself needs.
+    watched = supervisor.get("supervises")
+    if any(agent["task"] == watched for agent in L["agents"].values()):
         return
     if supervisor["status"] != "running":
         cancel_task(supervisor, 'cointos', 'the run it was watching has ended')

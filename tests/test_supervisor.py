@@ -113,14 +113,27 @@ class Supervisors(unittest.TestCase):
         recovery.enforce()
         supervisor = self.supervisors()[0]
         self.worker['status'] = 'done'
+        state.L['agents'] = {k: a for k, a in state.L['agents'].items() if a['task'] != self.worker['id']}
         lifecycle.reconcile()
         self.assertEqual(supervisor['status'], 'failed', 'an unstarted one just goes')
+
+    def test_a_supervisor_is_stood_down_when_its_subject_waits_in_review(self):
+        self.run_for(1200)
+        recovery.enforce()
+        supervisor = self.supervisors()[0]
+        lifecycle.reconcile()
+        self.assertEqual(supervisor['status'], 'waiting', 'kept while the run is live')
+        self.worker['status'] = 'review'
+        state.L['agents'] = {k: a for k, a in state.L['agents'].items() if a['task'] != self.worker['id']}
+        lifecycle.reconcile()
+        self.assertEqual(supervisor['status'], 'failed', 'a reviewed subject has no run to watch')
 
     def test_a_running_supervisor_gets_a_short_wrap_up_when_its_run_ends(self):
         self.run_for(1200)
         recovery.enforce()
         supervisor = support.running(self.supervisors()[0], 'supervisor-1', worktree=False)
         self.worker['status'] = 'done'
+        state.L['agents'] = {k: a for k, a in state.L['agents'].items() if a['task'] != self.worker['id']}
         lifecycle.reconcile()
         self.assertEqual(supervisor['status'], 'running')
         self.assertEqual(state.L['messages'][-1]['to'], supervisor['id'])
