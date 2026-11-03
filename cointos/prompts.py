@@ -77,13 +77,22 @@ def assignment(task: dict, where: dict) -> str:
                      "under any name; `cointos revise`, `cointos hold` or `cointos cancel` it instead:\n" +
                      "\n".join(f"- {r['project']}:{r['item']} ({'landed' if queues.status(r) == 'done' else queues.status(r)})"
                                f"{': ' + r['summary'] if r.get('summary') else ''}" for r in proposed))
-    if task['role'] == 'manager' and (unbound := unbound_tests(task['place'])):
-        parts.append("Accepted tests in this project that no item depends on yet. Before queuing a test author, check "
-                     "whether one of these already covers that scenario: an implementation item can depend on it "
-                     "directly, so don't author it again:\n" +
-                     "\n".join(f"- {r['item']}{': ' + r['summary'] if r.get('summary') else ''}" for r in unbound))
+    if task['role'] in PLANNERS:
+        # Hidden acceptance publishes nothing to main, so the project's plan never learns of it.
+        places = [task['place']] if task['place'] != 'system' else sorted({r['project'] for r in queues.records().values()})
+        unbound = [r for place in places for r in unbound_tests(place)]
+        if unbound:
+            parts.append("Accepted hidden tests that no item depends on yet. They stay off main, so the project's plan "
+                         "and knowledge don't show them: what's listed here is accepted even where the plan says it's "
+                         "next. Before queuing a test author, check whether one already covers that scenario; an "
+                         "implementation item can depend on it directly:\n" +
+                         "\n".join(f"- {r['project']}:{r['item']}{': ' + r['summary'] if r.get('summary') else ''}"
+                                   for r in unbound))
     parts.append(ending(task, where))
     return "\n\n".join(parts)
+
+
+PLANNERS = ('manager', 'steward', 'first-responder', 'operator', 'supervisor')
 
 
 def unbound_tests(project_name: str, limit: int = 40) -> list[dict]:
