@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-24T01:50:30+11:00"
+revised_at: "2026-11-04T08:13:13+11:00"
 ---
 
 Semantic contract judgment and useful unattended recovery remain reliability gaps. The contract-quality owner records a concrete historical accepted witness that violated another owning law; it does not establish that the current binding still has that defect. Check the current packet and correction chain before requesting more work. Mechanical scope, binding and execution guards protect authority, not semantic adequacy.
@@ -19,5 +19,6 @@ Current defect owners:
 - Reply retokenization: why/can/finished/cointos/replies/require/token/rereading.md.
 - Unexplained post-message context loss: why/did/cointos/lose/context/after/an/agent/message.md.
 - Legacy draft state: why/do/legacy/cointos/snapshots/lack/mtp/history.md.
+- API latency from whole-ledger dashboard polling: why/is/the/cointos/api/slow/while/dashboards/are/open.md.
 
 Startup, pressure, stream, compaction and cache-retention limits retain their focused what/is/unverified owners. Acceptance and remaining steps retain their owners. Do not infer a present incident from an old probe, repair managed product implementations merely to demonstrate autonomy, manufacture host pressure, or adopt a backend from a short speed sample.
