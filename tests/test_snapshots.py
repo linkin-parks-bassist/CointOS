@@ -229,6 +229,24 @@ class Snapshots(unittest.TestCase):
         snapshots.forget_orphans()
         self.assertEqual([s["owner"] for s in state.L["snapshots"].values()], ["shared"])
 
+    def test_caches_untouched_past_the_idle_limit_are_forgotten_even_for_live_conversations(self):
+        snapshots.keep(0, [1, 2], 'coin/a', 'checkpoint')
+        snapshots.keep(0, [3, 4], 'coin/b', 'checkpoint')
+        snapshots.keep(0, [5, 6], 'shared', 'checkpoint')
+        hours = state.CONFIG['memory']['snapshot_idle_hours']
+        ages = {'coin/a': hours + 1, 'coin/b': hours - 1, 'shared': hours + 1}
+        for snapshot in state.L['snapshots'].values():
+            snapshot['last_run'] = state.now() - ages[snapshot['owner']] * 3600
+        pinned = next(n for n, s in state.L['snapshots'].items() if s['owner'] == 'shared')
+        with snapshot_cleanup.pin(pinned):
+            snapshots.forget_idle()
+        self.assertEqual(sorted(s['owner'] for s in state.L['snapshots'].values()), ['coin/b', 'shared'])
+        snapshots.keep(0, [5, 6], 'shared', 'checkpoint')  # reusing identical bytes is a touch
+        snapshots.forget_idle()
+        self.assertEqual(sorted(s['owner'] for s in state.L['snapshots'].values()), ['coin/b', 'shared'])
+        self.drain()
+        self.assertEqual(len(self.forgotten), 1)
+
     def test_identical_tokens_of_different_models_are_not_the_same_state(self):
         snapshots.keep(0, [1, 2], "shared", "checkpoint")
         state.L["lanes"][0]["model"] = "other-model"
@@ -287,7 +305,7 @@ class Snapshots(unittest.TestCase):
     def test_reconciliation_forgets_terminal_owners_but_preserves_surviving_runs(self):
         for name, status in (("accepted", "done"), ("failed", "failed"), ("finishing", "done"), ("review", "review")):
             state.L["tasks"][name] = {"id": name, "kind": "item", "status": status, "branch": None, "record": None}
-            state.L["snapshots"][name] = {"owner": name, "tier": "disk"}
+            state.L["snapshots"][name] = {"owner": name, "tier": "disk", "last_run": state.now()}
         state.L["agents"]["finishing-run"] = {"task": "finishing"}
         state.L["tasks"]["t"].update(kind="item", branch=None, record=None)
         lifecycle.reconcile()

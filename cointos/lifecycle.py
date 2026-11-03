@@ -904,6 +904,7 @@ def reconcile() -> None:
             if obsolete:
                 cancel_task(task, "cointos", "repair origin progressed or was withdrawn before admission")
     snapshots.forget_orphans()
+    snapshots.forget_idle()
     swept = 0
     for task in list(L["tasks"].values()):  # retire settled work a bounded few at a time under LOCK
         if swept >= CONFIG["recovery"]["retire_per_tick"]:  # git runs under LOCK, so a few per pass

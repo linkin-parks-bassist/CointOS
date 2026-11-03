@@ -311,6 +311,7 @@ def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str |
             model, index = L["lanes"][position]["model"], L["lanes"][position]["index"]
             for saved in L["snapshots"].values():
                 if saved["model"] == model and saved["digest"] == wanted:
+                    saved["last_run"] = now()  # reusing identical bytes is a touch
                     if owner == "shared":
                         saved["owner"] = "shared"
                     if kind == 'prefix' and saved['owner'] != 'shared':
@@ -407,6 +408,7 @@ def retain_prefix(model: str, tokens: list[int], owner: str) -> bool:
         wanted = digest(tokens)
         for saved in L['snapshots'].values():
             if saved['model'] == model and saved['digest'] == wanted:
+                saved['last_run'] = now()
                 if saved['owner'] == owner:
                     saved['kind'] = 'prefix'
                 return True
@@ -443,6 +445,27 @@ def forget_orphans() -> None:
             continue
         forget_owner(owner)
         log("snapshot forgotten", owner=owner, reason="its conversation is over")
+
+
+def forget_idle() -> None:
+    """Forget caches no conversation has saved or restored for `memory.snapshot_idle_hours`.
+
+    Reachability alone never ends Coin, user and shared conversations, and a waiting task can
+    wait indefinitely, so without this their abandoned caches would hold the disk tier forever.
+    A cache in transfer or pinned by a restore is left for a later pass.
+    """
+    hours = CONFIG['memory'].get('snapshot_idle_hours')
+    if hours is None:
+        return
+    cutoff = now() - hours * 3600
+    idle = [(n, s) for n, s in L['snapshots'].items()
+            if s['last_run'] < cutoff and s['tier'] in ('memory', 'disk') and not s.get('discard')
+            and not cleanup.pinned(n, s['tier'])]
+    for name, snapshot in idle:
+        drop(name)
+    if idle:
+        log('snapshots forgotten', count=len(idle), gb=round(sum(map(size_gb, (s for _, s in idle))), 2),
+            reason=f'untouched for {hours:g} hours')
 
 
 def recover_transfers() -> None:

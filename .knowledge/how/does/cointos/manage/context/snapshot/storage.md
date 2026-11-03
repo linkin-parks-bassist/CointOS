@@ -1,9 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-27T08:59:35+11:00"
+revised_at: "2026-11-04T07:25:16+11:00"
 ---
 
 Snapshots are disposable performance hints, never task/conversation authority. Startup retires unreachable caches; terminal tasks retain them while a run survives. Native execution residency has the shorter run/thought lifetime owned by how/does/gufo/select/resident/agent/state.md.
+
+Reachability never ends Coin, user and shared conversations, and waiting tasks can wait indefinitely, so reconciliation also retires memory/disk caches whose `last_run` is older than memory.snapshot_idle_hours (36, user-requested). Saves, identical-bytes reuse, prefix retention and restores refresh `last_run`; transfers and pinned restore inputs wait for a later pass. Expiry costs only a reread.
 
 Retirement separates logical removal from physical deletion. snapshot_cleanup owns per-format/tier canonical filename jobs in durable snapshot_garbage. Retired bytes remain charged through unlink/restart. Independent RAM/disk workers inventory/delete outside LOCK; SSD disposal never runs on the model worker. Inventory failure gates that tier; failed deletion retains charge/error for retry. Discovery rechecks ownership under LOCK. Saves reserve names, transfers retain ownership and restores pin inputs. Pending names cannot be reused. RAM restoration can proceed while its obsolete SSD copy deletes.
 
