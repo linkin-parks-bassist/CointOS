@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-11-07T16:12:39+11:00"
+revised_at: "2026-11-07T16:58:19+11:00"
 ---
 
-Next unowned CointOS work: reconcile self-enrollment's accepted branch, test/landing profile and current source/runtime baseline. The project points at work/draft-dc2e9a05cbbf with no test manifest while explicit gardening still targets master. Preserve all source/editor drafts. Establish a coherent independently testable baseline; classify existing Coin notification fixture failures against the current contracts without weakening them.
+Next unowned CointOS work: reconcile self-enrollment's accepted branch, test/landing profile and canonical source/staged-runtime baseline. The project points at work/draft-dc2e9a05cbbf with no test manifest while explicit gardening still targets master. Preserve all source/editor drafts. Establish a coherent independently testable baseline; classify existing Coin notification fixture failures against the current contracts without weakening them.
 
-External Codex owns scheduler, minimal-prompt and supervision verification; do not duplicate it. Observe fresh starts, useful supervisory intervention and post-prefill generation with loaded foreground responsiveness. The two-hour runtime-review Steward is already scheduled and its first task is running; let existing agents handle findings.
+Observe fresh minimal prompts through useful completion, evidence-driven supervisory intervention, the current runtime-review Steward's completed review and a natural two-hour occurrence. Preserve existing recovery owners; GPU service and one handoff do not establish useful throughput.
 
 Deploy the tested conditional upstream push at a safe worker boundary. Push failure must never reverse acceptance or create recovery. Preserve repository credential routing and multiple GitHub identities.
 

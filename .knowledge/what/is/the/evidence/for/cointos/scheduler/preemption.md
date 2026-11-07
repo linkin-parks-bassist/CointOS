@@ -1,6 +1,16 @@
 ---
 status: green
-revised_at: "2026-10-14T23:44:05+11:00"
+revised_at: "2026-11-07T16:56:12+11:00"
 ---
 
-- **Scheduler/gateway.** A real user-class request acquired the occupied background lane in 3.46 s and replied in 5.06 s. JSON/SSE peer disconnects release work; Unicode token fragments and successive generation steps retain exact known prefixes. A deliberate cache loss caused 68 s of successful cold rereading below an earlier frontier without false stall cancellation. One preemption does not establish the soak.
+The installed scheduler uses measured physical worker service divided by weight, without strict role tiers. Defaults are Coin 16, user/Operator 8, First Responder 4, Supervisor 3, ordinary work/Steward 2 and upkeep 1. A higher-weight waiter owed service can preempt ordinary slices and tool-return locality at completed GPU steps; overserved high-weight work cannot. Opening reads earn generation time, while unsaved reads retain protection. Source and installed mechanism tests cover these rules and live priority rebasing/in-flight charging.
+
+Native allocation evidence is archived under logs/scheduler-service-20261107/cointos-scheduler-owed-window/. The 898-second, 450-sample interval has no API errors and maximum sampled API latency 0.965 s. Approximate GPU-service deltas: First Responder 210 s, Supervisor 204 s, Steward 183 s, existing worker 191 s and new successor 64 s. Both recovery/Supervisor runs ended during the interval and the successor joined late; these are not five continuously eligible equal-duration shares. Maximum sampled lane waits were 51 s, 56 s, 62 s, 133 s and 41 s respectively. Charged worker occupancy was about 95%, not hardware GPU utilisation; probes and sampling edges are not fully attributed. Background latency and useful throughput remain limitations.
+
+Three isolated user-class native requests under that load returned exactly OK in 4.46 s, 7.72 s and 9.51 s. A post-tool-trim probe returned in 8.61 s. They use 23 prompt tokens, two output tokens and disabled thinking; they qualify gateway/priority latency, not real Coin conversation, Telegram delivery or the full fifteen-second acceptance contract. Earlier 18–20 s probes exposed lottery ties, read-completion protection and tool-return/ordinary-slice blocking. Their failure artifacts remain under the earlier /tmp/cointos-scheduler-* directories; successful later probes do not erase those failures.
+
+Nasxes submitted a checked canonical replacement handoff after about 59 GPU minutes and 22,437 tokens; its new worker started. Its Supervisor was retired because the watched run ended. No new implementation landing was observed. This supports recovery handback, not efficient diagnosis or improved supervision. Runtime-review Steward completion and a natural periodic occurrence remain unobserved. No developer product edits, bespoke messages or managed-product rescue were used; necessary deployments and the user-directed priority experiments are boundaries, not an uninterrupted two-hour factory acceptance.
+
+A native successor's initial request was 4,795 tokens with 533 system characters and no Git/hidden-test mention in its initial messages. It still advertised 21 tools despite configuration flags. Gateway filtering was then verified in a native 18-tool request without unmanaged Task/todo/skill. Existing histories and old prose briefs persist; fresh-prompt judgment remains unqualified.
+
+Full discovery evidence: 1,363 tests, three skips and two pre-existing Coin notification errors. Later focused staged checks include 136 allocation/lifecycle tests and 74 tool-profile checks. The validation owner names the errors. The governing rule remains: never claim CointOS is fixed; report bounded observations and remaining failures.
