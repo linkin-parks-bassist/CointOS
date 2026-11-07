@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-07T16:58:19+11:00"
+revised_at: "2026-11-08T08:58:03+11:00"
 ---
 
-Next unowned CointOS work: reconcile self-enrollment's accepted branch, test/landing profile and canonical source/staged-runtime baseline. The project points at work/draft-dc2e9a05cbbf with no test manifest while explicit gardening still targets master. Preserve all source/editor drafts. Establish a coherent independently testable baseline; classify existing Coin notification fixture failures against the current contracts without weakening them.
+Next unowned CointOS work: queued by manager-cointos-self-enrollment-baseline-reconcile — merge master into accepted branch work/draft-dc2e9a05cbbf (preserve uncommitted .knowledge editor drafts); add tests/contracts.json and set the CointOS project test profile; fix the coin.py turn loop so the two protected test_progress_notifications ConversationLoop fixtures pass without weakening them (code defect, not test defect).
 
 Observe fresh minimal prompts through useful completion, evidence-driven supervisory intervention, the current runtime-review Steward's completed review and a natural two-hour occurrence. Preserve existing recovery owners; GPU service and one handoff do not establish useful throughput.
 
