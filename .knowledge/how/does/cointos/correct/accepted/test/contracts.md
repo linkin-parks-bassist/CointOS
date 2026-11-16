@@ -1,13 +1,13 @@
 ---
 status: green
-revised_at: "2026-10-29T00:06:38+11:00"
+revised_at: "2026-11-08T16:26:30+11:00"
 ---
 
 Source and installed runtime provide cointos correct-tests and typed cointos_correct_tests for the owning manager or control-enabled Operator. Supply the accepted packet, correction brief, defect evidence, summary and declared APIs. Implementers cannot replace their own acceptance tests.
 
 A recovery request atomically queues/reuses the correction and records checked controller completion after validating clean landed artifacts and reachable handback. Refusal leaves no partial child; exact same-run replay returns the receipt. Managers and ad-hoc Operators remain nonterminal.
 
-packets.py owns the relation. One live correction is queued per exact accepted packet; duplicate requests return its owner. The independent author starts at the accepted packet commit, including hidden tests. Reused checkouts/branches must still contain it: runs.launch refuses mismatched ancestry before model launch, preserving files, refs and recorded baseline. Restore the correct checkout lineage without discarding work before resuming; metadata alone cannot repair it. A correction must change protected tests or harness; commentary cannot replace acceptance. Ordinary submission and independent review remain mandatory. The original packet stays binding until correction acceptance.
+packets.py owns the relation. One live correction is queued per exact accepted packet; duplicate requests return its owner. The independent author starts at the accepted packet commit, including hidden tests. Reused checkouts/branches must still contain it: runs.launch refuses mismatched ancestry before model launch, preserving files, refs and recorded baseline. Source launch reports missing prepared packet contents and requests current preparation; no agent storage repair is required. Installed guidance still names checkout lineage. Metadata alone cannot supply missing files. A correction must change protected tests or harness; commentary cannot replace acceptance. Ordinary submission and independent review remain mandatory. The original packet stays binding until correction acceptance.
 
 Pending corrections are derived admission prerequisites for their consumers, without editing accepted dependencies. Revising a consumer cannot start it early. Authors/reviewers remain eligible; waiting consumer reviews leave correction review capacity. Unrelated work proceeds. Withdrawal removes the wait and retains the original contract; it is not evidence the reported defect was fixed. Active consumer completion, landing and incorporation check packets.require_resolved before validation and under LOCK before receipt/acceptance. Requests arriving during validation revoke the attempt without discarding candidates or consuming product-refusal attempts. Restored ledger authority retains the blocker. Correction authors/reviewers do not block on themselves.
 

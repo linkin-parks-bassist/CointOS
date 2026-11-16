@@ -193,7 +193,8 @@ class AuthorityStorage(unittest.TestCase):
             (root / 'config').mkdir(parents=True, exist_ok=True)
         (target / 'state').mkdir(exist_ok=True)
         (target / '.runtime-install').touch()
-        (source / 'config/cointos.json').write_text(json.dumps(state.CONFIG))
+        # Authority preflight fixtures do not depend on host harness assets.
+        (source / 'config/cointos.json').write_text(json.dumps({**state.CONFIG, 'opencode_v2': False}))
         (source / 'config/projects.json').write_text('{"projects":[]}')
         (target / 'state/cointos.json').write_text('{}')
         (target / 'state/keys.json').write_text('{"coin":"fixture-coin","agents":{}}')

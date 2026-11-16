@@ -118,11 +118,12 @@ class PromptDate(unittest.TestCase):
             text = "|".join(str(message.get("content", "")) for message in conversation["messages"])
             return {"tokens": list(text.encode()) + [999], "reader": {}}
 
-        with patch.object(gateway.BACKEND, "render", side_effect=render) as renderer:
+        with patch.dict(state.CONFIG['scheduler'], shared_prefix_tokens=300), \
+                patch.object(gateway.BACKEND, "render", side_effect=render) as renderer:
             rendered = gateway.render_request(body, "agent", state.CONFIG["work_model"], {})
         system = gateway.stable_environment(body["messages"], "agent")[0]["content"]
         expected = [n for n in (len((system + "|" + prefix).encode()) for prefix in prompts.shared_launch_tiers(task))
-                    if n >= state.CONFIG["scheduler"]["shared_prefix_tokens"]]  # too-short starts are not worth a snapshot
+                    if n >= 300]  # exercise both tiers independently of production prompt size
         self.assertEqual(len(expected), 2)
         self.assertEqual(rendered["shared"], expected)
         self.assertEqual(rendered["shared"][-1], len((system + "|" + prompts.shared_launch_prefix(task)).encode()))
@@ -152,7 +153,7 @@ class PromptDate(unittest.TestCase):
 
     def test_fresh_run_marks_the_common_tools_before_role_specific_definitions(self):
         task = state.L['tasks'][self.tid]
-        ordinary = {'type': 'function', 'function': {'name': 'read', 'description': 'common ' * 700}}
+        ordinary = {'type': 'function', 'function': {'name': 'custom_common', 'description': 'common ' * 700}}
         role = {'type': 'function', 'function': {'name': 'cointos_finish', 'description': 'role contract'}}
         body = {'messages': self.messages('today'), 'tools': [role, ordinary]}
         body['messages'][-1]['content'] = prompts.launch_text(task, tasks.SYSTEM)
@@ -165,7 +166,7 @@ class PromptDate(unittest.TestCase):
 
         with patch.object(gateway.BACKEND, 'render', side_effect=render) as renderer:
             rendered = gateway.render_request(body, 'agent', state.CONFIG['work_model'], {})
-        boundary = len(('read:' + ordinary['function']['description'] + '\n').encode())
+        boundary = len(('custom_common:' + ordinary['function']['description'] + '\n').encode())
         self.assertIn(boundary, rendered['shared'])
         self.assertGreaterEqual(boundary, state.CONFIG['scheduler']['shared_prefix_tokens'])
         self.assertEqual(renderer.call_args_list[0].args[2]['tools'], [ordinary, role])
@@ -203,7 +204,7 @@ class ToolPinning(unittest.TestCase):
         pinned = gateway.stable_tools(raw, 'first')
         self.assertEqual(pinned, gateway.stable_tools(tools('second'), 'second'))
         self.assertIn('$COINTOS_SCRATCH/opencode', pinned[0]['function']['description'])
-        self.assertIn('Keep every other rule.', pinned[0]['function']['description'])
+        self.assertNotIn('Keep every other rule.', pinned[0]['function']['description'])
         self.assertEqual(pinned[0]['function']['parameters'], raw[0]['function']['parameters'])
         self.assertEqual(raw, before)
         # Relauching on a fresh run still resolves the current run's own path.
@@ -227,7 +228,9 @@ class ToolPinning(unittest.TestCase):
         self.assertEqual(task['tool_context'], 'legacy')
         task.pop('tool_context')
         ordinary[0]['function']['name'] = 'read'
-        self.assertEqual(gateway.stable_tools(ordinary, 'current'), ordinary)
+        shortened = gateway.stable_tools(ordinary, 'current')
+        self.assertNotIn('/installed/state/agents/old', shortened[0]['function']['description'])
+        self.assertEqual(shortened[0]['function']['name'], 'read')
         self.assertIs(gateway.stable_tools(ordinary, 'unmanaged'), ordinary)
 
     def test_cointos_contracts_refresh_while_other_tool_prefixes_remain_pinned(self):
@@ -247,6 +250,19 @@ class ToolPinning(unittest.TestCase):
         self.assertEqual(gateway.stable_tools(newer, "agent"), refreshed)
         self.assertIsNone(gateway.stable_tools(None, "agent"))
         self.assertEqual(gateway.stable_tools(newer, "someone-else"), newer)
+
+    def test_unmanaged_tools_are_not_advertised_in_fresh_or_retained_profiles(self):
+        support.fresh_ledger(self)
+        task = tasks.create('steward', tasks.SYSTEM, 'minimal', 'Inspect.', [6])
+        state.L['agents']['a'] = {'task': task['id']}
+        raw = [{'type': 'function', 'function': {'name': name}} for name in ('read', 'task', 'todowrite', 'skill', 'cointos_finish')]
+        actual = gateway.stable_tools(raw, 'a')
+        self.assertEqual([t['function']['name'] for t in actual], ['read', 'cointos_finish'])
+        task['tool_context'] = 'old-profile'
+        state.L['system_contexts']['old-profile'] = json.dumps(raw)
+        actual = gateway.stable_tools(raw, 'a')
+        self.assertEqual([t['function']['name'] for t in actual], ['read', 'cointos_finish'])
+
 
 
 class VolatileStartup(unittest.TestCase):

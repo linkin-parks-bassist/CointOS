@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-03T18:18:31+11:00"
+revised_at: "2026-11-09T05:51:47+11:00"
 ---
 
-Coin reread because two defects combined. Both repairs are installed and a live pair of wakes confirmed them with no agents running: a turn after a prompt change read all 19,628 tokens and took 61 seconds to its first words, three rounds then ran at generation speed with no lane switch, and the next wake restored 15,860 of 18,379 tokens in 0.78 seconds and finished in 12 seconds. Changing Coin's prompt or tools still costs one full read on its next turn. A wake's first response also includes up to 384 tokens of reasoning, about 24 seconds. Preempting a running agent has not been timed.
+Coin reuses cached context, but recent loaded llama-server requests still diverge. Event1794163345 restored25,772/25,773 tokens;1794163745 changed20,361→20,320 tokens and restored0 with diverged=true. Subsequent switches restored3,072,8,192 and14,354 tokens. The changed input and cause remain unverified. This contradicts consistent prefix retention, not the existence of caching. Earlier Gufo repairs below had an idle-lane wake restoring15,860/18,379 tokens in0.78s and finishing in12s; that historical result does not qualify today's loaded path.
 
 **Requests diverged from Coin's resident state.** `coin.complete` appended a `<cointos-message-times>` user message as each request's tail without retaining it, and Coin dropped generated reasoning, so the next request differed at that position (for example held 15,075, next 16,788, common 14,104). Gufo resident state cannot truncate, so `lanes.switch` needed a compatible snapshot. The block is present from c999367 (2026-10-24), and restored shares were already partial on 2026-10-22, when the event logs begin.
 

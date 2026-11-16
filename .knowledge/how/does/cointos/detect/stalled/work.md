@@ -1,9 +1,11 @@
 ---
 status: green
-revised_at: "2026-10-22T07:47:04+11:00"
+revised_at: "2026-11-10T06:23:37+11:00"
 ---
 
-Self-check covers idle lanes with work waiting, priority pre-emption, starvation, agent silence, repeated thoughts, stalled thoughts, stray processes, dead dependencies, recovery ownership, memory bounds and journal writability. Recovery continuation derives from the original assignment and its current canonical recovery controller's runnable children, including children queued before controller exhaustion. Their full closure must avoid holds, dead/cyclic edges and backedges to the failed origin. Old-version children cannot hide current blockage. A valid continuation does not complete failed runs; absence of both an active owner and valid continuation is the recovery-owner failure.
+Self-check covers idle lanes with work waiting, delayed Coin preemption and unapplied winning current lottery draws, agent silence, repeated thoughts, stalled thoughts, stray processes, dead dependencies, recovery ownership, memory bounds and journal writability. Recovery continuation derives from the original assignment and its current canonical recovery controller's runnable children, including children queued before controller exhaustion. Their full closure must avoid holds, dead/cyclic edges and backedges to the failed origin. Old-version children cannot hide current blockage. A valid continuation does not complete failed runs; absence of both an active owner and valid continuation is the recovery-owner failure.
+
+Coin wait checks ignore obsolete usage scores and unsaved-reader protection; peer checks retain read protection. The overdue clock does not reset at each global slice. Losing a weighted lottery alone is not a starvation-check failure.
 
 An agent with no thought or OpenCode event is silent after checks.agent_silent_seconds (600), or checks.tool_silent_seconds (660, above OpenCode's tool cap) while running tools after a tool-call reply; it stops and resumes in its session. A held thought must advance preparation or generation within checks.thought_stalled_seconds (60); lane waits do not count. Successful bounded rereading after displacement/cache loss refreshes progress below an earlier read frontier; snapshot restoration or failed steps do not. The daemon cancels stalled thoughts at a safe step boundary.
 

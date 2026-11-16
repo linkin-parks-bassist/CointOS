@@ -26,6 +26,6 @@ class Summary(unittest.TestCase):
         for line in ("implementation 1, test-contract 1", "Gate returns:         test-contract 1",
                      "Infeasible briefs:    1", "Worker items started: 1", "Legacy manager passes: 1",
                      "First Responders: 1", "Planning assignments: 1", "Recorded operator generation: 75s / 1300 tokens",
-                     "0 complete, 1 blocked", "Packet test failures: 1", "Recoveries per landing: 1.00",
+                     "0 complete, 1 blocked", "Submission validation failures: 1", "Recoveries per landing: 1.00",
                      "Implementation share of landings: 50%", "infeasible p:c: a.h::f"):
             self.assertIn(line, text)

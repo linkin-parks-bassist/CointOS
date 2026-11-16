@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-31T16:11:20+11:00"
+revised_at: "2026-11-09T19:31:31+11:00"
 ---
 
-The installed empty-assistant rendering fix uses `patches/llama-b10723-explicit-continuation.patch` after the stop/state patches. Stock b10723 treats explicit `continue_final_message: false` as automatic continuation, stripping an empty final assistant's opening. The patch honors explicit false; the adapter requests a new generation opening while retaining every message. Eight CPU-only native fixtures verify exact prefix stability through the next reply, preserved tools/history and reasoning accounting; focused adapter fixtures pass. The bundle changes only the server implementation; compute libraries and MTP policy are unchanged. `/tmp/cointos-explicit-continuation-check/evidence.json` records native validation. `/tmp/cointos-explicit-install-evidence.json` verifies the installed pair, recipe/session preservation and ten passing checks. Sustained managed recovery remains unproved.
+Earlier packaged llama-server b11393/dbe4c3ed4 ignored explicit `continue_final_message:false` after an empty assistant: it removes the generation opener (reader thinking=false); two final assistants yield HTTP400. Native evidence: deployment-parity/continuation-fixture.json. The `--no-prefill-assistant` workaround passes four native render fixtures: fresh, empty, answer-plus-empty and explicit reasoning continuation (render-flag-results.json). This disables implicit auto-continuation; callers needing continuation must request it explicitly. Retained on DSpine (server-build owner). Its role in the original failure is unproved; the worker reconstruction ends in tools. The historical b10723 patch's /opt bundle is absent; server-build owner records current selection. Gufo is the rollback baseline.
 
 `backend_llama.prefill` rejects errors or missing terminal events and verifies cached length. First progress exposes retained state; material loss raises `Lost` before unbounded rereading. `think` verifies retention by extending the prefix with its pending real token, then checks terminal status, complete count and cached length in a non-streaming token-only completion. Both use configured server timeouts. Generation duration starts after preparation, so verification does not spend generation budget.
 

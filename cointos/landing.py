@@ -20,7 +20,7 @@ SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 def exact(*commits) -> None:
     if any(not isinstance(c, str) or not SHA.fullmatch(c) for c in commits):
-        raise ValueError("landing requires exact commit SHAs")
+        raise git.OperationError("landing requires exact commit SHAs")
 
 
 repository_lock = git.repository_lock
@@ -30,6 +30,25 @@ def acceptance_result(worker: dict) -> dict:
     """Return the durable acceptance, including publication kind and measured gate."""
     acceptance = copy.deepcopy(worker['acceptance'])
     return {'ok': True, 'commit': acceptance['commit'], 'acceptance': acceptance}
+
+
+def push_after_acceptance(where: dict, accepted: dict) -> dict:
+    """A remote push is best-effort publication, never another acceptance gate."""
+    if (accepted.get('acceptance') or {}).get('via') != 'landing':
+        return accepted
+    try:
+        with repository_lock(where['path']):
+            outcome = git.push_upstream(where['path'], where['main_branch'],
+                                        CONFIG['timeouts'].get('push_seconds', 60))
+    except Exception as error:
+        outcome = {'status': 'failed', 'error': str(error)[:3000]}
+    # Even a journal failure cannot turn already-durable local acceptance into a refusal.
+    try:
+        with LOCK:
+            log('landing push', project=where['name'], landed_commit=accepted['commit'], **outcome)
+    except Exception:
+        pass
+    return {**accepted, 'push': outcome}
 
 
 def tests_of(worker: dict, *, required: bool = False) -> list[str]:
@@ -74,7 +93,7 @@ def submitted_tests(worker: dict) -> list[str]:
         packets.require_resolved(worker)
         tests = tests_of(worker, required=True)
         if worker['receipt']['evidence'].get('tests') != tests:
-            raise ValueError('receipt test-contract commits differ from the current accepted dependencies; '
+            raise ValueError('receipt test-contract requirements differ from the current accepted dependencies; '
                              'the worker must validate and submit the current packet before review')
     return tests
 
@@ -99,7 +118,7 @@ def current(integration: dict, run: str | None, submitted: dict, repo: str, main
             or git.head(tree) != commit or git.head(repo, main) != parent
             or git.head(repo, worker["branch"]) != submitted["receipt"]["evidence"]["commit"]
             or not git.clean(worker["worktree"]) or not git.clean(tree)):
-        raise ValueError("task or Git refs changed during validation; review and retry")
+        raise ValueError("the assignment or prepared files changed during validation; inspect the current task and retry")
     return worker
 
 
@@ -129,20 +148,20 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
         where, worker = dict(tasks.place(integration)), copy.deepcopy(worker)
     if replay:
         save()  # retry durability before acknowledging a previously settled result
-        return acceptance_result(worker)
+        return push_after_acceptance(where, acceptance_result(worker))
     repo, main, tree = where["path"], where["main_branch"], integration["worktree"]
     rules = where.get("test_policy")
     if not rules:
         raise ValueError("project has no configured test_policy")
     with repository_lock(repo):
         if git.head(tree) != commit or not git.clean(tree):
-            raise ValueError("candidate must be the integrator's clean HEAD")
+            raise git.OperationError("candidate must be the integrator's clean HEAD")
         parent = git.head(repo, main)
         if not git.contains(repo, parent, commit):
-            raise ValueError("candidate must contain current main; run cointos review again")
+            raise ValueError("accepted product changed; run cointos review again")
         submitted = worker["receipt"]["evidence"]["commit"]
         if git.head(repo, worker["branch"]) != submitted or not git.clean(worker["worktree"]):
-            raise ValueError("worker branch is not the clean commit its completion receipt submitted")
+            raise git.OperationError("worker branch is not the clean commit its completion receipt submitted")
         with LOCK:
             current(L["tasks"][task_id], run, worker, repo, main, parent, tree, commit)
         counts = None
@@ -152,7 +171,7 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
                     or intent.get("receipt_run") != worker["receipt"]["run"]
                     or intent.get("record_version") != worker.get("record_version")
                     or intent.get("run") != run):
-                raise ValueError("commit reached main without passing the landing gate")
+                raise git.OperationError("commit reached main without passing the landing gate")
         else:
             check_candidate(repo, worker, parent, commit, rules)
             counts, caused = contracts.suite(repo, parent, commit, rules, CONFIG["timeouts"]["validation_seconds"],
@@ -213,7 +232,7 @@ def land(task_id: str, commit: str, run: str | None) -> dict:
                 log("workspace preserved", project=where["name"], **publication)
             result = acceptance_result(held)
         save()
-    return result
+    return push_after_acceptance(where, result)
 
 
 def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None) -> dict:
@@ -228,7 +247,7 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
         if not worker or worker["kind"] != "item" or worker["stage"] != "implementation" or worker["status"] != "review":
             raise ValueError("incorporate requires an implementation in review")
         if worker["receipt"]["evidence"]["commit"] != worker_commit:
-            raise ValueError("the worker commit must be the one its completion receipt submitted")
+            raise git.OperationError("the worker commit must be the one its completion receipt submitted")
         integration = integrating(worker)
         if integration is not None:
             lifecycle.require_run(integration, run)
@@ -236,14 +255,14 @@ def incorporate(worker_id: str, commit: str, worker_commit: str, run: str | None
     repo, main = where["path"], where["main_branch"]
     with repository_lock(repo):
         if git.head(repo, main) != commit:
-            raise ValueError("incorporation requires the current main HEAD, not a historical ancestor")
+            raise git.OperationError("incorporation requires the current main HEAD, not a historical ancestor")
         if git.head(repo, worker["branch"]) != worker_commit or not git.clean(worker["worktree"]):
-            raise ValueError("submitted worker changed or has uncommitted work")
+            raise ValueError("submitted files changed after completion; preserve them and return the assignment for verification")
         if worker["receipt"]["disposition"] != "complete":
             raise ValueError("incorporation requires the worker's complete receipt")
         tests = submitted_tests(worker)
         if not contracts.tests_landed(repo, commit, tests, where["test_policy"]):
-            raise ValueError("this packet's tests are not on main; land it with cointos land so they land with it")
+            raise ValueError("this assignment's tests are not published; use cointos land to accept the implementation and its tests together")
         contracts.incorporated(repo, worker, commit, where["test_policy"])
         with LOCK:
             if integrating(worker) is not integration:

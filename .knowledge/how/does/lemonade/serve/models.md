@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-19T06:11:03+11:00"
+revised_at: "2026-11-16T13:37:49+11:00"
 ---
 
-Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared with other clients. Control: `http://127.0.0.1:13305`; logs: `journalctl -u lemond`. CointOS must tolerate another client changing the backend URL. MiniCPM was explicitly unloaded at the user's request. Coin and construction now select the separate Gufo Qwen process owned by what/is/the/gufo/backend/candidate/for/cointos.md.
+Lemonade is the machine-level model service (`lemond.service`, user `lemonade`) shared with other clients. Control: `http://127.0.0.1:13305`; logs: `journalctl -u lemond`. CointOS must tolerate another client changing the backend URL. MiniCPM was explicitly unloaded at the user's request. David requires Gufo to be a backend managed by Lemonade. The existing CointOS Gufo adapter instead starts a private gufo-control scope directly; Lemonade cannot unload it. That deployment violates the required service ownership. Moving its native stepping/resident-state interface under Lemonade remains unimplemented; do not describe the independent runner as the intended architecture. Flash-Next uses the Lemonade llama.cpp route.
 
 `GET /api/v1/health` reports loaded state, backend URL, effective launch command, recipe options, PID and pin. CointOS refreshes this map during model checks. `POST /v1/load` accepts model name, context size, llama.cpp arguments, merge/save flags and pin. CointOS uses `merge_args: false`, `save_options: false`: operational config determines shape without rewriting saved recipes. Unload addresses one model; absence may return 404. Config removal does not unload pinned models.
 

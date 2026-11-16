@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from cointos import coin, coin_input, coin_routing
+from tests.test_coin import sent_reply
 
 
 class Routing(unittest.TestCase):
@@ -83,7 +84,7 @@ class Routing(unittest.TestCase):
         self.assertEqual([v['id'] for v in coin_input.pending(coin.COIN_STATE / 'inputs')], [2])
         self.assertFalse((self.dest / 'photo_2.jpg').exists())
         inbox = Mock(); inbox.get.side_effect = KeyboardInterrupt
-        with patch.object(coin, 'complete', return_value={'role': 'assistant', 'content': 'Caption received.'}) as model, \
+        with patch.object(coin, 'complete', return_value=sent_reply('Caption received.')) as model, \
                 patch.object(coin, 'send'), self.assertRaises(KeyboardInterrupt):
             coin.worker('fixture-token', inbox, {7})
         self.assertIn('This one needs a different folder', str(model.call_args.args[1]))
@@ -128,7 +129,7 @@ class Routing(unittest.TestCase):
             route = next(m['content'] for m in messages if '<cointos-photo-route>' in m.get('content', ''))
             self.assertIn(str(self.dest), route)
             self.assertIn('"operation": "move"', route)
-            return {'role': 'assistant', 'content': 'Received your instruction.'}
+            return sent_reply('Received your instruction.')
         with patch.object(coin, 'recent', return_value=[]), patch.object(coin, 'complete', side_effect=answer), patch.object(coin, 'send'):
             coin.turn('fixture-token', 7, 70, ['Stop the photo rule'], lambda: [], None)
 

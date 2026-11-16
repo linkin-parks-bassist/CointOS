@@ -1,0 +1,101 @@
+diff --git a/common/speculative.cpp b/common/speculative.cpp
+index e6290ea..016c2c3 100644
+--- a/common/speculative.cpp
++++ b/common/speculative.cpp
+@@ -32,15 +32,16 @@
+ #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
+ #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+ 
+-// Rebuild seq_id's draft sampler at the target's temperature: rejection weighs q against p, so
+-// both have to sample alike. Only temp and seed carry over; the draft keeps its own top_k.
++// Reuse the target's temperature and stateless filters for sampled proposals.
++// Rejection uses the actual proposal distribution q.
+ static void spec_retune(
+         std::vector<common_sampler_ptr> & smpls,
+         std::vector<common_params_sampling> & cfg,
+         const llama_model * model,
+         llama_seq_id seq_id,
+         float temp,
+-        uint32_t seed) {
++        uint32_t seed,
++        const common_params_sampling * target) {
+     if (cfg.size() != smpls.size()) {
+         const size_t n_old = cfg.size();
+         cfg.resize(smpls.size());
+@@ -52,21 +53,29 @@ static void spec_retune(
+     }
+ 
+     auto & cur = cfg[seq_id];
++    const int32_t top_k = target ? target->top_k : 10;
++    const float top_p = target ? target->top_p : 1.0f;
++    const float min_p = target ? target->min_p : 0.0f;
+ 
+-    if (cur.temp == temp && cur.seed == seed) {
++    if (cur.temp == temp && cur.seed == seed && cur.top_k == top_k && cur.top_p == top_p && cur.min_p == min_p) {
+         return;
+     }
+ 
+     cur.temp = temp;
+     cur.seed = seed;
++    cur.top_k = top_k;
++    cur.top_p = top_p;
++    cur.min_p = min_p;
+ 
+     common_params_sampling sparams;
+     sparams.no_perf  = false;
+-    sparams.top_k    = 10;
++    sparams.top_k    = cur.top_k;
++    sparams.top_p    = cur.top_p;
++    sparams.min_p    = cur.min_p;
+     sparams.temp     = cur.temp;
+     // must be explicit, the default reseeds at random; mixed so it differs from the target's
+     sparams.seed     = cur.seed == LLAMA_DEFAULT_SEED ? cur.seed : cur.seed ^ 0x85ebca6bu;
+-    sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE };
++    sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TOP_P, COMMON_SAMPLER_TYPE_MIN_P, COMMON_SAMPLER_TYPE_TEMPERATURE };
+ 
+     smpls[seq_id].reset(common_sampler_init(model, sparams));
+ }
+@@ -374,7 +383,7 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
+ 
+             // result_q is only set when the caller wants rejection, so it also gates the retune
+             if (dp.result_q) {
+-                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp.temp, dp.seed);
++                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp.temp, dp.seed, dp.sampling);
+             }
+ 
+             // a reset reseeds the chain, which breaks probabilistic drafting
+@@ -1824,7 +1833,7 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
+ 
+             // result_q is only set when the caller wants rejection, so it also gates the retune
+             if (dp.result_q) {
+-                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp.temp, dp.seed);
++                spec_retune(smpls, smpls_cfg, llama_get_model(ctx_dft), seq_id, dp.temp, dp.seed, dp.sampling);
+             }
+ 
+             // a reset reseeds the chain, which breaks probabilistic drafting
+diff --git a/common/speculative.h b/common/speculative.h
+index 4262327..bcfca6a 100644
+--- a/common/speculative.h
++++ b/common/speculative.h
+@@ -79,6 +79,9 @@ struct common_speculative_draft_params {
+     // the target's temp and seed, read only when the drafter samples probabilistically
+     float    temp = 1.0f;
+     uint32_t seed = LLAMA_DEFAULT_SEED;
++
++    // Optional target filters; valid during draft(). Null keeps the legacy proposal filters.
++    const common_params_sampling * sampling = nullptr;
+ };
+ 
+ common_speculative_draft_params & common_speculative_get_draft_params(common_speculative * spec, llama_seq_id seq_id);
+diff --git a/tools/server/server-context.cpp b/tools/server/server-context.cpp
+index 78c8ef1..9b02712 100644
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -3917,6 +3917,7 @@ private:
+                             /* .result_q = */ spec_reject ? &slot.spec_draft_q : nullptr,
+                             /* .temp     = */ slot.task->params.sampling.temp,
+                             /* .seed     = */ slot.task->params.sampling.seed,
++                            /* .sampling = */ &slot.task->params.sampling,
+                         };
+ 
+                         drafting.push_back(&slot);

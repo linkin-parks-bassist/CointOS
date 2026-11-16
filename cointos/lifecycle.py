@@ -7,7 +7,8 @@ are checked as evidence before it is recorded; the functions here alone transiti
 state and write a queue record's one terminal fact, `done`. Callers hold LOCK.
 
     waiting --start--> running --receipt--> review (complete worker) | done | failed (blocked work)
-    running --run ended or stopped without receipt--> waiting (retry) | failed (runs exhausted)
+    running --unexpected unreceipted exit, before/after model admission--> failed (First Responder)
+    running --authorised interruption--> waiting | failed
     review  --landed--> done        review --returned--> waiting
 """
 from __future__ import annotations
@@ -38,25 +39,21 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
     naming what to fix. A branch task leaves nothing uncommitted; a merged one has landed
     before it completes; a test packet changes only tests; tested work has passed its check."""
     found = {}
-    watched = L["tasks"].get(task.get("supervises")) if task["kind"] == "supervise" else None
-    if watched and tasks.active(watched) and disposition == "complete" and not task.get("insisted_on_retiring"):
-        task["insisted_on_retiring"] = True
-        raise ValueError(f"{watched['id']} is still running, and you normally stay until it ends. Wait with "
-                         "cointos_inbox wait=true, then look at what it has done since. Retire only if you are "
-                         "certain it is on course and will stay there: finish complete again with your evidence. "
-                         "Another Supervisor double-checks after its next 20 GPU minutes.")
+    if task.get('must_split') and not (checked or {}).get('two_way_split'):
+        raise ValueError('the second supervisor must hand off exactly two fresh worker jobs; it cannot retire or revise')
     if task['kind'] == 'steward' and disposition == 'complete':
         found['scout_result'] = scout_evidence(task, (checked or {}).get('scout_result'))
-    if task["role"] == "manager" and disposition == "complete":
-        problems = queues.frontier_problems(task["place"], owner=task["id"])
+    if (task["role"] == "manager" or task.get('must_split')) and disposition == "complete":
+        project = L['tasks'][task['supervises']]['place'] if task.get('must_split') else task['place']
+        problems = queues.frontier_problems(project, owner=task["id"])
         if problems:
             raise ValueError("queued work cannot continue; fix it before finishing, or finish blocked with the "
                              "unresolved cause:\n" + "\n".join(problems))
     lands = schema.KINDS[task["kind"]]["lands"]
     if task["branch"] is not None:
-        if not git.clean(task["worktree"]):
-            raise ValueError("commit everything on your branch before finishing; uncommitted now (git status):\n"
-                             + uncommitted(task["worktree"]))
+        if disposition == 'complete' and not git.clean(task["worktree"]):
+            raise ValueError("workspace changed during submission; submit again to capture the current files: "
+                             + ', '.join(contracts.working_paths(task['worktree'])))
         found["commit"] = git.head(task["worktree"])
         where = tasks.place(task)
         if lands == "review":
@@ -71,12 +68,11 @@ def evidence(task: dict, disposition: str, checked: dict | None = None) -> dict:
             if (disposition == "complete" and task.get("stage") in schema.TESTED + ("test-contract",)
                     and where.get("test_policy")):
                 if (checked or {}).get("commit") != found["commit"]:
-                    raise ValueError("the packet's tests have not run on this commit; run cointos finish again")
+                    raise ValueError("the packet's tests have not run on these files; submit with cointos finish again")
                 found.update(checked)
         elif lands == "merge" and disposition == "complete" and not git.contains(where["path"], task["branch"],
                                                                                  where["main_branch"]):
-            raise ValueError(f"land your committed branch with `cointos merge` before finishing: {task['branch']} "
-                             f"is {ahead(where, task)} commit(s) ahead of {where['main_branch']}")
+            raise ValueError("publish the submitted maintenance files with cointos merge before finishing")
     if task["kind"] == "garden" and disposition == "complete":
         health = garden_health(task)
         if health.get('deferred'):
@@ -106,6 +102,12 @@ def scout_evidence(task: dict, result) -> dict:
         if problems:
             raise ValueError('repair the manager handoff before completing:\n' + '\n'.join(problems))
         return {'kind': kind, 'handoff': handoff}
+    if kind == 'recovery_handoff':
+        target = L['tasks'].get(result.get('handoff'))
+        if (not target or target['role'] != 'first-responder' or target.get('cancelled')
+                or target['status'] == 'failed'):
+            raise ValueError('recovery_handoff requires a live or checked-complete First Responder task')
+        return {'kind': kind, 'handoff': target['id']}
     if kind == 'no_action':
         names = result.get('checked_projects')
         required = {p['name'] for p in tasks.enabled_projects()}
@@ -127,7 +129,7 @@ def scout_evidence(task: dict, result) -> dict:
             raise ValueError('user_decision requires a specific new question needing personal authority; '
                              'managerial judgment about approved work needs manager_handoff')
         return {'kind': kind, 'question': question.strip()}
-    raise ValueError('unknown scout_result.kind; choose no_action, manager_handoff or user_decision')
+    raise ValueError('unknown scout_result.kind; choose no_action, manager_handoff, recovery_handoff or user_decision')
 
 
 def scout_frontiers(read_plans=False) -> list[dict]:
@@ -165,6 +167,14 @@ def repair_evidence(task: dict) -> dict:
     """A repair receipt needs a changed origin or a real runnable handoff, not just prose."""
     origin = task["repair_origin"]
     source = L["tasks"].get(origin["task"])
+    if source and source.get('must_split'):
+        subject = L['tasks'].get(source.get('supervises'))
+        successor = L['tasks'].get((subject or {}).get('split_supervisor'))
+        subject_record = queues.records().get((subject or {}).get('record'))
+        if (subject_record and not subject_record.get('done') and not subject_record.get('replaced_by')
+                and not subject.get('cancelled') and successor and successor['id'] != source['id'] and tasks.pending(successor)
+                and successor.get('must_split') and successor.get('supervises') == source.get('supervises')):
+            return {'repair_origin': origin, 'split_supervisor': successor['id']}
     record = queues.records().get(origin["task"]) or queues.records().get((source or {}).get("record"))
     if source and source.get("record") and record is None:
         return {"repair_origin": origin, "withdrawn_record": source["record"]}
@@ -231,11 +241,6 @@ def uncommitted(worktree, limit: int = 12) -> str:
     return "\n".join(lines[:limit] + ([f"... and {len(lines) - limit} more"] if len(lines) > limit else []))
 
 
-def ahead(where: dict, task: dict) -> str:
-    counted = git.result(where["path"], "rev-list", "--count", f"{where['main_branch']}..{task['branch']}")
-    return counted.stdout.strip() if counted.returncode == 0 else "some"
-
-
 def garden_health(task: dict) -> dict:
     """A finished batch's tree as main now has it; still-unresolved selected leaves alert the user
     instead of repeating the batch."""
@@ -284,6 +289,7 @@ def submit(task_id: str, run: str | None, disposition: str, summary: str, checke
 
 def _receive(task: dict, run: str | None, disposition: str, summary: str, found: dict) -> dict:
     """Record a checked receipt and apply its one transition."""
+    task['last_run_usage'] = frontier.usage(task, L, now())
     receipt = {"run": run, "disposition": disposition, "summary": summary, "evidence": found, "at": now()}
     note = f"{disposition}: {summary}"[:CONFIG["result_chars"]]
     record = queues.records().get(task["record"]) if task["record"] else None
@@ -321,7 +327,7 @@ def landed(integration: dict | None, run: str | None, worker: dict, acceptance: 
     if worker["status"] != "review":
         raise ValueError(f"{worker['id']} is not in review")
     if worker["receipt"]["evidence"]["commit"] != acceptance["worker_commit"]:
-        raise ValueError("the landed worker commit is not the one its receipt submitted")
+        raise ValueError("the accepted worker files do not match its submitted receipt")
     accept_worker(worker, acceptance)
     if live:
         _receive(integration, run, "complete", f"{worker['item']} accepted at {acceptance['commit']}",
@@ -357,6 +363,21 @@ def returned(integration: dict, run: str | None, notes: str) -> None:
     worker = L["tasks"][integration["worker"]]
     if worker["status"] != "review":
         raise ValueError(f"{worker['id']} is not in review")
+    if worker.get('session'):
+        previous = worker.setdefault('previous_sessions', [])
+        if worker['session'] not in previous:
+            previous.append(worker['session'])
+    for field in ('system_context', 'tool_context', 'system_context_v2', 'tool_context_v2',
+                  'supervision_tokens', 'supervision_threshold',
+                  'supervision_checked_tokens', 'split_supervisor', 'recovery_note', 'recovery_context'):
+        worker.pop(field, None)
+    worker.update(session=None, runs=0, fresh_retries=0)
+    record = queues.records().get(worker.get('record')) or {}
+    worker['budget'] = schema.budget(CONFIG, record.get('budget'), role=worker['role'])
+    snapshots.forget_owner(worker['id'])
+    for watcher in list(L['tasks'].values()):
+        if watcher.get('supervises') == worker['id'] and tasks.pending(watcher):
+            cancel_task(watcher, 'cointos', 'review returned work to a fresh worker')
     _settle(worker, "waiting", "sent back by the integrator", review=notes.strip(), receipt=None)
     worker["rejections"] = worker.get("rejections", 0) + 1
     _receive(integration, run, "returned", notes.strip(), {"worker": worker["id"]})
@@ -402,6 +423,12 @@ def revise(key: str, by: str, reason: str, brief: str, stage=None, reasoning_eff
         raise ValueError(f"{key} is already accepted; queue new work instead")
     if record.get("replaced_by"):
         raise ValueError(f"{key} was superseded by {', '.join(record['replaced_by'])}")
+    if (task and task['status'] == 'failed'
+            and (task.get('submission_failure') or {}).get('category') == 'test' and by != 'user'):
+        controller = frontier.controller(task)
+        if controller is None or controller['id'] != by:
+            raise ValueError('product-test failure requires independent recovery diagnosis before revising the worker; '
+                             'preserve its candidate and failure evidence for the First Responder')
     if task and task["status"] == "review" and any(
             t["kind"] == "integrate" and t["worker"] == key and t["status"] == "running" for t in L["tasks"].values()):
         raise ValueError(f"{key} is being integrated now; hold it and revise after the integration ends")
@@ -441,7 +468,7 @@ def refresh_assignment(key: str, by: str, reason: str, record: dict) -> None:
                 snapshots.forget_owner(integration["id"])
 
 
-def replace(record: dict, replacements: list[str], by: str, reason: str) -> None:
+def replace(record: dict, replacements: list[str], by: str, reason: str, *, carry_material=True) -> None:
     """Repoint live dependencies and their assignments as one validated graph change."""
     def preflight(changed):
         for key in changed:
@@ -451,7 +478,10 @@ def replace(record: dict, replacements: list[str], by: str, reason: str) -> None
             if any(t["kind"] == "integrate" and t["worker"] == key
                    and t["status"] == "running" for t in L["tasks"].values()):
                 raise ValueError(f"{key} is being integrated; no records changed")
-    changed = queues.replace(record, replacements, reason, preflight=preflight)
+    changed = queues.replace(record, replacements, reason, preflight=preflight, carry_material=carry_material)
+    source = queues.current(record)
+    if source and source.get('agent') and owns(source, source['agent']):
+        stop(source['agent'], 'assignment replaced by ' + ', '.join(record['replaced_by']), requeue=False, charge=False)
     # A correction handed to one successor stays a correction, or its result would bind nothing.
     successors = [queues.records().get(f"{record['project']}:{name}") for name in record['replaced_by']]
     if record.get('correction') and len(successors) == 1 and successors[0]:
@@ -462,7 +492,7 @@ def replace(record: dict, replacements: list[str], by: str, reason: str) -> None
         refresh_assignment(key, by, reason, queues.records()[key])
 
 
-def replacement_handoff(task: dict, run: str, record: dict, children: list[str]) -> dict:
+def replacement_handoff(task: dict, run: str, record: dict, children: list[str], checked=None, summary=None) -> dict:
     """Check the complete proposed handoff before repointing work and receipting its owner.
 
     The API holds LOCK and persists both facts together. The preview has no run, task,
@@ -470,17 +500,18 @@ def replacement_handoff(task: dict, run: str, record: dict, children: list[str])
     """
     require_run(task, run)
     reason = 'replaced by ' + task['id']
-    proposed, _ = queues.replacement(record, children, reason)
+    carry_material = not (checked or {}).get('two_way_split')  # Mandatory children already have exact prepared snapshots.
+    proposed, _ = queues.replacement(record, children, reason, carry_material=carry_material)
     current = L['queue']
     try:
         L['queue'] = proposed
-        found = evidence(task, 'complete')
+        found = evidence(task, 'complete', checked)
     finally:
         L['queue'] = current
-    replace(record, children, task['id'], reason)
+    replace(record, children, task['id'], reason, carry_material=carry_material)
     task['replacements'] = list(record['replaced_by'])
     found['replacement'] = list(children)
-    summary = f"Handed {queues.key(record)} to " + ', '.join(f"{record['project']}:{n}" for n in record['replaced_by'])
+    summary = summary or f"Handed {queues.key(record)} to " + ', '.join(f"{record['project']}:{n}" for n in record['replaced_by'])
     return _receive(task, run, 'complete', summary, found)
 
 
@@ -488,6 +519,8 @@ def replacement_handoff(task: dict, run: str, record: dict, children: list[str])
 
 def require_start(task: dict, agent_id: str | None = None) -> None:
     """Validate admission before allocating execution or changing ownership."""
+    if task.get('split_supervisor'):
+        raise ValueError('this worker earned its second supervisor and must be split before more implementation')
     if task.get("admission_hold"):
         raise ValueError(f"task {task['id']} is held; explicitly resume it first")
     if task["status"] != "waiting" or any(a["task"] == task["id"] for a in L["agents"].values()):
@@ -498,6 +531,7 @@ def require_start(task: dict, agent_id: str | None = None) -> None:
 
 def start(task: dict, agent_id: str) -> None:
     require_start(task, agent_id)
+    task.pop('run_failure', None)
     task.update(status="running", runs=task["runs"] + 1, agent=agent_id, receipt=None, note=None, updated_at=now())
 
 
@@ -514,7 +548,7 @@ def engaged(agent_id: str) -> None:
 
 def ended(agent_id: str, facts: dict) -> None:
     """The runner's report that a run is over. Reconciliation only: a receipted run is released;
-    an unreceipted one is retried or failed. Finish markers and exit codes are diagnostics."""
+    every unreceipted unexpected exit fails into First Responder recovery."""
     task = L["tasks"].get(L["agents"][agent_id]["task"])
     if not owns(task, agent_id):
         release(agent_id, "run ended")
@@ -523,15 +557,11 @@ def ended(agent_id: str, facts: dict) -> None:
     if facts.get("error"):
         detail += f"; {facts['error']}"
     agent = L["agents"][agent_id]
+    task['run_failure'] = agent_id
     if not agent.get("engaged"):
-        failures = task.get("launch_failures", 0) + 1
-        task["launch_failures"] = failures
-        if failures >= CONFIG["spawner"]["max_launch_failures"]:
-            task["admission_hold"] = "repeated infrastructure launch failure"
-            alert(f"Held {task['id']} after {failures} runs ended before reaching the model: {detail}")
-        stop(agent_id, f"run failed before reaching the model ({detail})", requeue=True, charge=False)
-        return
-    stop(agent_id, f"run ended without a completion receipt ({detail})", requeue=True)
+        task["launch_failures"] = task.get("launch_failures", 0) + 1
+        detail += '; before reaching the model'
+    stop(agent_id, f"run ended without a completion receipt ({detail})", requeue=False)
 
 
 def cancel(items: list[str], by: str, reason: str) -> list[str]:
@@ -554,8 +584,15 @@ def cancel(items: list[str], by: str, reason: str) -> list[str]:
         raise ValueError(f"{', '.join(dependents)} still depend on it; cancel them too or revise their Depends on")
     note = f"cancelled by {by}: {reason.strip()}"
     for key in items:
-        affected = [t for t in L["tasks"].values() if not tasks.settled(t)
-                    and (t["id"] == key or t.get("record") == key or (t["kind"] == "integrate" and t.get("worker") == key))]
+        owners = {key}
+        while True:
+            linked = {t['id'] for t in L['tasks'].values()
+                      if any(owner in owners for owner in (t.get('record'), t.get('worker'),
+                             t.get('supervises'), (t.get('repair_origin') or {}).get('task')))}
+            if linked <= owners:
+                break
+            owners |= linked
+        affected = [t for t in L['tasks'].values() if t['id'] in owners and t['status'] != 'done']
         for agent in [a for a in L["agents"].values() if a["task"] in {t["id"] for t in affected}]:
             release(agent["id"], note)
             threading.Thread(target=opencode.stop, args=(agent["id"],), daemon=True).start()
@@ -615,6 +652,7 @@ def stop(agent_id: str, reason: str, requeue: bool, charge: bool = True) -> None
     task = L["tasks"].get(agent["task"])
     if owns(task, agent_id):
         task["interrupted_at"] = now()
+        task['preserved_run'] = agent_id
         if not charge:
             task["runs"] -= 1
         if requeue and task["runs"] < CONFIG["spawner"]["max_runs_per_task"]:
@@ -668,19 +706,15 @@ def split(task_id: str, reason: str, by: str) -> dict:
     while f"{project['name']}:{queues.slug(name)}" in queues.records():
         attempt += 1
         name = f"split-{title}-{attempt}"
-    places = "\n".join(f"- {t['id']}: branch {t.get('branch') or 'none'}, checkout {t.get('worktree') or 'none'}"
-                       for t in (L["tasks"][s] for s in sorted(stopping)))
-    brief = (f"{source['id']} was far too big for one agent and has been stopped: {reason}\n\n"
-             f"Preserved work, including any uncommitted files in those checkouts:\n{places}\n"
-             f"Full evidence: cointos task {source['id']} --history.\n\n"
-             "Do not try to finish this job or send one agent back at it. Look at what those places already "
-             "hold and keep anything valuable by naming it in the piece that owns it. Then cut everything "
-             "that remains into many far smaller pieces, far more than feels necessary: each one a job its "
-             "author could picture whole before starting. If a piece still needs a list to describe it, it "
-             "is several pieces. Keep its accepted test dependencies. Publish only the next runnable pieces "
-             "and leave the rest in the product frontier.\n\n"
-             f"The assignment being replaced:\n{record['brief'] if record else source['brief']}")
+    brief = (f"{source['id']} was too big for one agent and has been stopped: {reason}\n\n"
+             f"Read cointos_task {source['id']} for current obligations and recent evidence. "
+             "Divide remaining behavior into much smaller clear jobs. Do not finish implementation "
+             "or send one worker back at the whole job. CointOS preserves authored material and carries "
+             "applicable prerequisites into children automatically. Publish the next runnable pieces; "
+             "leave remaining obligations in the product frontier.")
     item = queues.add(project, "command", name, brief)
+    from cointos import artifacts
+    artifacts.carry(queues.records()[f"{project['name']}:{item}"], source)
     if record is not None:
         replace(record, [item], by, f"too big for one agent: {reason}")
         if assignment:
@@ -698,7 +732,8 @@ def retry_fresh(agent_id: str, reason: str, packet: str) -> None:
     task = L["tasks"][L["agents"][agent_id]["task"]]
     fresh = task.get("fresh_retries", 0)
     if fresh >= schema.fresh_limit(CONFIG, task):
-        task.update(recovery_note=reason, recovery_context=packet, exhausted=True)  # the controller's preserved evidence
+        task.update(recovery_note=reason, recovery_context=packet, exhausted=True,
+                    run_failure=agent_id)  # the controller's preserved evidence
         stop(agent_id, reason + "; fresh retries exhausted", requeue=False)
         return
     task.update(session=None, fresh_retries=fresh + 1, recovery_note=reason, recovery_context=packet)
@@ -711,15 +746,16 @@ def fail(task: dict, reason: str) -> None:
     _settle(task, "failed", reason)
     if task["role"] not in ("worker", "integrator"):
         alert(f"Gave up on {task['title']} in {task['place']} after {task['runs']} runs: {reason}")
-    if task["kind"] == "integrate" and L["tasks"][task["worker"]]["status"] == "review":
+    if (task["kind"] == "integrate" and not task.get('run_failure')
+            and L["tasks"][task["worker"]]["status"] == "review"):
         _settle(L["tasks"][task["worker"]], "failed", "could not be integrated")
 
 
 def orphaned(task: dict) -> None:
-    """A running task whose run did not survive a daemon replacement waits again."""
-    interrupted = now()
-    task.update(status="waiting", agent=None, note="its agent was gone after a daemon restart",
-                interrupted_at=interrupted, updated_at=interrupted)
+    """A missing unreceipted run is a death, including across daemon replacement."""
+    task['interrupted_at'] = now()
+    task['run_failure'] = task.get('agent')
+    fail(task, 'its agent was gone after a daemon restart without a completion receipt')
 
 
 def release(agent_id: str, reason: str) -> None:
@@ -765,6 +801,11 @@ def retire(task: dict) -> bool:
     if (task["branch"] is None or not tasks.settled(task) or task.get("retired")
             or any(agent["task"] == task["id"] for agent in L["agents"].values())):
         return False
+    from cointos import artifacts
+    if (task.get('base_commit') or Path(task['worktree']).is_dir()) and any(
+            ref.get('task') == task['id'] and artifacts.material_key(ref) not in task.get('material_snapshots', {})
+            for ref in artifacts.pending_material()):
+        return False  # Current handoffs must capture these files before retirement.
     try:
         where = tasks.place(task)
     except StopIteration:  # its project is no longer configured: nothing safe to act on
@@ -837,7 +878,8 @@ def recover_landings() -> int:
     resulting ledger outside LOCK before acknowledging it. Do not acquire the repository
     lock here: publishers acquire that lock before LOCK.
     """
-    recovered = 0
+    from cointos import handoffs
+    recovered = handoffs.recover()
     for integration in list(L["tasks"].values()):
         intent = integration.get("landing")
         if (not intent or integration["kind"] != "integrate" or not tasks.pending(integration)
@@ -869,19 +911,25 @@ def recover_landings() -> int:
 
 
 def stand_down(supervisor: dict) -> None:
-    """A supervisor ends with its run: at once if unstarted, else after a short wrap-up."""
+    """Ordinary supervision owns one run; stopped implementers still need their split."""
     # The run, not the task: a subject waiting in review has no run to watch, and a supervisor
     # kept for it holds a slot and memory the review itself needs.
-    watched = supervisor.get("supervises")
-    if any(agent["task"] == watched for agent in L["agents"].values()):
+    if supervisor.get('must_split'):
+        subject = L['tasks'].get(supervisor.get('supervises'))
+        record = queues.records().get((subject or {}).get('record'))
+        if record and not record.get('done') and not record.get('replaced_by'):
+            return  # stopping the worker is required, not a reason to abandon its split
+        cancel_task(supervisor, 'cointos', 'the split origin was withdrawn or replaced')
         return
-    if supervisor["status"] != "running":
-        cancel_task(supervisor, 'cointos', 'the run it was watching has ended')
-    elif "standing_down" not in supervisor:
-        supervisor["standing_down"] = now()
-        L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": supervisor["id"], "read": False,
-            "text": "The run you were watching has ended. Dispatch any follow-up it needs now, then finish."}]
-    elif now() - supervisor["standing_down"] >= CONFIG["recovery"].get("supervise_wrap_up_seconds", 120):
+    watched = supervisor.get("supervises")
+    run = supervisor.get('supervises_run')
+    if 'supervises_run' in supervisor:
+        live = (L['agents'].get(run) or {}).get('task') == watched
+    else:
+        # Old checks notified of an ended run cannot adopt a later run of the same task.
+        live = ('standing_down' not in supervisor and
+                any(agent['task'] == watched for agent in L['agents'].values()))
+    if not live:
         cancel_task(supervisor, 'cointos', 'the run it was watching has ended')
 
 

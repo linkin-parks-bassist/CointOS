@@ -85,7 +85,7 @@ def observe(directory, wakes, ledger, allowed):
             message = ('Report completion of requested work. This is a verification trigger, not proof of completion. The user asked for: ' + item['description']
                 + '\nTask: ' + item['task'] + '\nFollow-up: ' + key
                 + '\nRead the current task receipt and verify the deliverables exist before replying. '
-                  'Read exact returned evidence paths; delegate implementation/diff and behaviour verification. A plan-only commit, '
+                  'Read exact returned evidence paths; delegate implementation and behaviour verification. A plan-only submission, '
                   'green unrelated suite or completed controller does not establish the requested implementation. '
                   'Use report_result for a short substantive update saying what is finished and where it is. '
                   'A significant usable deliverable merits a milestone message even if other work remains. '

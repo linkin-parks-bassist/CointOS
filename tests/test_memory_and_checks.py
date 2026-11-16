@@ -106,9 +106,9 @@ class Checks(unittest.TestCase):
         self.assertEqual(self.failing(ledger([lane()], [thought("a", "background", waiting_since=90)])),
                          {"no lane idle while an agent waits"})
 
-    def test_higher_class_kept_waiting_behind_a_lower_one(self):
+    def test_labels_do_not_trigger_strict_preemption_health_alarm(self):
         state = ledger([lane(holder="bg")], [thought("bg", "background", lane=0), thought("c", "coin", waiting_since=50)])
-        self.assertIn("higher classes pre-empt", self.failing(state))
+        self.assertNotIn("higher classes pre-empt", self.failing(state))
 
     def slot_where(self, test):
         """A time 20s into a slot whose draw between waiting b and holding a passes `test`."""
@@ -120,6 +120,26 @@ class Checks(unittest.TestCase):
         now = self.slot_where(lambda b, a: b > a)
         state = ledger([lane(holder="a")], [thought("a", "background", lane=0), thought("b", "background", waiting_since=0)])
         self.assertIn("no agent starves", self.failing(state, now=now))
+
+    def test_winning_draw_must_be_applied_across_non_coin_request_labels(self):
+        now = self.slot_where(lambda b, a: b > a)
+        state = ledger([lane(holder="a")], [thought("a", "user", lane=0), thought("b", "background", waiting_since=0)])
+        self.assertIn("no agent starves", self.failing(state, now=now))
+
+    def test_coin_wait_is_reported_despite_large_old_score_and_unsaved_reader(self):
+        holder = thought('worker', 'background', lane=0, reading=True)
+        holder.update(service=3715, weight=2)
+        coin = thought('coin', 'coin', waiting_since=0)
+        coin.update(service=20969, weight=1000)
+        self.assertIn('no agent starves', self.failing(ledger([lane(holder='worker')],
+                      [holder, coin]), now=500))
+
+    def test_wait_alarm_does_not_reset_at_each_short_slice(self):
+        c = dict(CONFIG, scheduler={**CONFIG['scheduler'], 'slice_seconds': 5})
+        holder = thought('worker', 'background', lane=0)
+        coin = thought('coin', 'coin', waiting_since=0)
+        results = checks.evaluate(c, ledger([lane(holder='worker')], [holder, coin]), 500, {})
+        self.assertTrue(any(r['name'] == 'no agent starves' and not r['ok'] for r in results))
 
     def test_losing_the_draw_is_not_starving(self):
         now = self.slot_where(lambda b, a: b < a)

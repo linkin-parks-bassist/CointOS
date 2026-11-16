@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from cointos import api, config, journal, lifecycle, opencode, prompts, queues, recovery, schema, spawner, state, tasks
+from cointos import api, config, journal, lifecycle, opencode, prompts, queues, recovery, schema, sessions, spawner, state, tasks
 from tests import support
 
 
@@ -79,7 +79,7 @@ class Budgets(unittest.TestCase):
         self.spend()
         self.assertEqual(self.task["status"], "running")
         state.L["restarting"] = True
-        self.spend(seconds=self.task["budget"]["generation_seconds"])
+        self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertEqual(self.task["status"], "running")
 
     def test_exhaustion_restarts_fresh_a_bounded_number_of_times(self):
@@ -100,7 +100,7 @@ class Budgets(unittest.TestCase):
         with patch.dict(state.CONFIG['recovery']['role_fresh_retries'], configured):
             artifact = Path(self.task['worktree']) / 'partial.c'
             artifact.write_text('preserved unfinished work\n')
-            self.spend(seconds=self.task['budget']['generation_seconds'])
+            self.spend(tokens=self.task['budget']['generation_tokens'])
             self.assertEqual(self.task['status'], 'failed')
             self.assertEqual(self.task['session'], 'old')
             self.assertIsNone(self.task['receipt'])
@@ -117,11 +117,11 @@ class Budgets(unittest.TestCase):
 
     def test_an_overrunning_worker_item_continues_and_its_finished_work_can_still_be_submitted(self):
         (Path(self.task["worktree"]) / "done.txt").write_text("finished, never committed\n")
-        self.spend(seconds=self.task["budget"]["generation_seconds"])
+        self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertEqual((self.task["status"], self.task["session"]), ("waiting", None))
         text = prompts.launch_text(self.task, self.project)
-        self.assertIn("?? done.txt", text)
-        self.assertIn("if its work is already complete, commit it and submit your receipt now", text)
+        self.assertNotIn("?? done.txt", text)
+        self.assertIn("cointos_task " + self.task["id"], text)
         support.running(self.task, "worker-2", worktree=False)
         (Path(self.task["worktree"]) / "done.txt").write_text("done\n")
         support.commit(self.task["worktree"])
@@ -131,53 +131,58 @@ class Budgets(unittest.TestCase):
     def test_a_worker_item_whose_fresh_runs_are_exhausted_reaches_a_manager_with_the_packet(self):
         self.task["fresh_retries"] = state.CONFIG["recovery"]["fresh_retries"]
         with patch.object(recovery, "packet", return_value="Read rtl_lower.h; the memo owns fire identity"):
-            self.spend(seconds=self.task["budget"]["generation_seconds"])
+            self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertEqual(self.task["status"], "failed")
         self.assertIn("fresh retries exhausted", self.task["note"])
         found = queues.state(state.L["queue"][f"{self.project['name']}:item"])
         self.assertTrue(found["recoverable"])
         self.assertIn("the memo owns fire identity", found["blocker"])
-        self.assertIn(self.task["branch"], found["blocker"])
+        self.assertIn("files preserved", found["blocker"])
+        self.assertNotIn(self.task["branch"], found["blocker"])
 
-    def test_a_task_override_and_either_limit_triggers(self):
+    def test_a_time_override_cannot_stop_work_but_token_exhaustion_can(self):
         self.task["budget"] = {"generation_tokens": 100, "generation_seconds": 10}
-        self.spend(tokens=99, seconds=9)
+        self.spend(tokens=99, seconds=100000)
         self.assertEqual(self.task["status"], "running")
-        self.spend(seconds=10)
+        self.spend(tokens=100)
         self.assertEqual(self.task["status"], "waiting")
 
     def test_a_committed_report_without_a_receipt_does_not_win_over_the_budget(self):
         (Path(self.task["worktree"]) / "done.txt").write_text("done\n")
         support.commit(self.task["worktree"])
-        self.spend(seconds=self.task["budget"]["generation_seconds"])
+        self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertEqual((self.task["status"], self.task["fresh_retries"]), ("waiting", 1))
 
     def test_a_receipted_run_over_budget_is_released_without_retry(self):
         (Path(self.task["worktree"]) / "done.txt").write_text("done\n")
         support.commit(self.task["worktree"])
         lifecycle.submit(self.task["id"], "worker-1", "complete", "Done")
-        self.spend(seconds=self.task["budget"]["generation_seconds"])
+        self.spend(tokens=self.task["budget"]["generation_tokens"])
         self.assertNotIn("worker-1", state.L["agents"])
         self.assertEqual((self.task["status"], self.task["session"], self.task.get("fresh_retries")), ("review", "old", None))
 
     def test_a_run_is_warned_once_as_its_budget_runs_low(self):
-        limit = self.task["budget"]["generation_seconds"]
+        self.task["budget"]["generation_tokens"] = 10000
+        limit = 10000
         def warned():
             return [m for m in state.L["messages"] if m["to"] == self.task["id"] and "Budget warning" in m["text"]]
-        self.spend(seconds=limit * 0.7)
+        self.spend(tokens=limit * 0.7)
         self.assertEqual(warned(), [])
-        self.spend(seconds=limit * 0.75)
-        self.spend(seconds=limit * 0.9)
+        self.spend(tokens=limit * 0.75)
+        self.spend(tokens=limit * 0.9)
         warnings = warned()
         self.assertEqual(len(warnings), 1)
         self.assertIn("Budget warning", warnings[0]["text"])
-        self.assertIn("finish --blocked", warnings[0]["text"])
+        self.assertIn("exact blocker", warnings[0]["text"])
         self.assertEqual(self.task["status"], "running", "a warning never stops the run")
 
-    def test_an_item_that_has_written_nothing_may_use_its_full_budget(self):
+    def test_an_implementer_over_40k_is_stopped_for_the_threshold_splitter(self):
         self.spend(seconds=self.task["budget"]["generation_seconds"] - 1,
                    tokens=self.task["budget"]["generation_tokens"] - 1)
-        self.assertEqual(self.task["status"], "running")
+        self.assertEqual(self.task['status'], 'waiting')
+        checks = [t for t in state.L['tasks'].values() if t.get('supervises') == self.task['id']]
+        self.assertEqual(len(checks), 1)
+        self.assertTrue(checks[0]['must_split'])
 
 
 class Evidence(unittest.TestCase):
@@ -185,7 +190,7 @@ class Evidence(unittest.TestCase):
         support.fresh_ledger(self)
         self.project = support.project(self, support.repository(self))
 
-    def test_the_packet_keeps_recent_tools_text_and_git_but_never_reasoning(self):
+    def test_the_packet_keeps_file_and_outward_evidence_without_repository_metadata(self):
         task = support.running(support.queued(self.project, "item"), "worker-1")
         task["base_commit"] = support.git.head(task["worktree"])
         (Path(task["worktree"]) / "work.txt").write_text("useful dirty work\n")
@@ -197,23 +202,24 @@ class Evidence(unittest.TestCase):
         (run / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
         with patch.object(opencode, "run_dir", return_value=run):
             packet = recovery.packet("worker-1", task, {"generation_tokens": 20, "generation_seconds": 3})
-        for expected in ("Verified the parser contract", "python3 -m unittest", "?? work.txt"):
+        for expected in ("Verified the parser contract", "python3 -m unittest", "Changed files:\nwork.txt"):
             self.assertIn(expected, packet)
+        for forbidden in ('Git status', 'Commits since start', task['base_commit'], task['branch']):
+            self.assertNotIn(forbidden, packet)
         self.assertNotIn("SECRET INNER MONOLOGUE", packet)
         self.assertLessEqual(len(packet), state.CONFIG["recovery"]["handoff_chars"])
 
-    def test_first_and_recovery_prompts_end_with_the_budget_and_carry_the_packet(self):
+    def test_first_and_recovery_prompts_omit_budgets_and_carry_the_packet(self):
         queues.add(self.project, "queued", "child", "Brief", budget={"generation_tokens": 1234, "generation_seconds": 56})
         task = tasks.create("item", self.project, "child", "Brief", [4], item="child", reasoning_effort="low")
         text = prompts.launch_text(task, self.project)
-        self.assertIn("FYI — daemon-managed budget for this run: 1,234 generated tokens or 56 seconds", text)
-        self.assertIn("reasoning block is limited to 256 tokens at low effort", text)
-        self.assertGreater(text.rindex("FYI"), text.index("Brief"))
-        self.assertTrue(text.endswith("do not expand scope."))
+        self.assertNotIn('daemon-managed budget', text)
+        self.assertNotIn('reasoning block', text)
+        self.assertNotIn('1,234', text)
         task.update(recovery_note="checkpoint reached", recovery_context="Ran focused tests: OK")
         text = prompts.launch_text(task, self.project)
-        self.assertIn("Recovery packet:\nRan focused tests: OK", text)
-        self.assertIn("Treat packet claims as leads until verified", text)
+        self.assertNotIn("Recovery packet:", text)
+        self.assertIn("cointos_task " + task["id"], text)
 
     def test_a_recently_interrupted_run_gets_only_the_minimum_handoff(self):
         queues.add(self.project, "queued", "child", "Brief", budget={"generation_tokens": 1234, "generation_seconds": 56})
@@ -221,6 +227,7 @@ class Evidence(unittest.TestCase):
                 "session": "old", "interrupted_at": 1000}
         run = Path(self.enterContext(tempfile.TemporaryDirectory()))
         with patch.object(opencode, "run_dir", return_value=run), \
+                patch.object(sessions, "prepare_v2"), \
                 patch.object(opencode.subprocess, "run") as systemd_run:
             opencode.launch(state.CONFIG, "worker-1", task, "key",
                             prompts.launch_text(task, self.project, at=1001), [])
@@ -236,7 +243,7 @@ class Evidence(unittest.TestCase):
                 "session": "old", "interrupted_at": 1000}
         text = prompts.launch_text(task, self.project, at=1000 + state.CONFIG["recovery"]["reorient_after_seconds"])
         self.assertTrue(text.startswith("This assignment has been paused for several hours."))
-        self.assertIn("daemon-managed budget", text)
+        self.assertNotIn("daemon-managed budget", text)
 
 
 class Journal(unittest.TestCase):

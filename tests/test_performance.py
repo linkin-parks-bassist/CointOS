@@ -35,6 +35,15 @@ class RunningPerformance(unittest.TestCase):
         self.assertAlmostEqual(performance.snapshot()['prefill_tps'],
                                1000 + (1 - math.exp(-.1)) * 2000)
 
+    def test_active_delivery_does_not_change_read_or_decode_denominators(self):
+        performance.record('prefill', 1000, 5)
+        performance.record('generation', 100, 2)
+        performance.record('active', 100, 10)
+        result = performance.snapshot()
+        self.assertEqual(result['prefill_tps'], 200)
+        self.assertEqual(result['generation_tps'], 50)
+        self.assertEqual(result['active_tps'], 10)
+
     def test_constant_signal_is_invariant_to_step_partitioning(self):
         performance.record('generation', 10, 1)
         performance.record('generation', 200, 10)
@@ -74,8 +83,9 @@ for (const name of ['generation','prefill','mtp']) {
 const context = {$: id => elements[id], setText: (el, text) => el.textContent = text};
 vm.createContext(context);
 vm.runInContext(html.slice(html.indexOf('function renderPerformance('), html.indexOf('function render(L)')), context);
-context.renderPerformance({performance: {generation_tps: 123.45, prefill_tps: 2000, mtp_acceptance: 0}});
+context.renderPerformance({performance: {generation_tps: 123.45, prefill_tps: 2000, mtp_acceptance: 0, active_tps: 10}});
 assert.equal(elements['perf-generation'].querySelector('b').textContent, '123.5 tok/s');
+assert.equal(elements['perf-generation'].querySelector('small').textContent, 'Active total: 10.0 tok/s');
 assert.equal(elements['perf-mtp'].querySelector('b').textContent, '0.0%');
 assert.equal(elements['perf-prefill'].querySelector('b').textContent, (2000).toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1}) + ' tok/s');
 context.renderPerformance({});

@@ -7,6 +7,25 @@ from cointos import cli
 
 
 class TerminalCommands(unittest.TestCase):
+    def test_managed_dispatch_exposes_reuse_status_instead_of_only_a_task_id(self):
+        result = {'ok': True, 'task': 'p:origin', 'created': False, 'status': 'blocked',
+                  'message': 'Existing assignment reused; no run restarted or recovery handoff completed.'}
+        for managed in (False, True):
+            with self.subTest(managed=managed), patch.dict(os.environ), \
+                    patch.object(cli, 'call', return_value=result), patch('builtins.print') as output:
+                os.environ.pop('COINTOS_AGENT', None)
+                if managed: os.environ['COINTOS_AGENT'] = 'author'
+                cli.main(['agent', 'run', 'origin', 'Same assignment', '--role', 'worker', '--project', 'p'], acknowledge=False)
+                text = output.call_args.args[0]
+                self.assertEqual(__import__('json').loads(text) if managed else text, result if managed else 'p:origin')
+
+    def test_revision_prints_actual_change_result(self):
+        result = {'ok': True, 'item': 'p:work', 'changed': False,
+                  'message': 'Assignment unchanged; no work restarted and no recovery handoff completed.'}
+        with patch.object(cli, 'call', return_value=result), patch('builtins.print') as output:
+            cli.main(['revise', 'p:work', 'Same assignment', '--reason', 'Preparation changed'], acknowledge=False)
+        self.assertEqual(__import__('json').loads(output.call_args.args[0]), result)
+
     def test_correct_tests_only_retires_a_caller_with_a_checked_receipt(self):
         for has_receipt in (False, True):
             with self.subTest(receipt=has_receipt), \
@@ -73,3 +92,66 @@ class LiveViews(unittest.TestCase):
                 with self.assertRaises(SystemExit) as refused:
                     cli.main(command)
                 self.assertIn("live terminal view", str(refused.exception))
+
+
+class CoinIdentityViews(unittest.TestCase):
+    def test_profile_journal_and_name_reach_the_mirror(self):
+        from cointos import coin_mirror
+        profile = {'identity': 'synthetic', 'name': 'Synthetic Coin'}
+        with patch.object(cli, 'coin_profile', return_value=profile), \
+                patch.object(cli, '_coin_live_states', return_value=iter(())), \
+                patch.object(coin_mirror, 'show') as show:
+            cli.coin_log()
+        self.assertEqual(show.call_args.args[0], cli.configuration.STATE / 'coin-synthetic/turns.jsonl')
+        self.assertEqual(show.call_args.kwargs['name'], 'Synthetic Coin')
+
+    def test_profile_live_text_never_comes_from_another_coin(self):
+        profile = {'identity': 'synthetic', 'name': 'Synthetic Coin'}
+        state = {'thoughts': {
+            'ours': {'agent': 'coin', 'owner': 'synthetic/abc'},
+            'other': {'agent': 'coin', 'owner': 'other/abc'}},
+            'coin': {'busy': True, 'live': {'owner': 'other/abc', 'content': 'other text'}}}
+        selected = cli.coin_view_state(state, profile)
+        self.assertEqual(set(selected['thoughts']), {'ours'})
+        self.assertEqual(selected['coin']['live'], {})
+        state['coin']['live'] = {'owner': 'synthetic/abc', 'content': 'our text'}
+        self.assertEqual(cli.coin_view_state(state, profile)['coin']['live']['content'], 'our text')
+        del state['coin']['live']['owner']
+        self.assertEqual(cli.coin_view_state(state, profile)['coin']['live'], {})
+
+    def test_private_profile_refuses_before_opening_a_viewer(self):
+        with patch.object(cli.coins, 'profile', return_value={
+                'identity': 'synthetic', 'name': 'Private Coin', 'retain_diagnostics': False}):
+            with self.assertRaisesRegex(ValueError, 'diagnostics disabled'):
+                cli.coin_profile('private')
+
+    def test_coin_command_passes_selected_profile(self):
+        with patch.object(cli, 'coin_live', return_value=None) as live:
+            cli.main(['coin', 'professional'], acknowledge=False)
+        live.assert_called_once_with('professional')
+
+
+class AutomaticCoinViews(unittest.TestCase):
+    def test_automatic_slot_resolves_reported_worker_without_a_picker(self):
+        from types import SimpleNamespace
+        profiles = {'amateur': {'identity': 'a', 'name': 'Amateur'},
+                    'professional': {'identity': 'p', 'name': 'Professional'}}
+        def systemctl(args, **kwargs):
+            return SimpleNamespace(returncode=0, stdout='42\n' if 'cointel-professional-coin.service' in args else '41\n')
+        with patch.object(cli.coins, 'names', return_value=list(profiles)), \
+                patch.object(cli.coins, 'profile', side_effect=profiles.get), \
+                patch.object(cli.subprocess, 'run', side_effect=systemctl), \
+                patch('builtins.input', side_effect=AssertionError('automatic viewer must never ask')):
+            self.assertEqual(cli.automatic_coin_profile({'coin': {'process': {'pid': 42}}}), profiles['professional'])
+            self.assertIsNone(cli.automatic_coin_profile({'coin': {}}))
+
+    def test_slot_passes_its_identity_to_the_journal_viewer(self):
+        profile = {'identity': 'synthetic', 'name': 'Synthetic'}
+        with patch.object(cli, 'interactive'), \
+                patch.object(cli, 'ledger', return_value={'viewers': {'0': 'coin'}, 'agents': {}}), \
+                patch.object(cli, 'automatic_coin_profile', return_value=profile), \
+                patch.object(cli, 'coin_profile', side_effect=AssertionError('no picker')), \
+                patch.object(cli, 'coin_log', side_effect=KeyboardInterrupt) as log:
+            with self.assertRaises(KeyboardInterrupt):
+                cli.view(0)
+        self.assertEqual(log.call_args.kwargs['profile'], profile)

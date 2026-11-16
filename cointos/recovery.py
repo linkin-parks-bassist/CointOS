@@ -1,16 +1,14 @@
-"""Run budgets, recovery evidence and incident packets.
+"""Token budgets and evidence-driven supervision.
 
-Each run is charged only for generation: lane waiting, prefill and tool time are free. A run
-past its budget ends; its assignment continues in a fresh session from its branch/files and a
-bounded evidence packet, a bounded number of times (`lifecycle.retry_fresh`). Once a run has spent `recovery.warning_fraction` of either limit it
-gets one message saying so, to wrap up while it still can. Long silent stretches before writing
-are normal for the work model, so nothing stops a run before its budget. Caller holds LOCK.
+Elapsed time never terminates a run. Generated-token exhaustion retains the existing
+recovery policy; periodic token/GPU-service milestones request a progress decision.
+Caller holds LOCK.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from cointos import git, lifecycle, opencode, schema, tasks
+from cointos import contracts, frontier, lifecycle, opencode, schema, tasks
 from cointos.state import CONFIG, L, log, now
 
 
@@ -23,8 +21,7 @@ def enforce() -> None:
             continue
         used = schema.spent(agent)
         spent_seconds, spent_tokens = used["generation_seconds"], used["generation_tokens"]
-        exhausted = (spent_seconds >= task["budget"]["generation_seconds"]
-                     or spent_tokens >= task["budget"]["generation_tokens"])
+        exhausted = (task["role"] != "supervisor" and spent_tokens >= task["budget"]["generation_tokens"])
         if not lifecycle.owns(task, agent_id):
             if exhausted:  # only finishing its reply after its receipt
                 lifecycle.stop(agent_id, "generation budget reached after its receipt", requeue=False)
@@ -33,41 +30,59 @@ def enforce() -> None:
             agent["budget_warned"] = True
             warn(task, spent_seconds, spent_tokens)
         if not exhausted:
-            supervise(task, agent, spent_seconds)
+            supervise(task, agent, spent_tokens)
         if exhausted:
-            reason = f"generation budget reached ({spent_seconds:.0f}s, {spent_tokens} tokens); branch and files preserved"
+            reason = f"generation budget reached ({spent_seconds:.0f}s, {spent_tokens} tokens); files preserved"
             lifecycle.retry_fresh(agent_id, reason, packet(agent_id, task, agent))
 
 
-UNSUPERVISED = ("supervisor", "gardener", "tree-auditor")  # small bounded passes, and supervisors themselves
+UNSUPERVISED = ("supervisor",)  # no recursive supervision
 
 
-def supervise(task: dict, agent: dict, spent_seconds: float) -> None:
-    """A run that has spent this much GPU generation gets someone watching what it's actually doing."""
-    every = CONFIG["recovery"].get("supervise_every_seconds")
-    if not every or task["role"] in UNSUPERVISED or spent_seconds < every * (agent.get("supervisions", 0) + 1):
+def supervise(task: dict, agent: dict, spent_tokens: int) -> None:
+    """A run that has generated this many tokens gets someone watching what it's actually doing.
+    GPU service and generated tokens are observations, not proof of useful progress."""
+    if not CONFIG.get('factory_enabled', True):
+        return  # Only explicit Coin/user/timer dispatch may request another agent.
+    every = CONFIG["recovery"].get("supervise_every_tokens")
+    if not every or task["role"] in UNSUPERVISED:
         return
-    agent["supervisions"] = agent.get("supervisions", 0) + 1
-    tasks.request_supervisor(task, spent_seconds)
+    accounted = agent.get('supervision_accounted_tokens', 0)
+    task['supervision_tokens'] = task.get('supervision_tokens', 0) + max(0, spent_tokens - accounted)
+    agent['supervision_accounted_tokens'] = spent_tokens
+    if task.get('split_supervisor'):
+        return
+    if (task['role'] == 'worker' and task.get('stage') == 'implementation' and task.get('record')
+            and task['supervision_tokens'] >= CONFIG['recovery'].get('split_after_tokens', 40000)):
+        tasks.request_supervisor(task, task['supervision_tokens'], must_split=True)
+        return
+    # A token watermark survives restarts and cadence changes. Coalesce overdue
+    # intervals into one inspection rather than launching a backlog of watchers.
+    last = task.get('supervision_checked_tokens', 0)
+    gpu = frontier.usage(task, L, now())['gpu_seconds']
+    interval = CONFIG['recovery'].get('supervise_every_gpu_seconds', float('inf'))
+    gpu_due = gpu // interval > agent.get('supervision_checked_gpu_seconds', 0) // interval
+    if task['supervision_tokens'] // every <= last // every and not gpu_due:
+        return
+    if any(t['kind'] == 'supervise' and t.get('supervises') == task['id'] and tasks.pending(t)
+           for t in L['tasks'].values()):
+        return
+    tasks.request_supervisor(task, task['supervision_tokens'])
+    task['supervision_checked_tokens'] = task['supervision_tokens']
+    agent['supervision_checked_gpu_seconds'] = gpu
 
 
 def warned(task: dict, spent_seconds: float, spent_tokens: int) -> bool:
     share = CONFIG["recovery"]["warning_fraction"]
-    return (spent_seconds >= share * task["budget"]["generation_seconds"]
-            or spent_tokens >= share * task["budget"]["generation_tokens"])
+    return task['role'] != 'supervisor' and spent_tokens >= share * task['budget']['generation_tokens']
 
 
 def warn(task: dict, spent_seconds: float, spent_tokens: int) -> None:
     """One message into the run's session: its budget is nearly spent."""
     limits = task["budget"]
-    text = (f"Budget warning: this run has used {spent_seconds / 60:.0f} of its {limits['generation_seconds'] / 60:.0f} "
-            f"generation minutes ({spent_tokens:,} of {limits['generation_tokens']:,} tokens). Commit your work now. "
-            "If the assignment is done, finish --complete. If it cannot finish within this run's remaining budget, "
-            "preserve diagnostics separately, commit only the scoped artifact, report exactly what is done and "
-            "what remains, and finish --blocked. At the limit this run ends "
-            f"with branch/files preserved; this role permits {schema.fresh_limit(CONFIG, task)} fresh budget retries, "
-            "then unresolved work stays blocked unless an eligible canonical recovery or corrective handoff can advance it. "
-            "Exhausted First Responders receive no recursive repair.")
+    token_limit = "no token cap" if task["role"] == "supervisor" else format(limits["generation_tokens"], ",")
+    text = (f"Budget warning: this run has generated {spent_tokens:,} of {token_limit} tokens. "
+            "Preserve your work and submit the completed result or exact blocker. There is no automatic time limit.")
     L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": task["id"], "text": text, "read": False}]
     log("budget warning", task=task["id"], seconds=round(spent_seconds), tokens=spent_tokens)
 
@@ -76,11 +91,10 @@ def packet(agent_id: str, task: dict, agent: dict) -> str:
     """Bounded outward evidence for a fresh run; never hidden reasoning."""
     sections = [f"Previous run: {agent.get('generation_tokens', 0)} generated tokens, "
                 f"{agent.get('generation_seconds', 0):.0f} generation seconds. "
-                "This packet contains outward text and tool evidence only; verify it against the branch."]
+                "This packet contains outward text and tool evidence only; verify it against the prepared files."]
     worktree = task["worktree"]
     if task["branch"] is not None and Path(worktree).is_dir():
-        status = git.result(worktree, "status", "--short").stdout.strip()
-        commits = git.result(worktree, "log", "--oneline", f"{task.get('base_commit') or 'HEAD'}..HEAD").stdout.strip()
-        sections += ["Git status:\n" + (status or "clean"), "Commits since start:\n" + (commits or "none")]
+        changed = contracts.working_paths(worktree, task.get('base_commit') or 'HEAD')
+        sections += ["Changed files:\n" + ('\n'.join(changed) or 'none')]
     sections += list(reversed(opencode.evidence(agent_id, limit=7)))
     return "\n\n".join(sections)[:CONFIG["recovery"]["handoff_chars"]]

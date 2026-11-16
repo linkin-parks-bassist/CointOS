@@ -47,7 +47,7 @@ class RunObserver(unittest.TestCase):
                         patch.object(opencode, "active", side_effect=unit_state), patch.object(opencode.time, "sleep"):
                     runs.follow(agent, None, None)
                 self.assertEqual(len(observed), 2, "malformed telemetry cannot settle a live run")
-                self.assertEqual((task["status"], task["session"]), ("waiting", session))
+                self.assertEqual((task["status"], task["session"]), ("failed", session))
                 self.assertNotIn("AttributeError", task["note"])
 
     def test_recovery_evidence_keeps_valid_outward_and_tool_records_among_malformed_events(self):
@@ -237,7 +237,7 @@ class RunObserver(unittest.TestCase):
                     runs.follow(agent, None, None)
                 self.assertTrue(injected)
                 self.assertTrue(released)
-                self.assertEqual((task["status"], task["session"]), ("waiting", session))
+                self.assertEqual((task["status"], task["session"]), ("failed", session))
                 self.assertNotIn(agent, state.L["agents"])
                 self.assertIn("exit code 1", task["note"])
                 self.assertIn("native fixture model-server error", task["note"])
@@ -285,7 +285,7 @@ class RunObserver(unittest.TestCase):
                     patch.object(opencode.subprocess, "run", side_effect=query), patch.object(opencode.time, "sleep"):
                 runs.follow("observed-run", None, None)
             self.assertGreaterEqual(len(calls), 4, "ambiguous bus failure cannot authorize unit death")
-            self.assertEqual((task["status"], state.L["agents"]), ("waiting", {}))
+            self.assertEqual((task["status"], state.L["agents"]), ("failed", {}))
             self.assertIn("exit code 1", task["note"])
             self.assertIn("the thought failed on the model server", task["note"])
 
@@ -348,7 +348,7 @@ class Completion(unittest.TestCase):
     def test_final_text_and_a_stop_marker_without_a_receipt_are_not_completion(self):
         self.end({"type": "text", "part": {"type": "text", "text": "Complete final summary"}},
                  {"type": "step_finish", "part": {"reason": "stop"}})
-        self.assertEqual((self.task["status"], self.task["receipt"]), ("waiting", None))
+        self.assertEqual((self.task["status"], self.task["receipt"]), ("failed", None))
         self.assertIn("without a completion receipt (finish marker stop, exit code 0)", self.task["note"])
 
     def test_a_transcript_ending_after_tool_calls_is_decided_by_the_receipt_alone(self):
@@ -357,21 +357,21 @@ class Completion(unittest.TestCase):
                  {"type": "step_finish", "part": {"reason": "tool-calls"}}, code=1)
         self.assertEqual(self.task["status"], "done")
 
-    def test_an_unexpected_unit_death_requeues_the_task(self):
+    def test_an_unexpected_unit_death_enters_recovery(self):
         runs.follow("run-1", None, None)
-        self.assertEqual((self.task["status"], state.L["agents"]), ("waiting", {}))
+        self.assertEqual((self.task["status"], state.L["agents"]), ("failed", {}))
 
-    def test_runner_errors_are_diagnostics_on_the_retry(self):
+    def test_runner_errors_are_recovery_diagnostics(self):
         with patch.object(opencode, "watch", side_effect=RuntimeError("serve failed")):
             runs.follow("run-1", None, None)
-        self.assertEqual(self.task["status"], "waiting")
+        self.assertEqual(self.task["status"], "failed")
         self.assertIn("RuntimeError: serve failed", self.task["note"])
 
-    def test_terminal_model_error_event_is_retained_in_retry_diagnostics(self):
+    def test_terminal_model_error_event_is_retained_in_recovery_diagnostics(self):
         self.end({"type": "step_finish", "part": {"reason": "tool-calls"}},
                  {"type": "error", "error": {"name": "UnknownError", "data": {
                      "message": '{"message":"the thought failed on the model server; try again"}'}}}, code=1)
-        self.assertEqual(self.task["status"], "waiting")
+        self.assertEqual(self.task["status"], "failed")
         self.assertIn("exit code 1", self.task["note"])
         self.assertIn("the thought failed on the model server", self.task["note"])
 
@@ -384,19 +384,14 @@ class Completion(unittest.TestCase):
         self.assertEqual(self.task["result"], "Checked work is complete")
         self.assertEqual(state.L["agents"], {})
 
-    def test_launch_failures_are_uncharged_bounded_and_held(self):
+    def test_launch_death_fails_immediately_without_automatic_retry_or_hold(self):
         self.task["runs"] = 1
         state.L["agents"]["run-1"]["engaged"] = False
         self.end(code=1)
         self.assertEqual((self.task["status"], self.task["runs"], self.task["launch_failures"]),
-                         ("waiting", 0, 1))
-        support.running(self.task, "run-2", worktree=False)
-        state.L["agents"]["run-2"]["engaged"] = False
-        self.end(code=1, agent="run-2")
-        self.assertEqual((self.task["status"], self.task["runs"], self.task["launch_failures"]),
-                         ("waiting", 0, 2))
-        self.assertEqual(self.task["admission_hold"], "repeated infrastructure launch failure")
-        self.assertIn("before reaching the model", state.L["alerts"][-1]["text"])
+                         ("failed", 1, 1))
+        self.assertFalse(self.task.get('admission_hold'))
+        self.assertIn("before reaching the model", self.task['note'])
 
     def test_first_gateway_admission_clears_launch_failures_in_the_reducer(self):
         self.task["launch_failures"] = 1
@@ -405,14 +400,18 @@ class Completion(unittest.TestCase):
         self.assertTrue(state.L["agents"]["run-1"]["engaged"])
         self.assertEqual(self.task["launch_failures"], 0)
 
-    def test_every_kind_shares_one_bounded_retry_limit(self):
-        limit = state.CONFIG["spawner"]["max_runs_per_task"]
-        for attempt in range(2, limit + 1):
-            runs.follow(f"run-{attempt - 1}", None, None)
-            self.assertEqual(self.task["status"], "waiting")
-            support.running(self.task, f"run-{attempt}", worktree=False)
-        runs.follow(f"run-{limit}", None, None)
-        self.assertEqual((self.task["status"], len(state.L["alerts"])), ("failed", 1))
+    def test_unexpected_death_preserves_session_and_dispatches_first_responder(self):
+        self.task['session'] = 'preserved-session'
+        runs.follow('run-1', None, None)
+        self.assertEqual(self.task['status'], 'failed')
+        self.assertEqual(self.task['session'], 'preserved-session')
+        state.L['paused'] = False
+        spawner.repair_work({})
+        responders = [t for t in state.L['tasks'].values() if t['kind'] == 'first-response']
+        self.assertEqual(len(responders), 1)
+        self.assertEqual(responders[0]['repair_origin']['task'], self.task['id'])
+        spawner.repair_work({})
+        self.assertEqual(len([t for t in state.L['tasks'].values() if t['kind'] == 'first-response']), 1)
 
     def test_a_session_learned_by_the_observer_belongs_to_the_current_run_only(self):
         runs.observed("run-1", "session", "session-a")
@@ -487,7 +486,7 @@ class Completion(unittest.TestCase):
 
     def test_an_uncommitted_worker_cannot_finish(self):
         worker = self.worker(commit=False)
-        with self.assertRaisesRegex(ValueError, "commit"):
+        with self.assertRaisesRegex(ValueError, "workspace changed"):
             lifecycle.submit(worker["id"], "worker-1", "complete", "Done")
 
     def gardener(self, pending: list[str]) -> dict:
@@ -511,7 +510,7 @@ class Completion(unittest.TestCase):
     def test_a_garden_cannot_finish_without_landing_or_with_uncommitted_corrections(self):
         garden = self.gardener([])
         (Path(garden["worktree"]) / "leaf.md").write_text("corrected\n")
-        with self.assertRaisesRegex(ValueError, "commit"):
+        with self.assertRaisesRegex(ValueError, "workspace changed"):
             lifecycle.submit(garden["id"], "gardener-1", "complete", "Corrected")
         support.commit(garden["worktree"])
         with self.assertRaisesRegex(ValueError, "cointos merge"):
@@ -543,7 +542,7 @@ class Completion(unittest.TestCase):
         integration, worker = self.integration()
         with self.assertRaisesRegex(ValueError, "cointos land"):
             lifecycle.submit(integration["id"], "integrator-1", "complete", "Looks good")
-        with self.assertRaisesRegex(ValueError, "not the one its receipt submitted"):
+        with self.assertRaisesRegex(ValueError, "do not match its submitted receipt"):
             lifecycle.landed(integration, "integrator-1", worker, {**self.acceptance(worker), "worker_commit": "other"})
         lifecycle.landed(integration, "integrator-1", worker, self.acceptance(worker))
         self.assertEqual((worker["status"], integration["status"]), ("done", "done"))
@@ -565,11 +564,28 @@ class Completion(unittest.TestCase):
 
     def test_a_return_is_the_integrators_receipt(self):
         integration, worker = self.integration()
+        worker.update(session='old-session', runs=3, fresh_retries=1, supervision_tokens=39000,
+                      supervision_checked_tokens=35000, supervision_threshold=7,
+                      system_context='old-system', tool_context='old-tools',
+                      system_context_v2='old-native-system', tool_context_v2='old-native-tools')
+        branch, checkout = worker['branch'], worker['worktree']
         lifecycle.returned(integration, "integrator-1", "Handle empty input")
         lifecycle.returned(integration, "integrator-1", "Handle empty input")  # a lost reply is safe
         self.assertEqual((worker["status"], worker["review"], worker["rejections"], worker["receipt"]),
                          ("waiting", "Handle empty input", 1, None))
         self.assertEqual((integration["status"], integration["receipt"]["disposition"]), ("done", "returned"))
+        self.assertIsNone(worker['session'])
+        self.assertEqual(worker['previous_sessions'], ['old-session'])
+        self.assertEqual((worker['runs'], worker['fresh_retries']), (0, 0))
+        self.assertNotIn('supervision_tokens', worker)
+        self.assertNotIn('supervision_checked_tokens', worker)
+        self.assertNotIn('system_context', worker)
+        self.assertNotIn('system_context_v2', worker)
+        self.assertNotIn('tool_context_v2', worker)
+        self.assertEqual((worker['branch'], worker['worktree']), (branch, checkout))
+        text = prompts.launch_text(worker, tasks.place(worker))
+        self.assertIn('Handle empty input', text)
+        self.assertIn('Your assignment', text)
 
     def test_a_blocked_integrator_fails_its_worker_instead_of_respawning(self):
         integration, worker = self.integration()
@@ -586,11 +602,12 @@ class Completion(unittest.TestCase):
         self.assertEqual(state.L["alerts"], [], "a manager-handleable blocker does not interrupt the user")
         manager = spawner.next_task()
         self.assertEqual((manager["role"], manager["item"]), ("first-responder", "parser"))
-        self.assertIn("Contract mismatch", manager["brief"])
+        self.assertIn(worker["id"], manager["brief"])
         view = frontier.inspect(manager['id'], state.L)
         self.assertEqual(view['origin_task']['receipt'], worker['receipt'])
         self.assertEqual(view['queue']['brief'], worker['brief'])
-        self.assertIn(worker['receipt']['evidence']['commit'], prompts.launch_text(manager, self.project))
+        self.assertNotIn(worker['receipt']['evidence']['commit'], prompts.launch_text(manager, self.project))
+        self.assertEqual(view['origin_task']['receipt']['evidence']['commit'], worker['receipt']['evidence']['commit'])
         self.assertIs(spawner.next_task(), manager, "reconciliation must not create a second controller")
         support.running(manager, "manager-1")
         lifecycle.submit(manager["id"], "manager-1", "blocked", "the user must choose the public contract")
@@ -642,11 +659,12 @@ class Completion(unittest.TestCase):
 
     # ------------------------------------------------ daemon replacement
 
-    def test_a_run_lost_in_a_daemon_replacement_waits_again(self):
+    def test_a_run_lost_in_a_daemon_replacement_fails_into_diagnosis(self):
         state.L["agents"].clear()
         with patch.object(opencode, "find_processes", return_value={}):
             runs.adopt({})
-        self.assertEqual((self.task["status"], self.task["agent"]), ("waiting", None))
+        self.assertEqual((self.task["status"], self.task["agent"]), ("failed", None))
+        self.assertEqual(tasks.request_repair(self.task)[0]['role'], 'first-responder')
 
     def test_a_run_that_outlived_the_daemon_is_followed_again(self):
         previous = {"agents": dict(state.L["agents"])}
@@ -658,7 +676,7 @@ class Completion(unittest.TestCase):
         self.assertEqual((self.task["status"], list(state.L["agents"])), ("running", ["run-1"]))
         thread.assert_called_once_with(target=runs.follow, args=("run-1", None, None), daemon=True)
 
-    def test_a_keyed_run_whose_unit_died_during_shutdown_is_orphaned_uncharged(self):
+    def test_a_keyed_run_whose_unit_died_during_shutdown_gets_diagnosis(self):
         previous = {"agents": dict(state.L["agents"])}
         before = self.task["runs"]
         state.L["agents"].clear()
@@ -667,7 +685,8 @@ class Completion(unittest.TestCase):
                 patch.object(opencode, "find_processes", return_value={}):
             runs.adopt(previous)
         self.assertEqual((self.task["status"], self.task["agent"], self.task["runs"]),
-                         ("waiting", None, before))
+                         ("failed", None, before))
+        self.assertEqual(tasks.request_repair(self.task)[0]['role'], 'first-responder')
 
 
 if __name__ == "__main__":
@@ -690,4 +709,4 @@ class Refusals(unittest.TestCase):
 
     def test_uncommitted_work_is_listed(self):
         (Path(self.worker["worktree"]) / "scratch.c").write_text("int x;\n")
-        self.assertIn("?? scratch.c", self.refusal())
+        self.assertIn("scratch.c", self.refusal())

@@ -32,8 +32,9 @@ class Split(unittest.TestCase):
         records = queues.records()
         manager = records[result["task"]]
         self.assertEqual(manager["kind"], "command")
-        self.assertIn("Do six things.", manager["brief"])
-        self.assertIn(self.worker["branch"], manager["brief"])
+        self.assertIn('cointos_task ' + self.worker['id'], manager['brief'])
+        self.assertNotIn(self.worker['branch'], manager['brief'])
+        self.assertEqual(manager['carried_work'][0]['task'], self.worker['id'])
         self.assertEqual(records["p:huge"]["replaced_by"], [result["item"]])
         self.assertEqual(records["p:after"]["depends"], [result["item"]])
 
@@ -61,7 +62,7 @@ class Split(unittest.TestCase):
         self.assertEqual([(t["kind"], t["role"]) for t in responders], [("first-response", "first-responder")])
         self.assertFalse(queues.records()["p:huge"].get("replaced_by"))
 
-    def test_a_first_responder_that_runs_out_splits_an_implementer_once(self):
+    def test_a_first_responder_that_runs_out_gets_another_first_responder(self):
         lifecycle.stop("worker-1", "budget", requeue=False)
         responder, _ = tasks.request_repair(self.worker)
         support.running(responder, "responder-1", worktree=False)
@@ -69,18 +70,22 @@ class Split(unittest.TestCase):
             lifecycle.retry_fresh("responder-1", "generation budget reached", "packet")
         scanned = {"p": copy.deepcopy(list(queues.records().values()))}
         spawner.repair_work(scanned)
-        self.assertEqual(len(queues.records()["p:huge"]["replaced_by"]), 1)
-        self.assertFalse(responder["exhausted"])
+        self.assertFalse(queues.records()["p:huge"].get("replaced_by"))
+        owner, created = tasks.request_repair(responder)
+        self.assertFalse(created)
+        self.assertEqual(owner['role'], 'first-responder')
+        self.assertEqual(owner['repair_origin']['task'], responder['id'])
         self.assertIn("worker-2", state.L["agents"])
 
-    def test_a_held_operator_splits_and_names_the_uncommitted_checkout(self):
+    def test_a_held_operator_splits_with_typed_preserved_work(self):
         operator = tasks.request_operator("big", "Do everything.", "p", ["standard"], None, None)
         support.running(operator, "operator-2", worktree=False)
         result = api.dispatch("split", {"task": operator["id"], "reason": "huge"})
         brief = queues.records()[result["task"]]["brief"]
-        self.assertIn("Do everything.", brief)
-        self.assertIn(operator["worktree"], brief)
-        self.assertIn("uncommitted", brief)
+        self.assertIn('cointos_task ' + operator['id'], brief)
+        self.assertNotIn(operator['worktree'], brief)
+        self.assertNotIn('uncommitted', brief)
+        self.assertEqual(queues.records()[result['task']]['carried_work'][0]['task'], operator['id'])
         self.assertNotIn("operator-2", state.L["agents"])
         self.assertIn("worker-1", state.L["agents"])
         self.assertIn("worker-2", state.L["agents"])
@@ -162,6 +167,28 @@ class CoinTools(unittest.TestCase):
         self.assertLessEqual(set(names), {t["function"]["name"] for t in tools})
         self.assertFalse(hasattr(kt_mcp, "EXCLUDED"))
 
+    def test_coin_project_controls_hide_storage_selection_and_keep_project_facts(self):
+        offered = {t['function']['name']: t['function'] for t in coin.TOOLS}
+        project = {'name': 'p', 'main_branch': 'private-storage-line', 'path': '/projects/p',
+                   'priority': 50, 'enabled': False, 'test_policy': {'manifest': 'tests/contracts.json'}}
+        for name in ('project_add', 'project_new', 'project_set'):
+            self.assertNotIn('main_branch', offered[name]['parameters']['properties'])
+            with patch.object(coin, 'call', return_value={'ok': True, 'project': project}) as call:
+                result = coin.execute(name, {'project': 'p', 'enabled': False})
+                with self.assertRaisesRegex(ValueError, 'No project settings were changed'):
+                    coin.execute(name, {'project': 'p', 'enabled': True, 'main_branch': 'do-not-switch'})
+                self.assertEqual(call.call_count, 1)
+                self.assertNotIn('main_branch', result['project'])
+                self.assertFalse(result['project']['enabled'])
+                self.assertEqual(result['project']['test_policy'], project['test_policy'])
+                self.assertNotIn('main_branch', call.call_args.args[1])
+                if name == 'project_set':
+                    self.assertEqual(call.call_args.args[1]['settings'], {'enabled': False})
+        with patch.object(coin, 'call', return_value={'ok': True, 'projects': [project]}):
+            shown = coin.execute('projects', {})
+        self.assertNotIn('main_branch', shown['projects'][0])
+        self.assertEqual(project['main_branch'], 'private-storage-line')
+
     def test_dispatch_offers_every_role_and_split_exists(self):
         offered = {t["function"]["name"]: t["function"] for t in coin.TOOLS}
         roles = set(offered["dispatch"]["parameters"]["properties"]["role"]["enum"])
@@ -180,12 +207,10 @@ class FirstResponder(unittest.TestCase):
         self.worker.update(status="failed", note="generation budget reached")
         self.responder, _ = tasks.request_repair(self.worker)
 
-    def test_it_is_a_distinct_role_with_a_small_budget_that_dispatches(self):
+    def test_it_is_a_distinct_role_with_a_small_budget(self):
         self.assertEqual(self.responder["role"], "first-responder")
         self.assertEqual(self.responder["budget"], schema.budget(state.CONFIG, role="first-responder"))
         self.assertLess(self.responder["budget"]["generation_tokens"], schema.budget(state.CONFIG, role="operator")["generation_tokens"])
-        self.assertIn("dispatch", self.responder["brief"])
-        self.assertNotIn("Restore progress", self.responder["brief"])
         self.assertTrue((ROOT / "roles/first-responder.md").is_file())
 
     def test_its_edit_tools_are_off_but_it_keeps_its_controls(self):

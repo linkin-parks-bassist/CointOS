@@ -1,0 +1,6 @@
+{
+  "name": "Cointel Professional",
+  "identity": "cointelprofessional",
+  "station": "~/Work",
+  "telegram_env": "~/.config/agent-ecosystem/cointelprofessional.env"
+}

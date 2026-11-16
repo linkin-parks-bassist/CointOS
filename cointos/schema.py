@@ -44,6 +44,11 @@ KINDS = {
 # Roles holding queue and lifecycle controls over a project's work.
 CONTROLLERS = ("operator", "first-responder")
 
+RECOVERY_GOAL = ("Conduct the minimal investigation needed to choose, with reasonable confidence, "
+                 "the right agent role to handle the failure of {task}. "
+                 "Establish a checked handoff within existing authority; if a decision requires authority "
+                 "you lack, surface that specific decision and finish blocked. Routing permission does not expand product scope.")
+
 # The queue kinds agents and the user submit, and the task kind that carries each.
 QUEUE_KINDS = {"queued": "item", "urgent": "item", "command": "breakdown"}
 
@@ -51,20 +56,22 @@ QUEUE_KINDS = {"queued": "item", "urgent": "item", "command": "breakdown"}
 # the daemon decides what a caller may do from who is calling.
 INPUT_IDS = {"type": "array", "items": {"type": "integer", "minimum": 0}, "minItems": 1,
              "description": "Current update_ids belonging to this assignment. Required when multiple inputs are present; exclude unrelated requests."}
+BRIEF_DESCRIPTION = ("A few sentences: result, relevant input/path and completion check. Link detailed contracts. "
+                     "Omit history, repeated rules and coordination metadata; use typed fields for that.")
 AGENT_PROPERTIES = {
-    "name": {"type": "string"}, "brief": {"type": "string"}, "project": {"type": "string"},
+    "name": {"type": "string"}, "brief": {"type": "string", "description": BRIEF_DESCRIPTION}, "project": {"type": "string"},
     "station": {"type": "object", "additionalProperties": False, "description": "Where the agent works and what it can reach. Omit for no project: the runtime with standard tools.", "properties": {
         "directory": {"type": "string", "description": "An existing directory to work in; its writes are confined there. Not combined with project."},
         "tools": {"type": "array", "items": {"type": "string"}, "description": "Configured MCP servers it can use beyond the standard tools, from mcp_tools, or * for all."}}},
     "abilities": {"type": "array", "items": {"type": "string", "enum": ["standard", "control", "network", "logs"]},
                   "description": "logs gives any role the log tool, to read agents' records and yours; Operators also use control and network."},
     "reasoning_effort": {"type": "string", "enum": ["low", "medium", "xhigh"]},
-    "generation_seconds": {"type": "number"}, "generation_tokens": {"type": "integer"}, "input_ids": INPUT_IDS}
+    "generation_tokens": {"type": "integer"}, "input_ids": INPUT_IDS}
 DISPATCH_DESCRIPTION = (
     "Start an agent of any role. The brief is everything it will know. operator (the default) does one direct job "
     "with explicit scope, station, abilities, reasoning and budget. manager breaks a project goal into small work; "
     "worker does one small piece in a project, at stage. integrator lands the reviewed work named by task. "
-    "first-responder works out what went wrong with the failed run named by task and dispatches the fix. "
+    "first-responder minimally investigates the failed task or standalone runtime problem to choose the right agent role, then hands off within existing authority or surfaces the required decision and finishes blocked. "
     "supervisor reads the transcript of the running agent named by task and steers it. gardener "
     "and tree-auditor tend the tree named by project. steward and test-auditor take the brief across the system. "
     "What you may start depends on who you are, and a refusal says why.")
@@ -72,7 +79,7 @@ DISPATCH_PROPERTIES = {
     **AGENT_PROPERTIES,
     "role": {"type": "string", "enum": sorted({kind["role"] for kind in KINDS.values()})},
     "task": {"type": "string", "description": "for integrator: the reviewed worker task; for first-responder: the failed task; for supervisor: the running task"},
-    "stage": {"type": "string", "enum": ["skeleton", "test-contract", "implementation", "integration"], "description": "for worker: its construction stage"},
+    "stage": {"type": "string", "enum": ["skeleton", "test-contract", "implementation", "integration"], "description": "requires role worker; sets its construction stage, never selects the role"},
     "summary": {"type": "string", "description": "for worker: 5-20 plain words saying what the task is for, shown on the dashboard"},
     "dependencies": {"type": "array", "items": {"type": "string"}, "description": "for worker: prerequisite item IDs; [] means none"},
     "relies_on": {"type": "array", "items": {"type": "string"}, "description": "for a test-contract worker: existing API names its tests use"}}
@@ -115,7 +122,11 @@ def budget(config: dict, overrides=None, *, role=None) -> dict:
     result = {key: config["recovery"][key] for key in BUDGET_KEYS}
     result.update(config["recovery"].get("role_budgets", {}).get(role, {}))
     result.update(overrides or {})
+    if role == "supervisor":
+        result["generation_tokens"] = None
     for key, value in result.items():
+        if role == "supervisor" and key == "generation_tokens" and value is None:
+            continue
         whole = key == "generation_tokens"
         if (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
                 or value <= 0 or (whole and not isinstance(value, int))):

@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from cointos import coin, coin_input
+from tests.test_coin import sent_reply
 
 
 class DurableIntakeIntegration(unittest.TestCase):
@@ -77,7 +78,7 @@ class DurableIntakeIntegration(unittest.TestCase):
         mechanical.assert_not_called()
         inbox = unittest.mock.Mock()
         inbox.get.side_effect = KeyboardInterrupt
-        with patch.object(coin, 'complete', return_value={'role': 'assistant', 'content': 'Model status explanation.'}) as model, \
+        with patch.object(coin, 'complete', return_value=sent_reply('Model status explanation.')) as model, \
                 patch.object(coin, 'send') as send, self.assertRaises(KeyboardInterrupt):
             coin.worker('fixture-only-token', inbox, {7})
         self.assertIn('/status', str(model.call_args.args[1]))
@@ -123,7 +124,7 @@ class DurableIntakeIntegration(unittest.TestCase):
                 raise KeyboardInterrupt()
             return records
         with patch.object(coin_input, 'pending', side_effect=stop_when_completed), \
-             patch.object(coin, 'complete', return_value={'role': 'assistant', 'content': 'Checked the current task.'}), \
+             patch.object(coin, 'complete', return_value=sent_reply('Checked the current task.')), \
              patch.object(coin, 'send', return_value={'message_id': 459}) as send, \
              self.assertRaises(KeyboardInterrupt):
             coin.worker('fixture-only-token', queue.Queue(), {7})
@@ -145,7 +146,7 @@ class DurableIntakeIntegration(unittest.TestCase):
                     raise KeyboardInterrupt()  # bound a broken immediate replay loop
                 raise RuntimeError('fixture model failure')
             good_seen.append(True)
-            return {'role': 'assistant', 'content': 'The separate action was checked.'}
+            return sent_reply('The separate action was checked.')
         def send(token, chat, text):
             if chat == 70:
                 raise RuntimeError('fixture reply transport failed')
@@ -167,8 +168,7 @@ class DurableIntakeIntegration(unittest.TestCase):
     def test_storage_failure_after_success_does_not_invent_a_model_failure_reply(self):
         coin_input.offset(self.directory, self.root / 'telegram-offset.json')
         record = coin_input.accept(self.directory, self.update, {7})
-        with patch.object(coin, 'complete', return_value={
-                'role': 'assistant', 'content': 'Checked the current task.'}), \
+        with patch.object(coin, 'complete', return_value=sent_reply('Checked the current task.')), \
              patch.object(coin, 'send', return_value={'message_id': 462}) as send, \
              patch.object(coin_input, 'complete', side_effect=[OSError('fixture durable commit failed'),
                                                             KeyboardInterrupt()]), \

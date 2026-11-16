@@ -28,15 +28,17 @@ class ConversationFlow(unittest.TestCase):
             coin.turn('fixture', 7, 70, texts or [{'id': 1, 'text': 'Please update my record.'}], arrivals, None)
         return captured
 
-    def test_unacknowledged_input_cannot_execute_or_finish_silently(self):
-        with patch.object(coin, 'execute') as execute:
-            captured = self.turn([
-                assistant(call('run_command', {'command': 'exit 1'}), call('done')),
-                assistant(call('send', {'message': 'I’ll pass that update on.'}), call('done'))])
-        execute.assert_not_called()
-        self.assertEqual(self.sent, ['I’ll pass that update on.'])
+    def test_read_before_reply_succeeds_but_cannot_finish_silently(self):
+        record = self.root / 'record.txt'
+        record.write_text('60 kg: 5, 6, 8 reps')
+        captured = self.turn([
+            assistant(call('fs_read', {'path': str(record)}), call('done')),
+            assistant(call('send', {'message': '60 kg: 5, 6, 8 reps'}), call('done'))])
+        self.assertEqual(self.sent, ['60 kg: 5, 6, 8 reps'])
         results = [json.loads(m['content']) for m in captured[1] if m['role'] == 'tool']
-        self.assertTrue(all(r['ok'] is False for r in results))
+        self.assertTrue(results[0]['ok'])
+        self.assertEqual(results[0]['content'], '60 kg: 5, 6, 8 reps')
+        self.assertFalse(results[1]['ok'])
 
     def test_new_input_reopens_reply_obligation_and_keeps_same_owner(self):
         coin_followups.retain(self.root / 'followups', 7, 70, 'system:fitness-1', 'Update workout')
@@ -64,8 +66,9 @@ class ConversationFlow(unittest.TestCase):
                                      call('dispatch', {'name': 'records', 'brief': 'Update records.'}))])
         execute.assert_not_called()
 
-    def test_empty_send_is_not_a_receipt_and_done_content_is_delivered_once(self):
-        self.turn([assistant(call('send', {'message': ''}), call('done'), content='Received your update.')])
+    def test_empty_send_and_done_content_do_not_satisfy_reply_obligation(self):
+        self.turn([assistant(call('send', {'message': ''}), call('done'), content='Internal bookkeeping.'),
+                   assistant(call('send', {'message': 'Received your update.'}), call('done'))])
         self.assertEqual(self.sent, ['Received your update.'])
 
     def test_refused_report_cannot_hide_an_unanswered_direct_message(self):

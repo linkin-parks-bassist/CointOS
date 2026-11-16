@@ -8,9 +8,10 @@ republish the readable queue projection.
 from __future__ import annotations
 
 import re
+import math
 from copy import deepcopy
 
-from cointos import contracts, frontier, git, landing, lifecycle, models, packets, projects, queues, replacement, schema, settings, snapshots, tasks, wakeups
+from cointos import artifacts, contracts, frontier, git, landing, lifecycle, models, packets, projects, queues, replacement, schema, settings, snapshots, tasks, wakeups
 from cointos.config import ROOT
 from cointos.state import ACTIVE, CONFIG, LOCK, STOPPING, L, alert, log, now, save
 
@@ -41,9 +42,22 @@ def running(body) -> dict | None:
 
 
 def dispatch(action: str, body: dict):
+    try:
+        return _dispatch(action, body)
+    except (git.OperationError, contracts.CompositionError) as error:
+        if body.get('caller') or isinstance(error, projects.SetupError):
+            log('private file operation failed', task=(body.get('caller') or {}).get('task'), diagnostic=str(error))
+            raise ApiError(error.public) from None
+        raise
+
+
+def _dispatch(action: str, body: dict):
     # Already-published work must settle before a later hold, cancellation or
     # revision can reinterpret it as unaccepted after a daemon replacement.
     with LOCK:
+        acting, _ = caller(body)
+        if acting and acting.get('must_split') and action not in ('handoff', 'check-work', 'read-log', 'source'):
+            raise ApiError('the second supervisor may only inspect work and hand off exactly two fresh workers')
         recovered = lifecycle.recover_landings()
     if recovered:
         save()
@@ -53,6 +67,24 @@ def dispatch(action: str, body: dict):
         return finishing(body)
     if action == "check-work":
         return check_work(body)
+    if action == 'review':
+        return review(body)
+    if action == 'handoff':
+        return handoff(body)
+    if action == 'read-log':
+        return read_log(body)
+    if action == 'source':
+        return source_files(body)
+    if action == 'diagnostic':
+        return diagnostic(body)
+    if action == 'metrics':
+        with LOCK:
+            running(body)
+        from cointos import metrics
+        hours = body.get('hours')
+        if type(hours) not in (int, float) or not math.isfinite(hours) or hours <= 0:
+            raise ApiError('hours must be a positive finite number')
+        return {'ok': True, 'text': metrics.report(hours)}
     if action not in ACTIONS:
         raise ApiError(f"unknown action {action!r}")
     with LOCK:
@@ -87,9 +119,34 @@ def _landing_action(action: str, body: dict):
         ACTIVE["landings"] += 1
     try:
         if action == "land":
-            result = landing.land(target["id"], body["commit"], run)
+            if 'commit' not in body:
+                with LOCK:
+                    worker = L['tasks'][target['worker']]
+                    accepted = worker.get('acceptance') or {}
+                    replay = worker['status'] == 'done' and accepted.get('commit')
+                    if not replay:
+                        running(body)
+                    where = deepcopy(tasks.place(target))
+                if replay:
+                    commit = accepted['commit']
+                else:
+                    prepared = target.get('prepared_review')
+                    if not prepared or prepared['main'] != git.head(where['path'], where['main_branch']):
+                        raise ApiError('accepted product changed or review is not prepared; inspect cointos_review before accepting')
+                    if prepared.get('reconcile'):
+                        raise ApiError('complete the indicated knowledge upkeep and call review again before accepting')
+                    summary = body.get('summary', '').strip()
+                    if not summary:
+                        raise ApiError('acceptance requires a review summary')
+                    commit = artifacts.accept(target, worker, where, summary)
+            else:
+                commit = body['commit']
+            result = landing.land(target["id"], commit, run)
         else:
-            result = landing.incorporate(target["id"], body["commit"], body["worker_commit"], run)
+            where = tasks.place(target)
+            commit = body.get('commit') or git.head(where['path'], where['main_branch'])
+            submitted = body.get('worker_commit') or (target.get('receipt') or {}).get('evidence', {}).get('commit')
+            result = landing.incorporate(target["id"], commit, submitted, run)
         queues.publish()
         return result
     finally:
@@ -105,17 +162,56 @@ def _landing_action(action: str, body: dict):
 LANDINGS = ("land", "incorporate")
 
 
+def review(body):
+    with replacement.lease(ROOT, shared=True) as acquired:
+        if not acquired:
+            raise ApiError('runtime replacement in progress; retry review after replacement')
+        with LOCK:
+            task = running(body)
+            if not task or task['kind'] != 'integrate':
+                raise ApiError('only the assigned integrator reviews this work')
+            worker = deepcopy(L['tasks'][task['worker']])
+            if worker['status'] != 'review' or (worker.get('receipt') or {}).get('disposition') != 'complete':
+                raise ApiError('worker has no completed submission to review')
+            where, candidate = deepcopy(tasks.place(task)), deepcopy(task)
+        prepared, result = artifacts.review(candidate, worker, where)
+        with LOCK:
+            running(body)
+            if L['tasks'][worker['id']].get('receipt') != worker['receipt']:
+                raise ApiError('submission changed during review preparation; inspect the current work again')
+            task['prepared_review'] = prepared
+        save()
+        return {'ok': True, **result}
+
+
 def finishing(body):
+    with LOCK:
+        actor, _ = caller(body)
+        planning = (actor and actor['role'] == 'manager' and actor.get('branch')
+                    and body.get('outcome') == 'complete')
+    if planning:
+        from cointos import handoffs
+        return handoffs.complete({'caller': body.get('caller'), 'summary': body.get('detail'), 'items': []},
+                                 allow_empty=True)
     with replacement.lease(ROOT, shared=True) as acquired:
         if not acquired:
             raise ApiError('runtime replacement in progress; retry completion after replacement')
+        with LOCK:
+            task, run = caller(body)
+            capture = (body.get('outcome') == 'complete' and isinstance(body.get('detail'), str)
+                       and body['detail'].strip() and task and lifecycle.owns(task, run) and not task.get('receipt')
+                       and task.get('branch') and not task.get('validating'))
+            candidate = deepcopy(task) if capture else None
+            where = deepcopy(tasks.place(task)) if capture else None
+        if candidate:
+            artifacts.capture_run(candidate, where, body.get('detail', ''))
         return _finishing(body)
 
 
 def _finishing(body):
     """`cointos finish`. An implementer's complete receipt first runs its packet's hidden tests,
-    outside the ledger lock; a failure goes straight back to the still-running implementer with
-    the failing tests revealed. A test writer's complete receipt first finds out whether its
+    outside the ledger lock; the first product-test failure blocks into independent recovery
+    with the failing tests preserved. A test writer's complete receipt first finds out whether its
     tests already pass on main."""
     with LOCK:
         task, run = caller(body)
@@ -172,6 +268,8 @@ def _finishing(body):
         try:
             if retained.get('category') == 'product':
                 raise ValueError(retained['error'])
+            if retained.get('category') == 'test':
+                raise contracts.ProductTestFailure(retained['error'])
             if retained.get('category') == 'composition':
                 raise contracts.CompositionError.retained(retained['error'], retained['composition'])
             checked = {"commit": commit, "tests": tests}
@@ -191,9 +289,10 @@ def _finishing(body):
             if isinstance(error, contracts.CompositionError):
                 error.evidence.update(main=main, candidate=commit)
             category = ('execution' if isinstance(error, contracts.ExecutionError) else
-                        'composition' if isinstance(error, contracts.CompositionError) else 'product')
+                        'composition' if isinstance(error, contracts.CompositionError) else
+                        'test' if isinstance(error, contracts.ProductTestFailure) else 'product')
             log({'execution': 'validation execution failed', 'composition': 'packet composition failed',
-                 'product': 'packet tests failed'}[category],
+                 'test': 'packet tests failed', 'product': 'packet tests failed'}[category],
                 task=task['id'], commit=commit, reason=str(error)[:500])
             changed, blocked = False, None
             with LOCK:
@@ -207,18 +306,22 @@ def _finishing(body):
                     failure = task.get('submission_failure') or {}
                     same = failure.get('inputs') == submission and failure.get('category', 'product') == category
                     attempts = failure.get('attempts', 0) + 1 if same else 1
-                    task['submission_failure'] = {'inputs': submission, 'attempts': attempts,
+                    task['submission_failure'] = {'inputs': submission, 'candidate': commit, 'attempts': attempts,
                                                   'category': category, 'error': str(error)}
                     if category == 'composition':
                         task['submission_failure']['composition'] = deepcopy(error.evidence)
                     changed = True
-                    if category == 'composition' or attempts >= 3:
-                        reason = ('Accepted test packets cannot compose; request an independently reviewed '
-                                  'correct-tests replacement and preserve implementation artifacts: '
-                                  if category == 'composition' else f'Validation infrastructure failed {attempts} unchanged submissions; no assertion evidence: '
-                                  if category == 'execution' else f'Unchanged candidate refused {attempts} submissions: ')
+                    if category in ('test', 'composition') or attempts >= 3:
+                        if category == 'test':
+                            reason = 'Product tests failed; First Responder diagnosis required before further implementation: '
+                        elif category == 'composition':
+                            reason = ''
+                        elif category == 'execution':
+                            reason = f'Validation infrastructure failed {attempts} unchanged submissions; no assertion evidence: '
+                        else:
+                            reason = f'Unchanged candidate refused {attempts} submissions: '
                         receipt = lifecycle.submit(task['id'], run, 'blocked',
-                                                   reason + str(error))
+                                                   reason + (error.public if category == 'composition' else str(error)))
                         task['submission_failure']['blocked_request'] = {'run': run, 'detail': body.get('detail', '')}
                         blocked = receipt
             if changed:
@@ -283,13 +386,23 @@ def queue(body):
     if by is not None:
         if not controls_project(by, project["name"]):
             raise ApiError("this recovery's origin was withdrawn; it no longer steers queued work")
+        artifacts.require_child_scope(body['brief'], by)
         if kind in ("queued", "urgent") and body.get("summary") is None:
             queues.require_summary(body["brief"])
+    fresh = f"{project['name']}:{queues.slug(body['name'])}" not in queues.records()
     item = queues.add(project, kind, body["name"], body["brief"], body.get("stage"),
                       body.get("reasoning_effort"), body.get("budget"),
                       dependency_ids=body.get("dependencies"), summary=body.get("summary"), reliances=body.get("relies_on"))
     if by is not None:
-        queues.records()[f"{project['name']}:{item}"].setdefault("proposed_by", by["id"])
+        record = queues.records()[f"{project['name']}:{item}"]
+        try:
+            artifacts.carry_owner(record, by)
+        except Exception:
+            if fresh:
+                queues.records().pop(f"{project['name']}:{item}")
+            raise
+        if fresh:
+            record['proposed_by'] = by['id']
     log("queued", project=project["name"], item=item)
     return {"ok": True, "item": item}
 
@@ -335,10 +448,56 @@ def correct_tests(body):
 
 
 def handoff(body):
-    """Publish a manager's runnable children and its checked handoff in one transaction."""
+    from cointos import handoffs
+    with LOCK:
+        task, _ = caller(body)
+        splitting = bool(task and task.get('must_split'))
+    if not splitting:
+        return handoffs.complete(body)
+    with replacement.lease(ROOT, shared=True) as acquired:
+        if not acquired:
+            raise ApiError('runtime replacement in progress; retry handoff after replacement')
+        with LOCK:
+            task, run = caller(body)
+            if (task.get('receipt') or {}).get('run') == run:
+                result = _split_handoff(body)
+                replay = True
+            else:
+                running(body)
+                if task.get('validating') or STOPPING.is_set():
+                    raise ApiError('split preparation is busy; retry after it finishes')
+                subject = L['tasks'][task['supervises']]
+                original = deepcopy(queues.records()[subject['record']])
+                snapshot = deepcopy(subject)
+                task['validating'] = True
+                ACTIVE['landings'] += 1
+                replay = False
+        try:
+            if not replay:
+                artifact = artifacts.preserved(snapshot, tasks.place(snapshot))
+                with LOCK:
+                    if (L['tasks'].get(subject['id']) is not subject
+                            or queues.records().get(subject['record']) != original):
+                        raise ApiError('split assignment changed during preparation; preserve work and inspect it again')
+                    artifacts.remember_material(subject, artifact)
+                    result = _split_handoff(body, artifact)
+            save()
+            queues.publish()
+            return result
+        finally:
+            if not replay:
+                with LOCK:
+                    task.pop('validating', None)
+                    ACTIVE['landings'] -= 1
+                    LOCK.notify_all()
+
+
+def _split_handoff(body, artifact=None):
+    """Replace a stopped implementer through its mandatory splitter's checked handoff."""
     task, run = caller(body)
-    if task is None or task['role'] != 'manager':
-        raise ApiError('handoff is a manager completion with runnable child assignments')
+    splitting = bool(task and task.get('must_split'))
+    if not splitting:
+        raise ApiError('split handoff requires the assigned mandatory Supervisor')
     previous = task.get('receipt') or {}
     if previous.get('run') == run and previous.get('disposition') == 'complete':
         if (previous.get('summary') != body.get('summary')
@@ -347,25 +506,62 @@ def handoff(body):
         return {'ok': True, 'receipt': previous}
     running(body)
     items = body.get('items')
+    if not isinstance(body.get('summary'), str) or not body['summary'].strip():
+        raise ApiError('handoff needs a nonempty summary')
     if not isinstance(items, list) or not items or any(not isinstance(item, dict) for item in items):
         raise ApiError('handoff needs a nonempty array of child assignments')
-    project = tasks.project_named(task['place'])
+    subject = L['tasks'][task['supervises']] if splitting else None
+    original = queues.records()[subject['record']] if subject else None
+    if splitting:
+        if len(items) != 2 or any(i.get('kind', 'queued') not in ('queued', 'urgent') for i in items):
+            raise ApiError('the second supervisor must create exactly two fresh worker jobs')
+        names = [queues.slug(i.get('name', '')) for i in items]
+        if len(set(names)) != 2 or any(f"{original['project']}:{n}" in L['queue'] or
+                f"{original['project']}:{n}" in L['tasks'] for n in names):
+            raise ApiError('the two halves need distinct fresh names, not existing jobs')
+        if any(i.get('stage', original['stage']) != original['stage'] for i in items):
+            raise ApiError('both halves must retain the original worker stage')
+        for item in items:
+            brief = item.get('brief', '')
+            if isinstance(brief, str) and any(value and value in brief
+                                             for value in (subject.get('worktree'), subject.get('branch'))):
+                raise ApiError('describe each remaining behavior using relative file paths; '
+                               'children receive their own prepared files automatically')
+        if original.get('held_by') not in (None, task['id']):
+            raise ApiError('preserve the existing explicit hold; its owner must release it before splitting')
+    project = tasks.project_named(original['project'] if splitting else task['place'])
     before = deepcopy(L['queue'])
     try:
         created = []
         for item in items:
             if item.get('summary') is None or not isinstance(item.get('dependencies'), list):
                 raise ApiError('every handoff child needs summary and dependencies')
-            name = queues.add(project, item.get('kind', 'queued'), item.get('name', ''), item.get('brief', ''),
-                              item.get('stage'), item.get('reasoning_effort'), item.get('budget'),
-                              dependency_ids=item['dependencies'], summary=item['summary'],
+            brief = item.get('brief', '')
+            name = queues.add(project, item.get('kind', 'queued'), item.get('name', ''), brief,
+                              item.get('stage', original['stage'] if splitting else None), item.get('reasoning_effort'), item.get('budget'),
+                              dependency_ids=list(dict.fromkeys([*original['depends'], *item['dependencies']])), summary=item['summary'],
                               reliances=item.get('relies_on'))
             record = queues.records()[f"{project['name']}:{name}"]
             if record.get('proposed_by') not in (None, task['id']):
                 raise ApiError('handoff child already belongs to another proposer')
             record['proposed_by'] = task['id']
+            record['preserved_artifact'] = deepcopy(artifact)
             created.append(queues.key(record))
-        receipt = lifecycle.submit(task['id'], run, 'complete', body.get('summary', ''))
+        if splitting:
+            if original.get('correction'):
+                first, final = (queues.records()[k] for k in created)
+                corrected_item = original['correction']['packet'].split(':', 1)[1]
+                first['depends'] = [d for d in first['depends'] if d != corrected_item]
+                final['depends'] = list(dict.fromkeys([*final['depends'], *original['depends'], first['item']]))
+                final['correction'] = deepcopy(original['correction'])
+                first['brief'] = queues.dependency_brief(first['brief'], first['depends'])
+                final['brief'] = queues.dependency_brief(final['brief'], final['depends']) + (
+                    f"\nFinish the test correction by including {first['item']}'s independently accepted test changes "
+                    "alongside your assigned half. The old accepted contract remains binding until this final half is reviewed.")
+            receipt = lifecycle.replacement_handoff(task, run, original,
+                [queues.records()[k]['item'] for k in created], {'two_way_split': subject['id']}, body['summary'])
+            subject['replaced_by'] = list(original['replaced_by'])
+            lifecycle.fail(subject, 'stopped and replaced by two fresh worker jobs: ' + ', '.join(created))
         receipt['evidence']['handoff'] = deepcopy(items)
     except Exception:
         L['queue'] = before
@@ -405,7 +601,8 @@ def _check_work(body):
     project = tasks.project_named(body.get("project") or (by or {}).get("place", ""))
     if "brief" not in body:
         problems = queues.frontier_problems(project["name"], owner=by["id"] if by else None)
-        if by and by['role'] == 'worker':
+        if by and by['role'] == 'worker' and not [p for p in contracts.working_paths(
+                by['worktree'], by.get('base_commit', 'HEAD')) if p != '.work-report.md']:
             try:
                 contracts.worker_artifact(project['path'], by, git.head(by['worktree']))
             except ValueError as error:
@@ -431,15 +628,14 @@ def _check_work(body):
                 except ValueError as error:
                     problems.append(str(error))
         result = {"problems": problems}
-        if by:
+        if by and not (by['role'] == 'worker' and by.get('stage') != 'test-contract'):
             result['binding_tests'] = frontier.inspect(by['id'], L)['binding_tests']
         if by and by['role'] == 'worker' and project.get('test_policy'):
             paths = contracts.working_stage_changes(by['worktree'], by['stage'], project['test_policy'])
             result['out_of_scope_paths'] = paths
             if paths:
-                problems.append('uncommitted files outside the assigned ' + by['stage'] + ' stage: ' +
-                                ', '.join(paths) + '; preserve diagnostic work separately and restore these '
-                                'files before committing the scoped artifact')
+                problems.append('files outside the assigned ' + by['stage'] + ' stage: ' +
+                                ', '.join(paths) + '; preserve diagnostics in scratch and keep submitted files in scope')
         if by and schema.KINDS[by['kind']]['lands'] == 'merge':
             try:
                 where = tasks.place(by)
@@ -448,21 +644,20 @@ def _check_work(body):
             except ValueError as error:
                 problems.append(str(error))
         if by and by['role'] in ('worker', 'manager', 'integrator'):
-            result['worktree_clean'] = git.clean(by['worktree'])
-            if not result['worktree_clean']:
-                status = git.result(by['worktree'], 'status', '--short')
-                result['worktree_status'] = (status.stdout or status.stderr)[:4000]
-            if by['role'] != 'integrator' and not result['worktree_clean']:
-                problems.append('the assigned worktree has uncommitted or untracked changes; inspect and preserve them, then commit the completed scoped artifact before submitting it')
+            result['changed_files'] = contracts.working_paths(by['worktree'], by.get('base_commit', 'HEAD'))
             result.update(task=by['id'], completion_receipt_required=True,
-                          worktree=by['worktree'], branch=by['branch'], main_branch=project['main_branch'],
+                          workspace=by['worktree'],
                           next_action='Fix the reported problems and continue, or submit the role\'s checked completion/blocked receipt. A green preflight is not semantic acceptance; final prose cannot settle this task.')
         return {"ok": not problems, **result}, False
     try:
-        return queues.preview(project, body.get("kind", "queued"), body.get("name", ""), body["brief"],
+        if by:
+            artifacts.require_child_scope(body['brief'], by)
+        proposal = queues.preview(project, body.get("kind", "queued"), body.get("name", ""), body["brief"],
                               body.get("stage"), body.get("reasoning_effort"), body.get("budget"),
                               dependency_ids=body.get("dependencies"), summary=body.get("summary"),
-                              reliances=body.get("relies_on")), False
+                              reliances=body.get("relies_on"))
+        return {**proposal, 'created': False,
+                'message': 'Proposal checked only; no work was queued or dispatched.'}, False
     except ValueError as error:
         return {"ok": False, "problems": [str(error)]}, False
 
@@ -502,8 +697,7 @@ def require_operator_release(task: dict | None, record: dict) -> None:
 
 
 def decider(body) -> tuple[str, str]:
-    """The queue item a hold or revision is about, and who decides about it: the user, or the
-    running manager of the item's own project."""
+    """Resolve queued work and the current actor, checking recovery and hold authority."""
     name = body.get("item", "")
     key = queue_key(name)
     if key is None:
@@ -530,13 +724,17 @@ def unhold(body):
 
 def revise(body):
     key, by = decider(body)
+    version = queues.records()[key]['version']
     lifecycle.revise(key, by, body.get("reason", ""), body.get("brief", ""), body.get("stage"),
                      body.get("reasoning_effort"), body.get("budget"), dependency_ids=body.get("dependencies"),
                      summary=body.get("summary"), reliances=body.get("relies_on"))
+    changed = queues.records()[key]['version'] != version
     caller_task = L["tasks"].get(by)
-    if caller_task and caller_task.get("supervises") == key:  # its brief is the handoff; the next threshold brings another
+    if changed and caller_task and caller_task.get("supervises") == key:  # its brief is the handoff; the next threshold brings another
         lifecycle.cancel_task(caller_task, "cointos", "it revised its run; its brief is the handoff")
-    return {"ok": True, "item": key}
+    return {"ok": True, "item": key, "changed": changed,
+            "message": "Assignment revised; work refreshed." if changed else
+                       "Assignment unchanged; no work restarted and no recovery handoff completed."}
 
 
 def cancel(body):
@@ -728,6 +926,10 @@ def resume_task(body):
     if by is not None:
         if target is None or not controls_project(by, target["place"]):
             raise ApiError(f"no task {body['task']!r} that this run can resume")
+        if not target.get("admission_hold"):
+            raise ApiError("this task has no infrastructure admission hold to resume; inspect its current "
+                           "assignment and recovery owner. Revise only to change the assignment, or establish "
+                           "a checked replacement handoff; an unchanged revision does not restart work")
         if target.get("admission_hold") != "repeated infrastructure launch failure":
             raise ApiError("explicit user holds require the user's own resume control")
     task = lifecycle.resume_task(body["task"])
@@ -754,23 +956,56 @@ def run_role(body, role):
     """Any other role, for the user and for a First Responder, whose job is to call the right
     one. Other agents propose work through the queue. Coin is no dispatchable role at all."""
     by = running(body)
-    if by is not None and role == "first-responder":
+    if (by is not None and role == 'supervisor' and by['role'] == 'supervisor'
+            and body.get('task') == by.get('supervises')):
+        raise ApiError('you already supervise this task; use cointos_send to send it a steer, then finish your supervision')
+    if by is not None and role == "first-responder" and by["role"] != "steward":
         raise ApiError("a First Responder does not call another First Responder; dispatch whoever can fix it")
     if body.get("check_only"):
         return {"ok": True}
     if role in ("manager", "worker"):
         if not body.get("project"):
             raise ApiError(f"a {role} works in a registered project: name it, or create one with project_new first")
-        request = {"project": body["project"], "kind": "command" if role == "manager" else "queued", "name": body["name"],
+        project = tasks.project_named(body['project'])
+        request = {"project": project["name"], "kind": "command" if role == "manager" else "queued", "name": body["name"],
                    "brief": body["brief"], "stage": body.get("stage"), "reasoning_effort": body.get("reasoning_effort"),
                    "budget": body.get("budget"), "summary": body.get("summary"), "dependencies": body.get("dependencies"),
                    "relies_on": body.get("relies_on"), **({"caller": body["caller"]} if by else {})}
+        key = f"{project['name']}:{queues.slug(body['name'])}"
+        created = key not in queues.records()
         item = queue(request)["item"]
-        if body.get("abilities"):
-            queues.records()[f"{body['project']}:{item}"]["abilities"] = schema.abilities(body["abilities"])
-        return {"ok": True, "task": f"{body['project']}:{item}", "item": item}
+        if created and body.get("abilities"):
+            queues.records()[key]["abilities"] = schema.abilities(body["abilities"])
+        return {"ok": True, "task": key, "item": item,
+                "created": created, "status": queues.state(queues.records()[key])['status'],
+                "message": "Work queued." if created else
+                           "Existing assignment reused; no run restarted or recovery handoff completed."}
+    occurrence = body.get('occurrence')
+    if occurrence is not None:
+        if not isinstance(occurrence, str) or not occurrence:
+            raise ApiError('occurrence must be a nonempty string')
+        started = next((t for t in L['tasks'].values() if t.get('occurrence') == occurrence), None)
+        if started:
+            started['dispatch_requested'] = True
+            return {'ok': True, 'task': started['id']}
+        series = occurrence.split(':', 1)[0]
+        previous = next((t for t in L['tasks'].values() if t.get('occurrence', '').split(':', 1)[0] == series
+                         and tasks.active(t)), None)
+        if previous:
+            previous['dispatch_requested'] = True
+            return {'ok': True, 'task': previous['id'], 'already_running': True}
     from cointos import spawner
+    known_tasks = set(L['tasks'])
     task = spawner.request_role(role, body)
+    if by is not None and task['id'] not in known_tasks:
+        try:
+            artifacts.carry_task(task, by)
+        except Exception:
+            L['tasks'].pop(task['id'], None)
+            raise
+    task['dispatch_requested'] = True
+    if occurrence is not None:
+        task['occurrence'] = occurrence
     if body.get("abilities"):
         task["abilities"] = schema.abilities(body["abilities"])
     log("agent requested", task=task["id"], role=role)
@@ -809,18 +1044,33 @@ def recover(body):
 
 def run_agent(body):
     role = body.get("role", "operator")
+    if body.get('stage') is not None and role != 'worker':
+        raise ApiError('a construction stage requires role worker; set role worker and its stage explicitly')
+    if role not in ('worker', 'manager') and any(body.get(field)
+                                                for field in ('dependencies', 'relies_on')):
+        raise ApiError('construction prerequisites require role worker or manager; they cannot be ignored')
+    by = running(body)
+    if by:
+        artifacts.require_child_scope(body['brief'], by)
     if role != "operator":
         if role not in {spec["role"] for spec in schema.KINDS.values()}:
             raise ApiError(f"unknown role {role!r}")
         return run_role(body, role)
     task, run = caller(body)
     spawner = (running(body), L["agents"][run]) if task is not None else None
+    known_tasks = set(L['tasks'])
     task = tasks.request_operator(body["name"], body["brief"], body.get("project"), body.get("abilities"),
                                   body.get("reasoning_effort"), body.get("budget"), spawner,
                                   station=body.get("station"), occurrence=body.get("occurrence"),
                                   check_only=bool(body.get("check_only")))
     if task is None:
         return {"ok": True}
+    if spawner is not None and task['id'] not in known_tasks:
+        try:
+            artifacts.carry_task(task, spawner[0])
+        except Exception:
+            L['tasks'].pop(task['id'], None)
+            raise
     if body.get("occurrence") and task.get("occurrence") != body["occurrence"]:
         return {"ok": True, "task": task["id"], "already_running": True}
     log("operator requested", task=task["id"], abilities=task["abilities"], spawned_by=task.get("spawned_by"))
@@ -829,6 +1079,7 @@ def run_agent(body):
 
 def scout(body):
     task, created = tasks.request_steward()
+    task['dispatch_requested'] = True
     log("scout requested", task=task["id"], created=created)
     return {"ok": True, "task": task["id"], "created": created}
 
@@ -868,6 +1119,14 @@ def reasoning(body):
     return {"ok": True, "applies": "next reply"}
 
 
+def agent_priority(body):
+    if running(body) is not None:
+        raise ApiError('GPU priority overrides are a user control')
+    if set(body) != {'task', 'weight'}:
+        raise ApiError('Expected task and weight (null restores the role default)')
+    return settings.set_priority(body['task'], body['weight'])
+
+
 def budget(body):
     by = running(body)
     key = queue_key(body["task"])
@@ -893,6 +1152,8 @@ def forget_task(body):
     """Operator cleanup of one paused task; its Git and OpenCode artifacts are removed separately."""
     if not L["paused"] or L["agents"] or ACTIVE["landings"]:
         raise ApiError("pause and stop all agents before forgetting work")
+    if any(reference['task'] == body['task'] for reference in artifacts.pending_material()):
+        raise ApiError('unfinished work still needs this preserved assignment; cancel or replace that work first')
     if body["task"] in L["tasks"]:
         forget(body["task"])
         log("task forgotten", task=body["task"])
@@ -905,6 +1166,7 @@ def clear_task_history(body):
     protected |= {tid for tid, task in L["tasks"].items() if tasks.active(task)}
     protected |= {task["worker"] for tid, task in L["tasks"].items() if tid in protected and task["worker"]}
     protected |= {task["record"] for tid, task in L["tasks"].items() if tid in protected and task["record"]}
+    protected.update(reference['task'] for reference in artifacts.pending_material())
     for tid, task in L["tasks"].items():
         if not (origin := task.get("repair_origin")):
             continue
@@ -921,6 +1183,8 @@ def clear_task_history(body):
             if source and source.get("record"):
                 protected.add(source["record"])
     frontier = queues.history_frontier(protected)
+    protected.update(reference['task'] for key in frontier for reference in
+                     (queues.records().get(key) or {}).get('carried_work', []))
     removed = [tid for tid, task in L["tasks"].items()
                if tasks.settled(task) and tid not in protected
                and tid not in frontier and task["record"] not in frontier]
@@ -948,13 +1212,15 @@ def merge(body):
     """Publish maintenance through current daemon-owned run and role authority."""
     task = running(body)
     if task is None or schema.KINDS[task['kind']]['lands'] != 'merge' or not task.get('branch'):
-        raise ApiError('maintenance merge requires a running maintenance/planning assignment')
+        raise ApiError('only maintenance/planning assignments publish directly; workers submit for an integrator')
     where = tasks.place(task)
     commit = body.get('commit')
+    if commit is None:
+        commit = artifacts.maintenance(task, where)
     if not isinstance(commit, str) or commit != git.head(task['worktree']) or commit != git.head(where['path'], task['branch']):
-        raise ApiError('maintenance candidate must be the current assigned branch HEAD')
+        raise git.OperationError('maintenance candidate must be the current assigned branch HEAD')
     if not git.clean(task['worktree']):
-        raise ApiError('commit the scoped worktree changes before maintenance merge')
+        raise git.OperationError('scoped changes remained after maintenance capture')
     with git.repository_lock(where['path']):
         main = git.head(where['path'], where['main_branch'])
         contracts.maintenance_history(where, task, main)
@@ -965,6 +1231,98 @@ def merge(body):
 
 def project_list(body):
     return {"ok": True, "projects": CONFIG["projects"]}
+
+
+def workspace_changes(body):
+    task = L['tasks'].get(body.get('task'))
+    if not task:
+        raise ApiError('unknown task')
+    changed = ''
+    if task.get('branch') and task.get('base_commit'):
+        changed = git.run(task['worktree'], 'diff', '--stat=120', task['base_commit'])
+    return {'ok': True, 'changes': changed}
+
+
+def read_log(body):
+    """Read selected session evidence through daemon authority, outside the ledger lock."""
+    from cointos import transcript
+    from cointos.config import STATE
+    with LOCK:
+        reader = running(body)
+        target = body.get('task')
+        if reader and reader['role'] == 'worker' and target != reader['id']:
+            raise ApiError('workers inspect their own trace; coordinating roles inspect other assignments')
+        if target == 'coin':
+            if reader and reader['role'] not in ('supervisor', 'first-responder'):
+                raise ApiError('this role does not inspect the user conversation')
+            task = None
+        else:
+            task = deepcopy(L['tasks'].get(target))
+            if not task:
+                raise ApiError('no task ' + str(target))
+    options = {key: body[key] for key in ('show', 'kind', 'turn', 'grep', 'last') if body.get(key) is not None}
+    try:
+        result = ({'text': transcript.view(transcript.coin_entries(STATE / 'coin/turns.jsonl'), **options)}
+                  if task is None else transcript.read_task(task, STATE / 'agents', export=bool(body.get('export')),
+                                                           public=reader is not None, **options))
+    except OSError as error:
+        raise ApiError('the retained trace is unavailable; preserve run evidence for recovery') from error
+    return {'ok': True, **result}
+
+
+def source_files(body):
+    from cointos import inspection
+    with LOCK:
+        reader = running(body)
+        if bool(body.get('task')) == bool(body.get('project')):
+            raise ApiError('name exactly one task or project for source inspection')
+        if reader and reader['role'] == 'worker' and body.get('task') != reader['id']:
+            raise ApiError('workers use their own prepared files; coordinating roles inspect other source')
+        if body.get('task'):
+            task = deepcopy(L['tasks'].get(body['task']))
+            if not task:
+                raise ApiError('no task ' + str(body['task']))
+            where = deepcopy(tasks.place(task))
+        else:
+            task, where = None, deepcopy(tasks.project_named(body['project']))
+    return {'ok': True, **inspection.files(task, where, path=body.get('path'), start=body.get('start', 1),
+                                         limit=body.get('limit', CONFIG['inspection']['page_lines']))}
+
+
+def diagnostic(body):
+    with LOCK:
+        task = deepcopy(running(body))
+        where = deepcopy(tasks.project_named(body['project'])) if body.get('project') else None
+        source = None
+        if task and task['role'] == 'first-responder':
+            origin = task.get('repair_origin') or {}
+            source = deepcopy(L['tasks'].get(origin.get('task')))
+            record = frontier.record(source) if source else None
+            if (body.get('path') or where or not source or not source.get('branch')
+                    or source.get('agent') or source.get('cancelled')
+                    or source['status'] != 'failed'
+                    or frontier.origin(record or source) != origin
+                    or (record and (record.get('done') or record.get('replaced_by')))
+                    or not frontier.runnable(task)):
+                raise ApiError('diagnostic prepares only this recovery\'s stopped current assignment; omit path/project')
+            where = deepcopy(tasks.place(source))
+    if source:
+        from cointos import inspection, opencode
+        with opencode.quiesce(task['agent']):
+            return {'ok': True, **inspection.prepare(task, where, source)}
+    if task and task['role'] == 'test-auditor' and where:
+        if body.get('path'):
+            raise ApiError('prepare the accepted project, then inspect its files in your scratch directory')
+        from cointos import inspection, opencode
+        with opencode.quiesce(task['agent']):
+            return {'ok': True, **inspection.prepare(task, where)}
+    if where:
+        raise ApiError('preparing accepted project diagnostics requires a test auditor')
+    if not task or task['kind'] != 'integrate':
+        raise ApiError('diagnostic requires an assigned integrator, or a test auditor naming a project')
+    with LOCK:
+        worker = deepcopy(L['tasks'][task['worker']])
+    return {'ok': True, **artifacts.diagnostic(task, worker, body.get('path'))}
 
 
 def project_new(body):
@@ -1002,15 +1360,16 @@ def project_remove(body):
 
 
 ACTIONS = {
+    'workspace-changes': workspace_changes,
     "message-delivered": message_delivered,
     "merge": merge,
     "receipt-delivered": receipt_delivered, "return": send_back, "replace": replace,
-    "queue": queue, "handoff": handoff, "correct-tests": correct_tests, "check-work": check_work, "send": send, "inbox": inbox,
+    "queue": queue, "correct-tests": correct_tests, "check-work": check_work, "send": send, "inbox": inbox,
     "hold": hold, "unhold": unhold, "revise": revise,
     "stop": pause, "go": resume, "coin": coin, "halt": halt, "kill-agent": kill_agent, "resume-task": resume_task,
     "prepare-restart": prepare_restart, "cancel-restart": cancel_restart,
     "run-agent": run_agent, "recover": recover, "split": split, "scout": scout, "supersede": supersede, "cancel": cancel, "move": move, "clear-review": clear_review,
-    "reasoning": reasoning, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
+    "reasoning": reasoning, "agent-priority": agent_priority, "budget": budget, "forget-task": forget_task, "clear-task-history": clear_task_history,
     "viewers": viewers, "scheduler": scheduler, "default-model": models.choose,
     "project-list": project_list, "project-new": project_new, "project-add": project_add,
     "project-set": project_set, "project-remove": project_remove,

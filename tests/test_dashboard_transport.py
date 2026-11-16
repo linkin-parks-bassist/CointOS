@@ -15,6 +15,73 @@ from tests import support
 
 
 class DashboardTransport(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('node'), 'requires Node for browser JavaScript checks')
+    def test_focused_scheduler_control_displays_live_value_and_unknown_is_blank(self):
+        script = r"""
+const assert = require('node:assert/strict');
+const html = require('node:fs').readFileSync('web/dashboard.html','utf8');
+const input = {value:'8',options:[{value:'8'},{value:'64'}],disabled:false};
+const status = {};
+const $ = id => id==='chunk' ? input : status;
+const document = {activeElement:input};
+const schedulerControls = [{id:'chunk',key:'chunk_tokens',unit:'tokens',saving:false,error:''}];
+function renderDefaultModel(){}
+let MODEL_FETCHED=0;
+function discoverModels(){}
+eval(html.slice(html.indexOf('function renderScheduler('),html.indexOf('for (const control of schedulerControls) $(control.id).addEventListener')));
+renderScheduler({scheduler:{chunk_tokens:64}});
+assert.equal(input.value,'64','focused select hid the live setting');
+assert.match(status.textContent,/64/);
+renderScheduler({scheduler:{}});
+assert.equal(input.value,'','unknown setting must not show the first numeric option');
+assert.equal(input.disabled,true);
+"""
+        result = subprocess.run(['node','-e',script],capture_output=True,text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which('node'), 'requires Node for browser JavaScript checks')
+    def test_user_requests_show_scheduler_progress_without_conversation_text(self):
+        script = r'''
+const assert = require('node:assert/strict');
+const html = require('node:fs').readFileSync('web/dashboard.html', 'utf8');
+eval(html.slice(html.indexOf('function userRequestsHTML('), html.indexOf('function renderAgents(')));
+assert.equal(userRequestsHTML({thoughts: {}}), '');
+const text = userRequestsHTML({thoughts: {a: {agent:'user', owner:'private/secret', lane:0,
+  reading:true, read:2048, prompt:4096, generated:0, content:'SECRET_PROMPT'},
+  b: {agent:'user', owner:'user', lane:null}, c: {agent:'coin', content:'OTHER_SECRET'}}});
+assert.match(text, /Private session/);
+assert.match(text, /User session/);
+assert.match(text, /Reading context/);
+assert.match(text, /Waiting for GPU/);
+assert.ok(!text.includes('SECRET'));
+assert.ok(!text.includes('private/secret'));
+eval(html.slice(html.indexOf('function activeClientCount('), html.indexOf('function renderAgents(')));
+assert.equal(activeClientCount({agents:{}, thoughts:{a:{agent:'user',owner:'private/a'},b:{agent:'user',owner:'private/b'}}}), 2);
+assert.equal(activeClientCount({agents:{a:{id:'a'}}, thoughts:{b:{agent:'a',owner:'task/a'}}}), 1);
+'''
+        subprocess.run(['node', '-e', script], check=True)
+
+    @unittest.skipUnless(shutil.which('node'), 'requires Node for browser JavaScript checks')
+    def test_cancel_on_supervisor_or_recovery_withdraws_the_originating_work(self):
+        script = r'''
+const assert = require('node:assert/strict');
+const html = require('node:fs').readFileSync('web/dashboard.html', 'utf8');
+eval(html.slice(html.indexOf('function cancellationTarget('), html.indexOf('// Each control gives')));
+const L = {queue: {'p:work': {}}, tasks: {
+  worker: {record: 'p:work'}, supervisor: {supervises: 'worker'},
+  recovery: {repair_origin: {task: 'supervisor'}}, review: {worker: 'worker'},
+  direct: {}, cycle: {supervises: 'cycle'}}};
+for (const id of ['p:work', 'worker', 'supervisor', 'recovery', 'review']) {
+  assert.equal(cancellationTarget(L, id), 'p:work');
+}
+assert.equal(cancellationTarget(L, 'direct'), 'direct');
+assert.equal(cancellationTarget(L, 'cycle'), 'cycle');
+delete L.queue['p:work'];
+assert.equal(cancellationTarget(L, 'recovery'), 'recovery');
+'''
+        subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                       check=True, timeout=10, capture_output=True, text=True)
+
     def test_model_memory_classifies_anonymous_gufo_weights(self):
         shapes = {name: {'lanes': 1, 'memory_gb': 30, 'weights_gb': 20, **extra}
                   for name, extra in [('gufo', {'backend': 'gufo'}),
@@ -42,23 +109,65 @@ vm.createContext(context);
 vm.runInContext(html.slice(html.indexOf('const MEMORY_COLOURS'), html.indexOf('function renderChecks(')), context);
 const gb = gib => gib * 2 ** 30 / 1e9;
 for (const reclaimable of [true, false]) {
-  const frame = {memory: {physical_gb: gb(128), available_gb: gb(reclaimable ? 83 : 63)},
+  const frame = {memory: {physical_gb: gb(128), available_gb: gb(63)},
     models: {loaded: {up: true}, unloaded: {up: false}},
-    model_memory: {loaded: {weights_gb: 20, memory_gb: 30, weights_reclaimable: reclaimable},
+    model_memory: {loaded: {weights_gb: gb(20), memory_gb: gb(30), weights_reclaimable: reclaimable},
       unloaded: {weights_gb: 40, memory_gb: 60, weights_reclaimable: false}}, saved_bytes: 5 * 2 ** 30};
   const values = Array.from(context.memoryValues(frame));
-  assert.deepEqual(values, [30, 20, 10, 5, 63], 'same physical allocation regardless of backing type');
+  values.forEach((v,i) => assert.ok(Math.abs(v - [30,20,10,5,63][i]) < 1e-9));
   assert.equal(values.reduce((a, b) => a + b, 0), 128);
   context.renderMemory(frame);
   assert.equal(tileParts.b.textContent, '51%');
   assert.equal(tileParts.small.textContent, '65 of 128 GB');
   assert.equal(elements['mem-value'].textContent, '65 GB');
 }
-const mixed = {memory: {physical_gb: gb(128), available_gb: gb(73)},
+const mixed = {memory: {physical_gb: gb(128), available_gb: gb(63)},
   models: {gufo: {up: true}, llama: {up: true}}, saved_bytes: 5 * 2 ** 30,
-  model_memory: {gufo: {weights_gb: 10, memory_gb: 15, weights_reclaimable: false},
-    llama: {weights_gb: 10, memory_gb: 15, weights_reclaimable: true}}};
-assert.deepEqual(Array.from(context.memoryValues(mixed)), [30, 20, 10, 5, 63]);
+  model_memory: {gufo: {weights_gb: gb(10), memory_gb: gb(15), weights_reclaimable: false},
+    llama: {weights_gb: gb(10), memory_gb: gb(15), weights_reclaimable: true}}};
+Array.from(context.memoryValues(mixed)).forEach((v,i) => assert.ok(Math.abs(v - [30,20,10,5,63][i]) < 1e-9));
+// The reported Flash case must never enlarge a 128-GiB machine to 168 GB.
+const flash = {memory: {physical_gb: gb(128), available_gb: gb(25)},
+  models: {flash: {up: true}}, saved_bytes: .6 * 2 ** 30,
+  model_memory: {flash: {weights_gb: 68.5, memory_gb: 69.5, weights_reclaimable: true}}};
+for (const available of [25, 90, 128]) {
+  flash.memory.available_gb = gb(available);
+  const values = Array.from(context.memoryValues(flash));
+  assert.ok(values.every(v => v >= 0));
+  assert.ok(Math.abs(values.reduce((a,b) => a+b,0) - 128) < 1e-9);
+  assert.ok(Math.abs(values[4] - available) < 1e-9);
+}
+
+'''
+        subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
+                       check=True, timeout=10, capture_output=True, text=True)
+
+    @unittest.skipUnless(shutil.which('node'), 'requires Node for browser JavaScript checks')
+    def test_focused_default_chooser_tracks_the_active_model_without_rebuilding_options(self):
+        script = r'''
+const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+const html = fs.readFileSync('web/dashboard.html', 'utf8');
+const input = {dataset: {}, value: 'old'}, status = {}, unavailable = {}, unavailableList = {};
+let writes = 0;
+const context = {$: id => ({'default-model': input, 'default-model-status': status, 'model-unavailable': unavailable, 'model-unavailable-list': unavailableList})[id],
+  document: {activeElement: input}, esc: s => s, assistant: () => 'Coin',
+  setHTML: (element, value) => {element.innerHTML = value; if (element === input) writes++;}};
+vm.createContext(context);
+vm.runInContext(html.slice(html.indexOf('let MODEL_CHOICES'), html.indexOf('$("default-model").addEventListener')), context);
+vm.runInContext('MODEL_CHOICES = [{id:"lemonade:Flash",name:"Flash",available:true}];', context);
+context.renderDefaultModel({model: 'Flash', path: 'lemonade:Flash', phase: 'ready'});
+assert.equal(input.value, 'lemonade:Flash');
+assert.equal(input.disabled, false);
+context.renderDefaultModel({model: 'Flash', path: 'lemonade:Flash', phase: 'ready'});
+assert.equal(writes, 1);
+vm.runInContext('MODEL_CHOICES.push({id:"normal",name:"Qwen3.8-27B-UD-Q4_K_XL",available:true}, {id:"broken",name:"unsupported",available:false,reason:"No recipe"});', context);
+context.renderDefaultModel({model: 'Flash', path: 'lemonade:Flash', phase: 'ready'});
+assert.ok(input.innerHTML.indexOf('Standard') < input.innerHTML.indexOf('Flash'));
+assert.ok(input.innerHTML.includes('Qwen 3.8 27B · Standard · Q4_K_XL'));
+assert.ok(!input.innerHTML.includes('unsupported'));
+assert.equal(unavailable.hidden, false);
+assert.ok(unavailableList.innerHTML.includes('No recipe'));
+assert.equal(input.value, 'lemonade:Flash');
 '''
         subprocess.run(['node', '-e', script], cwd=Path(__file__).resolve().parents[1],
                        check=True, timeout=10, capture_output=True, text=True)
@@ -157,6 +266,7 @@ const poll = html.slice(html.indexOf('async function poll()'), html.indexOf('\np
     const context = {AbortController, location: {host: 'ddriver.test'}, console: {error() {}},
       $: () => stamp, setTimeout: (fn, ms) => (timers.push({fn, ms}), timers.length),
       clearTimeout: id => cleared.push(id),
+      renderScheduler: () => {},
       render: data => {if (mode === 'render') throw new Error('bad task field'); rendered.push(data);},
       fetch: async (url, options) => {
         assert.equal(url, '/api/ledger');

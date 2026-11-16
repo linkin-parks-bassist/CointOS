@@ -57,6 +57,7 @@ class Boot(unittest.TestCase):
     def test_unit_routes_fatal_python_startup_to_one_independent_repair_service(self):
         root = Path(__file__).resolve().parents[1]
         daemon = (root / 'systemd/cointosd.service').read_text()
+        daemon = daemon.replace('@REPAIR_UNIT@', 'cointos-repair.service')
         self.assertIn('ExecStart=/usr/bin/python3 -m cointos.boot', daemon)
         self.assertIn('OnFailure=cointos-repair.service', daemon)
         self.assertIn('RestartPreventExitStatus=2', daemon)

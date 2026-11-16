@@ -1,0 +1,8 @@
+{
+  "name": "Cointel Personal",
+  "identity": "cointelpersonal",
+  "station": "~/Personal",
+  "retain_archive": false,
+  "retain_diagnostics": false,
+  "telegram_env": "~/.config/agent-ecosystem/cointelpersonal.env"
+}

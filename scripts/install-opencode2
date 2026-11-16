@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+"""Install the pinned CointOS V2 CLI separately, retaining V1 for exact exports."""
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root))
+from cointos.opencode import LEGACY_OPENCODE, OPENCODE2_VERSION, require_opencode2
+
+legacy = Path(LEGACY_OPENCODE)
+if not legacy.exists():
+    source = Path.home() / '.opencode/bin/opencode'
+    version = subprocess.check_output([str(source), '--version'], text=True).strip()
+    if version != '1.19.5':
+        raise SystemExit('Retain the qualified OpenCode 1.19.5 binary before migrating existing conversations.')
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, legacy)
+subprocess.run(['npm', 'install', '--prefix', str(legacy.parent.parent / 'opencode2'), '--no-audit', '--no-fund',
+                f'@opencode/cli@{OPENCODE2_VERSION}', f'@opencode/client@{OPENCODE2_VERSION}',
+                f'@opencode/plugin@{OPENCODE2_VERSION}'], check=True)
+require_opencode2()
+print(f'OpenCode {OPENCODE2_VERSION} installed; user OpenCode and retained V1 stores are unchanged.')

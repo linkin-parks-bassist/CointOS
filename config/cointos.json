@@ -14,7 +14,6 @@
  "classes": [
   "coin",
   "user",
-  "supervisor",
   "background"
  ],
  "coin": {
@@ -24,6 +23,7 @@
   "history_messages": 50,
   "history_trim_messages": 20,
   "journal_bytes": 8000000,
+  "search_seconds": 5,
   "long_poll_seconds": 25,
   "max_tool_rounds": 128,
   "model_seconds": 600,
@@ -33,12 +33,17 @@
   "telegram_env": "~/.config/agent-ecosystem/telegram.env",
   "telegram_seconds": 40
  },
+ "compaction": {
+  "auto": false
+ },
+ "opencode_v2": true,
  "dashboard": {
   "live_chars": 20000,
   "live_hz": 10,
   "model_discovery_seconds": 15
  },
  "disk_snapshots": "~/.cache/cointos/contexts",
+ "factory_enabled": false,
  "garden": {
   "audit_every_seconds": 604800,
   "check_seconds": 60,
@@ -51,8 +56,13 @@
  },
  "keepalive_seconds": 10,
  "lemonade": "http://127.0.0.1:13305",
+ "inspection": {
+  "page_lines": 200
+ },
  "memory": {
   "agent_limit_gb": 8,
+  "agent_margin_gb": 1.5,
+  "agent_measure_grace_seconds": 60,
   "agent_memory_gb": 1,
   "calm_seconds": 120,
   "disk_snapshots_gb": 300,
@@ -72,16 +82,10 @@
  ],
  "models": {
   "Qwen3.8-27B-GGUF": {
-   "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --cache-ram 0",
-   "backend": "gufo",
+   "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type draft-mtp --spec-draft-n-max 3 --cache-ram 0 --control-vector /var/lib/lemonade/steers/qwen38-close-a05.gguf --control-vector-layer-range 28 36 --no-prefill-assistant --cache-type-k q8_0 --cache-type-v q8_0",
+   "backend": "llama",
    "ctx_size": 131072,
    "gufo": {
-    "dflash": {
-     "max_draft_tokens": 7,
-     "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf",
-     "policy": "adaptive",
-     "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd"
-    },
     "executable": "/home/david/.local/share/cointos/gufo/192b75a-native-v13-20261031/gufo-control",
     "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-UD-Q4_K_XL.gguf",
     "sampling": {
@@ -93,11 +97,45 @@
      "top_p": 0.95
     },
     "sha256": "3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e",
-    "socket": "~/.CointOS/state/gufo/qwen/control.sock"
+    "socket": "~/.CointOS/state/gufo/qwen/control.sock",
+    "dflash": {
+     "max_draft_tokens": 7,
+     "model_path": "~/.cache/cointos-speed/models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf",
+     "policy": "adaptive",
+     "sha256": "1a25c56858e1ebe93f2718ac1d49d1151f9323325c1bbfd6209370f4db131ebd"
+    }
    },
    "lanes": 1,
    "memory_gb": 39,
-   "weights_gb": 17.5
+   "weights_gb": 17.5,
+   "resident": true,
+   "slots": 1
+  },
+  "Qwen3.8-Flash-Next-GSQ-RCO-abliterated-GGUF-IQ2_XS": {
+   "backend": "llama",
+   "resident": true,
+   "args": "--batch-size 512 --ubatch-size 128 --poll 0 --prio -1 --spec-type none --cache-ram 0",
+   "ctx_size": 131072,
+   "lanes": 1,
+   "slots": 1,
+   "weights_gb": 68.5,
+   "memory_gb": 69.5,
+   "cpu_gb": 3.5
+  },
+  "Qwen3.8-Flash-Next-Halogen": {
+   "backend": "halogen",
+   "ctx_size": 131072,
+   "lanes": 1,
+   "resident": true,
+   "weights_gb": 66.687678432,
+   "memory_gb": 81,
+   "halogen": {
+    "url": "http://127.0.0.1:8731",
+    "container": "cointos-halogen",
+    "image": "ghcr.io/peonist-ai/halogen-flash-server@sha256:3041272385d1ac88e5b842be3dbf4b99472bb079f22430c1ea3b3e0dbd1e1568",
+    "weights": "/home/david/.cache/halogen-models",
+    "state": "/home/david/.CointOS/state/halogen"
+   }
   }
  },
  "port": 4200,
@@ -139,20 +177,21 @@
    },
    "supervisor": {
     "generation_seconds": 1800,
-    "generation_tokens": 40000
+    "generation_tokens": null
    }
   },
   "role_fresh_retries": {
    "first-responder": 0,
-   "supervisor": 0,
    "integrator": 0,
    "manager": 0,
    "operator": 0,
+   "supervisor": 0,
    "worker": 0
   },
-  "supervise_every_seconds": 1200,
-  "supervise_wrap_up_seconds": 120,
-  "warning_fraction": 0.75
+  "split_after_tokens": 40000,
+  "supervise_every_tokens": 5000,
+  "warning_fraction": 0.75,
+  "supervise_every_gpu_seconds": 1800
  },
  "reserved_lanes": [],
  "result_chars": 2000,
@@ -161,18 +200,23 @@
   "max_thought_tokens": 16384,
   "read_chunk_tokens": 1024,
   "shared_prefix_tokens": 4096,
-  "slice_seconds": 30,
+  "slice_seconds": 10,
   "weights": {
-   "integrator": 4,
+   "coin": 1000,
+   "first-responder": 4,
+   "integrator": 3,
    "manager": 2,
-   "operator": 2,
-   "worker": 4
+   "operator": 1,
+   "steward": 2,
+   "supervisor": 3,
+   "user": 100,
+   "worker": 2
   },
   "yield_grace_seconds": 15
  },
  "server_cgroup": "/sys/fs/cgroup/inference.slice",
  "service_restart_seconds": 3,
- "snapshots": "/dev/shm/cointos-contexts",
+ "snapshots": "/dev/shm/cointos-steer-mtp-20261116",
  "spawner": {
   "idle_steward_seconds": 300,
   "interval_seconds": 5,

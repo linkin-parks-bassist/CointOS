@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-10-17T21:35:46+11:00"
+revised_at: "2026-11-06T11:28:58+11:00"
 ---
 
-Managed stream recovery remains unproved across every interruption and completion boundary. Installed explicit-continuation handling preserves history and correct openings for consecutive/empty final assistants; eight native rendering fixtures, ten installation checks and three managed continuations established those mechanisms. Backend 4xx remains a request error. New-unit hooks preserve original user identity and completed tools; patched CLI fixtures preserve start/text/finish events. One native worker executed bounded pre-stop validation and continued, without thereby establishing useful work completion.
+Managed stream recovery remains unproved across every interruption/completion boundary. Historical explicit-continuation fixtures qualified an older patched llama bundle; that bundle is absent on halomit. Current packaged b11393 drops the assistant/thinking opener after an empty final assistant and rejects consecutive final assistants despite explicit false. The native-reply/render and server-build owners hold current evidence; do not assume historical installation checks cover this runtime. The baseline uses Gufo; the current authorised llama retry enables --no-prefill-assistant (steering owner). Backend 4xx remains a request error. New-unit hooks preserve original user identity and completed tools; patched CLI fixtures preserve start/text/finish events. One native worker executed bounded pre-stop validation and continued, without establishing useful work completion.
 
 The route-test publication recovery controller exposed a separate response-boundary defect: after its 384-token reasoning allowance closed, several replies ended without outward content or tool calls. The gateway reported ordinary stop, OpenCode ended without a receipt and five allowed runs exhausted. Installed gateway now reports such non-length replies as incomplete_response errors after any existing pre-stop check. Length continuation, real answers/tools and ownership/budgets remain unchanged.
 

@@ -3,12 +3,28 @@ import copy
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from cointos import api, contracts, git, landing, lifecycle, packets, queues, runs, spawner, state, tasks
+from cointos import api, contracts, frontier, git, landing, lifecycle, packets, queues, runs, spawner, state, tasks
 from tests import support
 from tests.test_landing import Project
 
 
 class Corrections(Project):
+    def test_two_way_split_keeps_correction_pending_until_final_half_review(self):
+        task, _ = self.correction()
+        supervisor = tasks.request_supervisor(task, 40000, must_split=True)
+        support.running(supervisor, 'splitter-1', worktree=False)
+        items = [{'name': name, 'summary': name, 'brief': 'Correct this half of the test.',
+                  'stage': 'test-contract', 'relies_on': ['a'], 'dependencies': ['tests-a']}
+                 for name in ('helper-half', 'assertion-half')]
+        result = api.dispatch('handoff', {'caller': support.caller(supervisor, 'splitter-1'),
+                              'summary': 'Split the test correction evenly', 'items': items})
+        first, final = [queues.records()[k] for k in result['children']]
+        self.assertNotIn('tests-a', first['depends'], 'the first half cannot wait on its own final correction')
+        self.assertIn(first['item'], final['depends'])
+        self.assertEqual(final['correction'], queues.records()[task['record']]['correction'])
+        pending = packets.pending(queues.records()[self.worker['record']])
+        self.assertEqual([queues.key(r) for r in pending], [queues.key(final)])
+
     def test_running_consumer_cannot_submit_while_correction_is_pending(self):
         code = self.implement()
         correction = self.propose()['item']
@@ -93,7 +109,7 @@ class Corrections(Project):
         code = self.implement()
         draft = self.tree / 'diagnostic.txt'
         draft.write_text('preserve me')
-        with patch.object(runs.opencode, 'launch') as launch:
+        with patch.object(runs.opencode, 'launch', return_value=None) as launch:
             with self.assertRaises(contracts.CompositionError) as caught:
                 runs.launch('worker-1', self.worker, 'fixture-key')
         launch.assert_not_called()
@@ -103,11 +119,15 @@ class Corrections(Project):
         self.assertEqual(caught.exception.evidence['main'], self.base)
         self.assertEqual(caught.exception.evidence['packets'], [self.tests, second])
         self.assertIn('tests/test_a.py', caught.exception.evidence['paths'])
+        with patch.dict(self.worker, composition_failure=caught.exception.evidence):
+            view = frontier.agent_view(frontier.inspect(self.worker['id'], state.L), {'role': 'first-responder'})
+        self.assertEqual(view['composition_failure'], {'paths': caught.exception.evidence['paths'],
+                                                     'test_tasks': ['p:tests-conflict']})
         self.assertEqual(git.head(self.tree), code)
         self.assertEqual(draft.read_text(), 'preserve me')
 
     def test_binding_preflight_allows_composable_hidden_packet_without_running_tests(self):
-        with patch.object(contracts, '_run') as execute, patch.object(runs.opencode, 'launch') as launch:
+        with patch.object(contracts, '_run') as execute, patch.object(runs.opencode, 'launch', return_value=None) as launch:
             runs.launch('worker-1', self.worker, 'fixture-key')
         execute.assert_not_called()
         launch.assert_called_once()
@@ -120,7 +140,7 @@ class Corrections(Project):
         watch.assert_not_called()
         self.assertEqual(self.worker['status'], 'failed')
         self.assertNotIn('launch_failures', self.worker)
-        self.assertIn('correct-tests', self.worker['note'])
+        self.assertIn('accepted test contract', self.worker['note'])
         self.assertEqual(queues.state(queues.records()[self.worker['record']])['status'], 'blocked')
 
     def fail_composition(self):
@@ -144,6 +164,47 @@ class Corrections(Project):
         self.assertEqual(self.worker['status'], 'waiting')
         self.assertNotIn('composition_failure', self.worker)
         self.assertEqual(queues.state(record)['status'], 'queued')
+
+    def test_preparation_retry_waits_for_recovery_owner_then_resumes_after_blocked_receipt(self):
+        record = self.fail_composition()
+        controller, _ = tasks.request_repair(self.worker)
+        support.running(controller, 'repair-1')
+        started = []
+        with patch.object(spawner.threading, 'Thread',
+                          side_effect=lambda target, args, daemon: started.append((target, args)) or Mock()):
+            spawner.refresh()
+            self.assertEqual(started, [], 'a live recovery owner retains authority')
+            lifecycle.submit(controller['id'], 'repair-1', 'blocked',
+                             'No assignment change is needed; file preparation still needs platform retry.')
+            lifecycle.release('repair-1', 'blocked')
+            spawner.refresh()
+        self.assertEqual(len(started), 1)
+        started[0][0](*started[0][1])
+        self.assertEqual(controller['receipt']['disposition'], 'blocked')
+        self.assertEqual(self.worker['status'], 'waiting')
+        self.assertEqual(queues.state(record)['status'], 'queued')
+
+    def test_background_preparation_cannot_override_a_new_hold_or_recovery_owner(self):
+        record = self.fail_composition()
+        version = record['version']
+        attempt = (queues.key(record), version, self.base, (self.tests,))
+        for authority in ('hold', 'controller', 'correction', 'pause'):
+            with self.subTest(authority=authority):
+                record['held_by'] = None
+                state.L['paused'] = False
+                spawner.COMPOSITIONS_TRIED.add(attempt)
+                def arriving(*args):
+                    if authority == 'hold': record['held_by'] = 'user'
+                    if authority == 'pause': state.L['paused'] = True
+                with patch.object(runs, 'prepare_test_inputs', side_effect=arriving), \
+                        patch.object(frontier, 'controller', return_value={'status': 'running'} if authority == 'controller' else None), \
+                        patch.object(packets, 'pending', return_value=[{}] if authority == 'correction' else []):
+                    spawner.retry_composition(self.project, queues.key(record), attempt, self.project['test_policy'])
+                self.assertEqual(record['version'], version)
+                self.assertIn('composition_failure', self.worker)
+                self.assertNotIn(attempt, spawner.COMPOSITIONS_TRIED)
+        state.L['paused'] = False
+        record['held_by'] = None
 
     def test_a_correction_handed_to_a_successor_still_rebinds_its_consumers(self):
         record = queues.records()[self.propose()['item']]
@@ -182,7 +243,7 @@ class Corrections(Project):
         operator, body = self.recovery_request()
         (Path(operator['worktree']) / 'repair-note').write_text('Uncommitted diagnosis')
         before = copy.deepcopy(state.L)
-        with self.assertRaisesRegex(ValueError, 'uncommitted'):
+        with self.assertRaisesRegex(ValueError, 'workspace changed'):
             api.dispatch('correct-tests', body)
         self.assertEqual(state.L, before)
 
@@ -216,15 +277,13 @@ class Corrections(Project):
         task = tasks.create('item', self.project, record['item'], record['brief'], [4],
                             item=record['item'], record_version=record['version'])
         support.running(task, 'test-author', worktree=False)
-        with patch.object(runs.opencode, 'launch'):
+        with patch.object(runs.opencode, 'launch', return_value=None):
             runs.launch('test-author', task, 'fixture-key')
         return task, Path(task['worktree'])
 
     def test_invalid_packet_is_binding_until_review_then_preserved_code_resumes(self):
         code = self.implement('41')
-        with self.assertRaisesRegex(ValueError, 'fail'):
-            self.finish()
-        lifecycle.submit(self.worker['id'], 'worker-1', 'blocked', 'The accepted witness expects the wrong answer')
+        self.assertEqual(self.finish()['disposition'], 'blocked')
         lifecycle.release('worker-1', 'blocked')
         old_receipt = copy.deepcopy(queues.records()['p:tests-a']['done'])
         task, tree = self.correction()
@@ -249,7 +308,7 @@ class Corrections(Project):
         self.assertEqual(git.head(self.tree), code, 'review correction cannot rewrite the implementation')
         self.assertEqual(landing.tests_of(self.worker), [candidate])
         support.running(self.worker, 'worker-2')
-        with patch.object(runs.opencode, 'launch'):
+        with patch.object(runs.opencode, 'launch', return_value=None):
             runs.launch('worker-2', self.worker, 'fixture-key')
         receipt = api.dispatch('finish', {'caller': support.caller(self.worker, 'worker-2'),
                                          'outcome': 'complete', 'detail': 'Preserved implementation passes corrected contract'})['receipt']
@@ -267,7 +326,7 @@ class Corrections(Project):
                 if not existing_checkout:
                     (tree / 'preserved-draft').unlink()
                     git.remove_worktree(self.repo, str(tree))
-                with patch.object(runs.opencode, 'launch') as launch:
+                with patch.object(runs.opencode, 'launch', return_value=None) as launch:
                     with self.assertRaisesRegex(ValueError, 'does not contain accepted packet'):
                         runs.launch('test-author', task, 'fixture-key')
                     launch.assert_not_called()
@@ -282,7 +341,7 @@ class Corrections(Project):
         witness.write_text(witness.read_text().replace('42', '41'))
         corrected = support.commit(tree, 'preserved correction')
         (tree / 'preserved-draft').write_text('unfinished work')
-        with patch.object(runs.opencode, 'launch') as launch:
+        with patch.object(runs.opencode, 'launch', return_value=None) as launch:
             runs.launch('test-author', task, 'fixture-key')
             launch.assert_called_once()
         self.assertEqual(git.head(tree), corrected)
@@ -299,9 +358,7 @@ class Corrections(Project):
 
     def test_brief_revision_cannot_readmit_consumers_before_correction_review(self):
         self.implement('41')
-        with self.assertRaisesRegex(ValueError, 'fail'):
-            self.finish()
-        lifecycle.submit(self.worker['id'], 'worker-1', 'blocked', 'The accepted witness is incorrect')
+        self.assertEqual(self.finish()['disposition'], 'blocked')
         lifecycle.release('worker-1', 'blocked')
         task, tree = self.correction()
         independent = queues.add(self.project, 'queued', 'independent', 'Independent implementation')

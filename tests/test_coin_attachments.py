@@ -14,6 +14,7 @@ import urllib.request
 import urllib.error
 
 from cointos import coin, coin_attachments, coin_files, coin_input, privatejson
+from tests.test_coin import sent_reply
 
 
 class Attachments(unittest.TestCase):
@@ -196,7 +197,7 @@ class Attachments(unittest.TestCase):
                 return {'role': 'assistant', 'tool_calls': [call('send', {'message': 'Organising the picture.'}), call('fs_mkdir', {'path': str(organised)}),
                     call('fs_move', {'path': path, 'destination': str(organised / 'saved.jpg')})]}
             self.assertTrue(all(json.loads(m['content'])['ok'] for m in messages if m['role'] == 'tool'))
-            return {'role': 'assistant', 'content': 'Saved the picture in photos.'}
+            return sent_reply('Saved the picture in photos.')
         with patch.object(coin, 'complete', side_effect=model), patch.object(coin, 'send', side_effect=lambda *args: sent.append(args[-1])):
             coin.turn('token', 7, 70, [item], lambda: [], None)
         self.assertEqual((organised / 'saved.jpg').read_bytes(), self.payload)
@@ -233,7 +234,7 @@ class Attachments(unittest.TestCase):
             attachments = [m for m in messages if m['role'] == 'user' and '<cointos-attachments>' in m['content']]
             self.assertEqual(len(attachments), 1)  # the caption still reaches Coin
             self.assertEqual(len(list(self.root.glob('attachments/**/*.jpg'))), 2)
-            return {'role': 'assistant', 'content': 'Both pictures are saved.'}
+            return sent_reply('Both pictures are saved.')
         with patch.object(coin.kt_mcp, 'open_session', return_value=None), \
                 patch.object(coin_input, 'pending', side_effect=stop_after_completion), \
                 patch.object(coin, 'complete', side_effect=model), patch.object(coin, 'send') as sender, \

@@ -31,6 +31,22 @@ class Queue(unittest.TestCase):
         queues.add(self.project, kind, name, brief or name.upper())
         return queues.records()[f"p:{name}"]
 
+    def test_knowledge_queue_is_an_index_without_replayed_procedures_or_reports(self):
+        record = self.failed('blocked', 'Summary: Verify the required compiler build\nobsolete Git procedure: checkout old branch and commit')
+        task = state.L['tasks']['p:blocked']
+        task['receipt'] = {'disposition': 'blocked',
+                           'summary': 'old storage diagnosis and manual merge procedure', 'evidence': {}}
+        before = copy.deepcopy(state.L)
+        shown = queues.projection('queued')
+        self.assertIn('## p:blocked', shown)
+        self.assertIn('Status: blocked', shown)
+        self.assertIn('Verify the required compiler build', shown)
+        self.assertIn('cointos task p:blocked', shown)
+        self.assertNotIn('obsolete Git procedure', shown)
+        self.assertNotIn('manual merge procedure', shown)
+        self.assertEqual(state.L, before)
+        self.assertIn('obsolete Git procedure', queues.records()['p:blocked']['brief'])
+
     def failed(self, name, brief=None):
         """A record whose worker item failed: it awaits its one recovery controller."""
         record = self.add(name, brief)
@@ -179,7 +195,7 @@ class Admission(Queue):
         self.add("after", "Depends on: big\n\nAfter.")
         task = spawner.next_task()
         self.assertEqual((task["kind"], task["role"], task["item"], task["record"]), ("first-response", "first-responder", "big", None))
-        self.assertIn("worker gave up", task["brief"])
+        self.assertIn("p:big", task["brief"])
         self.assertEqual(state.L["dependency_problems"], {}, "its dependent waits instead of alerting")
         task["status"] = "running"
         self.assertIsNone(spawner.next_task())
@@ -222,7 +238,7 @@ class Admission(Queue):
         self.assertEqual((refused["status"], refused["runs"]), ("failed", 0), "no worker run was spent")
         found = queues.state(state.L["queue"]["p:bad"])
         self.assertEqual((found["status"], found["recoverable"]), ("blocked", True))
-        self.assertIn("pigen_pres, nope.h, absent on main", found["blocker"])
+        self.assertIn("pigen_pres, nope.h, absent from accepted source", found["blocker"])
 
     def test_a_brief_relying_on_present_apis_dispatches(self):
         (self.repo / "api.h").write_text("int pigen_present(void);\n")
@@ -288,7 +304,7 @@ class Admission(Queue):
             self.add(name, brief)
         queues.replace(queues.records()["p:big"], ["a", "b"], "split")
         self.assertEqual(state.L["queue"]["p:a"]["depends"], ["base"])
-        self.assertEqual(state.L["queue"]["p:b"]["depends"], ["a"])
+        self.assertEqual(state.L["queue"]["p:b"]["depends"], ["a", "base"])
         self.assertEqual(state.L["queue"]["p:after"]["depends"], ["a", "b"])
 
     def test_replacement_keeps_dependency_metadata_and_dispatched_briefs_consistent(self):
@@ -316,7 +332,7 @@ class Admission(Queue):
         held = self.add("after", "Depends on: big\nAfter")
         held["held_by"] = "user"
         before = copy.deepcopy(accepted)
-        self.assertEqual(queues.replace(parent, ["small"], "split"), ["p:after"])
+        self.assertEqual(queues.replace(parent, ["small"], "split"), ["p:small", "p:after"])
         self.assertEqual(accepted, before)
         self.assertEqual(held["held_by"], "user")
 
@@ -327,7 +343,7 @@ class Admission(Queue):
         before = copy.deepcopy(queues.records())
 
         def reject(changed):
-            self.assertEqual(changed, ["p:after"])
+            self.assertEqual(changed, ["p:small", "p:after"])
             raise ValueError("an integration is reviewing the affected assignment")
 
         with self.assertRaisesRegex(ValueError, "integration"):

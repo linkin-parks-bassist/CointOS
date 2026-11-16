@@ -85,3 +85,39 @@ assert.equal(next.message.id, 'msg_actual_new');
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PermissionPresentation(unittest.TestCase):
+    def test_typed_permission_refusal_does_not_rewrite_program_output_or_stored_parts(self):
+        module = (Path(opencode.__file__).parent / 'opencode_resume.mjs').as_uri()
+        script = r"""
+import hook from MODULE;
+import assert from 'node:assert/strict';
+const raw = 'The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{"permission":"bash","pattern":"git *","action":"deny"}]';
+const denied = {type:'tool', tool:'bash', state:{status:'error', error:raw, input:{command:'git status'}, time:{start:1,end:2}}};
+const completed = {type:'tool', tool:'bash', state:{status:'completed', output:raw, metadata:{exit:1}}};
+const ordinaryError = {type:'tool', tool:'read', state:{status:'error', error:'File not found: source.c'}};
+const remote = {type:'tool', tool:'custom_server', state:{status:'error', error:raw}};
+const original = {info:{id:'message', role:'assistant'}, parts:[denied, completed, ordinaryError, remote]};
+const quoted = {info:{role:'user'}, parts:[denied]};
+const before = structuredClone(original);
+const hooks = await hook();
+const output = {messages:[original, quoted]};
+await hooks['experimental.chat.messages.transform']({}, output);
+assert.match(output.messages[0].parts[0].state.error, /permitted scope/);
+assert.equal(output.messages[0].parts[0].state.input, denied.state.input);
+assert.equal(output.messages[0].parts[0].state.time, denied.state.time);
+assert.equal(output.messages[0].parts[1], completed);
+assert.equal(output.messages[0].parts[2], ordinaryError);
+assert.equal(output.messages[0].parts[3], remote);
+assert.deepEqual(original, before);
+assert.equal(output.messages[1], quoted);
+delete process.env.COINTOS_TASK_ID;
+const unmanaged = {messages:[original]};
+await hooks['experimental.chat.messages.transform']({}, unmanaged);
+assert.equal(unmanaged.messages[0], original);
+""".replace('MODULE', json.dumps(module))
+        result = subprocess.run(['node', '--input-type=module', '-e', script],
+                                env={**os.environ, 'COINTOS_TASK_ID': 'fixture:permission'},
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)

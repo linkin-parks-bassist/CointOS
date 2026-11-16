@@ -17,6 +17,7 @@ class Snapshots(unittest.TestCase):
         # Persistence-path fixtures; ordinary resident selection is covered in
         # test_resident_switch and the native continuation checks.
         self.enterContext(mock.patch.object(lanes.BACKEND, 'resident_states', return_value=False))
+        self.enterContext(mock.patch.object(snapshots.BACKEND, 'snapshot_size', return_value=None))
         transfers = set(snapshots.TRANSFERS)
         self.addCleanup(lambda: (snapshots.TRANSFERS.clear(), snapshots.TRANSFERS.update(transfers)))
         snapshots.TRANSFERS.clear()
@@ -63,6 +64,20 @@ class Snapshots(unittest.TestCase):
         self.assertEqual(state.L["snapshots"], {})
         self.drain()
         self.assertEqual(len(self.forgotten), 1)
+
+    def test_native_size_overrides_tiny_probe_extrapolation_before_admission(self):
+        held = list(range(33842))
+        state.L['snapshots']['probe'] = {'model': WORK, 'tokens': 22, 'bytes': 354795876,
+            'owner': 'other', 'kind': 'checkpoint', 'tier': 'memory', 'digest': 'probe', 'last_run': 0}
+        self.assertGreater(memory.snapshot_gb(state.L['snapshots'], WORK, len(held)), 500)
+        with mock.patch.object(snapshots.BACKEND, 'snapshot_size',
+                               return_value={'tokens': len(held), 'bytes': 600000000}):
+            self.assertTrue(snapshots.keep(0, held, 't', 'checkpoint'))
+
+    def test_native_size_for_another_position_does_not_override_the_estimate(self):
+        with mock.patch.object(snapshots.BACKEND, 'snapshot_size', return_value={'tokens': 99, 'bytes': 1}), \
+                mock.patch.object(memory, 'snapshot_gb', return_value=100):
+            self.assertFalse(snapshots.keep(0, [1, 2, 3], 't', 'checkpoint'))
 
     def test_a_state_saved_as_its_task_is_forgotten_is_not_kept(self):
         self.while_saving = lambda: state.L["tasks"].pop("t")
@@ -283,6 +298,17 @@ class Snapshots(unittest.TestCase):
         state.L["agents"]["run"] = {"task": "t"}
         with mock.patch.object(gateway.keys, "owner", return_value=("run", "background")):
             self.assertEqual(gateway.identity("key", "coin/pretend"), ("run", "background", "t"))
+
+    def test_all_cointel_conversations_survive_between_turns(self):
+        from cointos import coins
+        with mock.patch.object(gateway.keys, 'owner', return_value=('coin', 'coin')):
+            owners = [gateway.identity('key', 'same-user', coins.profile(name)['identity'])[2]
+                      for name in coins.names()]
+        self.assertEqual(len(set(owners)), 3)
+        for owner in owners:
+            self.assertTrue(snapshots.live(owner), owner)
+        self.assertFalse(snapshots.coin_conversation('unknown/user'))
+        self.assertFalse(snapshots.coin_conversation('coin/'))
 
     def test_conversation_liveness_is_task_reachability_not_task_outcome(self):
         self.assertTrue(snapshots.live("t"))

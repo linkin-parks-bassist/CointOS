@@ -13,10 +13,11 @@ from __future__ import annotations
 import array
 import hashlib
 import math
+from pathlib import Path
 import secrets
 import threading
 
-from cointos import capacity, memory, schema, snapshot_cleanup as cleanup
+from cointos import capacity, coins, private_clients, config as configuration, memory, schema, snapshot_cleanup as cleanup
 from cointos.state import BACKEND, CONFIG, LOCK, L, log, now
 
 RESERVED: dict[str, float] = {}  # in-flight file plus native capture capacity, GB
@@ -25,7 +26,12 @@ UNTASKED = frozenset({"user", "coin", "shared"})  # owners that are conversation
 
 
 def coin_conversation(owner: str | None) -> bool:
-    return bool(owner and owner.startswith("coin/"))
+    if not owner or '/' not in owner:
+        return False
+    identity, conversation = owner.split('/', 1)
+    identities = {configuration.identity(CONFIG), 'coin'}
+    identities.update(coins.profile(name)['identity'] for name in coins.names())
+    return bool(conversation and identity in identities)
 
 
 def digest(tokens: list[int]) -> str:
@@ -55,6 +61,8 @@ def live(owner: str | None) -> bool:
     agent process exits.  This is the one reachability rule used by snapshot creation, resident
     state retention and final retirement.
     """
+    if owner and owner.startswith('private/'):
+        return private_clients.live(owner)
     if owner in UNTASKED or coin_conversation(owner):
         return True
     task = L["tasks"].get(owner or "")
@@ -133,6 +141,9 @@ def evict(name: str) -> float:
     """Take a snapshot out of memory: spill it to disk if the disk tier has room (RAM freed
     later), else retire it for cleanup. Neither path credits memory before release."""
     snapshot = L["snapshots"][name]
+    if snapshot["owner"].startswith("private/"):
+        drop(name)  # memory pressure may discard a cache, never persist private KV to disk
+        return 0.0
     if cleanup.pending(name, 'disk') or not cleanup.ready('disk'):
         return 0.0  # a previous disk copy still owns that destination
     if disk_room(size_gb(snapshot), keep=name):
@@ -173,6 +184,10 @@ def spill(name: str) -> None:
     """Move a snapshot to disk. Runs outside LOCK."""
     with LOCK:
         original = L['snapshots'].get(name)
+        if original and original['owner'].startswith('private/'):
+            drop(name, transfer_done=True)
+            TRANSFERS.discard(name)
+            return
         TRANSFERS.add(name)
     try:
         BACKEND.spill(CONFIG, name)
@@ -252,6 +267,9 @@ def persist() -> None:
             snapshot = L['snapshots'].get(name)
             if snapshot is None or snapshot['tier'] != 'memory':
                 continue
+            if snapshot['owner'].startswith('private/'):
+                drop(name)
+                continue
             admitted = disk_room(size_gb(snapshot), keep=name)
         if not admitted:
             # Shutdown may wait for disk capacity. Ordinary lane work never does.
@@ -302,15 +320,30 @@ def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str |
     saving; a failed replacement then rereads instead of retaining that old hint. Runs outside
     LOCK; returns whether it was saved. `for_owner` is whose request needs the state, when
     it is stored under another owner."""
-    need, reclaimed = 0.0, False
     requester = for_owner or owner
+    if (requester or '').startswith('private/'):
+        if owner != requester or not Path(CONFIG['snapshots']).expanduser().resolve().is_relative_to('/dev/shm'):
+            return False  # private KV checkpoints are owner-bound and tmpfs-only
+    if not coins.retains_diagnostics((requester or '').split('/', 1)[0]):
+        return False
+    with LOCK:
+        model, index = L['lanes'][position]['model'], L['lanes'][position]['index']
+    if not BACKEND.persistent_snapshots(CONFIG, model):
+        return False  # This backend retains only disposable in-engine caches.
+    try:
+        sized = BACKEND.snapshot_size(CONFIG, model, index)
+    except (OSError, ValueError, RuntimeError):
+        sized = None  # Older servers retain the measured-sample estimate.
+    exact = (sized['bytes'] / memory.GB if sized and sized.get('tokens') == len(held) else None)
+    need, reclaimed = 0.0, False
     spare = capacity.conversation_cache_gb(requester)
     wanted = digest(held)
     while True:
         with LOCK:
             model, index = L["lanes"][position]["model"], L["lanes"][position]["index"]
             for saved in L["snapshots"].values():
-                if saved["model"] == model and saved["digest"] == wanted:
+                if saved["model"] == model and saved["digest"] == wanted and (
+                        not saved["owner"].startswith("private/") or saved["owner"] == owner):
                     saved["last_run"] = now()  # reusing identical bytes is a touch
                     if owner == "shared":
                         saved["owner"] = "shared"
@@ -324,7 +357,7 @@ def keep(position: int, held: list[int], owner: str, kind: str, for_owner: str |
             if not math.isfinite(capacity.headroom_gb()):
                 return False  # an adopted run's native capacity is not measured yet
             # Retiring the last sample must not turn this allocation's estimate into zero.
-            need = max(need, memory.snapshot_gb(L["snapshots"], model, len(held)))
+            need = max(need, exact if exact is not None else memory.snapshot_gb(L["snapshots"], model, len(held)))
             native_bytes = L['models'].get(model, {}).get('resident_state_bytes', 0)
             if not need and native_bytes:
                 # An unmeasured native checkpoint is not a zero-byte allocation.
@@ -399,7 +432,8 @@ def shared(model: str, tokens: list[int]) -> bool:
     """Whether a snapshot of exactly this context start exists. Runs outside LOCK."""
     with LOCK:
         wanted = digest(tokens)
-        return any(s["model"] == model and s["digest"] == wanted for s in L["snapshots"].values())
+        return any(s["model"] == model and s["digest"] == wanted and not s["owner"].startswith("private/")
+                   for s in L["snapshots"].values())
 
 
 def retain_prefix(model: str, tokens: list[int], owner: str) -> bool:
@@ -441,7 +475,7 @@ def forget_owner(owner: str) -> None:
 def forget_orphans() -> None:
     """Reconcile saved states against conversation reachability, not task-record presence."""
     for owner in {s["owner"] for s in L["snapshots"].values() if not s.get("discard")}:
-        if live(owner):
+        if live(owner) and coins.retains_diagnostics((owner or '').split('/', 1)[0]):
             continue
         forget_owner(owner)
         log("snapshot forgotten", owner=owner, reason="its conversation is over")

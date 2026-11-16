@@ -1,12 +1,12 @@
 ---
 status: green
-revised_at: "2026-10-17T21:22:13+11:00"
-checked_at: '2026-10-31T17:32:44+11:00'
+revised_at: "2026-11-07T11:57:38+11:00"
+checked_at: "2026-10-31T17:32:44+11:00"
 ---
 
 Each uncancelled bounded assignment ends with one checked receipt {run, disposition, summary, evidence, at} on its task. Integration preserves the worker account in its commit; claims in that account do not override checked evidence.
 
-Run identity is an exclusively reserved agent ID. Directory/key ownership prevents reuse; lock-gated admission persists keys before exposing ownership. Thread/key failures preserve waiting work. Adoption preserves exact task/current-receipt ownership, requeues displaced tasks and watches receipted survivors through delivery/exit. COINTOS_AGENT/COINTOS_TASK_ID become caller identity through client.call and api.caller/running. User commands carry no caller.
+Run identity is an exclusively reserved agent ID. Directory/key ownership prevents reuse; lock-gated admission persists keys before exposing ownership. Thread/key failures preserve waiting work. Adoption preserves exact task/current-receipt ownership, sends missing/displaced unreceipted runs to First Responders and watches receipted survivors through delivery/exit. COINTOS_AGENT/COINTOS_TASK_ID become caller identity through client.call and api.caller/running. User commands carry no caller.
 
 cointos finish --complete ACCOUNT or --blocked BLOCKER submits a run's permitted disposition from schema.KINDS. Integrators complete only through verified land/incorporate or return. land may accept a hidden reviewed packet (via=tests, not publication) or publish a reviewed candidate (via=landing). Its response includes the durable acceptance; evidence retains gate={suite, failed, red_on_main}: registered commands, candidate failures and failures also present on prior main. Acceptance/receipt/queue done and verified publication intents retain measured counts through replay/recovery. Missing old measurements remain unknown, never inferred as zero failures. A permitted landing with existing-main failures is not a wholly green suite.
 
@@ -16,4 +16,4 @@ Worker completion requires changed artifacts against a pinned baseline, excludin
 
 Identical same-run receipts replay; changed or foreign receipts refuse. All scoped controls share run authority. Human holds use the stable user identity. CLI flushes terminal output and MCP flushes its actual protocol reply before delivery acknowledgement retires the managed run. Process exit and final text never establish completion.
 
-Cancellation is explicit user/owning-manager/scoped-Operator authority over unaccepted queue work: it releases runs, marks unfinished related tasks cancelled/failed, deletes the record and requires dependent closure. Cancelling an ad-hoc task is user-only. Withdrawn recovery loses mutation authority but may close with checked withdrawal evidence.
+Cancellation is explicit user/owning-manager/scoped-Operator authority over unaccepted queue work: it releases runs, marks unfinished related workers, reviewers, Supervisors and transitive recovery owners cancelled/failed, deletes the record and requires dependent closure. Cancelling an ad-hoc task is user-only. Dashboard Cancel withdraws work, never creates a hold, and suppresses death recovery. Explicit cancellation stops linked recovery immediately, preserving its artifacts without requiring another handback.

@@ -29,4 +29,5 @@ def snapshot():
     return {'smoothing_active_seconds': TIME_CONSTANT,
             'generation_tps': FILTERS.get('generation'),
             'prefill_tps': FILTERS.get('prefill'),
+            'active_tps': FILTERS.get('active'),
             'mtp_acceptance': 100 * FILTERS['accepted'] / drafted if drafted else None}

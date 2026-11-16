@@ -12,7 +12,9 @@ import hashlib
 import fcntl
 import os
 import queue
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -24,14 +26,27 @@ import urllib.request
 from pathlib import Path
 
 from cointos import cli, config as configuration, kt_mcp, wakeups, coin_input, coin_attachments, coin_files, coin_requests, coin_routing, coin_notifications, coin_followups
-from cointos import coin_reports, schema, stations
+from cointos import coin_reports, coins, schema, stations, frontier
 from cointos.client import Unreachable, call, ledger
 from cointos.config import KEYS, ROOT, STATE
 
 CONFIG = configuration.load()
-SETTINGS = CONFIG["coin"]
-COIN_STATE = STATE / "coin"
+# COINTEL selects one identity over the shared daemon; absence keeps the historical Coin.
+PROFILE = coins.profile(os.environ.get("COINTEL"))
+SETTINGS = {**CONFIG["coin"], **PROFILE}
+COIN_STATE = STATE / coins.state(PROFILE.get("identity"))
+# The station is where this Coin works and which directory its knowledge root resolves
+# from. The default installation keeps its historical behaviour: commands from home and
+# the knowledge session at the runtime root.
+STATION = Path(SETTINGS["station"]).expanduser() if SETTINGS.get("station") else None
+KNOWLEDGE_CWD = STATION or ROOT
+COMMAND_CWD = STATION or Path("~").expanduser()
+NAME = SETTINGS.get("name") or configuration.coin_name(CONFIG)
+IDENTITY = SETTINGS.get("identity") or configuration.identity(CONFIG)
 ROLE = (ROOT / "roles/coin.md").read_text(encoding="utf-8")
+if NAME != "Coin":
+    # The role text calls the assistant by its default name; an instance keeps its own.
+    ROLE = ROLE.replace("Coin", NAME)
 TELEGRAM_LIMIT = 4000
 
 
@@ -145,7 +160,8 @@ def ensure_state() -> None:
 
 
 def remember(user: int, role: str, content: str, *, at: float | None = None, input_id: int | None = None,
-             delivery_id: int | None = None, delivery_chat: int | None = None) -> float:
+             delivery_id: int | None = None, delivery_chat: int | None = None,
+             delivery_key: str | None = None) -> float:
     if input_id is not None and (type(input_id) is not int or input_id < 0 or role != 'user'):
         raise ValueError('input identity requires a nonnegative user update ID')
     if delivery_id is not None and (type(delivery_id) is not int or delivery_id <= 0 or role != 'assistant'):
@@ -180,6 +196,8 @@ def remember(user: int, role: str, content: str, *, at: float | None = None, inp
                     break
         if existing is None:
             entry = {"at": at, "role": role, "content": content}
+            if delivery_key is not None:
+                entry['delivery_key'] = delivery_key
             if input_id is not None:
                 entry['input_id'] = input_id
             if delivery_id is not None:
@@ -188,6 +206,16 @@ def remember(user: int, role: str, content: str, *, at: float | None = None, inp
             stream.write((json.dumps(entry) + "\n").encode())
         else:
             at = existing['at']
+        if not SETTINGS.get('retain_archive', True):
+            stream.seek(0)
+            lines = stream.read().splitlines(keepends=True)
+            limit, trim = SETTINGS['history_messages'], SETTINGS['history_trim_messages']
+            excess = max(0, len(lines) - limit + 1)
+            start = ((excess + trim - 1) // trim) * trim
+            if start:
+                stream.seek(0)
+                stream.truncate()
+                stream.write(b''.join(lines[start:]))
         stream.flush()
         os.fsync(stream.fileno())
     directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -198,13 +226,27 @@ def remember(user: int, role: str, content: str, *, at: float | None = None, inp
     return at
 
 
-def deliver_text(token, user, chat, text):
+def deliver_text(token, user, chat, text, *, input_ids=()):
     """One conversational egress for substantive model replies."""
     text = text.strip()
     if not text:
         raise ValueError('a delivered message needs text')
+    delivered = {}
+    if input_ids:
+        path = history_path(user)
+        raw = path.read_bytes() if path.exists() else b''
+        for line in raw.splitlines(keepends=True):
+            if not line.endswith(b'\n'):
+                continue
+            entry = json.loads(line)
+            if entry.get('role') == 'assistant' and entry.get('delivery_key'):
+                delivered[entry['delivery_key']] = entry
     for start in range(0, len(text), TELEGRAM_LIMIT):
         part = text[start:start + TELEGRAM_LIMIT]
+        key = hashlib.sha256(json.dumps([chat, sorted(input_ids), text, start]).encode()).hexdigest() if input_ids else None
+        if key in delivered:
+            receipt = {'message_id': delivered[key].get('delivery_id'), 'duplicate': True}
+            continue
         receipt = send(token, chat, part)
         metadata = {}
         if isinstance(receipt, dict) and type(receipt.get('message_id')) is int:
@@ -212,7 +254,7 @@ def deliver_text(token, user, chat, text):
             metadata['delivery_chat'] = chat
             if isinstance(receipt.get('date'), (int, float)):
                 metadata['at'] = receipt['date']
-        remember(user, 'assistant', part, **metadata)
+        remember(user, 'assistant', part, **metadata, **({'delivery_key': key} if key else {}))
     return receipt
 
 
@@ -256,6 +298,8 @@ def recent(user: int, incoming: int = 0, *, exclude_inputs=()) -> list[dict]:
 
 def journal(entry: dict) -> None:
     """Publish a turn's progress for viewers, bounded and private. It never stops a turn."""
+    if not SETTINGS.get('retain_diagnostics', True):
+        return
     path = COIN_STATE / 'turns.jsonl'
     try:
         limit = SETTINGS['journal_bytes']
@@ -306,7 +350,7 @@ def complete(model: str, messages: list[dict], timeout: float, **options) -> dic
             # evidence, but do not teach the model to reproduce them on every turn.
             item["content"] = reply_text(item["content"])
         rendered.append(item)
-    body = {"model": model, "messages": rendered, "reasoning_effort": SETTINGS.get("reasoning_effort", CONFIG["reasoning"]["default"]), **options, "stream": True}
+    body = {"model": model, "messages": rendered, "assistant": IDENTITY, "reasoning_effort": SETTINGS.get("reasoning_effort", CONFIG["reasoning"]["default"]), **options, "stream": True}
     request = urllib.request.Request(configuration.api_url(CONFIG) + "/v1/chat/completions", json.dumps(body).encode(),
                                      {"Content-Type": "application/json", "Authorization": f"Bearer {coin_key()}"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -352,7 +396,7 @@ INPUT_IDS, AGENT_PROPERTIES = schema.INPUT_IDS, schema.AGENT_PROPERTIES
 
 
 TOOLS = [
-    tool('run_command', 'Run a Bash command on the workstation as the local user. Use for general computer control, programs, services and filesystem tasks. Returns exit status, stdout and stderr. An optional timeout is in seconds; omitted means wait for completion.',
+    tool('run_command', 'Run a Bash command as the local user for programs, services and filesystem changes. Prefer fs_search for searches. Shell filesystem searches have a five-second ceiling even if a longer timeout is requested. Other commands use the default command timeout. Timeout kills the command process group.',
          {'command': {'type': 'string'}, 'cwd': {'type': 'string'}, 'timeout': {'type': 'number', 'exclusiveMinimum': 0}}, ['command']),
     tool('attachment_route', 'Keep a standing rule to copy or move incoming captionless photos to a folder, creating the folder if needed. Ordinary batches run locally without model turns, quotas or repeated verification. The rule survives restart until changed or stopped. Current captioned attachments are included when establishing the rule.',
          {'destination': {'type': 'string'}, 'operation': {'type': 'string', 'enum': ['copy', 'move']}}, ['destination']),
@@ -372,7 +416,7 @@ TOOLS = [
     tool('fs_read', 'Read a UTF-8 text file, optionally by line range. Binary attachments are stored but not interpreted.',
          {'path': {'type': 'string'}, 'start_line': {'type': 'integer', 'minimum': 1},
           'lines': {'type': 'integer', 'minimum': 1}}, ['path']),
-    tool('fs_search', 'Recursively find local files by filename glob and optional literal text. Does not follow directory symlinks.',
+    tool('fs_search', 'Find files by filename glob and optional literal text inside the smallest relevant directory. Locate candidates by filename before searching contents. Skips generated directories and directory symlinks; incomplete results require a narrower path.',
          {'path': {'type': 'string'}, 'glob': {'type': 'string'}, 'text': {'type': 'string'}}, ['path']),
     tool('fs_mkdir', 'Create a local directory and any missing parents.',
          {'path': {'type': 'string'}}, ['path']),
@@ -398,29 +442,29 @@ TOOLS = [
          "implementers with structured dependencies. urgent/queued describe already-planned construction work.", {
              "project": {"type": "string"}, "kind": {"type": "string", "enum": ["urgent", "queued", "command"]},
              "name": {"type": "string", "description": "a short name, a few words"},
-             "brief": {"type": "string", "description": "the outcome wanted, where it lives, how to tell it is done"}, 'input_ids': INPUT_IDS},
+             "brief": {"type": "string", "description": schema.BRIEF_DESCRIPTION}, 'input_ids': INPUT_IDS},
          ["project", "kind", "name", "brief"]),
     tool("hold_item", "Keep a queue item (PROJECT:ITEM) from starting while the user decides; release=true lifts the hold.", {
              "item": {"type": "string"}, "release": {"type": "boolean"}}, ["item"]),
     tool("revise_item", "Change a queue item's brief while retaining its stage, reasoning and budget; its task restarts on the new brief.", {
-             "item": {"type": "string"}, "brief": {"type": "string", "description": "the complete revised brief"},
+             "item": {"type": "string"}, "brief": {"type": "string", "description": schema.BRIEF_DESCRIPTION},
              "reason": {"type": "string"}}, ["item", "brief", "reason"]),
     tool("projects", "List projects registered with CointOS, including priority and enabled state."),
-    tool("project_add", "Register an existing Git repository with CointOS.", {
+    tool("project_add", "Register an existing project with CointOS.", {
              "path": {"type": "string"}, "name": {"type": "string"},
-             "main_branch": {"type": "string"}, "priority": {"type": "integer"},
+             "priority": {"type": "integer"},
              "enabled": {"type": "boolean"}}, ["path"]),
-    tool("project_new", "Create a folder and Git repository, initialize its project knowledge tree, commit it, and register it with CointOS.", {
+    tool("project_new", "Create and register a project folder with its knowledge tree; CointOS initializes storage automatically.", {
              "name": {"type": "string"}, "path": {"type": "string"},
-             "main_branch": {"type": "string"}, "priority": {"type": "integer"},
+             "priority": {"type": "integer"},
              "enabled": {"type": "boolean"}}, ["name"]),
-    tool("project_set", "Change a registered project's priority, enabled state or main branch.", {
-             "project": {"type": "string"}, "main_branch": {"type": "string"},
+    tool("project_set", "Change a registered project's priority or enabled state.", {
+             "project": {"type": "string"},
              "priority": {"type": "integer"}, "enabled": {"type": "boolean"}}, ["project"]),
-    tool("project_remove", "Remove an idle project from CointOS without deleting its repository.", {
+    tool("project_remove", "Remove an idle project from CointOS without deleting its files.", {
              "project": {"type": "string"}}, ["project"]),
     tool("dispatch", schema.DISPATCH_DESCRIPTION, schema.DISPATCH_PROPERTIES, ["name", "brief"]),
-    tool("split_work", "Stop an implementer or Operator whose job turned out too big for one agent. Its branch and files are kept and a manager salvages them and cuts the job into far smaller pieces that replace it. Other roles keep ordinary recovery.",
+    tool("split_work", "Stop an implementer or Operator whose job turned out too big for one agent. Its work is preserved and a manager divides the remaining obligations into smaller replacements. Other roles keep ordinary recovery.",
          {"task": {"type": "string"}, "reason": {"type": "string"}}, ["task", "reason"]),
     tool('update_work', 'Forward a continuation or correction to an existing dispatched owner without stopping or restarting it. The service includes the original current inputs verbatim. Use the task ID from dispatched-work context. Inbox acceptance is not consumption or completed work.',
          {'task': {'type': 'string'}, 'instruction': {'type': 'string', 'description': 'How this input changes the existing request; preserve repetitions and quantities.'}, 'input_ids': INPUT_IDS},
@@ -436,7 +480,7 @@ TOOLS = [
     tool("restart", "Drain replies and restart only the daemon, preserving agents, sessions and loaded models."),
     tool("wake", "Save a durable future turn with a message and condition, for reminders, checks or actions. The model can inspect state, use tools and send requested results when woken. Deadline, process-exit, unit-state and task-state wakes fire once. schedule and *-change wakes repeat until cancelled, each firing once per new occurrence. Give agent to start that stationed agent directly on each firing with no model turn; message then only describes it. Background system alerts remain off.", {
         "message": {"type": "string"},
-        "agent": {"type": "object", "properties": AGENT_PROPERTIES, "required": ["name", "brief"], "additionalProperties": False,
+        "agent": {"type": "object", "properties": {**AGENT_PROPERTIES, "role": schema.DISPATCH_PROPERTIES["role"]}, "required": ["name", "brief"], "additionalProperties": False,
                   "description": "The agent to start each time this fires. Its brief must stand alone: it receives the trigger time but not this conversation."},
         "condition": {"oneOf": [
             {"type": "object", "properties": {"kind": {"const": "schedule"}, "cron": {"type": "string", "description": "Five fields, minute hour day-of-month month day-of-week, on the timezone's wall clock. Weekdays at 6:00pm: 0 18 * * 1-5."}, "timezone": {"type": "string", "description": "Named zone such as Pacific/Auckland. Defaults to the workstation's; the result's next_run shows the wall clock to confirm."}}, "required": ["kind", "cron"], "additionalProperties": False},
@@ -458,17 +502,17 @@ TOOLS = [
     tool("pause_wake", "Pause or resume a repeating wake without losing it. Occurrences while paused do not count.", {"id": {"type": "string"}, "paused": {"type": "boolean"}}, ["id", "paused"]),
     tool("mcp_tools", "Your station has every configured MCP server. With no server, list them; with one, list its tools and their inputs.", {"server": {"type": "string"}}),
     tool("mcp_call", "Call one tool on a configured local MCP server; use mcp_tools first for its name and inputs.", {"server": {"type": "string"}, "tool": {"type": "string"}, "arguments": {"type": "object"}}, ["server", "tool"]),
-    tool('report_result', 'Announce a verified requested deliverable once. Use for unsolicited completion/milestone updates instead of send. Read reported-results context first and reuse its location/milestone for the same outcome, even across different tasks. Internal plans, tests or handoffs are not delivered implementations. Cite successful fs_read or run_command call IDs from this turn that actually verify the promised behaviour; tool success alone does not prove completion.',
+    tool('report_result', 'Announce a verified requested deliverable once. Use for unsolicited completion/milestone updates instead of send. Read reported-results context first and reuse its location/milestone for the same outcome, even across different tasks. Internal plans, tests or handoffs are not delivered implementations. Cite the evidence_call_id shown in successful fs_read or run_command results from this turn that actually verify the promised behaviour; tool success alone does not prove completion.',
          {'location': {'type': 'string', 'description': 'Existing canonical result file or project directory; reuse the recorded location.'},
-          'milestone': {'type': 'string', 'description': 'Stable user-visible outcome, e.g. cli-wiring. Reuse for the same deliverable; never task IDs, timestamps or commit hashes.'},
+          'milestone': {'type': 'string', 'description': 'Stable user-visible outcome, e.g. cli-wiring. Reuse for the same deliverable; never task IDs, timestamps or internal storage identifiers.'},
           'message': {'type': 'string'},
           'evidence_calls': {'type': 'array', 'items': {'type': 'string'}, 'minItems': 1}},
          ['location', 'milestone', 'message', 'evidence_calls']),
     tool("send", "Send a direct reply now; the turn continues. Use report_result for unsolicited completion/milestone announcements. All Telegram text must come from the model; never send a canned queued receipt or forward system warnings.", {"message": {"type": "string"}}, ["message"]),
-    tool("done", "End this turn. Closing content is delivered unless this reply calls send/report_result. Internal completion checks require report_result and otherwise finish silently; omit content for silence."),
+    tool("done", "End this turn silently. Ordinary model output is internal and never sent to Telegram. Use send or report_result explicitly to deliver a message."),
 ]
-INPUT_GUIDANCE = ("(This is the current pending input, durably saved. Reply FIRST using send, "
-                  "without claiming unperformed work is complete. Dispatch SECOND using dispatch or "
+INPUT_GUIDANCE = ("(This is the current pending input, durably saved. Use tools as needed, then send the answer; "
+                  "no preliminary acknowledgement is required. Never claim unperformed work is complete. Dispatch using dispatch or "
                   "queue_item; always defer substantive searches, record updates, diagnostics and execution. "
                   "For unclear work, dispatch an Operator to determine how to dispatch its execution. "
                   "Use update_work for a continuation to an existing dispatched owner; do not kill/revise it. "
@@ -480,7 +524,7 @@ INPUT_GUIDANCE = ("(This is the current pending input, durably saved. Reply FIRS
                   "On replay, use bounded current-task inspection to avoid duplicate dispatch.)")
 
 def project_change(arguments: dict) -> dict:
-    changes = {key: arguments[key] for key in ("main_branch", "priority", "enabled") if arguments.get(key) is not None}
+    changes = {key: arguments[key] for key in ("priority", "enabled") if arguments.get(key) is not None}
     return call("project-set", {"project": arguments["project"], "settings": changes})
 
 
@@ -511,7 +555,7 @@ def mcp_session(server: str) -> dict:
         raise ValueError(f"unknown MCP server {server!r}; configured: {mcp_servers()}")
     if configured.get("type") != "local":
         raise ValueError(f"{server} is not a local server; start an agent with it in its station instead")
-    session = kt_mcp.connect(configured["command"], Path(stations.COIN["directory"]),
+    session = kt_mcp.connect(configured["command"], COMMAND_CWD,
                              {**os.environ, **configured.get("environment", {})})
     if session is None:
         raise RuntimeError(f"MCP server {server} did not start")
@@ -541,11 +585,27 @@ def output(value: str) -> dict:
 
 
 def run_command(arguments: dict) -> dict:
-    result = subprocess.run(arguments['command'], shell=True, executable='/bin/bash',
-                            cwd=Path(arguments.get('cwd', '~')).expanduser(),
-                            capture_output=True, text=True, errors='replace', timeout=arguments.get('timeout', COMMAND_SECONDS))
-    return {'ok': result.returncode == 0, 'exit_code': result.returncode,
-            'stdout': result.stdout, 'stderr': result.stderr}
+    timeout = arguments.get('timeout', COMMAND_SECONDS)
+    # Include paths, pipelines and nested shell strings. This recognizes ordinary
+    # search invocations; it is a responsiveness policy, not a shell security boundary.
+    if re.search(r'(?<![\w-])(?:grep|egrep|fgrep|rg|ripgrep|find|fd|fdfind|locate|plocate|ag|ack)(?![\w-])',
+                 arguments['command']):
+        timeout = min(timeout, SETTINGS['search_seconds'])
+    with subprocess.Popen(arguments['command'], shell=True, executable='/bin/bash',
+                            cwd=Path(arguments.get('cwd', str(COMMAND_CWD))).expanduser(),
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            errors='replace', start_new_session=True) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+            raise
+    return {'ok': process.returncode == 0, 'exit_code': process.returncode,
+            'stdout': stdout, 'stderr': stderr}
 
 
 # What each of Coin's own tools does; `send` and `done` are handled by the turn itself.
@@ -562,7 +622,7 @@ EXECUTE = {
     "queue_item": lambda arguments: call("queue", arguments),
     "hold_item": lambda arguments: call("unhold" if arguments.get("release") else "hold", {"item": arguments["item"]}),
     "revise_item": lambda arguments: call("revise", arguments),
-    "projects": lambda arguments: output(cli.projects_text(call("project-list")["projects"])),
+    "projects": lambda arguments: call("project-list"),
     "project_add": lambda arguments: call("project-add", arguments),
     "project_new": lambda arguments: call("project-new", arguments),
     "project_set": project_change,
@@ -586,7 +646,11 @@ def execute(name: str, arguments: dict) -> dict:
     if name not in EXECUTE:
         return {"ok": False, "error": f"unknown tool {name}"}
     try:
-        return EXECUTE[name](arguments)
+        if name in ("project_add", "project_new", "project_set"):
+            if "main_branch" in arguments:
+                raise ValueError("This project tool does not accept storage selection. No project settings were changed.")
+        result = EXECUTE[name](arguments)
+        return frontier.file_view(result) if name in ("projects", "project_add", "project_new", "project_set", "project_remove") else result
     except SystemExit as error:
         # CLI control refusals are tool results, not a reason to kill Coin's worker.
         return {"ok": False, "error": str(error)}
@@ -687,16 +751,8 @@ COMMAND_SECONDS = 300  # a turn is for answering; longer work is dispatched or a
 
 
 def orientation() -> str:
-    """What `kt info` says from Coin's station, read once so the prompt prefix stays fixed."""
-    global ORIENTATION
-    if ORIENTATION is None:
-        try:
-            found = subprocess.run([str(Path.home() / '.knowledge/.tools/kt'), 'info', '--no-prove'], cwd=Path.home(),
-                                   capture_output=True, text=True, errors='replace', timeout=30)
-            ORIENTATION = ('\n\n## Your knowledge orientation\n\n' + found.stdout.strip()) if found.returncode == 0 else ''
-        except (OSError, subprocess.SubprocessError):
-            ORIENTATION = ''
-    return ORIENTATION
+    """Relevant knowledge is retrieved on demand, rather than dumped at startup."""
+    return ''
 
 
 def system_prompt(knowledge: dict | None) -> tuple[str, list[dict]]:
@@ -705,6 +761,10 @@ def system_prompt(knowledge: dict | None) -> tuple[str, list[dict]]:
     archive = (f'\n\nThe durable conversation archives are in {COIN_STATE}, named conversation-<user>.jsonl. '
                'The prompt contains only a recent window; older messages remain in that archive. '
                'Use fs_read/fs_search to retrieve earlier messages.')
+    if not SETTINGS.get('retain_archive', True):
+        archive = ('\n\nOnly your rolling context window is retained locally. '
+                   'Older conversation text is discarded; do not claim an older transcript exists. '
+                   'Retained user instructions and deliberately saved knowledge are separate.')
     return ROLE + orientation() + archive, TOOLS + kt
 
 
@@ -768,6 +828,9 @@ def trigger_text(wake: dict | None, texts: list) -> str:
 
 def report(busy: bool, doing: str | None = None, trigger: str | None = None) -> None:
     """Tell the daemon what Coin is doing and what prompted it; never at the turn's expense."""
+    if not SETTINGS.get('retain_diagnostics', True):
+        doing = 'Using a tool' if doing else None
+        trigger = 'Private conversation' if trigger else None
     body = {"busy": busy, "doing": doing, "pid": os.getpid()}
     if trigger is not None:
         body["trigger"] = trigger
@@ -805,6 +868,7 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
     dispatched_context = None
     current_inputs = []
     awaiting_reply = False
+    sent_replies = set()
 
     def refresh_requests():
         nonlocal active_context, route_context, notification_context, reports_context, dispatched_context
@@ -863,7 +927,7 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                               for r in reported], ensure_ascii=False)
                 + '\n</cointos-reported-results>\nAlready delivered results, independent of rolling history and task IDs. '
                   'Do not announce these outcomes again. Reuse the recorded location/milestone in report_result. '
-                  'A new task, receipt, wake or verification is not a new milestone. Direct user questions still get answers.'}
+                  'A new task, receipt, wake or verification alone is not a new milestone. A newly requested reporting period is a distinct deliverable; include its period in the milestone key. Direct user questions still get answers.'}
             messages.insert(history_prefix_messages, reports_context)
         if dispatched_context is not None:
             messages.remove(dispatched_context)
@@ -900,7 +964,11 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
         nonlocal awaiting_reply
         text = reply_text(text)
         if text and not completion_only:
-            deliver_text(token, user, chat, text)
+            signature = (chat, json.dumps(current_inputs, sort_keys=True), text)
+            if signature not in sent_replies:
+                deliver_text(token, user, chat, text,
+                             input_ids=[entry['id'] for entry in current_inputs if 'id' in entry])
+                sent_replies.add(signature)
             awaiting_reply = False
             return True
         return False
@@ -910,7 +978,7 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
     # the message wins. History keeps the user's own words.
     if wake is not None:
         content = ("<cointos-wake>\n" + json.dumps(wake) + "\n</cointos-wake>\n"
-                   "Saved model wake, not a new Telegram message. Check current state before acting. "
+                   "Saved model wake, not a new Telegram message. Check current state before acting. For recurring work, compare the requested period with the actual coverage of existing artifacts. Last week’s report does not complete this week’s report; existence or a previous delivery alone does not establish completion for the due period. "
                    "Use tools as needed and send the requested reminder or relevant result; finish with done if nothing needs saying. Do not forward system warnings. Delivery may repeat after interruption; check whether prior actions already happened.")
         at = time.time()  # internal work is not a Telegram message/history slot
         journal({'kind': 'user', 'text': f"Wake: {wake.get('message') or 'saved turn'}"})
@@ -952,13 +1020,11 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
         messages.append({**{key: value for key, value in assistant.items() if key in ("role", "content", "reasoning_content", "tool_calls")},
                          "at": time.time()})
         if not calls:
-            say(assistant.get("content") or "")
-            if awaiting_reply:
-                messages.append({'role': 'user', 'content': 'This new user input still needs a reply. Use send or provide a direct answer before ending.'})
-                continue
-            return
+            messages.append({'role': 'user', 'content': 'Ordinary output is internal and was not delivered. '
+                'Use the permitted delivery tool (send or report_result) to deliver your message; '
+                'an earlier acknowledgement is not the answer. Call done explicitly to finish silently.'})
+            continue
         finished = False
-        sent_in_response = False
         for request in calls:
             name = request["function"]["name"]
             try:
@@ -966,23 +1032,20 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
             except ValueError as error:
                 arguments, result = {}, {"ok": False, "error": f"invalid arguments: {error}"}
             else:
-                if awaiting_reply and name not in ('send', 'done'):
-                    result = {'ok': False, 'error': 'Reply to the current user input with send before tools or dispatch. Acknowledge receipt, not completion.'}
-                elif completion_only and name == 'wake':
+                if completion_only and name == 'wake':
                     result = {'ok': False, 'error': 'The service observes factory handoffs. Do not schedule product continuation checks; finish silently or report an exact verified result.'}
                 elif name == "send":
                     if completion_only:
                         result = {'ok': False, 'error': 'Use report_result with current verification evidence, or finish silently.'}
                     else:
                         sent = say(str(arguments.get("message", "")))
-                        sent_in_response |= sent
                         result = ({"ok": True, "output": "sent"} if sent else
                                   {'ok': False, 'error': 'A reply needs nonempty text.'})
                 elif name == 'report_result':
                     try:
                         ids = arguments.get('evidence_calls')
                         if not isinstance(ids, list) or not ids or any(i not in verification for i in ids):
-                            raise ValueError('Cite successful fs_read/run_command call IDs from this turn that verify the actual deliverable')
+                            raise ValueError('Cite evidence_call_id from a successful fs_read/run_command result in this turn that verifies the actual deliverable. Available IDs: ' + ', '.join(verification))
                         result = coin_reports.deliver(COIN_STATE / 'reports', user, chat,
                             arguments['location'], arguments['milestone'], reply_text(arguments['message']),
                             [verification[i] for i in ids],
@@ -990,7 +1053,7 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                     except (KeyError, TypeError, ValueError) as error:
                         result = {'ok': False, 'error': f'{type(error).__name__}: {error}'}
                 elif name == "done":
-                    finished = not awaiting_reply or bool(reply_text(assistant.get('content') or ''))
+                    finished = not awaiting_reply
                     result = ({'ok': True, 'output': 'turn ended'} if finished else
                               {'ok': False, 'error': 'Reply to the new user input before ending this turn.'})
                 elif round_number >= limit:
@@ -1000,7 +1063,10 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                     if name in ('dispatch', 'queue_item', 'update_work', 'wake'):
                         signature += json.dumps(current_inputs, sort_keys=True)
                     report(True, name)
-                    if signature in seen:
+                    # Observations must reflect intervening writes (including other
+                    # agents). Reusing a read can contradict fresh verification and
+                    # trap the model in a retry loop. Keep effect deduplication.
+                    if signature in seen and name not in ('fs_read', 'fs_stat', 'fs_list', 'fs_search'):
                         result = {**seen[signature], "note": "You already made this call; use this result."}
                     else:
                         try:
@@ -1010,14 +1076,13 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                             result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
                         seen[signature] = result
                     if name in ('fs_read', 'run_command') and result.get('ok') is True:
+                        result = {'evidence_call_id': request['id'], **result}
                         verification[request['id']] = {'tool': name, 'arguments': arguments, 'result': result}
             messages.append({"role": "tool", "tool_call_id": request.get("id", ""), "name": name,
                              "content": json.dumps(result)[:20000], "at": time.time()})
             journal({'kind': 'tool', 'id': request.get('id', ''), 'name': name, 'input': arguments,
                      'output': messages[-1]['content']})
         if finished:
-            if not sent_in_response and not any(request["function"]["name"] == 'report_result' for request in calls):
-                say(assistant.get("content") or "")
             if not awaiting_reply:
                 return
             messages.append({'role': 'user', 'content': 'No reply was delivered for the new user input. Use send before ending.'})
@@ -1074,7 +1139,7 @@ def observe_wakes() -> None:
 
 def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> None:
     """One turn at a time; messages from the same user that arrive mid-turn join the running turn."""
-    knowledge = kt_mcp.open_session(ROOT)
+    knowledge = kt_mcp.open_session(KNOWLEDGE_CWD)
     report(False)  # a restarted idle worker must clear the previous process's busy card
     directory = COIN_STATE / 'inputs'
     retry: dict[str, float] = {}
@@ -1165,7 +1230,7 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
                 for ident in consumed:
                     input_retry[ident] = time.monotonic() + SETTINGS['error_pause_seconds']
                 if knowledge and knowledge['process'].poll() is not None:
-                    knowledge = kt_mcp.open_session(ROOT)
+                    knowledge = kt_mcp.open_session(KNOWLEDGE_CWD)
             else:
                 # Persistence failures are not model failures. Let the service
                 # restart and replay retained work without fabricating a reply.

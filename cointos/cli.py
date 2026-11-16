@@ -18,12 +18,12 @@ import time
 import urllib.request
 from pathlib import Path
 
-from cointos import config as configuration, contracts, frontier, git, metrics, opencode, queues, schema
+from cointos import coins, config as configuration, contracts, frontier, git, metrics, opencode, progress, queues, schema
 from cointos.client import Unreachable, call, ledger
 from cointos.config import ROOT
 
 CONFIG = configuration.load()
-UNITS = ["cointosd.service", "cointos-coin.service"]
+UNITS = ["cointosd.service", *([coins.unit(name) for name in coins.names()] or ["cointos-coin.service"])]
 LANDING_TIMEOUT = CONFIG["timeouts"]["validation_seconds"] + CONFIG["timeouts"]["api_seconds"]
 TERMINAL_COMMANDS = frozenset({"finish", "handoff", "replace", "correct-tests", "land", "return", "incorporate"})
 
@@ -122,16 +122,39 @@ def agents_text(state: dict) -> str:
     return "\n".join(lines) or "no live agents"
 
 
+def progress_command(args) -> str:
+    """Live progress, optionally refreshed: the tool behind a slow-looking factory."""
+    def once() -> str:
+        data = progress.report(ledger(), CONFIG, minutes=args.minutes, as_json=args.json)
+        return json.dumps(data, indent=2) if args.json else data
+
+    if not args.watch:
+        return once()
+    try:
+        while True:
+            sys.stdout.write("\033[2J\033[H")
+            print(once())
+            sys.stdout.flush()
+            time.sleep(args.watch)
+    except KeyboardInterrupt:
+        return ""
+
+
 def jobs_text(state: dict, limit: int | None = 30, project: str | None = None) -> str:
     now = time.time()
     newest = sorted((task for task in state["tasks"].values()
                      if project is None or task.get("place") == project),
                     key=lambda task: task["updated_at"], reverse=True)
+    if limit is not None and os.environ.get('COINTOS_AGENT'):
+        # Queue outcomes remain current facts; completed standalone runs are explicit history.
+        newest = [task for task in newest if task['status'] != 'done' or task.get('record')]
     if limit is not None:
         settled = [task for task in newest if task["status"] in schema.SETTLED]
         history = {task["id"] for task in settled[:limit]}
         newest = [task for task in newest if task["status"] in schema.ACTIVE or task["id"] in history]
     def note(task):
+        if os.environ.get('COINTOS_AGENT'):
+            task = frontier.file_view(task)
         words = (task.get("note") or "").split()
         count = CONFIG["summary_words"][-1]
         return " ".join(words[:count]) + (" … (task for full note)" if len(words) > count else "")
@@ -198,8 +221,8 @@ def restart() -> str:
             if time.monotonic() >= deadline:
                 raise SystemExit("restart cancelled: replies did not drain in time; no processes stopped")
             time.sleep(CONFIG["tick_seconds"])
-        if systemctl("restart", "cointosd.service") != 0:
-            raise SystemExit("daemon restart failed; check cointosd.service")
+        if systemctl("restart", UNITS[0]) != 0:
+            raise SystemExit(f"daemon restart failed; check {UNITS[0]}")
     except BaseException:
         try:
             call("cancel-restart")
@@ -222,76 +245,31 @@ def run_here() -> tuple[dict, str]:
     return task, run
 
 
-def main_branch(task: dict) -> str:
-    places = configuration.managed_trees(CONFIG) if schema.KINDS[task["kind"]]["scope"] == "tree" else CONFIG["projects"]
-    return next(p for p in places if p["name"] == task["place"])["main_branch"]
-
-
-def here(*args) -> subprocess.CompletedProcess:
-    return git.result(".", *args)
-
-
-def conflicted() -> list[str]:
-    return here("diff", "--name-only", "--diff-filter=U").stdout.split()
-
-
-def resolve(files: list[str], then: str) -> None:
-    raise SystemExit(
-        "These files have changes from both sides:\n  " + "\n  ".join(files) + "\n"
-        "Nothing has landed. Open each file, keep what both sides meant (main's changes are other "
-        "agents' finished work; do not drop them) and remove the <<<<<<< ======= >>>>>>> markers. "
-        f"Then `git add` those files and {then}.")
+def acceptance_text(result: dict) -> str:
+    if os.environ.get('COINTOS_AGENT'):
+        result = frontier.file_view(result)
+    acceptance = result.get('acceptance') or {}
+    via, gate = acceptance.get('via'), acceptance.get('gate')
+    outcome = ('accepted hidden test packet; not published' if via == 'tests' else
+               'verified and published' if via == 'landing' else
+               'verified existing implementation' if via == 'incorporation' else 'acceptance recorded')
+    measured = (f"Suite: {gate['suite']} commands, {gate['failed']} failed "
+                f"({gate['red_on_main']} already failed on the accepted product)."
+                if isinstance(gate, dict) and {'suite', 'failed', 'red_on_main'} <= gate.keys()
+                else 'Suite result not retained; acceptance alone does not establish a green suite.')
+    push = result.get('push') or {}
+    warning = ('\nDelivery warning: ' + push.get('error', 'upstream delivery failed')
+               if push.get('status') == 'failed' else '')
+    return outcome + '; this is your receipt.\n' + measured + warning
 
 
 def merge() -> str:
-    """Land this run's branch: bring it up to date with main, then fast-forward main to it (an
-    integrator's candidate goes through the daemon's landing gate instead). A conflict is left
-    in the worktree with plain instructions; nothing lands until it is resolved."""
-    task, run = run_here()
-    lands = schema.KINDS[task["kind"]]["lands"]
-    if lands == "review":
-        raise SystemExit("Workers do not land their work. Commit everything on your branch, then submit it with "
-                         "`cointos finish`: the integrator reviews and lands it.")
-    if task["branch"] is None:
-        raise SystemExit("this system task has no branch to land")
-    main = main_branch(task)
-    again = ('run `cointos land "<same summary>"` again' if lands == "gate" else
-             "`git commit --no-edit`, and run `cointos merge` again")
-    if here("branch", "--show-current").stdout.strip() != task["branch"]:
-        raise SystemExit("run this in your task worktree, on your task branch")
-    if conflicted():
-        resolve(conflicted(), again)
-    if not git.clean("."):
-        raise SystemExit("your worktree has uncommitted changes; commit them first, then run `cointos merge` again")
-    if here("merge", "--no-edit", main).returncode != 0:
-        if conflicted():
-            resolve(conflicted(), again)
-        here("merge", "--abort")
-        raise SystemExit(f"bringing your branch up to date with {main} failed")
-    if lands == "gate":
-        result = call("land", {"commit": git.head(".")}, timeout=LANDING_TIMEOUT)
-        acceptance = result.get('acceptance') or {}
-        via, gate = acceptance.get('via'), acceptance.get('gate')
-        if via == 'tests':
-            outcome = f"accepted hidden test packet {result['commit']}; not published on {main}"
-        elif via == 'landing':
-            outcome = f"verified and landed {result['commit']} on {main}"
-        elif via == 'incorporation':
-            outcome = f"verified existing implementation {result['commit']} already on {main}"
-        else:
-            outcome = f"acceptance recorded for {result['commit']}; publication details not retained"
-        measured = (f"Suite: {gate['suite']} commands, {gate['failed']} failed "
-                    f"({gate['red_on_main']} already failed on {main})."
-                    if isinstance(gate, dict) and {'suite', 'failed', 'red_on_main'} <= gate.keys()
-                    else 'Suite result not retained; acceptance alone does not establish a green suite.')
-        return outcome + '; this is your receipt.\n' + measured
+    """Ask the daemon to capture and publish this run's scoped maintenance."""
     try:
-        publication = call('merge', {'commit': git.head('.')})
+        call('merge', {}, timeout=LANDING_TIMEOUT)
     except ValueError as error:
-        raise SystemExit(f"publication refused: {error}") from error
-    preserved = (f"; local edits preserved on {publication['draft']} in {publication['workspace']}"
-                 if publication.get("draft") else "")
-    return f"landed {task['branch']} on {main}{preserved}"
+        raise SystemExit(str(error)) from error
+    return 'scoped maintenance published; local editor work is preserved.'
 
 
 def integration() -> tuple[dict, dict, str]:
@@ -303,76 +281,13 @@ def integration() -> tuple[dict, dict, str]:
 
 
 def review() -> str:
-    """Stage the worker's submitted commit, after its packet's tests, for review, and show the
-    worker's account: its completion receipt."""
-    task, worker, run = integration()
-    main = main_branch(task)
-    submitted = worker["receipt"]["evidence"]["commit"]
-    if not (here("diff", "--cached", "--quiet").returncode or conflicted()):
-        if not git.clean("."):
-            raise SystemExit("commit or resolve existing review edits before staging another worker")
-        if not git.contains(".", git.head(".", main), git.head(".")):
-            updated = here("merge", "--no-edit", main)
-            if conflicted():
-                resolve(conflicted(), "commit the resolution, then run cointos review again")
-            if updated.returncode:
-                raise SystemExit(updated.stderr.strip())
-        for tests in worker["receipt"]["evidence"].get("tests", []):  # the packet's tests land with its code
-            if here("merge-base", "--is-ancestor", tests, "HEAD").returncode == 0:
-                continue
-            merged = here("merge", "--squash", tests)
-            merge_conflicts = conflicted()
-            if merge_conflicts:
-                rules = next(p for p in CONFIG["projects"] if p["name"] == task["place"]).get("test_policy")
-                if rules:
-                    git.resolve_insertions(".", [p for p in merge_conflicts if contracts.protected(p, rules)])
-                    # A packet's knowledge edits were written against an older main; the
-                    # integrator brings knowledge up to date in this landing either way.
-                    contracts.keep_current(".", [p for p in conflicted() if contracts.matches(p, rules.get("non_code", []))])
-            if merged.returncode and not merge_conflicts:
-                raise SystemExit(merged.stderr.strip())
-            if conflicted():
-                resolve(conflicted(), "commit the packet's tests with `git commit`, then run cointos review again")
-            here("commit", "-q", "-m", f"Tests for {task['item']}")
-        squashed = here("merge", "--squash", submitted)
-        if squashed.returncode and not conflicted():
-            raise SystemExit(squashed.stderr.strip())
-    lines = [f"Worker receipt for {task['item']}:\n\n{worker['receipt']['summary']}\n",
-             here("diff", main, "--stat").stdout]
-    scratch = opencode.run_dir(worker['receipt']['run']) / 'scratch'
-    if scratch.is_dir():
-        lines.append(f"Submitting worker's retained diagnostic scratch: {scratch}\n"
-                     "For unresolved verification questions, inspect its sources before rebuilding probes. "
-                     "Copy useful probes into your own scratch and replay against this exact candidate; "
-                     "check assertions and command exit status. These mutable files are unverified diagnostics.")
-    if conflicted():
-        resolve(conflicted(), "carry on with review; cointos land commits it")
-    return "\n".join(lines + [f'Review the full candidate with `git diff {main}` (committed and staged changes), '
-                              'check the contract and witness inputs; keep pending product state truthful, then cointos land "summary", '
-                              'or cointos return "what must change".'])
+    """Inspect the daemon-prepared candidate, with no repository operations in the client."""
+    return json.dumps(call('review', {}, timeout=LANDING_TIMEOUT), indent=2)
 
 
 def land(summary: str) -> str:
-    """Commit the review with the worker's account, then land it through the daemon's gate.
-    Retrying after a lost reply resends the same landing."""
-    task, worker, run = integration()
-    if conflicted():
-        resolve(conflicted(), "run cointos land again")
-    message = f"{summary.strip()}\n\nWorker: {worker['receipt']['summary']}"
-    here("add", "-A")
-    if here("diff", "--cached", "--quiet").returncode:
-        committed = here("commit", "-q", "-m", message)
-        if committed.returncode:
-            raise SystemExit(committed.stderr.strip() or committed.stdout.strip())
-    elif (git.head(".") != git.head(".", main_branch(task))
-          and (worker.get("acceptance") or {}).get("commit") != git.head(".")
-          and here("log", "-1", "--format=%B").stdout.strip() != message):
-        # A recovered, committed candidate still carries the worker's account into the
-        # landing commit. This changes metadata, not its reviewed tree or authorization.
-        committed = here("commit", "-q", "--allow-empty", "-m", message)
-        if committed.returncode:
-            raise SystemExit(committed.stderr.strip() or committed.stdout.strip())
-    return merge()
+    """Accept the reviewed files; the daemon captures, validates and publishes them."""
+    return acceptance_text(call('land', {'summary': summary}, timeout=LANDING_TIMEOUT))
 
 
 def send_back(notes: str) -> str:
@@ -461,7 +376,59 @@ def _coin_event_line(entry: dict) -> str:
     return f"{when}  {entry['event']}"
 
 
-def _coin_live_states():
+def coin_profile(name=None):
+    """Choose the journal owner before opening a passive display."""
+    name = name or os.environ.get('COINTEL')
+    names = coins.names()
+    if not name and names:
+        print("Choose Coin: " + ", ".join(f"{i + 1} {n}" for i, n in enumerate(names)))
+        selected = input("Coin: ").strip()
+        if not selected:
+            raise ValueError("Choose a Coin identity")
+        name = names[int(selected) - 1] if selected.isdigit() and 1 <= int(selected) <= len(names) else selected
+    profile = coins.profile(name)
+    if not profile.get('retain_diagnostics', CONFIG['coin'].get('retain_diagnostics', True)):
+        raise ValueError(f"{profile.get('name', 'Coin')} has diagnostics disabled; no conversation viewer is retained")
+    return profile
+
+
+def automatic_coin_profile(state):
+    """Resolve the worker that owns the automatic slot without asking the user."""
+    coin = state.get('coin') or {}
+    owner = (coin.get('live') or {}).get('owner', '').split('/', 1)[0]
+    profiles = [(name, coins.profile(name)) for name in coins.names()]
+    pid = (coin.get('process') or {}).get('pid')
+    if pid:
+        for name, profile in profiles:
+            try:
+                result = subprocess.run(['systemctl', '--user', 'show', coins.unit(name),
+                                         '--property=MainPID', '--value'], capture_output=True,
+                                        text=True, timeout=CONFIG['timeouts']['api_seconds'])
+            except (OSError, subprocess.TimeoutExpired):
+                return None
+            if result.returncode == 0 and result.stdout.strip() == str(pid):
+                return profile
+    if not pid and owner:
+        return next((profile for _, profile in profiles if profile['identity'] == owner), None)
+    return {} if not profiles else None
+
+
+def coin_view_state(state, profile):
+    """Never mix another identity's live text into this journal."""
+    if not profile or '_error' in state:
+        return state
+    prefix = profile['identity'] + '/'
+    thoughts = {key: item for key, item in state.get('thoughts', {}).items()
+                if item.get('agent') == 'coin' and item.get('owner', '').startswith(prefix)}
+    live = (state.get('coin') or {}).get('live') or {}
+    if not live.get('owner', '').startswith(prefix):
+        live = {}
+    return {**state, 'thoughts': thoughts, 'coin': {
+        'name': profile['name'], 'busy': bool(thoughts), 'live': live,
+        'turns': next(iter(thoughts), None)}}
+
+
+def _coin_live_states(profile=None):
     while True:
         try:
             request = urllib.request.Request(configuration.api_url(CONFIG) + "/api/live",
@@ -470,7 +437,7 @@ def _coin_live_states():
                 for raw in response:
                     line = raw.decode(errors="replace").strip()
                     if line.startswith("data: "):
-                        yield json.loads(line[6:])
+                        yield coin_view_state(json.loads(line[6:]), profile)
         except (OSError, ValueError) as error:
             yield {"_error": str(error)}
             time.sleep(1)
@@ -491,45 +458,61 @@ def write_transcript(task_id: str, out: str | None) -> str:
     task = ledger()["tasks"].get(task_id)
     if task is None:
         raise SystemExit(f"no task {task_id}")
-    sessions = transcript.sessions_of(task, ROOT / "state/agents")
-    if not sessions:
+    if not os.environ.get('COINTOS_AGENT') and not transcript.sessions_of(task, configuration.STATE / 'agents'):
         raise SystemExit(f"{task_id} has no agent session on record")
-    text, messages = transcript.render(transcript.database(), sessions)
+    result = (call('read-log', {'task': task_id, 'export': True}) if os.environ.get('COINTOS_AGENT') else
+              transcript.read_task(task, configuration.STATE / 'agents', export=True))
+    text, messages = result['text'], result['messages']
     name = re.sub(r"[^A-Za-z0-9._-]+", "-", task_id)
     path = Path(out or Path(os.environ.get("COINTOS_SCRATCH") or ".") / f"transcript-{name}.txt")
     path.write_text(text)
-    return f"{path}: {messages} messages in {len(sessions)} session(s), {len(text):,} characters. Search it, or read the parts you need."
+    return f"{path}: {messages} messages in {result['sessions']} session(s), {len(text):,} characters. Search it, or read the parts you need."
+
+
+def source_files(args) -> str:
+    result = call('source', {key: getattr(args, key) for key in ('task', 'project', 'path', 'start', 'limit')
+                             if getattr(args, key) is not None})
+    lines = (result['files'] if 'files' in result else
+             [f'{number}: {line}' for number, line in enumerate(result['lines'], result['start'])])
+    if result.get('next'):
+        lines.append(f"Continue with --start {result['next']}.")
+    return '\n'.join(lines)
 
 
 def read_log(args) -> str:
     """An index of an agent's thoughts, replies and tool calls, or entries from it by number."""
     from cointos import transcript
+    if os.environ.get('COINTOS_AGENT'):
+        return call('read-log', {'task': args.task, **{key: getattr(args, key) for key in
+                    ('show', 'kind', 'turn', 'grep', 'last') if getattr(args, key) is not None}})['text']
     if args.task == "coin":
         found = transcript.coin_entries(ROOT / "state/coin/turns.jsonl")
     else:
         task = ledger()["tasks"].get(args.task)
         if task is None:
             raise SystemExit(f"no task {args.task}")
-        found = transcript.entries(transcript.database(), transcript.sessions_of(task, ROOT / "state/agents"))
+        return transcript.read_task(task, configuration.STATE / 'agents', show=args.show, kind=args.kind,
+                                    turn=args.turn, grep=args.grep, last=args.last)['text']
     return transcript.view(found, show=args.show, kind=args.kind, turn=args.turn, grep=args.grep, last=args.last)
 
 
-def coin_log(stop=None) -> None:
+def coin_log(stop=None, profile=None) -> None:
     """Show Coin in OpenCode's viewer until the slot changes; the monitor if that cannot start."""
     from cointos import coin_mirror
-    state = ROOT / "state/coin"
+    profile = coin_profile() if profile is None else profile
+    state = configuration.STATE / coins.state(profile.get("identity"))
     try:
-        coin_mirror.show(state / "turns.jsonl", state / f"mirror-{os.getpid()}", opencode.OPENCODE, _coin_live_states(), stop)
+        coin_mirror.show(state / "turns.jsonl", state / f"mirror-{os.getpid()}", opencode.OPENCODE, _coin_live_states(profile), stop, name=profile.get("name"))
     except (OSError, RuntimeError, ValueError) as error:
         print(f"OpenCode view unavailable ({error}); showing Coin's monitor.", file=sys.stderr)
         from cointos.coin_view import watch
-        watch(_coin_live_states(), stop)
+        watch(_coin_live_states(profile), stop)
 
 
-def coin_live() -> None:
+def coin_live(profile=None) -> None:
     """A standalone Coin log, or the body of a Coin viewer slot."""
     interactive("coin")
-    coin_log()
+    coin_log(profile=coin_profile(profile))
     print()
 
 
@@ -548,7 +531,7 @@ def watch(agent_id: str | None) -> None:
     if not agent.get("url") or not agent.get("session"):
         raise SystemExit(f"{agent['id']} is still starting; try again in a moment")
     command = opencode.attach(agent)
-    os.execv(command[0], command)
+    os.execve(command[0], command, opencode.attach_environment(agent))
 
 
 def view(slot: int) -> None:
@@ -565,7 +548,10 @@ def view(slot: int) -> None:
             return None
         target = state["viewers"].get(str(slot))
         if target == "coin":
-            return {"id": "coin", "coin": True}
+            profile = automatic_coin_profile(state)
+            if profile is None or not profile.get('retain_diagnostics', CONFIG['coin'].get('retain_diagnostics', True)):
+                return None
+            return {"id": "coin:" + profile.get('identity', 'coin'), "coin": True, "profile": profile}
         agent = state["agents"].get(target)
         return agent if agent and agent.get("url") and agent.get("session") else None
 
@@ -581,14 +567,14 @@ def view(slot: int) -> None:
             continue
         idle_shown = False
         if agent.get("coin"):
-            title(f"CointOS {slot}: Coin")
+            title(f"CointOS {slot}: {agent['profile'].get('name', 'Coin')}")
             def still_coin():
                 current = assigned()
-                return not current or not current.get("coin")
-            coin_log(still_coin)
+                return not current or current["id"] != agent["id"]
+            coin_log(still_coin, profile=agent["profile"])
             continue
         title(f"CointOS {slot}: {agent['id']} on {agent['place']}: {agent['title']}")
-        child = subprocess.Popen(opencode.attach(agent))
+        child = subprocess.Popen(opencode.attach(agent), env=opencode.attach_environment(agent))
         while child.poll() is None:
             time.sleep(CONFIG["viewers"]["poll_seconds"])
             current = assigned()
@@ -649,25 +635,39 @@ def parser() -> argparse.ArgumentParser:
     jobs.add_argument("--project", help="show only tasks belonging to this exact project")
     sub.add_parser("metrics", help="pipeline effectiveness over a recent window, from the event journal").add_argument(
         "--hours", type=float, default=24.0)
+    progress_parser = sub.add_parser("progress", help="live read/generation progress, lane-switch mix and backend speculation")
+    progress_parser.add_argument("--minutes", type=float, default=5.0, help="event window (default 5)")
+    progress_parser.add_argument("--json", action="store_true", help="machine-readable output")
+    progress_parser.add_argument("--watch", type=float, metavar="SECONDS", help="repeat every SECONDS until interrupted")
     transcribing = sub.add_parser("transcript", help="write a task's complete agent transcript, including reasoning and tool output, to a file")
     transcribing.add_argument("task")
     transcribing.add_argument("--out", help="file to write; default is this run's scratch directory or the current one")
     logging_ = sub.add_parser("log", help="read an agent's record, or Coin's with task coin: an index, or entries by number")
     logging_.add_argument("task")
     logging_.add_argument("--show", help="the full text of entry N, or entries N-M")
-    logging_.add_argument("--kind", choices=("thought", "reply", "tool", "user", "compaction"))
+    logging_.add_argument("--kind", choices=("thought", "reply", "tool", "user", "compaction", "system"))
     logging_.add_argument("--turn", type=int)
     logging_.add_argument("--grep")
     logging_.add_argument("--last", type=int, default=40, help="how many index lines (default 40)")
+    source = sub.add_parser('source', help='inspect accepted project source or assigned task files')
+    scope = source.add_mutually_exclusive_group(required=True)
+    scope.add_argument('--task')
+    scope.add_argument('--project')
+    source.add_argument('--path', help='relative file, or directory ending in /; omit to list files')
+    source.add_argument('--start', type=int)
+    source.add_argument('--limit', type=int)
     task = sub.add_parser("task", help="show current work, binding tests, receipts and dependencies")
     task.add_argument("task")
     task.add_argument("--history", action="store_true", help="include full historical execution narratives")
+    diagnostic = sub.add_parser('diagnostic', help='prepare recovery files in scratch, inspect retained probes, or prepare accepted project files')
+    diagnostic.add_argument('--path')
+    diagnostic.add_argument('--project')
     sub.add_parser("halt").add_argument("--keep-coin", action="store_true")
     sub.add_parser("stop", help="pause autonomous agents and return their unfinished work to waiting")
     sub.add_parser("kill", help="kill one run and hold unfinished work until explicitly resumed").add_argument("agent")
     sub.add_parser("resume", help="release a killed task for scheduling").add_argument("task")
     sub.add_parser("watch", help="watch an agent live in OpenCode, or Coin's log").add_argument("agent", nargs="?")
-    sub.add_parser("coin", help="watch Coin's live log")
+    sub.add_parser("coin", help="watch one Coin identity's live log").add_argument("profile", nargs="?", help="Cointel identity (asks when omitted)")
     viewing = sub.add_parser("view", help="show agents and Coin in pop-up windows: --all to open them, --off to stop")
     viewing.add_argument("slot", type=int, nargs="?", help="be viewer window N (the daemon opens these)")
     viewing.add_argument("--all", action="store_true", help="open a viewer for every active agent, and for new ones")
@@ -680,16 +680,16 @@ def parser() -> argparse.ArgumentParser:
     disposition.add_argument("--blocked", help="specific blocker requiring intervention")
     finishing.add_argument('--scout-result-json', type=json.loads,
                            help='steward: typed no_action, manager_handoff or user_decision result')
-    handing = sub.add_parser('handoff', help='manager: atomically queue runnable children and finish planning')
+    handing = sub.add_parser('handoff', help='manager or mandatory splitter: atomically queue children and complete')
     handing.add_argument('summary')
     handing.add_argument('--items-json', type=json.loads, required=True)
     sub.add_parser("land", help="integrator: land the reviewed item").add_argument("summary")
     sub.add_parser("return", help="integrator: send the item back to its worker").add_argument("notes")
     sub.add_parser("replace", help="First Responder: hand off to existing items and complete atomically").add_argument("children", nargs="+")
-    incorporated = sub.add_parser("incorporate", help="integrator: settle an implementation already present on main")
+    incorporated = sub.add_parser("incorporate", help="integrator: settle an implementation already present in the accepted product")
     incorporated.add_argument("task", help="project:task in review")
-    incorporated.add_argument("--commit", required=True, help="exact current main commit SHA")
-    incorporated.add_argument("--worker-commit", required=True, help="exact submitted worker commit SHA")
+    incorporated.add_argument("--commit", help=argparse.SUPPRESS)
+    incorporated.add_argument("--worker-commit", help=argparse.SUPPRESS)
     messaging = sub.add_parser("message", help="send a message to an active task's inbox (an agent run sends as its task)")
     messaging.add_argument("to", help="PROJECT:NAME task id, 'mailbox:NAME', or 'user'")
     messaging.add_argument("text")
@@ -741,7 +741,7 @@ def parser() -> argparse.ArgumentParser:
     moving = sub.add_parser("move", help="reorder a queue item within its project")
     moving.add_argument("item", help="PROJECT:ITEM")
     moving.add_argument("to", choices=("top", "up", "down", "bottom"))
-    cancelling = sub.add_parser("cancel", help="withdraw unaccepted queue items for good: stop their runs, drop them and retire their branches")
+    cancelling = sub.add_parser("cancel", help="withdraw unaccepted queue items for good: stop their runs and preserve recoverable work")
     cancelling.add_argument("items", nargs="+", help="PROJECT:ITEM; dependents must be cancelled together")
     cancelling.add_argument("--reason", required=True)
     supersede = sub.add_parser("supersede", help="replace failed/blocked prerequisites without accepting the failed work")
@@ -762,27 +762,27 @@ def parser() -> argparse.ArgumentParser:
     project_sub = project.add_subparsers(dest="project_command", required=True)
     project_sub.add_parser("list", help="list projects in scheduling order")
     for name in ("add", "new"):
-        command = project_sub.add_parser(name, help=("register an existing Git repository" if name == "add" else
-                                                      "create a Git repository and project knowledge tree, then register it"))
+        command = project_sub.add_parser(name, help=("register an existing project" if name == "add" else
+                                                      "create a project and its knowledge tree, then register it"))
         if name == "add":
             command.add_argument("path")
             command.add_argument("--name")
         else:
             command.add_argument("name")
             command.add_argument("--path")
-        command.add_argument("--main-branch")
+        command.add_argument("--main-branch", help=argparse.SUPPRESS if os.environ.get('COINTOS_AGENT') else None)
         command.add_argument("--priority", type=int, default=100, help="lower values run first within a lifecycle class")
         command.add_argument("--disabled", action="store_true")
         policy_options(command)
     project_set = project_sub.add_parser("set", help="change project scheduling and policy options")
     project_set.add_argument("name")
-    project_set.add_argument("--main-branch")
+    project_set.add_argument("--main-branch", help=argparse.SUPPRESS if os.environ.get('COINTOS_AGENT') else None)
     project_set.add_argument("--priority", type=int)
     enabled = project_set.add_mutually_exclusive_group()
     enabled.add_argument("--enable", action="store_true")
     enabled.add_argument("--disable", action="store_true")
     policy_options(project_set)
-    project_sub.add_parser("remove", help="remove an idle project from CointOS (the repository remains)").add_argument("name")
+    project_sub.add_parser("remove", help="remove an idle project from CointOS (its files remain)").add_argument("name")
 
     splitting = sub.add_parser("split", help="stop an implementer or Operator whose job is too big; a manager salvages it and cuts it up")
     splitting.add_argument("task")
@@ -831,7 +831,12 @@ def show_check() -> str:
 
 def show_task(task_id: str, history: bool = False) -> str:
     try:
-        return json.dumps(frontier.inspect(task_id, ledger(), history), indent=2)
+        current = ledger()
+        reader = current['tasks'].get(os.environ.get('COINTOS_TASK_ID')) or {}
+        view = frontier.inspect(task_id, current, history)
+        if reader:
+            view = frontier.agent_view(view, reader)
+        return json.dumps(view, indent=2)
     except ValueError as error:
         raise SystemExit(str(error)) from error
 
@@ -877,10 +882,13 @@ COMMANDS = {
     "agents": lambda args: agents_text(ledger()),
     "jobs": lambda args: jobs_text(ledger(), project=args.project, **({"limit": None} if args.all else {})),
     "check": lambda args: show_check(),
-    "metrics": lambda args: metrics.report(args.hours),
+    "metrics": lambda args: (call('metrics', {'hours': args.hours})['text'] if os.environ.get('COINTOS_AGENT')
+                             else metrics.report(args.hours)),
+    "progress": progress_command,
     "task": lambda args: show_task(args.task, args.history),
     "transcript": lambda args: write_transcript(args.task, args.out),
     "log": lambda args: read_log(args),
+    'source': source_files,
     "go": lambda args: resume(),
     "stop": stop_command,
     "kill": lambda args: kill_command(args.agent),
@@ -889,17 +897,18 @@ COMMANDS = {
     "halt": lambda args: halt(args.keep_coin),
     "restart": lambda args: restart(),
     "watch": lambda args: watch(args.agent),
-    "coin": lambda args: coin_live(),
+    "coin": lambda args: coin_live(args.profile),
     "view": view_command,
     "finish": lambda args: finish(*(("complete", args.complete) if args.complete is not None else ("blocked", args.blocked)),
                                   scout_result=args.scout_result_json),
     "merge": lambda args: merge(),
     'handoff': lambda args: json.dumps(call('handoff', {'summary': args.summary, 'items': args.items_json})),
     "review": lambda args: review(),
+    'diagnostic': lambda args: json.dumps(call('diagnostic', {'path': args.path, 'project': args.project}), indent=2),
     "land": lambda args: land(args.summary),
     "return": lambda args: send_back(args.notes),
     "replace": lambda args: replace(args.children),
-    "incorporate": lambda args: json.dumps(call("incorporate", {"task": args.task, "commit": args.commit,
+    "incorporate": lambda args: acceptance_text(call("incorporate", {"task": args.task, "commit": args.commit,
                                                                 "worker_commit": args.worker_commit},
                                                 timeout=LANDING_TIMEOUT)),
     "message": lambda args: "sent to " + call("send", {**({"mailbox": args.mailbox} if args.mailbox else {}),
@@ -919,10 +928,10 @@ COMMANDS = {
         "name": args.name, "kind": args.kind, "stage": args.stage, "reasoning_effort": args.reasoning_effort,
         "budget": limits(args), "dependencies": args.dependencies_json, "relies_on": args.relies_on_json,
         "summary": args.summary}), indent=2),
-    "revise": lambda args: call("revise", ({
+    "revise": lambda args: json.dumps(call("revise", ({
         "item": args.item, "brief": args.brief, "reason": args.reason, "stage": args.stage,
         "reasoning_effort": args.reasoning_effort, "budget": limits(args), "dependencies": args.dependencies_json,
-        "relies_on": args.relies_on_json, "summary": args.summary}))["item"] + " revised",
+        "relies_on": args.relies_on_json, "summary": args.summary}))),
     "move": lambda args: json.dumps(call("move", {"item": args.item, "to": args.to})),
     "cancel": lambda args: json.dumps(call("cancel", ({"items": args.items, "reason": args.reason}))),
     "supersede": lambda args: json.dumps(call("supersede", {"task": args.task, "replacements": args.replacements,
@@ -933,14 +942,18 @@ COMMANDS = {
     "project": project_command,
     "split": lambda args: json.dumps(call("split", {"task": args.task, "reason": args.reason})),
     "recover": lambda args: json.dumps(call("recover", {"task": args.task, "reason": args.reason})),
-    "agent": lambda args: call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
+    "agent": lambda args: agent_result(call("run-agent", {"name": args.name, "brief": args.brief, "project": args.project,
                                              "role": args.role, "task": args.task, "stage": args.stage,
                                              "summary": args.summary, "dependencies": args.dependencies_json,
                                              "relies_on": args.relies_on_json,
                                              "abilities": args.ability or ["standard"],
                                              "reasoning_effort": args.reasoning_effort, "budget": limits(args),
-                                             "station": {"directory": args.directory, "tools": args.tool}})["task"],
+                                             "station": {"directory": args.directory, "tools": args.tool}})),
 }
+
+
+def agent_result(result: dict) -> str:
+    return json.dumps(result) if os.environ.get('COINTOS_AGENT') else result['task']
 
 
 def deliver_receipt() -> None:
@@ -980,6 +993,11 @@ def main(argv=None, *, acknowledge=True) -> None:
     except Unreachable as error:
         raise SystemExit(str(error))
     if output:
+        if os.environ.get('COINTOS_AGENT'):
+            try:
+                output = json.dumps(frontier.file_view(json.loads(output)), indent=2)
+            except (ValueError, TypeError):
+                pass  # Plain-text replies already have their command-owned presentation.
         print(output, flush=args.command in TERMINAL_COMMANDS)
     if acknowledge and args.command in TERMINAL_COMMANDS and has_receipt_here():
         deliver_receipt()

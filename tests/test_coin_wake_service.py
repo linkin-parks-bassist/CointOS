@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from cointos import coin, wakeups
-from tests.test_coin import assistant, call
+from tests.test_coin import assistant, call, sent_reply
 
 
 class WakeService(unittest.TestCase):
@@ -82,27 +82,27 @@ class WakeService(unittest.TestCase):
         self.run_worker([RuntimeError('model unavailable')])
         self.assertTrue(wakeups.pending(self.directory / 'wakes', record['id']))
         coin.send.assert_not_called()
-        self.run_worker([assistant(content='Receipt checked.')])
+        self.run_worker([sent_reply('Receipt checked.')])
         self.assertEqual(wakeups.list(self.directory / 'wakes', 7), [])
         coin.send.assert_called_once_with('never-a-real-token', 70, 'Receipt checked.')
 
     def test_ack_failure_replays_event_instead_of_losing_it(self):
         record = self.register()
         with patch.object(wakeups, 'ack', side_effect=OSError('disk unavailable')):
-            self.run_worker([assistant(content='Checked once.')], failure=OSError)
+            self.run_worker([sent_reply('Checked once.')], failure=OSError)
         self.assertTrue(wakeups.pending(self.directory / 'wakes', record['id']))
-        requests = self.run_worker([assistant(content='Rechecked current state before acting.')])
+        requests = self.run_worker([sent_reply('Rechecked current state before acting.')])
         self.assertIn('Delivery may repeat', requests[0][0][-2]['content'])
         self.assertFalse(wakeups.pending(self.directory / 'wakes', record['id']))
         self.assertEqual(coin.send.call_count, 2)
 
-    def test_failed_send_replays_without_an_unsent_assistant_reply(self):
+    def test_failed_send_replays_without_an_unsent_assistant_sent_reply(self):
         record = self.register()
         with patch.object(coin, 'send', side_effect=OSError('transport unavailable')):
-            self.run_worker([assistant(content='Unsent report.')])
+            self.run_worker([sent_reply('Unsent report.')])
         self.assertTrue(wakeups.pending(self.directory / 'wakes', record['id']))
         self.assertFalse(any(m['role'] == 'assistant' for m in coin.recent(7)))
-        requests = self.run_worker([assistant(content='Delivered report.')])
+        requests = self.run_worker([sent_reply('Delivered report.')])
         self.assertFalse(any(m.get('content') == 'Unsent report.' for m in requests[0][0]))
         self.assertFalse(wakeups.pending(self.directory / 'wakes', record['id']))
         coin.send.assert_called_once_with('never-a-real-token', 70, 'Delivered report.')
@@ -128,7 +128,7 @@ class WakeService(unittest.TestCase):
 
     def test_direct_message_runs_before_pending_wake_and_keeps_foreground_priority(self):
         self.register()
-        requests = self.run_worker([assistant(content='Direct reply.'), assistant(call('done'))],
+        requests = self.run_worker([sent_reply('Direct reply.'), assistant(call('done'))],
                                    arrivals=[(7, 70, 'What is happening?')])
         self.assertNotIn('request_class', requests[0][1])
         self.assertEqual(requests[1][1]['request_class'], 'background')
@@ -139,7 +139,7 @@ class WakeService(unittest.TestCase):
         self.register()
         wake = wakeups.ready(self.directory / 'wakes')[0]
         requests = []
-        replies = iter([assistant(call('send', {'message': 'Private check.'})), assistant(content='Reply to you.')])
+        replies = iter([assistant(call('send', {'message': 'Private check.'})), sent_reply('Reply to you.')])
 
         def complete(model, messages, **options):
             requests.append(options)
@@ -218,10 +218,10 @@ class WakeService(unittest.TestCase):
     def test_wake_send_failure_stays_pending_until_successful_model_replay(self):
         record = self.register()
         coin.send.side_effect = OSError('transport unavailable')
-        self.run_worker([assistant(content='Follow up ABB.')])
+        self.run_worker([sent_reply('Follow up ABB.')])
         self.assertTrue(wakeups.pending(self.directory / 'wakes', record['id']))
         coin.send.side_effect = None
-        self.run_worker([assistant(content='Follow up ABB.')])
+        self.run_worker([sent_reply('Follow up ABB.')])
         self.assertFalse(wakeups.pending(self.directory / 'wakes', record['id']))
 
     def test_wake_may_finish_without_sending_anything(self):
@@ -230,6 +230,23 @@ class WakeService(unittest.TestCase):
         self.assertEqual(requests[0][1]['request_class'], 'background')
         coin.send.assert_not_called()
         self.assertFalse(wakeups.pending(self.directory / 'wakes', record['id']))
+
+    def test_composed_reminder_requires_explicit_delivery_before_ack(self):
+        record = self.register()
+        requests = self.run_worker([
+            assistant(content='Remember the remote.'),
+            assistant(call('send', {'message': 'Remember the remote.'}), call('done')),
+        ])
+        self.assertEqual(len(requests), 2)
+        self.assertTrue(any('was not delivered' in (m.get('content') or '') for m in requests[1][0]))
+        coin.send.assert_called_once_with('never-a-real-token', 70, 'Remember the remote.')
+        self.assertFalse(wakeups.pending(self.directory / 'wakes', record['id']))
+
+    def test_unsent_wake_prose_and_interruption_do_not_ack(self):
+        record = self.register()
+        self.run_worker([assistant(content='Remember the remote.'), RuntimeError('interrupted')])
+        coin.send.assert_not_called()
+        self.assertTrue(wakeups.pending(self.directory / 'wakes', record['id']))
 
 
 if __name__ == '__main__':

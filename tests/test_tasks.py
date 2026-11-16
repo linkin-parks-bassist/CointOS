@@ -82,6 +82,8 @@ class Metadata(unittest.TestCase):
         edit = opencode.settings(state.CONFIG, "key", task, runs.protected(task, project))["permission"]["edit"]
         self.assertEqual((edit[f"{task['worktree']}/tests/**"], edit["tests/contracts.json"], edit["*"]), ("deny", "deny", "deny"))
         self.assertEqual(edit[f"{task['worktree']}/**"], "allow")
+        self.assertEqual(edit[f"{task['worktree'].lstrip('/')}/**"], "allow")
+        self.assertEqual(edit[f"{task['worktree'].lstrip('/')}/tests/**"], "deny")
         self.assertEqual(runs.protected({**task, "stage": "test-contract"}, project), [])
         legacy = {**project, "test_policy": {"manifest": "tests/contracts.json"}}
         edit = opencode.settings(state.CONFIG, "key", task, runs.protected(task, legacy))["permission"]["edit"]

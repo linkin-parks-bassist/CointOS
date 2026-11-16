@@ -1,0 +1,29 @@
+--- a/tools/server/server-context.cpp
++++ b/tools/server/server-context.cpp
+@@ -3127,7 +3127,25 @@
+                             n_idle_slots++;
+                         }
+ 
+-                        slots_data.push_back(slot.to_json(slots_debug == 0));
++                        auto data = slot.to_json(slots_debug == 0);
++                        // Count the serialized slot without allocating or copying its KV.
++                        // Draft appendices require separate sizing; report only target-only slots.
++                        if (!slot.is_processing() && ctx_dft == nullptr && !slot.can_speculate()) {
++                            size_t bytes = 3 * sizeof(uint32_t) + slot.prompt.tokens.serialize().size()
++                                + llama_state_seq_get_size(ctx_tgt, slot.id)
++                                // The in-memory blob has magic/sequence IDs absent from the file payload.
++                                - sizeof(uint32_t) - sizeof(llama_seq_id);
++                            if (!slot.prompt.checkpoints.empty()) {
++                                bytes += 3 * sizeof(uint32_t);
++                                for (const auto & cur : slot.prompt.checkpoints) {
++                                    bytes += sizeof(cur.n_tokens) + sizeof(cur.pos_min) + sizeof(cur.pos_max)
++                                        + 3 * sizeof(uint64_t) + cur.data_tgt.size()
++                                        + cur.data_dft.size() + cur.data_spec.size();
++                                }
++                            }
++                            data["state_size_bytes"] = bytes;
++                        }
++                        slots_data.push_back(std::move(data));
+                     }
+                     SRV_DBG("n_idle_slots = %d\n", n_idle_slots);
+ 

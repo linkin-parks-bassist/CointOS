@@ -1,7 +1,7 @@
 ---
 status: green
 revised_at: "2026-10-25T07:46:21+11:00"
-checked_at: "2026-10-12T12:45:58+11:00"
+checked_at: '2026-11-15T23:16:29+11:00'
 ---
 
 Every task gets a generated personal name (`tasks.create` → `names.invent`), unique among current tasks and retained for its lifetime. Paused/resumed runs keep that name; a new task gets a new one. Agent IDs such as `worker-0b23e3` identify transient runs. Admission reserves each run directory exclusively, skipping live, exiting and issued/persisted key identities. Existing directories, files and symlinks remain unavailable. The ledger lock prevents a new follower launching before registration: thread or key failure leaves task and ownership unchanged. Keys are drawn outside persisted/live/known-ended ownership and persist before adoption. Exact adoption is idempotent; conflicting owners and actor rotations are refused. Key registries require regular, non-symlink JSON. Unreadable, malformed or ambiguous data, including duplicate fields/key values, are refused without rewriting identities. Only a genuinely absent registry initializes Coin's fixed key; an existing registry without that key is refused unchanged. Launch metadata uses exclusive creation. Old IDs remain adoptable; an exact agent/task relation or current receipt identifies surviving ownership. A displaced running task requeues; a live receipted survivor remains watch-only.

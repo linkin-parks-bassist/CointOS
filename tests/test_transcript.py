@@ -66,6 +66,39 @@ class Transcript(unittest.TestCase):
     def test_a_missing_session_says_so(self):
         self.assertIn("no messages on record", transcript.render(self.database, ["gone"])[0])
 
+    def test_managed_readers_present_native_denials_without_changing_stored_history(self):
+        raw = 'The user has specified a rule which prevents you from using this specific tool call. PRIVATE RULES'
+        part = {'type': 'tool', 'tool': 'bash', 'state': {
+            'status': 'error', 'input': {'command': 'git status'}, 'error': raw}}
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("insert into part values('p6', 'm2', 's1', ?)", (json.dumps(part),))
+        paths = {'s1': self.database}
+        public_entries = transcript.entries(paths, ['s1'], public=True)
+        self.assertIn("outside this run's permitted scope", public_entries[-1]['text'])
+        self.assertIn('git status', public_entries[-1]['text'])
+        self.assertNotIn('PRIVATE RULES', transcript.render(paths, ['s1'], public=True)[0])
+        self.assertIn(raw, transcript.entries(paths, ['s1'])[-1]['text'])
+        self.assertIn(raw, transcript.render(paths, ['s1'])[0])
+        with patch.object(transcript, 'task_sources', return_value=(['s1'], paths, [])):
+            for export in (False, True):
+                shown = transcript.read_task({}, self.root, export=export, public=True, show='1-9')['text']
+                self.assertIn("outside this run's permitted scope", shown)
+                self.assertNotIn('PRIVATE RULES', shown)
+        self.assertEqual([(e['kind'], e['turn']) for e in public_entries],
+                         [(e['kind'], e['turn']) for e in transcript.entries(paths, ['s1'])])
+
+    def test_permission_presentation_preserves_program_output_and_other_errors(self):
+        raw = 'The user has specified a rule which prevents you from using this specific tool call. program diagnostic'
+        for tool, role, state in [
+                ('bash', 'assistant', {'status': 'completed', 'output': raw, 'exit': 1}),
+                ('bash', 'assistant', {'status': 'error', 'error': 'ordinary failure'}),
+                ('custom_server', 'assistant', {'status': 'error', 'error': raw}),
+                ('bash', 'user', {'status': 'error', 'error': raw}),
+                ('bash', 'assistant', {'status': 'error', 'output': raw, 'error': raw})]:
+            part = {'type': 'tool', 'tool': tool, 'state': state}
+            with self.subTest(tool=tool, role=role, state=state):
+                self.assertEqual(transcript._part(part, public=True, role=role), transcript._part(part))
+
     def test_it_finds_every_run_of_the_task_only(self):
         agents = self.root / "agents"
         for agent, task, session in (("a", "p:job", "s1"), ("b", "p:other", "s9"), ("c", "p:job", "s2")):

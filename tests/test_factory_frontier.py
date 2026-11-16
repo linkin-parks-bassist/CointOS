@@ -46,6 +46,100 @@ class Frontier(unittest.TestCase):
         self.assertEqual(spawner.next_task()['id'], useful['id'])
         self.assertEqual(sum(t.get('repair_origin') is not None for t in state.L['tasks'].values()), 2)
 
+    def test_unexpected_death_of_every_role_gets_one_first_responder(self):
+        for kind, engaged in [(kind, engaged) for kind in schema.KINDS for engaged in (False, True)]:
+            with self.subTest(kind=kind, engaged=engaged):
+                before = copy.deepcopy(state.L)
+                try:
+                    if schema.KINDS[kind]['record']:
+                        task = support.queued(self.project, 'dead-' + kind,
+                                              kind='command' if kind == 'breakdown' else 'queued')
+                    else:
+                        where = tasks.SYSTEM if schema.KINDS[kind]['scope'] in ('system', 'either') else self.project
+                        fields = {}
+                        if kind == 'integrate':
+                            subject = support.queued(self.project, 'reviewed')
+                            subject['status'] = 'review'
+                            fields['worker'] = subject['id']
+                        task = tasks.create(kind, where, 'dead-' + kind, 'Preserve and diagnose.', [1], **fields)
+                    support.running(task, 'dead-run', worktree=False)
+                    state.L['agents']['dead-run']['engaged'] = engaged
+                    lifecycle.ended('dead-run', {'code': 1, 'error': 'unexpected process death'})
+                    spawner.repair_work({})
+                    owner = frontier.controller(task)
+                    self.assertIsNotNone(owner)
+                    self.assertEqual(owner['role'], 'first-responder')
+                    self.assertTrue(frontier.runnable(owner))
+                    spawner.repair_work({})
+                    self.assertEqual([t['id'] for t in state.L['tasks'].values()
+                                      if t.get('repair_origin') == frontier.origin(task)], [owner['id']])
+                finally:
+                    state.L.clear()
+                    state.L.update(before)
+
+    def test_dead_mandatory_splitter_gets_recovery_without_restarting_implementer(self):
+        worker = support.running(support.queued(self.project, 'build'), 'worker-1', worktree=False)
+        splitter = tasks.request_supervisor(worker, 40000, must_split=True)
+        support.running(splitter, 'splitter-1', worktree=False)
+        lifecycle.retry_fresh('splitter-1', 'generation budget reached', 'Preserved split evidence')
+        spawner.repair_work({})
+        owner = frontier.controller(splitter)
+        self.assertEqual(owner['role'], 'first-responder')
+        self.assertTrue(frontier.runnable(owner))
+        self.assertEqual(worker['split_supervisor'], splitter['id'])
+        self.assertFalse(spawner.runnable(worker, {'p': {'build': 'ready'}}))
+        support.running(owner, 'responder-1', worktree=False)
+        result = api.run_agent({'role': 'supervisor', 'task': worker['id'], 'name': 'recover-split',
+                                'brief': 'Complete the interrupted split.',
+                                'caller': support.caller(owner, 'responder-1')})
+        successor = state.L['tasks'][result['task']]
+        self.assertTrue(successor['must_split'])
+        self.assertEqual(worker['split_supervisor'], successor['id'])
+        receipt = lifecycle.submit(owner['id'], 'responder-1', 'complete', 'Handed the split to its next owner')
+        self.assertEqual(receipt['evidence']['split_supervisor'], successor['id'])
+
+    def test_dead_first_responder_gets_diagnosis_instead_of_automatic_product_split(self):
+        worker = support.queued(self.project, 'build')
+        lifecycle.fail(worker, 'Failed acceptance')
+        first = tasks.request_repair(worker)[0]
+        support.running(first, 'first-1', worktree=False)
+        lifecycle.retry_fresh('first-1', 'generation budget reached', 'Preserved diagnostics')
+        spawner.repair_work({})
+        next_owner = frontier.controller(first)
+        self.assertEqual(next_owner['role'], 'first-responder')
+        self.assertTrue(frontier.runnable(next_owner))
+        self.assertIsNone(queues.records()[worker['record']].get('replaced_by'))
+
+    def test_dashboard_cancellation_withdraws_work_and_never_becomes_a_hold_or_recovery(self):
+        worker = support.running(support.queued(self.project, 'cancelled'), 'worker-1', worktree=False)
+        api.dispatch('cancel', {'items': [worker['id']], 'reason': 'cancelled from the dashboard'})
+        spawner.repair_work({})
+        self.assertNotIn(worker['record'], queues.records())
+        self.assertEqual(worker['status'], 'failed')
+        self.assertTrue(worker['cancelled'])
+        self.assertFalse(worker.get('admission_hold'))
+        self.assertIsNone(frontier.controller(worker))
+        self.assertIsNone(frontier.reason(worker))
+        self.assertIsNone(spawner.next_task())
+
+    def test_dashboard_cancellation_also_ends_split_and_recovery_owners(self):
+        worker = support.running(support.queued(self.project, 'cancelled'), 'worker-1', worktree=False)
+        splitter = tasks.request_supervisor(worker, 40000, must_split=True)
+        support.running(splitter, 'splitter-1', worktree=False)
+        lifecycle.ended('splitter-1', {'code': 1})
+        repair = tasks.request_repair(splitter)[0]
+        support.running(repair, 'repair-1', worktree=False)
+        api.dispatch('cancel', {'items': [worker['id']], 'reason': 'cancelled from the dashboard'})
+        for task in (worker, splitter, repair):
+            self.assertTrue(task['cancelled'])
+            self.assertIsNone(frontier.reason(task))
+            self.assertFalse(task.get('admission_hold'))
+        self.assertFalse(state.L['agents'])
+        self.assertNotIn(worker['record'], queues.records())
+        count = len(state.L['tasks'])
+        spawner.repair_work({})
+        self.assertEqual(len(state.L['tasks']), count)
+
     def test_recovery_inspection_uses_live_binding_and_only_typed_corrections(self):
         queues.add(self.project, 'queued', 'tests', 'Pin the behavior', 'test-contract', reliances=['code'])
         original = queues.records()['p:tests']
@@ -77,8 +171,11 @@ class Frontier(unittest.TestCase):
         repair.update(brief='OBSOLETE DECOMPOSITION INSTRUCTIONS',
                       recovery_context='OLD CONTROLLER TRANSCRIPT', recovery_note='Earlier migration')
         launch = prompts.launch_text(repair, self.project)
-        self.assertIn('CURRENT requirement', launch)
-        self.assertIn('Exact current refusal', launch)
+        self.assertIn('cointos_task ' + repair['id'], launch)
+        self.assertNotIn('CURRENT requirement', launch)
+        self.assertNotIn('Exact current refusal', launch)
+        self.assertIn('CURRENT requirement', json.dumps(frontier.inspect(repair['id'], state.L)))
+        self.assertIn('Exact current refusal', json.dumps(frontier.inspect(repair['id'], state.L)))
         self.assertNotIn('OLD NESTED', launch)
         self.assertNotIn('OBSOLETE DECOMPOSITION', launch)
         self.assertNotIn('OLD CONTROLLER', launch)
@@ -99,7 +196,8 @@ class Frontier(unittest.TestCase):
         queues.records()['p:ordinary']['done'] = {'commit': 'unrelated-accepted-commit', 'via': 'tests'}
         for task in (worker, manager, reviewer):
             launch = prompts.launch_text(task, self.project)
-            self.assertIn('original-accepted-commit', launch)
+            self.assertNotIn('original-accepted-commit', launch)
+            self.assertIn('original-accepted-commit', json.dumps(frontier.inspect(task['id'], state.L)))
             self.assertNotIn('unrelated-accepted-commit', launch)
 
         correction = packets.propose(self.project, 'tests', 'corrected', 'Correct the witness',
@@ -111,15 +209,18 @@ class Frontier(unittest.TestCase):
                                          item=author['item'], worker=author['id'])
         for task in (author, correction_review):
             launch = prompts.launch_text(task, self.project)
-            self.assertIn('"correction": {', launch)
-            self.assertIn('original-accepted-commit', launch)
-            self.assertIn('another packet does not complete this correction', launch)
+            self.assertNotIn('"correction": {', launch)
+            self.assertIn('"correction": {', json.dumps(frontier.inspect(task['id'], state.L)))
+            self.assertNotIn('original-accepted-commit', launch)
+            self.assertIn('original-accepted-commit', json.dumps(frontier.inspect(task['id'], state.L)))
+            self.assertNotIn('another packet does not complete this correction', launch)
 
         correction['done'] = {'commit': 'corrected-accepted-commit', 'via': 'tests'}
         lifecycle.activate_correction(correction, correction_review['id'])
         for task in (worker, manager, reviewer):
             launch = prompts.launch_text(task, self.project)
-            self.assertIn('corrected-accepted-commit', launch)
+            self.assertNotIn('corrected-accepted-commit', launch)
+            self.assertIn('corrected-accepted-commit', json.dumps(frontier.inspect(task['id'], state.L)))
             self.assertNotIn('unrelated-accepted-commit', launch)
 
     def test_current_task_view_keeps_one_assignment_and_checked_account(self):
@@ -216,8 +317,7 @@ class Frontier(unittest.TestCase):
 
     def manager(self):
         task = support.queued(self.project, 'plan', 'Plan the next boundary', kind='command')
-        support.running(task, 'manager-1', worktree=False)
-        task['branch'] = None
+        support.running(task, 'manager-1')
         return task
 
     def test_atomic_handoff_supports_forward_dependencies_and_lost_reply_replay(self):

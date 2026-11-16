@@ -1,33 +1,20 @@
 ---
 status: green
-revised_at: "2026-10-11T10:19:45+11:00"
+revised_at: "2026-11-10T14:07:02+11:00"
 ---
 
-Benchmark compaction without restarting managed agents. Preserve exact identifiers, completed tools, pending work, disabled execution, window limits and recovery.
+Benchmark compaction only in isolated copies, preserving exact identifiers, completed effects, pending work, tool-free summary execution, window limits and recovery. Generation-floor experiments remain paused. Do not restart managed inhabitants for benchmarks or enable automatic compaction.
 
-## Cache break and candidate
+Current managed source selects OpenCode2.2.6. Its normal native compactor and factual-response hook have separate transport fixtures. The structured-v1 candidate below is a V1-specific prototype, not the managed V2 compactor. structured_compaction=true with opencode_v2=true refuses. Never downgrade an advanced V2 store or replace the shared executable to try this candidate.
 
-OpenCode 1.18.35 flattens history and truncates tool outputs at 2,000 characters. CointOS pins system text, but missing declarations change template tokens. Live compaction changed 114,322 tokens to 44,335 with three common tokens; its later continuation recovered only an 18,729-token shared prefix.
+The V1 cache problem was measured on1.18.35: flattening/truncated tool outputs changed114322 input tokens to44335 with only three common tokens; later continuation recovered18729 shared tokens. A tool-free structured-v1 gateway accepts a managed envelope containing summary instructions c and complete native flattened fallback f. Pinned declarations preserve rendering while tool-call decoding stays disabled. Actual input plus output reserve must fit; overflow/missing declarations selects the native tool-free fallback.
 
-The installed, disabled structured-v1 gateway requires a managed, tool-free summary envelope: instructions `c` and complete native flattened fallback `f`. Pinned declarations preserve rendering; tool-call decoding is disabled. Actual tokens plus output reserve must fit the window, otherwise use the tool-free fallback. Missing declarations also select fallback.
+patches/opencode-1.18.35-guarded-compaction.patch and scripts/patch-opencode-compaction-prototype reproduce the checked compiled candidate from its exact attach-fixed input fingerprint. Its557-byte length-preserving change always emits envelopes and requires the paired header hook. Prototype SHA-256 is572e9e9f838c0a150558c8b412a50c3130acea0edd07288ab8da73b3b0a2380e. Use it only in its isolated version-qualified fixture; the V1 launch support remains default-off.
 
-`patches/opencode-1.18.35-guarded-compaction.patch` dry-applies to checked source and preserves ordinary flattening when disabled. `scripts/patch-opencode-compaction-prototype` reproduces the tested compiled CLI with one 557-byte length-preserving change from the exact attach-fixed input hash. This compiled copy always emits envelopes and requires the paired header hook; never replace global OpenCode. The launch procedure owns the default-off, CointOS-only option.
+Native fixture /tmp/cointos-compaction-shape-<suffix>/evidence.json covers: o58gq0x8 identity/history/header/summary consumption and once-only counter; wrrr44wo exact fallback under a reduced window;96hugjrl interrupted private-server recovery without repeated effect;5ihsnajw actual supervisor launch with paired header. Tests additionally cover exact fit, missing/malformed/unmanaged declarations and tool markup staying text. Tokenizer artifacts /tmp/cointos-compaction-{envelope,long}-prefix-evidence.json retain8420/89416-token complete prefixes;135316-token synthetic history selects fallback.
 
-Prototype SHA-256: `572e9e9f838c0a150558c8b412a50c3130acea0edd07288ab8da73b3b0a2380e`. The prototype executable remains unstaged.
+Four matched production-recipe trials in /tmp/cointos-compaction-model-evidence.json measured median prefill17.509s flattened versus2.415s structured, with total including restore28.868s versus12.257s. Different output lengths preclude decode-rate claims; tiny summaries retained the counter without tool calls.
 
-## Checked boundaries
+Fidelity remains the acceptance limit. /tmp/cointos-summary-protocol-quality-evidence.json used27979 input,27651 shared and864 output tokens: identifiers/effects survived, but planned checks became Blocked, completed verification became Active and an invented pause appeared. The corrected prompt requires real obstacles for Blocked, future checks in Next Move and no invented pauses/dependencies. /tmp/cointos-summary-protocol-corrected-quality-evidence.json used28032 input/809 output: no invented blocker/pause and correct identifiers/results/counter, but Active still duplicated unstarted steps and initial failures were omitted. This qualifies limited controlled evidence, not broad memory quality or managed adoption.
 
-Native fixture evidence is `/tmp/cointos-compaction-shape-<suffix>/evidence.json`:
-
-- `o58gq0x8`: header, history, identity, summary consumption and counter executed once.
-- `wrrr44wo`: real renderer selects exact native fallback in a reduced window.
-- `96hugjrl`: interrupted isolated server restarts and recovers through `finish_compaction`, without repeated counter execution.
-- `5ihsnajw`: actual supervisor launches the reproduced private CLI with its paired header.
-
-Tests cover exact fit, overflow, missing declarations, malformed/unmanaged envelopes and tool markup staying text. Tokenizer artifacts `/tmp/cointos-compaction-{envelope,long}-prefix-evidence.json` retain complete 8,420- and 89,416-token prefixes; the 135,316-token synthetic history selects a short fallback.
-
-## Model evidence and remaining work
-
-`/tmp/cointos-compaction-model-evidence.json` has four matched production-recipe trials: median prefill 17.509s flattened versus 2.415s structured, 86% less. Total including restore is 28.868s versus 12.257s; differing output lengths preclude decode-rate claims. Tiny summaries preserve the counter result without tool calls.
-
-`/tmp/cointos-summary-protocol-quality-evidence.json` checks exact candidate rendering: 27,979 tokens, 27,651 shared with ordinary history, 864 output tokens in 239.38s. Identifiers and once-only work survive without tool calls or agent restarts, but planned checks become Blocked, completed verification becomes Active, and a pause is invented. Deployment acceptance fails. Source now instructs that pending checks belong in Next Move, Blocked requires an established obstacle, and Active excludes completed verification; it forbids invented pauses/dependencies. The corrected exact-rendering recheck `/tmp/cointos-summary-protocol-corrected-quality-evidence.json` completes 28,032 input/809 output tokens in 244.86s: no invented blocker or pause, correct identifiers/final results/counter. Active still duplicates explicitly unstarted next steps; initial failure values are omitted. This is acceptable limited fidelity evidence for controlled adoption, not broad quality certification. All agent/session identities survive. Small instruction-tail changes restore zero because the saved checkpoint extends past the mismatch, forcing another full read. Installed earlier checkpoints address small tail edits; the scheduler owns native reuse evidence. Custom native fixture `cb3w0aqb` preserves override instructions and history with once-only execution; compiled custom fallback omits the native history label while retaining content. The guarded source patch preserves that label. Gateway/launch support is installed but disabled; managed compaction recovery and sustained gains need observation.
+Small instruction-tail changes once restored zero because a saved checkpoint extended beyond the mismatch; earlier checkpoints address that mechanism. Custom fixture cb3w0aqb retained override instructions/history and once-only effects; its compiled fallback omitted a native label while preserving content, whereas the guarded source patch retains it. Scheduler/cache owners govern reuse evidence. V2 requires its own exact-template/model-fidelity evaluation before transferring any V1 savings claim.

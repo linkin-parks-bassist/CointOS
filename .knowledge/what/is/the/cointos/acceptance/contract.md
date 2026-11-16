@@ -1,11 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-07T14:55:59+11:00"
+revised_at: "2026-11-12T16:04:53+11:00"
 ---
 
-Acceptance is organised around the four governing outcomes: (1) responsive, capable, always-reachable Coin; (2) autonomous work without user oversight; (3) minimal workflow blockage/GPU waste; (4) sustained apparent parallelism with appropriate GPU allocation. These are required behaviours, not claims of current achievement.
-
-Acceptance requires independent live behavior, not ledger totals or green fixtures.
+Personal mode requires reachable Coin, requested system Operator execution and checked results, responsive scheduling/memory controls, and no factory churn. Preserve suspended work across restart/upgrades. Native competence needs live evidence. how/to/disable/the/cointos/factory.md owns controls. Factory scenarios below remain suspended until explicit re-enablement.
 
 - Soak: two hours unattended with at least four live agents sharing the configured lane, checks green throughout and at least three accepted queue-item commits. Integrators signal checked acceptance and the daemon settles dependencies.
 - Coin under load: ten Telegram messages during the soak receive visible model replies within fifteen seconds.

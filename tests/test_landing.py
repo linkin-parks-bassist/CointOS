@@ -71,8 +71,8 @@ class Project(unittest.TestCase):
         path.write_text(path.read_text().replace("raise NotImplementedError", f"return {value}", 1))
         return support.commit(self.tree, "implement a")
 
-    def finish(self) -> dict:
-        return api.dispatch("finish", {"caller": support.caller(self.worker, "worker-1"), "outcome": "complete",
+    def finish(self, run="worker-1") -> dict:
+        return api.dispatch("finish", {"caller": support.caller(self.worker, run), "outcome": "complete",
                                        "detail": "A implemented."})["receipt"]
 
     def submit(self) -> str:
@@ -128,11 +128,10 @@ class Packets(Project):
     def test_new_binding_failure_is_not_exempted_by_unrelated_main_red(self):
         self.shared_packet_with_existing_main_failure()
         self.implement('41')
-        with self.assertRaises(api.ApiError) as failed:
-            self.finish()
-        self.assertIn('tests.test_a.A', str(failed.exception))
-        self.assertNotIn('Failing test: ' + ' '.join(B), str(failed.exception))
-        self.assertIsNone(self.worker['receipt'])
+        receipt = self.finish()
+        self.assertEqual(receipt['disposition'], 'blocked')
+        self.assertIn('tests.test_a.A', receipt['summary'])
+        self.assertNotIn('Failing test: ' + ' '.join(B), receipt['summary'])
 
     def test_baseline_execution_failure_cannot_authorize_submission(self):
         self.shared_packet_with_existing_main_failure()
@@ -251,16 +250,15 @@ class Packets(Project):
         packet = self.packet('shared-command', {'tests/test_code.py': shared}, B)
         state.L['queue'][self.worker['record']]['depends'] = ['shared-command']
         self.implement('41')
-        with self.assertRaises(api.ApiError) as failed:
-            self.finish()
-        self.assertIn('self.assertEqual(code.a(), 42)', str(failed.exception))
-        self.assertEqual(self.worker['status'], 'running')
-        self.assertIsNone(self.worker['receipt'])
+        receipt = self.finish()
+        self.assertIn('self.assertEqual(code.a(), 42)', receipt['summary'])
+        self.assertEqual(self.worker['status'], 'failed')
         self.assertEqual((self.tree / 'tests/test_code.py').read_text(), TESTS)
+        self.restart_after_diagnosis()
         path = self.tree / 'code.py'
         path.write_text(path.read_text().replace('return 41', 'return 42'))
         support.commit(self.tree, 'correct hidden shared-command assertion')
-        receipt = self.finish()
+        receipt = self.finish('worker-2')
         self.assertEqual(receipt['evidence']['tests'], [packet])
         self.assertEqual(receipt['evidence']['packet_tests'], 1)
 
@@ -271,11 +269,10 @@ class Packets(Project):
         state.L['queue'][self.worker['record']]['depends'] = ['mixed-commands']
         self.implement()
         self.assertEqual(contracts.packet_tests(self.repo, self.base, [packet], RULES), [B, A])
-        with self.assertRaises(api.ApiError) as failed:
-            self.finish()
-        self.assertIn('self.assertEqual(code.b(), 8)', str(failed.exception))
-        self.assertNotIn('self.assertEqual(code.a(), 42)', str(failed.exception))
-        self.assertIsNone(self.worker['receipt'])
+        receipt = self.finish()
+        self.assertEqual(receipt['disposition'], 'blocked')
+        self.assertIn('self.assertEqual(code.b(), 8)', receipt['summary'])
+        self.assertNotIn('self.assertEqual(code.a(), 42)', receipt['summary'])
 
     def test_command_main_removed_after_the_packet_forked_is_not_binding(self):
         changed = TESTS.replace('code.b(), 7', 'code.b(), 8')
@@ -310,37 +307,88 @@ class Packets(Project):
         self.assertEqual(self.worker.get("bundled", []), before)
         self.assertEqual(self.main(), self.base)
 
-    def test_finishing_runs_the_hidden_tests_and_reveals_only_failures(self):
-        self.implement("41")
-        with self.assertRaises(api.ApiError) as failed:
-            self.finish()
-        message = str(failed.exception)
+    def restart_after_diagnosis(self):
+        lifecycle.release('worker-1', 'blocked run ended')
+        responder, _ = tasks.request_repair(self.worker)
+        support.running(responder, 'responder-1')
+        api.dispatch('revise', {'caller': support.caller(responder, 'responder-1'),
+            'item': self.worker['id'], 'reason': 'independent diagnosis: code returns the wrong value',
+            'dependencies': list(state.L['queue'][self.worker['record']]['depends']),
+            'brief': 'Summary: Repair A to return the specified value\n'
+                     'Preserve the implementation; change the incorrect return value to 42.'})
+        lifecycle.submit(responder['id'], 'responder-1', 'complete', 'Diagnosed and revised the implementation')
+        support.running(self.worker, 'worker-2', worktree=False)
+
+    def test_first_product_test_failure_blocks_with_evidence_then_diagnosed_code_can_resume(self):
+        candidate = self.implement("41")
+        receipt = self.finish()
+        message = receipt['summary']
         self.assertIn("1 of the packet's 1 tests fail", message)
         self.assertIn("tests/test_a.py", message)
         self.assertIn("self.assertEqual(code.a(), 42)", message)
-        self.assertEqual((self.worker["status"], self.worker["receipt"]), ("running", None))
+        self.assertEqual((self.worker['status'], receipt['disposition']), ('failed', 'blocked'))
+        failure = self.worker['submission_failure']
+        self.assertEqual((failure['attempts'], failure['candidate']), (1, candidate))
+        self.assertEqual(failure['category'], 'test')
+        self.assertEqual((failure['inputs']['main'], failure['inputs']['tests']), (self.base, [self.tests]))
+        self.assertTrue(queues.state(state.L['queue']['p:item'])['recoverable'])
+        self.assertEqual(git.head(self.tree), candidate)
+        self.assertEqual(self.main(), self.base)
+        self.assertNotIn('validating', self.worker)
         self.assertFalse((self.tree / "tests/test_a.py").exists(), "revealed in the message, not the worktree")
+        self.restart_after_diagnosis()
         path = self.tree / "code.py"
         path.write_text(path.read_text().replace("return 41", "return 42"))
         support.commit(self.tree, "fix a")
-        receipt = self.finish()
+        receipt = self.finish('worker-2')
         self.assertEqual((self.worker["status"], receipt["evidence"]["tests"]), ("review", [self.tests]))
+
+    def test_supervisor_cannot_restart_a_test_failure_instead_of_independent_recovery(self):
+        candidate = self.implement('41')
+        supervisor = tasks.request_supervisor(self.worker, 0)
+        support.running(supervisor, 'supervisor-1', worktree=False)
+        self.assertEqual(self.finish()['disposition'], 'blocked')
+        before = state.L['queue'][self.worker['record']]['version']
+        with self.assertRaisesRegex(ValueError, 'independent recovery diagnosis'):
+            api.dispatch('revise', {'caller': support.caller(supervisor, 'supervisor-1'),
+                'item': self.worker['id'], 'reason': 'try the same assertion again',
+                'brief': 'Summary: Make the assertion pass\nDepends on: tests-a'})
+        self.assertEqual(state.L['queue'][self.worker['record']]['version'], before)
+        self.assertEqual(self.worker['status'], 'failed')
+        self.assertEqual(git.head(self.tree), candidate)
 
     def test_a_receipt_without_the_packet_check_is_refused(self):
         self.implement()
-        with self.assertRaisesRegex(ValueError, "have not run on this commit"):
+        with self.assertRaisesRegex(ValueError, "have not run on these files"):
             lifecycle.submit(self.worker["id"], "worker-1", "complete", "A implemented")
 
-    def test_unchanged_product_refusal_reuses_evidence_before_validation(self):
+    def test_product_test_failure_replay_does_not_validate_or_duplicate_recovery(self):
         self.implement('41')
         with patch.object(contracts, 'packet_check', wraps=contracts.packet_check) as check:
-            with self.assertRaises(api.ApiError): self.finish()
-            with self.assertRaises(api.ApiError): self.finish()
+            receipt = self.finish()
+            self.assertIs(self.finish(), receipt)
             self.assertEqual(check.call_count, 1)
-            (self.tree / 'code.py').write_text((self.tree / 'code.py').read_text().replace('return 41', 'return 42'))
-            support.commit(self.tree, 'repair candidate')
-            self.assertEqual(self.finish()['disposition'], 'complete')
-            self.assertEqual(check.call_count, 2)
+            restored = state.fresh(json.loads(json.dumps(state.L)))
+            state.L.clear()
+            state.L.update(restored)
+            self.worker = state.L['tasks'][self.worker['id']]
+            first, created = tasks.request_repair(self.worker)
+            second, duplicate = tasks.request_repair(self.worker)
+            self.assertTrue(created)
+            self.assertFalse(duplicate)
+            self.assertIs(first, second)
+            view = api.frontier.inspect(first['id'], state.L)
+            self.assertEqual(view['origin_task']['submission_failure']['error'], self.worker['submission_failure']['error'])
+            self.assertIs(self.finish(), self.worker['receipt'])
+            failed_candidate = self.worker['submission_failure']['candidate']
+            path = self.tree / 'code.py'
+            path.write_text(path.read_text().replace('return 41', 'return 42'))
+            changed_candidate = support.commit(self.tree, 'a later edit cannot bypass independent diagnosis')
+            self.assertNotEqual(failed_candidate, changed_candidate)
+            self.assertIs(self.finish(), self.worker['receipt'])
+            self.assertEqual(self.worker['submission_failure']['candidate'], failed_candidate)
+            self.assertEqual(self.worker['status'], 'failed')
+            self.assertEqual(check.call_count, 1)
 
     def test_composition_refusal_blocks_immediately_with_structured_evidence(self):
         self.implement()
@@ -352,15 +400,18 @@ class Packets(Project):
         self.assertEqual(check.call_count, 1)
         self.assertEqual(receipt['disposition'], 'blocked')
         self.assertEqual(self.worker['submission_failure']['category'], 'composition')
-        self.assertIn('correct-tests', receipt['summary'])
-        self.assertEqual(api.frontier.inspect(self.worker['id'], state.L)['composition_failure'], error.evidence)
+        self.assertIn('Recovery must determine', receipt['summary'])
+        self.assertNotIn('fix conflicts', receipt['summary'])
+        expected = {**error.evidence, 'test_tasks': ['p:tests-a']}
+        self.assertEqual(api.frontier.inspect(self.worker['id'], state.L)['composition_failure'], expected)
+        self.assertEqual(self.worker['submission_failure']['composition'], error.evidence)
         self.assertEqual(self.worker['submission_failure']['attempts'], 1)
         restored = state.fresh(json.loads(json.dumps(state.L)))
         state.L.clear()
         state.L.update(restored)
         self.worker = state.L['tasks'][self.worker['id']]
         recovery, _ = tasks.request_repair(self.worker)
-        self.assertEqual(api.frontier.inspect(recovery['id'], state.L)['composition_failure'], error.evidence)
+        self.assertEqual(api.frontier.inspect(recovery['id'], state.L)['composition_failure'], expected)
 
     def test_execution_failures_escalate_separately_from_product_refusals(self):
         self.implement()
@@ -422,6 +473,8 @@ class Packets(Project):
 
     def test_empty_commits_do_not_refill_refused_submission_attempts_but_changed_inputs_do(self):
         self.implement('41')
+        (self.tree / 'pytest.ini').write_text('[pytest]\n')
+        support.commit(self.tree, 'illegal harness edit')
         with self.assertRaises(api.ApiError): self.finish()
         git.run(self.tree, 'commit', '--allow-empty', '-qm', 'same content')
         with self.assertRaises(api.ApiError): self.finish()
@@ -434,6 +487,7 @@ class Packets(Project):
         support.commit(self.tree, 'different candidate')
         with self.assertRaises(api.ApiError): self.finish()
         self.assertEqual(self.worker['submission_failure']['attempts'], 1)
+        (self.tree / 'pytest.ini').unlink()
         (self.tree / 'code.py').write_text((self.tree / 'code.py').read_text().replace('return 40', 'return 42'))
         support.commit(self.tree, 'correct candidate')
         self.assertEqual(self.finish()['disposition'], 'complete')
@@ -443,7 +497,7 @@ class Packets(Project):
         self.implement('41')
         def revoked(*args):
             lifecycle.kill('worker-1')
-            raise ValueError('old candidate failure')
+            raise contracts.ProductTestFailure('old candidate failure')
         with patch.object(contracts, 'packet_check', side_effect=revoked):
             with self.assertRaisesRegex(api.ApiError, 'old candidate failure'): self.finish()
         self.assertNotIn('submission_failure', self.worker)
@@ -515,7 +569,7 @@ class Packets(Project):
         before = (git.head(tree), index.read_bytes(), git.run(tree, 'status', '--porcelain=v1', '-z'))
         checked = api.check_work(caller)
         self.assertTrue(checked['ok'], checked)
-        self.assertFalse(checked['worktree_clean'])
+        self.assertTrue(checked['changed_files'])
         self.assertEqual((git.head(tree), index.read_bytes(), git.run(tree, 'status', '--porcelain=v1', '-z')), before)
         self.assertIsNone(integration['receipt'])
         self.assertEqual(writer['status'], 'review')
@@ -629,11 +683,11 @@ class Packets(Project):
                     patch.object(cli, "ledger", side_effect=lambda: json.loads(json.dumps(state.L))), \
                     patch.object(cli, "call", side_effect=lambda action, body=None, **options:
                                  api.dispatch(action, {**(body or {}), "caller": client.caller()})):
-                with self.assertRaises(SystemExit):
+                with self.assertRaises(ValueError):
                     cli.review()
         finally:
             os.chdir(previous)
-        self.assertTrue(git.run(review, "diff", "--name-only", "--diff-filter=U"))
+        self.assertFalse(git.run(review, "diff", "--name-only", "--diff-filter=U"))
         self.assertNotIn("acceptance", writer)
         self.assertNotIn("tests-c", queues.landed("p"))
         self.assertEqual(self.main(), self.base)
@@ -695,6 +749,11 @@ class Packets(Project):
         with patch.object(contracts, "suite") as suite:
             with self.assertRaisesRegex(ValueError, "clean HEAD"):
                 landing.land(integration["id"], candidate, "integrator-1")
+            with patch.object(api, "log") as log:
+                with self.assertRaisesRegex(api.ApiError, "file preparation or publication"):
+                    api.dispatch("land", {"commit": candidate, "caller": {
+                        "task": integration["id"], "run": "integrator-1"}})
+                self.assertIn("clean HEAD", log.call_args.kwargs["diagnostic"])
             suite.assert_not_called()
         self.assertEqual(writer["status"], "review")
         self.assertNotIn("acceptance", writer)
@@ -720,7 +779,7 @@ class Packets(Project):
 
     def test_a_test_packet_receipt_without_its_check_is_refused(self):
         writer = self.writer("tests-c", TESTS, ["python3", "-m", "unittest", "tests.test_tests_c.B"])
-        with self.assertRaisesRegex(ValueError, "have not run on this commit"):
+        with self.assertRaisesRegex(ValueError, "have not run on these files"):
             lifecycle.submit(writer["id"], "writer-1", "complete", "tests")
 
     def test_a_test_packet_cannot_change_code(self):
@@ -812,6 +871,25 @@ class Packets(Project):
 
 
 class Gate(Project):
+    def test_push_failure_cannot_bounce_or_reopen_a_durable_landing(self):
+        integration, candidate, submitted = self.landing()
+        original_tasks = set(state.L['tasks'])
+        def refused(*args):
+            self.assertFalse(state.LOCK._is_owned())
+            self.assertEqual(self.main(), candidate)
+            self.assertEqual(self.worker['status'], 'done')
+            raise OSError('credentials unavailable')
+        with patch.object(git, 'push_upstream', side_effect=refused):
+            result = landing.land(integration['id'], candidate, 'integrator-1')
+            replay = landing.land(integration['id'], candidate, 'integrator-1')
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['push']['status'], 'failed')
+        self.assertEqual(replay['acceptance'], result['acceptance'])
+        self.assertEqual(integration['status'], 'done')
+        self.assertEqual(self.worker['status'], 'done')
+        self.assertEqual(integration['receipt']['disposition'], 'complete')
+        self.assertEqual(set(state.L['tasks']), original_tasks)
+
     def test_exact_checked_commit_lands_with_its_tests_and_a_retry_is_idempotent(self):
         integration, candidate, submitted = self.landing()
         result = landing.land(integration["id"], candidate, "integrator-1")
@@ -879,7 +957,7 @@ class Gate(Project):
             support.commit(self.tree)
             return {"suite": 0, "red_on_main": 0}, []
         with patch.object(contracts, "suite", side_effect=moved):
-            with self.assertRaisesRegex(ValueError, "refs changed"):
+            with self.assertRaisesRegex(ValueError, "prepared files changed"):
                 landing.land(integration["id"], candidate, "integrator-1")
         self.assertEqual(self.main(), self.base)
 
@@ -1046,9 +1124,12 @@ class Commands(Project):
         other.mkdir(parents=True)
         with patch.object(cli.opencode, 'STATE', runtime):
             result = self.run_command(cli.review)
-        self.assertIn(str(scratch), result)
+        self.assertIn("cointos_diagnostic", result)
         self.assertNotIn(str(other), result)
         self.assertIn('own scratch', result)
+        with patch.object(cli.opencode, 'STATE', runtime):
+            copied = api.dispatch('diagnostic', {'caller': support.caller(integration, 'integrator-1'), 'path': 'vdo/check.py'})
+        self.assertEqual(Path(copied['path']).read_text(), source)
         self.assertEqual(probe.read_text(), source)
         self.assertEqual(self.worker['receipt'], receipt)
         self.assertIsNone(integration['receipt'])
@@ -1083,7 +1164,7 @@ class Commands(Project):
         self.act_as(integration)
         self.run_command(cli.review)
         result = self.run_command(cli.land, 'Add behavior without causing the existing failure')
-        self.assertIn('1 failed (1 already failed on main)', result)
+        self.assertIn('1 failed (1 already failed on the accepted product)', result)
         self.assertEqual(self.run_command(cli.land, 'Add behavior without causing the existing failure'), result)
         self.worker['acceptance'].pop('gate')  # legacy acceptance with no measurements
         historical = self.run_command(cli.land, 'Read historical acceptance')
@@ -1126,7 +1207,7 @@ class Commands(Project):
         # squashed tests have no packet ancestry and whose message differs from land's.
         reviewed = support.commit(self.review, "Reviewed candidate before interruption")
         review = self.run_command(cli.review)
-        self.assertIn("git diff main", review)
+        self.assertIn("changes", review)
         self.assertIn("code.py", review, "review must show committed candidate changes")
         self.run_command(cli.review)
         self.assertEqual(git.head(self.review), reviewed)
@@ -1147,7 +1228,7 @@ class Commands(Project):
         integration = self.integrate()
         self.act_as(integration)
         original = self.main()
-        with self.assertRaisesRegex(ValueError, "without passing the landing gate"):
+        with self.assertRaisesRegex(ValueError, "review is not prepared"):
             self.run_command(cli.land, "A commit message cannot authorize landing")
         self.assertEqual(self.main(), original)
         self.assertEqual((self.worker["status"], integration["status"]), ("review", "running"))
@@ -1170,17 +1251,18 @@ class Commands(Project):
         (self.review / "plan.md").write_text("reviewed worker boundary\n")
         (self.repo / "plan.md").write_text("concurrent main frontier\n")
         current_main = support.commit(self.repo)
-        with self.assertRaises(SystemExit) as refused:
+        with self.assertRaisesRegex(ValueError, 'inspect cointos_review'):
             self.run_command(cli.land, "Add a")
-        self.assertIn('cointos land "<same summary>"', str(refused.exception.code))
-        self.assertNotIn('cointos merge', str(refused.exception.code))
+        report = self.run_command(cli.review)
+        self.assertIn('edit only where required', report)
+        self.assertNotIn('<<<<<<<', (self.review / "plan.md").read_text())
         self.assertEqual(self.main(), current_main)
         self.assertEqual((self.worker["status"], integration["status"]), ("review", "running"))
-        with self.assertRaises(SystemExit):
-            self.run_command(cli.land, "Add a")  # unresolved conflicts still refuse
+        with self.assertRaisesRegex(ValueError, 'knowledge upkeep'):
+            self.run_command(cli.land, "Add a")
         (self.review / "plan.md").write_text("concurrent main frontier\nreviewed worker boundary\n")
-        git.run(self.review, "add", "plan.md")
-        self.run_command(cli.land, "Add a")  # no manual commit or alternate command
+        self.run_command(cli.review)
+        self.run_command(cli.land, "Add a")
         accepted = self.worker["acceptance"]
         self.assertEqual((accepted["commit"], accepted["worker_commit"]), (self.main(), submitted))
         self.assertEqual((self.worker["status"], integration["status"]), ("done", "done"))
@@ -1203,7 +1285,7 @@ class Commands(Project):
         self.run_command(cli.finish, "complete", "Planned")
         self.assertEqual(task["status"], "done")
 
-    def test_a_conflict_is_left_to_resolve_and_nothing_lands(self):
+    def test_maintenance_overlap_prepares_accepted_answers_without_markers_or_publication(self):
         task = self.manager()
         worktree = Path(task["worktree"])
         (worktree / ".knowledge").mkdir()
@@ -1215,12 +1297,11 @@ class Commands(Project):
         with self.assertRaises(SystemExit) as refused:
             self.run_command(cli.merge)
         self.assertIn(".knowledge/plan.md", str(refused.exception.code))
+        self.assertEqual((worktree / ".knowledge/plan.md").read_text(), "theirs\n")
+        self.assertFalse(git.run(worktree, "diff", "--name-only", "--diff-filter=U"))
         self.assertEqual((self.repo / ".knowledge/plan.md").read_text(), "theirs\n")
-        with self.assertRaises(SystemExit):
-            self.run_command(cli.merge)  # still unresolved
         (worktree / ".knowledge/plan.md").write_text("theirs and mine\n")
-        git.run(worktree, "add", ".knowledge/plan.md")
-        git.run(worktree, "commit", "-q", "--no-edit")
+
         self.run_command(cli.merge)
         self.assertEqual((self.repo / ".knowledge/plan.md").read_text(), "theirs and mine\n")
 
@@ -1247,8 +1328,13 @@ class Commands(Project):
         original=self.main()
         with self.assertRaisesRegex(ValueError,'not running'):
             api.dispatch('merge',{'commit':original,'caller':{'task':task['id'],'run':'stale'}})
-        with self.assertRaisesRegex(ValueError,'current assigned'):
-            api.dispatch('merge',{'commit':'wrong','caller':{'task':task['id'],'run':task['agent']}})
+        body = {'commit': 'wrong', 'caller': {'task': task['id'], 'run': task['agent']}}
+        with self.assertRaisesRegex(git.OperationError, 'current assigned'):
+            api.merge(body)  # Private diagnostics remain available to the operator.
+        with patch.object(api, 'log') as log:
+            with self.assertRaisesRegex(api.ApiError, 'file preparation or publication'):
+                api.dispatch('merge', body)
+            self.assertIn('current assigned branch HEAD', log.call_args.kwargs['diagnostic'])
         self.assertEqual(self.main(),original)
 
     def test_a_worker_does_not_land_its_own_work(self):

@@ -11,15 +11,13 @@ class Filesystem(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-    def test_coins_prompt_starts_with_its_knowledge_orientation(self):
-        with patch.object(coin, 'ORIENTATION', None), patch.object(coin.subprocess, 'run') as run:
-            run.return_value.returncode, run.return_value.stdout = 0, 'Personal documents are in ~/Documents/'
+    def test_coin_looks_up_knowledge_without_an_automatic_orientation_dump(self):
+        with patch.object(coin.subprocess, 'run') as run:
             first, second = coin.system_prompt(None)[0], coin.system_prompt(None)[0]
-        self.assertIn('Personal documents are in ~/Documents/', first)
-        self.assertEqual(first, second, 'the prefix stays fixed for the life of the process')
-        run.assert_called_once()
-        with patch.object(coin, 'ORIENTATION', None), patch.object(coin.subprocess, 'run', side_effect=OSError):
-            self.assertIn('# Coin', coin.system_prompt(None)[0])
+        self.assertIn('Use kt', first)
+        self.assertNotIn('Your knowledge orientation', first)
+        self.assertEqual(first, second)
+        run.assert_not_called()
 
     def test_a_search_skips_generated_trees_survives_unreadable_ones_and_stops_in_time(self):
         folder = self.root / 'find'
@@ -189,3 +187,32 @@ class Filesystem(unittest.TestCase):
         self.assertEqual(result['stdout'], 'saved')
         self.assertEqual(result['stderr'], 'problem')
         self.assertEqual((self.root / 'note').read_text(), 'saved')
+
+    def test_shell_search_ceiling_overrides_a_longer_requested_timeout(self):
+        for command in ('grep -R needle ~ | head', '/usr/bin/find ~ -name needle',
+                        'bash -c "rg needle ~"', 'fd needle ~'):
+            with self.subTest(command=command), patch.object(coin.subprocess, 'Popen') as popen:
+                process = popen.return_value.__enter__.return_value
+                process.communicate.return_value = ('', '')
+                process.returncode = 0
+                coin.run_command({'command': command, 'timeout': 999})
+                process.communicate.assert_called_once_with(timeout=coin.SETTINGS['search_seconds'])
+
+    def test_command_timeout_kills_its_process_group(self):
+        import subprocess
+        with patch.object(coin.subprocess, 'Popen') as popen, patch.object(coin.os, 'killpg') as kill:
+            process = popen.return_value.__enter__.return_value
+            process.pid = 12345
+            process.communicate.side_effect = [subprocess.TimeoutExpired('find', 1), ('', '')]
+            with self.assertRaises(subprocess.TimeoutExpired):
+                coin.run_command({'command': 'find ~', 'timeout': 1})
+            kill.assert_called_once_with(12345, coin.signal.SIGKILL)
+            self.assertTrue(popen.call_args.kwargs['start_new_session'])
+
+    def test_search_deadline_is_checked_inside_a_file(self):
+        source = self.root / 'large.txt'
+        source.write_text('needle\n' * 4)
+        with patch.object(coin_files.time, 'monotonic', side_effect=[0, 0, 0, 999]):
+            result = self.run_tool('fs_search', self.root, text='needle')
+        self.assertIn('incomplete', result)
+        self.assertEqual(len(result['matches']), 1)

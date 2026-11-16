@@ -33,6 +33,8 @@ def load(path: Path = CONFIG, projects_path: Path | None = None) -> dict:
     config = read_owned_json(path)
     if not isinstance(config, dict):
         raise ValueError("invalid operational configuration")
+    if type(config.get('factory_enabled', True)) is not bool:
+        raise ValueError('factory_enabled must be a boolean')
     if 'history_trim_messages' in config.get('coin', {}):
         limit, trim = config['coin'].get('history_messages'), config['coin']['history_trim_messages']
         if type(limit) is not int or type(trim) is not int or not 1 <= trim < limit:
@@ -46,6 +48,25 @@ def load(path: Path = CONFIG, projects_path: Path | None = None) -> dict:
         place["path"] = str(Path(place["path"]).expanduser())
     config["projects"].sort(key=lambda p: (p.get("priority", 100), p["name"].lower()))
     return config
+
+
+def identity(config: dict) -> str:
+    """The name this installation's Coin uses as its conversation owner.
+
+    A single installation keeps the historical `coin`; each Cointel instance names itself so
+    three Coins sharing one model runner cannot select, resume or release each other's state."""
+    value = config.get('coin', {}).get('identity') or 'coin'
+    if not isinstance(value, str) or not value or not all(c.isalnum() or c in '-_' for c in value):
+        raise ValueError('coin.identity must be a short alphanumeric slug')
+    return value
+
+
+def coin_name(config: dict) -> str:
+    """The name Coin calls itself; the Telegram bot and prompt identity use it."""
+    value = config.get('coin', {}).get('name') or 'Coin'
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError('coin.name must be a nonempty string')
+    return value.strip()
 
 
 def api_url(config: dict) -> str:
@@ -149,6 +170,65 @@ def validate_ledger(previous) -> dict:
     for name in ("tasks", "agents", "queue", "snapshots", "snapshot_garbage"):
         if any(not isinstance(entry, dict) for entry in previous.get(name, {}).values()):
             raise ValueError(f"invalid ledger {name} entry")
+    def valid_artifact(value):
+        return (isinstance(value, dict) and set(value) == {'commit', 'base'}
+                and all(isinstance(v, str) and len(v) == 40 and all(c in '0123456789abcdef' for c in v)
+                        for v in value.values()))
+    owners = [(record, record.get('project')) for record in previous.get('queue', {}).values()]
+    owners += [(task, task.get('place')) for task in previous.get('tasks', {}).values()]
+    for record, place in owners:
+        if 'carried_work' in record:
+            references = record['carried_work']
+            if not isinstance(references, list):
+                raise ValueError('invalid carried work references')
+            for reference in references:
+                if (not isinstance(reference, dict) or set(reference) != {'task', 'version', 'stage', 'run'}
+                        or not isinstance(reference['task'], str)
+                        or not reference['task'].startswith(str(place) + ':')
+                        or reference['stage'] not in (None, 'skeleton', 'test-contract', 'implementation', 'integration')
+                        or (reference['version'] is not None and (type(reference['version']) is not int or reference['version'] < 1))
+                        or (reference['run'] is not None and (not isinstance(reference['run'], str) or not reference['run']))):
+                    raise ValueError('invalid carried work reference')
+        if 'preserved_artifact' in record:
+            artifact = record['preserved_artifact']
+            if not valid_artifact(artifact):
+                raise ValueError('invalid preserved work artifact')
+    for task in previous.get('tasks', {}).values():
+        if 'material_snapshots' in task:
+            cache = task['material_snapshots']
+            if (not isinstance(cache, dict) or any(not isinstance(k, str) or len(k) != 64
+                    or any(c not in '0123456789abcdef' for c in k) or not valid_artifact(v) for k, v in cache.items())):
+                raise ValueError('invalid preserved material cache')
+        if 'session_store' in task and (not isinstance(task['session_store'], str) or not task['session_store']):
+            raise ValueError('invalid task session_store')
+        value = task.get('scheduling_weight')
+        if 'scheduling_weight' in task and (type(value) not in (int, float) or not math.isfinite(value) or value <= 0):
+            raise ValueError('invalid task scheduling_weight')
+        if 'handoff_intent' in task:
+            intent = task['handoff_intent']
+            fields = {'run', 'version', 'commit', 'parent', 'summary', 'items', 'records', 'before', 'evidence'}
+            if not isinstance(intent, dict) or set(intent) != fields or task.get('role') != 'manager':
+                raise ValueError('invalid planning handoff intent')
+            if any(not isinstance(task.get(k), str) or not task[k] for k in ('id', 'place')):
+                raise ValueError('invalid planning handoff owner')
+            if (not isinstance(intent['run'], str) or not intent['run']
+                    or (intent['version'] is not None and (type(intent['version']) is not int or intent['version'] < 1))
+                    or not isinstance(intent['summary'], str) or not intent['summary'].strip()
+                    or not isinstance(intent['items'], list) or any(not isinstance(i, dict) for i in intent['items'])
+                    or not isinstance(intent['evidence'], dict)
+                    or any(not isinstance(intent[k], dict) for k in ('records', 'before'))):
+                raise ValueError('invalid planning handoff intent fields')
+            if any(not isinstance(intent[k], str) or len(intent[k]) != 40
+                   or any(c not in '0123456789abcdef' for c in intent[k]) for k in ('commit', 'parent')):
+                raise ValueError('invalid planning handoff artifact identity')
+            if intent['records'].keys() != intent['before'].keys():
+                raise ValueError('invalid planning handoff record set')
+            for key, record in intent['records'].items():
+                if (not isinstance(record, dict) or record.get('project') != task.get('place')
+                        or not isinstance(record.get('item'), str) or key != f"{record['project']}:{record['item']}"
+                        or record.get('proposed_by') != task.get('id')
+                        or (intent['before'][key] is not None and not isinstance(intent['before'][key], dict))):
+                    raise ValueError('invalid planning handoff child identity')
     for identifier, entry in previous.get('snapshot_garbage', {}).items():
         backend, tier, name, size = (entry.get(k) for k in ('backend', 'tier', 'name', 'bytes'))
         if (backend not in ('llama', 'gufo') or tier not in ('memory', 'disk')

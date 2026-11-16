@@ -40,13 +40,12 @@ main { max-width: 1840px; margin: auto; padding: 26px 16px 60px; }
 .runstate.paused i { background: transparent; border: 3px solid var(--dark-text); border-width: 0 5px; width: 14px; animation: none; }
 .runstate.paused small { color: #ffdfe4; }
 @media (max-width: 640px) { .global-ctl { width: 100%; } .runstate { order: -1; flex: 1 1 100%; } }
-.scheduler-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin: 4px 0 14px; }
-.scheduler-control { display: grid; gap: 3px; }
+.scheduler-controls { display: grid; align-items: start; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px 16px; margin: 4px 0 14px; }
+.scheduler-control { display: grid; grid-template-rows: 14px 36px auto; align-content: start; min-width: 0; gap: 3px; }
 .scheduler-control label { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--ink-faint); font-weight: 800; }
 .scheduler-control small { font-size: 11px; line-height: 1.3; color: var(--ink-faint); }
 .scheduler-control small:empty { display: none; }
-.scheduler-control select { width: 100%; }
-.scheduler-control .switch { min-height: 36px; }
+.scheduler-control select { width: 100%; min-width: 0; height: 36px; text-overflow: ellipsis; }
 .stamp { color: var(--ink-faint); font-size: 13px; }
 .stamp.bad { color: var(--accent); font-weight: 700; }
 .agents { display: grid; gap: 18px; grid-template-columns: repeat(6, minmax(0, 1fr)); --capacity: 1; }
@@ -355,6 +354,11 @@ select:disabled { opacity: .55; cursor: default; }
 .actions .line { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .actions .line .group + .group { margin-left: 14px; }
 .actions .spacer { flex: 1; }
+.gpu-priority { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: 0; }
+.gpu-priority label { display: inline-flex; align-items: center; gap: 8px; }
+.gpu-priority input { width: 76px; height: 32px; padding: 4px 8px; box-sizing: border-box; font: inherit; border: 1px solid var(--line); background: var(--paper); color: var(--ink); }
+.gpu-priority .btn { height: 32px; padding: 4px 8px; }
+.gpu-priority small { flex-basis: 100%; color: var(--ink-faint); font-size: 11px; }
 .row .acts { display: inline-flex; gap: 4px; margin-left: 10px; vertical-align: 1px; }
 .row .acts .btn { padding: 3px 7px; box-shadow: none; font-size: 11.5px; }
 .row .tag { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); margin-left: 6px; }
@@ -432,6 +436,7 @@ select:disabled { opacity: .55; cursor: default; }
 .scrim { position: fixed; inset: 0; background: color-mix(in oklab, var(--dark) 25%, transparent); z-index: 9; }
 .scrim[hidden] { display: none; }
 
+
 /* Coin's persistent status panel: service, current turn, last words and recent activity. */
 .coin-status { display: flex; align-items: flex-start; gap: 10px; margin: 2px 0 12px; }
 .coin-status .sq { flex: none; width: 15px; height: 15px; margin-top: 3px; border: 2px solid var(--accent-bright); }
@@ -464,6 +469,7 @@ select:disabled { opacity: .55; cursor: default; }
   <div class="strip" id="strip" aria-label="System at a glance"></div>
   <div class="cols">
   <div class="col-main">
+  <section class="panel" id="user-sessions" hidden></section>
   <div id="agents"></div>
   <section class="panel" id="home"><div class="panel-heading"><h2>Projects</h2><button class="btn" id="add-project" type="button">＋ Add project</button></div><div class="pcards" id="pcards"></div></section>
   <section class="panel" id="project-page" hidden><a class="back" href="#/">← All projects</a>
@@ -475,7 +481,7 @@ select:disabled { opacity: .55; cursor: default; }
       <div class="hist-list" id="hist-list" hidden></div></section>
   </div>
   <aside class="col-side">
-    <section class="panel" id="coin-panel"><div class="panel-heading"><h2>Coin</h2><button class="btn" id="coin-view" type="button" data-act="coin-viewer" title="Coin occupies a viewer slot while it is active">Open viewer</button></div><div id="coin-detail"></div></section>
+    <section class="panel" id="coin-panel"><div class="panel-heading"><h2 id="coin-name">Coin</h2><button class="btn" id="coin-view" type="button" data-act="coin-viewer" title="Coin occupies a viewer slot while it is active">Open viewer</button></div><div id="coin-detail"></div></section>
     <section class="panel" id="messages-panel"><h2>Messages <span class="badge" id="msg-new"></span></h2><div class="messages" id="messages"></div></section>
     <section class="panel machine"><h2>Machine</h2>
       <div class="scheduler-controls">
@@ -485,6 +491,7 @@ select:disabled { opacity: .55; cursor: default; }
       </div>
       <div class="scheduler-control"><label for="slice">GPU time slice</label>
         <select id="slice" disabled aria-describedby="slice-status">
+          <option value="" disabled selected>Connecting…</option>
           <option value="1">1 s</option><option value="2">2 s</option><option value="5">5 s</option>
           <option value="10">10 s</option><option value="15">15 s</option><option value="30">30 s</option>
           <option value="60">60 s</option><option value="120">120 s</option><option value="300">300 s</option>
@@ -492,18 +499,14 @@ select:disabled { opacity: .55; cursor: default; }
       </div>
       <div class="scheduler-control"><label for="chunk">Generation step</label>
         <select id="chunk" disabled aria-describedby="chunk-status">
+          <option value="" disabled selected>Connecting…</option>
           <option value="8">8 tokens</option><option value="16">16 tokens</option>
           <option value="32">32 tokens</option><option value="48">48 tokens</option>
           <option value="64">64 tokens</option><option value="96">96 tokens</option>
           <option value="128">128 tokens</option><option value="256">256 tokens</option>
         </select><small id="chunk-status" role="status" aria-live="polite">Connecting…</small>
       </div>
-      <div class="scheduler-control"><label for="viewers">Viewer windows</label>
-        <button type="button" class="switch" id="viewers" role="switch" aria-checked="false" disabled
-          title="Pop-up OpenCode windows on this desktop that follow the active agents, plus a Coin status window"><i></i><span>Off</span></button>
-        <small id="viewers-status" role="status" aria-live="polite"></small>
-      </div>
-      </div><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
+      </div><details id="model-unavailable" class="diagnostics" hidden><summary>Unavailable models</summary><div id="model-unavailable-list"></div></details><div class="machine-grid"><div id="lanes"></div><div id="memory"></div></div>
       <details class="diagnostics"><summary id="checks-summary">Diagnostics</summary><div id="checks"></div></details></section>
     <section class="panel"><div class="panel-heading"><h2>Recently</h2>
       <button type="button" class="switch small" id="history-all" role="switch" aria-checked="false"
@@ -517,6 +520,9 @@ select:disabled { opacity: .55; cursor: default; }
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 <aside class="drawer" id="drawer" hidden aria-label="Task details"><button class="close" id="drawer-close" type="button" aria-label="Close">×</button><div id="drawer-body"></div></aside>
 <script>
+// The instance's assistant keeps its own name; a single installation still reads Coin.
+function assistant() { return (typeof LAST !== "undefined" && LAST.coin && LAST.coin.name) || "Coin"; }
+
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const duration = seconds => { const s = Math.floor(Math.max(0, seconds));
@@ -577,7 +583,7 @@ function phase(L, a) {
   if (running) return ["thinking", (a.live || {}).phase === "writing" ? "Writing" : "Reasoning", `on ${short(running.model)} · ${running.generated} tokens so far`, undefined,
     Math.max(running.activity_since || 0, a.live?.phase_since || 0) || undefined];
   if (queued) return ["waiting", "Waiting", "for a lane", undefined, queued.waiting_since];
-  if (a.role === "coin" && a.alive === false) return ["offline", "Offline", "no live Coin worker", undefined, a.since];
+  if (a.role === "coin" && a.alive === false) return ["offline", "Offline", `no live ${assistant()} worker`, undefined, a.since];
   if (a.role === "coin" && !a.busy) return ["idle", "Idle", a.last ? `last turn ${ago(a.last)} ago` : "until a message arrives", undefined, a.last];
   if (a.role === "coin" && a.doing) return ["tools", "Tools", a.doing, undefined, a.doing_since];
   if (a.role === "coin") return ["thinking", "Working", "waiting for the model", undefined, a.since];
@@ -638,13 +644,35 @@ function coinAgent(S) {
           state: !alive ? "offline" : thought ? (thought.reading ? "reading" : "thinking") : c.doing ? "tools" : c.busy ? "thinking" : "idle"};
 }
 
+function userRequestsHTML(S) {
+  const requests = Object.values(S.thoughts || {}).filter(t => t.agent === "user");
+  if (!requests.length) return "";
+  return `<h2>Local OpenCode requests</h2>` + requests.map((t, i) => {
+    const privateSession = (t.owner || "").startsWith("private/");
+    const phase = t.waiting_for === "memory" ? "Waiting for memory" : t.lane === null ? "Waiting for GPU" : t.reading ? "Reading context" : "Generating";
+    return `<div class="lane-row"><span class="sq"></span><span class="name">${privateSession ? "Private session" : "User session"} ${i + 1}</span>` +
+      `<span>${phase}</span><span>${Number(t.read || 0).toLocaleString()} / ${Number(t.prompt || 0).toLocaleString()} read · ${Number(t.generated || 0).toLocaleString()} generated</span></div>`;
+  }).join("") + `<small class="muted">Through the CointOS scheduler. Activity only; conversation text is not displayed. Requests disappear when inference ends.</small>`;
+}
+
+function activeClientCount(S) {
+  const clients = new Set(Object.values(S.agents || {}).map(a => a.id));
+  if (S.coin?.busy && S.coin.alive !== false) clients.add("coin");
+  for (const t of Object.values(S.thoughts || {})) clients.add(t.agent === "user" ? t.owner : t.agent);
+  return clients.size;
+}
+
 function renderAgents(S) {
+  const sessions = $("user-sessions"), requests = userRequestsHTML(S);
+  sessions.hidden = !requests;
+  setHTML(sessions, requests);
   // Agents share one machine and its lanes, so every page shows all of them, matching the
   // header's count; project pages filter only their pipeline and Work list.
   const coin = S.coin && coinAgent(S);
   const agents = [...(coin?.busy ? [coin] : []), ...Object.values(S.agents).sort((a, b) => a.started_at - b.started_at)];
   let grid = $("agents").querySelector(".agents");
   if (!agents.length) {
+    if (requests) { setHTML($("agents"), ""); return; }
     setHTML($("agents"), `<div class="empty">${S.paused ? `Agents are paused: nothing new starts. <button type="button" class="btn go" data-act="go">Resume agents</button>`
       : "No agents right now. They start as work appears in the queues."}</div>`);
     return;
@@ -725,8 +753,8 @@ function coinIdentity(S, a, card, q, uptime, rate, writing) {
   setHTML(q(".stage-slot"), stageBadge({role: "coin"}));
   const tools = a.state === "tools";
   const activity = a.alive === false ? "offline" : !a.busy ? "idle" : tools ? "tools" : a.state === "reading" ? "reading" : "working";
-  const title = a.alive === false ? "Coin service offline" : a.busy ? (a.trigger || "Working") : "Waiting for a message";
-  const track = a.alive === false ? "Coin service offline" : tools ? "Running a tool"
+  const title = a.alive === false ? `${assistant()} service offline` : a.busy ? (a.trigger || "Working") : "Waiting for a message";
+  const track = a.alive === false ? `${assistant()} service offline` : tools ? "Running a tool"
     : a.state === "reading" ? "Reading context" : a.live?.phase === "writing" ? "Writing a reply" : a.busy ? "Reasoning" : "On call";
   setText(uptime, a.worker_since ? `${ago(a.worker_since)} up` : "no worker");
   setText(rate, writing ? `${a.rate.toFixed(1)} tok/s` : activity);
@@ -735,7 +763,7 @@ function coinIdentity(S, a, card, q, uptime, rate, writing) {
   setText(q(".sum"), `${a.turns || 0} turns` + (a.last ? ` · last ${ago(a.last)} ago` : "") +
     (a.last_turn_seconds ? ` · ${duration(a.last_turn_seconds)}` : ""));
   setHTML(q(".work"), `${esc(title)}<small>Telegram${a.model ? " · " + esc(short(a.model)) : ""}${tools && a.doing ? " · " + esc(a.doing) : ""}</small>`);
-  setHTML(q(".by"), `carried out by <b>Coin</b> <span>(remote control)</span>`);
+  setHTML(q(".by"), `carried out by <b>${esc(assistant())}</b> <span>(remote control)</span>`);
   const tip = "coin · top priority on its configured model";
   if (card.title !== tip) card.title = tip;
 }
@@ -743,12 +771,15 @@ function coinIdentity(S, a, card, q, uptime, rate, writing) {
 function renderCoinPanel(S) {
   const c = S.coin, detail = $("coin-detail");
   if (!c || !detail) return;
+  const heading = $("coin-name");
+  if (heading) heading.textContent = assistant();
+  document.title = `${assistant()} · CointOS`;
   const thought = Object.values(S.thoughts || {}).find(t => t.agent === "coin");
   const alive = c.alive !== false;
   const open = $("coin-view");
   if (open) {
     open.disabled = !alive || !c.busy;
-    open.title = !alive ? "Coin has not reported a live worker" : !c.busy ? "Coin is idle; the viewer appears while it is active" : "Coin occupies a viewer slot while it is active";
+    open.title = !alive ? `${assistant()} has not reported a live worker` : !c.busy ? `${assistant()} is idle; the viewer appears while it is active` : `${assistant()} occupies a viewer slot while it is active`;
   }
   const phase = !alive ? ["offline", "Offline", "no live worker"]
     : thought ? ["thinking", thought.reading ? "Reading" : c.live?.phase === "writing" ? "Writing" : "Reasoning",
@@ -888,6 +919,7 @@ function stageBadge(task = {}, reviewed = null) {
     : task.stage || (role === "worker" || task.kind === "queued" || task.kind === "item" ? "implementation" : role);
   const labels = {"test-mapping": "Map tests", "map-review": "Review test map", "test-review": "Review tests", "test-contract": "Writing tests", implementation: "Implementation", skeleton: "Skeleton",
     integration: "Review & integrate", recovery: "First Responder", planning: "Planning", operator: "Operator", coin: "Coin"};
+  if (key === "coin") labels.coin = assistant();
   if (!key) return "";
   return `<span class="stage-badge stage-${esc(key)}">${esc(labels[key] || stageName(key))}</span>`;
 }
@@ -1032,6 +1064,7 @@ document.addEventListener("click", e => {
 
 // What the user can do to this task right now, as buttons that call the daemon's control API: first what
 // to do, with Cancel set apart at the end; then where it sits in the queue and how hard it reasons.
+let PRIORITY_SAVING = false;
 const EFFORTS = [["low", "Low"], ["medium", "Medium"], ["xhigh", "Extra high"]];
 function actionsHTML(L, t, it, r) {
   const b = (act, label, data = {}, cls = "", title = "") => `<button type="button" class="btn ${cls}" data-act="${act}" ` +
@@ -1040,7 +1073,7 @@ function actionsHTML(L, t, it, r) {
   if (t?.admission_hold && t.status === "waiting") main.push(b("resume-task", "Resume", {task: t.id}, "go", `Held: ${t.admission_hold}`));
   if (t?.agent && L.agents[t.agent]) main.push(b("pause-agent", "Pause", {agent: t.agent}, "", "Stop its agent; the task waits until you resume it"));
   if (t && ["waiting", "running", "review"].includes(t.status)) main.push(b("message", "Message", {item: t.id}));
-  if ((t && ["waiting", "running"].includes(t.status) && !t.validating) || (!t && open)) main.push(b("budget", "Budget", {item: t?.id || key}));
+  if ((t && t.role !== "supervisor" && ["waiting", "running"].includes(t.status) && !t.validating) || (!t && open)) main.push(b("budget", "Budget", {item: t?.id || key}));
   if (open && !r.replaced_by) main.push(b("revise", "Revise brief", {item: key}));
   if (open) main.push(r.held_by ? b("unhold", "Release hold", {item: key}, "", `Held by ${r.held_by}`) : b("hold", "Hold", {item: key}, "", "Keep it from starting"));
   const cancel = open ? key : t && !["done", "failed"].includes(t.status) ? t.id : null;
@@ -1050,6 +1083,14 @@ function actionsHTML(L, t, it, r) {
   if (t && (t.status === "waiting" || t.status === "running")) tune.push(`<span class="group"><span class="ctl-label">Reasoning</span><span class="seg">` +
     EFFORTS.map(([e, label]) => `<button type="button" data-act="reasoning" data-task="${esc(t.id)}" data-effort="${e}" aria-pressed="${e === t.reasoning_effort}">${label}</button>`).join("") +
     `</span></span>`);
+  if (t?.agent && L.agents[t.agent]) {
+    const agent = L.agents[t.agent], pending = Object.values(L.thoughts || {}).find(x => x.agent === t.agent);
+    const weight = t.scheduling_weight ?? agent.scheduling_default ?? pending?.weight ?? 1;
+    tune.push(`<form class="group gpu-priority" data-priority-task="${esc(t.id)}">` +
+      `<label><span class="ctl-label">GPU priority</span><input aria-label="GPU priority weight" type="number" min="0" step="any" required name="weight" value="${esc(weight)}"></label>` +
+      `<button class="btn" type="submit">Apply</button>` + b("priority-default", "Role default", {task: t.id}, "", `Restore the role's GPU weight`) +
+      `<small>Higher gets more GPU time · role default ${esc(agent.scheduling_default ?? "—")}</small></form>`);
+  }
   if (!main.length && !cancel && !tune.length) return "";
   return `<div class="actions">${main.length || cancel ? `<div class="line">${main.join("")}<span class="spacer"></span>` +
     (cancel ? b("cancel-item", "Cancel task", {item: cancel}, "", "Stop it for good and take it off the queue") : "") + `</div>` : ""}` +
@@ -1057,7 +1098,7 @@ function actionsHTML(L, t, it, r) {
 }
 
 function renderDrawer(L) {
-  if (!SELECTED || !L) return;
+  if (!SELECTED || !L || PRIORITY_SAVING || document.activeElement?.closest(".gpu-priority")) return;
   const when = t => t ? `${new Date(t * 1000).toLocaleString()} (${ago(t)} ago)` : "";
   const link = key => key ? `<a data-key="${esc(key)}">${esc(key)}</a>` : "";
   if (SELECTED.startsWith('workflow:')) {
@@ -1085,7 +1126,7 @@ function renderDrawer(L) {
     ["Role", t?.role], ["Task status", t?.status], ["Queue status", r?.status], ["Priority", r?.priority],
     ["Agent", agent ? `${agent.id} · ${agent.state}${agent.doing ? " · " + (agent.doing.length > 90 ? agent.doing.slice(0, 90) + "…" : agent.doing) : ""}` : t?.agent],
     ["Reasoning", t?.reasoning_effort || r?.reasoning_effort], ["Runs", t?.runs],
-    ["Budget", t?.budget ? `${t.budget.generation_tokens.toLocaleString()} tokens / ${t.budget.generation_seconds / 60 | 0} min` : null],
+    ["Budget", t?.budget ? `${t.role === "supervisor" || t.budget.generation_tokens == null ? "No token cap" : t.budget.generation_tokens.toLocaleString() + " tokens"} / No time limit` : null],
     ["Depends on", r?.depends?.length ? r.depends.map(d => esc(d) + (it.blockers.includes(d) ? " ⏳" : " ✓")).join(", ") : null, true],
     ["Problem", L.dependency_problems?.[SELECTED]], ["Held", t?.admission_hold || r?.held_by],
     ["Recovery owner", progress?.recovery ? link(progress.recovery) : null, true],
@@ -1288,11 +1329,13 @@ function budgetSheet(id) {
   const L = LAST.L, t = L?.tasks?.[id], b = t?.budget || L?.queue?.[id]?.budget || {};
   openSheet({title: "Generation budget", hint: `For ${esc(id)}. ` + (t?.status === "running"
       ? "A running task's limits can only grow; what it has spent is kept." : "Applies to its next run."),
-    fields: [`<div class="pair">${field("Tokens", input("tokens", `type="number" min="1" step="1000" required value="${esc(b.generation_tokens ?? "")}"`))}` +
-      field("Minutes", input("minutes", `type="number" min="1" step="1" required value="${b.generation_seconds ? Math.round(b.generation_seconds / 60) : ""}"`)) + `</div>`],
+    fields: [`<div class="pair">${t?.role === "supervisor" ? field("Tokens", "No token cap") : field("Tokens", input("tokens", `type="number" min="1" step="1000" required value="${esc(b.generation_tokens ?? "")}"`))}` +
+      field("Time", "No automatic time limit") + `</div>`],
     label: "Set budget",
     submit: async value => {
-      await api("budget", {task: id, budget: {generation_tokens: Number(value("tokens")), generation_seconds: Number(value("minutes")) * 60}});
+      const budget = {};
+      if (t?.role !== "supervisor") budget.generation_tokens = Number(value("tokens"));
+      await api("budget", {task: id, budget});
       return "Budget set";
     }});
 }
@@ -1306,6 +1349,18 @@ function reviseSheet(key) {
     submit: async value => { await api("revise", {item: key, brief: value("brief"), reason: value("reason")}); return "Revised"; }});
 }
 
+function cancellationTarget(L, id) {
+  const seen = new Set();
+  for (let key = id; key && !seen.has(key);) {
+    seen.add(key);
+    if (L?.queue?.[key]) return key;
+    const task = L?.tasks?.[key];
+    if (task?.record && L?.queue?.[task.record]) return task.record;
+    key = task?.repair_origin?.task || task?.supervises || task?.worker;
+  }
+  return id;
+}
+
 // Each control gives [arm, action, body, done, after]: with arm set, the first click only arms the button
 // (showing arm as its label) and a second click within a few seconds runs it.
 const CONTROLS = {
@@ -1315,7 +1370,11 @@ const CONTROLS = {
   "hold": d => [null, "hold", {item: d.item}, "Held"],
   "unhold": d => [null, "unhold", {item: d.item}, "Hold released"],
   "move": d => [null, "move", {item: d.item, to: d.to}, `Moved ${d.to}`],
-  "cancel-item": d => ["Really cancel?", "cancel", {items: [d.item], reason: "cancelled from the dashboard"}, "Cancelled"],
+  "cancel-item": d => ["Really cancel?", "cancel", {items: [cancellationTarget(LAST.L, d.item)], reason: "cancelled from the dashboard"}, "Cancelled"],
+  "priority-default": d => [null, "agent-priority", {task: d.task, weight: null}, "Role GPU priority restored", () => {
+    if (LAST.L.tasks[d.task]) delete LAST.L.tasks[d.task].scheduling_weight;
+    document.activeElement?.blur(); renderDrawer(LAST.L);
+  }],
   "reasoning": d => [null, "reasoning", {task: d.task, effort: d.effort}, `Reasoning ${EFFORTS.find(([e]) => e === d.effort)?.[1].toLowerCase()} from its next reply`],
   "project-enable": d => [null, "project-set", {project: d.project, settings: {enabled: d.on === "true"}},
     d.on === "true" ? `${word(d.project)} enabled` : `${word(d.project)} disabled: its agents stop and nothing new starts there`],
@@ -1323,7 +1382,7 @@ const CONTROLS = {
   "project-remove": d => ["Really remove?", "project-remove", {project: d.project}, `Removed ${word(d.project)}; its repository is left alone`,
     () => { location.hash = "#/"; }],
   "message": d => messageSheet(d.item, d.quote),
-  "coin-viewer": () => [null, "viewers", {show: true}, "Viewer windows on; Coin occupies a slot while active"],
+  "coin-viewer": () => [null, "viewers", {show: true}, `Viewer windows on; ${assistant()} occupies a slot while active`],
   "budget": d => budgetSheet(d.item),
   "revise": d => reviseSheet(d.item),
 };
@@ -1355,6 +1414,21 @@ document.addEventListener("click", async e => {
   catch (error) { toast(error.message, true); }
   finally { button.disabled = false; }
 }, true);
+document.addEventListener("submit", async event => {
+  const form = event.target.closest("form[data-priority-task]");
+  if (!form) return;
+  event.preventDefault(); event.stopPropagation();
+  const weight = Number(form.elements.weight.value);
+  if (!Number.isFinite(weight) || weight <= 0) { toast("GPU priority must be greater than zero", true); return; }
+  PRIORITY_SAVING = true;
+  const button = form.querySelector('button[type="submit"]'); button.disabled = true;
+  try {
+    await api("agent-priority", {task: form.dataset.priorityTask, weight});
+    if (LAST.L.tasks[form.dataset.priorityTask]) LAST.L.tasks[form.dataset.priorityTask].scheduling_weight = weight;
+    toast(`GPU priority set to ${weight}`);
+  } catch (error) { toast(error.message, true); }
+  finally { PRIORITY_SAVING = false; button.disabled = false; document.activeElement?.blur(); renderDrawer(LAST.L); }
+});
 $("open-queue").addEventListener("click", queueSheet);
 $("open-operator").addEventListener("click", operatorSheet);
 $("add-project").addEventListener("click", projectSheet);
@@ -1395,20 +1469,6 @@ $("clear-task-history").addEventListener("click", async event => {
   catch (error) { $("clear-task-status").textContent = error.message; }
   finally { CLEARING = false; }
 });
-
-let VIEWERS_SAVING = false;
-$("viewers").addEventListener("click", async event => {
-  const button = event.currentTarget, show = button.getAttribute("aria-checked") !== "true";
-  VIEWERS_SAVING = button.disabled = true;
-  try { await api("viewers", {show}); renderViewers(show); $("viewers-status").textContent = ""; }
-  catch (error) { $("viewers-status").textContent = error.message; }
-  finally { VIEWERS_SAVING = button.disabled = false; }
-});
-function renderViewers(showing) {
-  const button = $("viewers");
-  button.setAttribute("aria-checked", String(!!showing));
-  setText(button.querySelector("span"), showing ? "Agents + Coin" : "Off");
-}
 
 // Per-viewer conveniences, kept in this browser only: which messages were seen, and the history filter.
 const stored = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
@@ -1458,23 +1518,22 @@ function renderMachine(L) {
                 saved_bytes: Object.values(L.snapshots).filter(s => s.tier === "memory").reduce((n, s) => n + s.bytes, 0)});
 }
 
-const MEMORY_COLOURS = [["Operating System", "#28262b"], ["Model weights", "#9f3b52"], ["KV-cache", "#e9687e"],
-                        ["Saved contexts", "#ec98a5"], ["Free", "#ece3e0"]];
+const MEMORY_COLOURS = [["Other used", "#28262b"], ["Model weights (est.)", "#9f3b52"], ["KV-cache (est.)", "#e9687e"],
+                        ["Saved contexts", "#ec98a5"], ["Available", "#ece3e0"]];
 
 function memoryValues(M) {
   const m = M.memory;
   const gib = gb => gb * 1e9 / 2 ** 30;  // shown in GiB (written "GB"), as RAM is sized
   const loaded = Object.entries(M.models).filter(([, model]) => model.up).map(([name]) => M.model_memory[name]);
-  const weights = loaded.reduce((n, x) => n + x.weights_gb, 0);
-  const kv = loaded.reduce((n, x) => n + x.memory_gb - x.weights_gb, 0);
-  const saved = M.saved_bytes / 2 ** 30, physical = gib(m.physical_gb);
-  // Gufo's anonymous weights already reduce MemAvailable; file-backed llama weights can be
-  // reclaimed. Remove only non-reclaimable weights from used RAM before labelling the rest OS.
-  const residentWeights = loaded.reduce((n, x) => n + (x.weights_reclaimable === false ? x.weights_gb : 0), 0);
-  const used = Math.max(0, physical - gib(m.available_gb));
-  const system = Math.max(0, used - residentWeights - kv - saved);
-  const free = Math.max(0, physical - system - weights - kv - saved);
-  return [system, weights, kv, saved, free];
+  const physical = Math.max(0, gib(m.physical_gb));
+  const available = Math.max(0, Math.min(physical, gib(m.available_gb)));
+  const used = physical - available, saved = Math.min(used, Math.max(0, M.saved_bytes / 2 ** 30));
+  const weights = gib(loaded.reduce((n, x) => n + Math.max(0, x.weights_gb), 0));
+  const kv = gib(loaded.reduce((n, x) => n + Math.max(0, x.memory_gb - x.weights_gb), 0));
+  // Recipes estimate model allocations; MemAvailable already accounts for reclaimable cache.
+  // Fit those estimates inside measured use, preserving the machine's actual total/available.
+  const scale = weights + kv ? Math.min(1, (used - saved) / (weights + kv)) : 0;
+  return [Math.max(0, used - saved - (weights + kv) * scale), weights * scale, kv * scale, saved, available];
 }
 
 function renderMemory(M) {
@@ -1621,16 +1680,36 @@ async function discoverModels() {
     renderDefaultModel(result.default);
   } catch (error) { MODEL_DISCOVERY_ERROR = error.message; }
 }
+function modelLabel(model) {
+  const standard = model.name.match(/^Qwen3\.8-27B-UD-(.+)$/);
+  if (standard) return `Qwen 3.8 27B · Standard · ${standard[1]}`;
+  return model.name.replace(/Qwen3\.8-/g, "Qwen 3.8 ").replace(/-GGUF/g, "")
+    .replace(/-abliterated/g, " · Abliterated").replace(/-UD-/g, " · ")
+    .replace(/-DSpine-/g, " · DSpine ").replace(/-GSQ-RCO-/g, " · GSQ RCO ")
+    .replace(/^Huihui-/, "Huihui · ");
+}
 function renderDefaultModel(current) {
   if (!current) return;
   const input = $("default-model"), busy = ["checking", "draining", "loading", "restoring"].includes(current.phase);
-  if (!MODEL_SAVING && document.activeElement !== input) {
-    const options = MODEL_CHOICES.map(m => `<option value="${esc(m.id)}" ${m.available ? "" : "disabled"}>${esc(m.name)}${m.reason ? " — " + esc(m.reason) : ""}</option>`).join("");
-    setHTML(input, options);
-    input.value = current.requested && busy ? current.requested : current.path;
+  const choices = MODEL_CHOICES.filter(m => m.available).sort((a, b) =>
+    Number(/^Qwen3\.8-27B-UD-/.test(b.name)) - Number(/^Qwen3\.8-27B-UD-/.test(a.name)) ||
+    modelLabel(a).localeCompare(modelLabel(b)));
+  const unavailable = MODEL_CHOICES.filter(m => !m.available);
+  $("model-unavailable").hidden = !unavailable.length;
+  setHTML($("model-unavailable-list"), unavailable.map(m =>
+    `<p><strong>${esc(m.name)}</strong>: ${esc(m.reason || "Unavailable")}</p>`).join(""));
+  if (!MODEL_SAVING) {
+    const selected = current.requested && busy ? current.requested : current.path;
+    const fallback = !choices.some(m => m.id === selected) ? `<option value="" disabled>${esc(current.model || "Current model")}</option>` : "";
+    const options = fallback + choices.map(m => `<option value="${esc(m.id)}" title="${esc(m.name)}">${esc(modelLabel(m))}</option>`).join("");
+    if (input.dataset.options !== options) {
+      setHTML(input, options);
+      input.dataset.options = options;
+    }
+    input.value = choices.some(m => m.id === selected) ? selected : "";
   }
-  input.disabled = MODEL_SAVING || busy || !MODEL_CHOICES.length;
-  $("default-model-status").textContent = MODEL_ERROR || MODEL_DISCOVERY_ERROR || current.error || ({checking: "Checking model…", draining: "Finishing current replies…", loading: "Loading selected model…", restoring: "Restoring previous model…"}[current.phase]) || "Shared by Coin, agents and your local sessions";
+  input.disabled = MODEL_SAVING || busy || !choices.length;
+  $("default-model-status").textContent = MODEL_ERROR || MODEL_DISCOVERY_ERROR || current.error || ({checking: "Checking model…", draining: "Finishing current replies…", loading: "Loading selected model…", restoring: "Restoring previous model…"}[current.phase]) || `Shared by ${assistant()}, agents and your local sessions`;
 }
 $("default-model").addEventListener("change", async event => {
   MODEL_SAVING = true; MODEL_ERROR = ""; event.target.disabled = true;
@@ -1646,15 +1725,19 @@ function renderScheduler(L) {
   if (L.default_model && Date.now() - MODEL_FETCHED > L.default_model.discovery_seconds * 1000) discoverModels();
   for (const control of schedulerControls) {
     const input = $(control.id), value = L.scheduler?.[control.key];
-    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value <= 0) {
+      input.value = "";
+      input.disabled = true;
+      $(control.id + "-status").textContent = control.error || "Waiting for live settings…";
+      continue;
+    }
     if (![...input.options].some(o => Number(o.value) === value))
       input.add(new Option(`${value} ${control.unit}`, String(value)));
-    if (!control.saving && document.activeElement !== input) input.value = String(value);
+    if (!control.saving) input.value = String(value);
     input.disabled = control.saving;
     $(control.id + "-status").textContent = control.saving ? "Saving…" :
-      control.error || L.config_error || "";
+      [control.error || L.config_error, `Running: ${value} ${control.unit}`].filter(Boolean).join(" · ");
   }
-  if (!VIEWERS_SAVING) { renderViewers(L.viewers_showing); $("viewers").disabled = false; }
 }
 for (const control of schedulerControls) $(control.id).addEventListener("change", async event => {
   control.saving = true;
@@ -1668,14 +1751,16 @@ for (const control of schedulerControls) $(control.id).addEventListener("change"
       body: JSON.stringify({[control.key]: Number(event.target.value)})});
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Could not save scheduler setting");
-    status.textContent = "";
+    if (!Number.isFinite(result[control.key])) throw new Error("Daemon did not acknowledge the setting");
+    if (LAST.L) LAST.L.scheduler = {...LAST.L.scheduler,
+      ...Object.fromEntries(schedulerControls.map(c => [c.key, result[c.key]]).filter(([,v]) => Number.isFinite(v)))};
   } catch (error) {
     control.error = error.message;
     status.textContent = control.error;
   } finally {
     control.saving = false;
-    event.target.disabled = false;
     event.target.blur();
+    renderScheduler(LAST.L || {});
   }
 });
 
@@ -1689,8 +1774,8 @@ function ensureStrip() {
 function renderPerformance(S) {
   const p = S.performance || {};
   const entries = [
-    ['generation', 'Generation', p.generation_tps, 'tok/s', 'Output tokens ÷ generation time; includes reasoning tokens.'],
-    ['prefill', 'Prefill', p.prefill_tps, 'tok/s', 'Newly processed input tokens ÷ prefill call time; cached tokens and snapshot I/O excluded.'],
+    ['generation', 'Generation', p.generation_tps, 'tok/s', 'New output tokens ÷ backend decode time, including reasoning and tool arguments. Reading is separate. Active total includes input processing and API overhead, but excludes lane waiting, snapshot I/O and tool execution.'],
+    ['prefill', 'Reading', p.prefill_tps, 'tok/s', 'Processed input tokens ÷ prompt-processing time; cached tokens and snapshot I/O excluded. Uses backend phase timing when exposed, otherwise the reading-call duration.'],
     ['mtp', 'MTP acceptance', p.mtp_acceptance, '%', 'Accepted draft tokens ÷ proposed draft tokens; not the proportion of output tokens.']
   ];
   for (const [id, label, value, unit, help] of entries) {
@@ -1698,7 +1783,9 @@ function renderPerformance(S) {
     const valid = typeof value === 'number' && Number.isFinite(value);
     setText(tile.querySelector('span'), label);
     setText(tile.querySelector('b'), valid ? `${value.toLocaleString(undefined, {minimumFractionDigits: 1, maximumFractionDigits: 1})}${unit === '%' ? '%' : ' tok/s'}` : '—');
-    setText(tile.querySelector('small'), valid ? (id === 'mtp' ? 'of drafted tokens' : 'smoothed over ~10 s') : 'Waiting for phase samples');
+    const active = typeof p.active_tps === 'number' && Number.isFinite(p.active_tps);
+    setText(tile.querySelector('small'), valid ? (id === 'mtp' ? 'of drafted tokens' :
+      id === 'generation' && active ? `Active total: ${p.active_tps.toFixed(1)} tok/s` : 'smoothed over ~10 s') : 'Waiting for phase samples');
     tile.title = help + ' One-pole exponential smoothing across completed steps, with a 10-second active-time constant per phase. Inactive phases hold their values.';
   }
 }
@@ -1721,7 +1808,8 @@ function render(L) {
   const at = s => items.filter(it => it.step === s).length;
   const held = L.lanes.filter(l => L.thoughts[l.holder]).length;  // the lanes are the one truth
   const waiting = Object.values(L.thoughts).filter(t => t.lane === null).length;
-  tile("agents", "Agents", agents.length, L.paused ? "paused" : `${held}/${L.lanes.length} on GPU${waiting ? ` · ${waiting} waiting` : ""}`, L.paused ? "bad" : "dark");
+  const availableLanes = L.lanes.filter(l => l.up && L.models[l.model]?.up).length;
+  tile("agents", "Active clients", activeClientCount(L), `${held}/${availableLanes} on GPU${waiting ? ` · ${waiting} waiting` : ""}${L.paused ? " · autonomous work paused" : ""}`, "dark");
   tile("queue", "Queue", at("ready") + at("blocked"), `${at("ready")} ready · ${at("blocked")} blocked`);
   const landed = items.filter(it => it.step === "landed" && it.updated > dayAgo).length;
   tile("landed", "Landed · 24 h", landed, `${at("landed")} in all`);
@@ -1735,7 +1823,6 @@ function render(L) {
   renderWork(L);
   renderMessages(L);
   renderMachine(L);
-  renderScheduler(L);
   renderChecks(L);
   renderDrawer(L);
   renderHistory(L);
@@ -1757,7 +1844,7 @@ async function poll() {
     console.error("Dashboard snapshot request failed", e);
   } finally { clearTimeout(deadline); }
   if (snapshot) {
-    try { render(snapshot); }
+    try { renderScheduler(snapshot); render(snapshot); }
     catch (e) {
       $("stamp").textContent = `Dashboard display failed: ${e.message}`;
       console.error("Dashboard rendering failed", e);

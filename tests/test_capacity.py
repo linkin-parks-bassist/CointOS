@@ -14,6 +14,9 @@ class Capacity(unittest.TestCase):
         self.enterContext(patch.dict(lanes.RESIDENT, {}, clear=True))
         self.enterContext(patch.object(state.journal, 'write'))
         self.enterContext(patch.object(capacity.BACKEND, 'resident_states', return_value=True))
+        # These admission fixtures exercise the estimated-size fallback without
+        # a live native server. Exact native accounting has its own fixtures.
+        self.enterContext(patch.object(snapshots.BACKEND, 'snapshot_size', return_value=None))
         state.L['models'][self.model].update(up=True, resident_state_bytes=11_000_000_000)
         state.L['memory'] = {'headroom_gb': 50, 'available_gb': 74, 'psi': 0}
         state.L['user_last_thought'] = 0
@@ -159,6 +162,77 @@ class Capacity(unittest.TestCase):
         self.assertNotIn((self.model, 'review'), lanes.RESIDENT)
         self.assertIn((self.model, 'tools'), lanes.RESIDENT)
 
+    def test_cleanup_preserves_an_active_owner_without_a_task(self):
+        owner = 'external-source/conversation'
+        lanes.RESIDENT[self.model, owner] = [1, 2]
+        state.L['thoughts']['step'] = {'owner': owner}
+        with patch.object(lanes.BACKEND, 'release_residents') as release:
+            lanes.retire_residents(self.model, [owner])
+            release.assert_not_called()
+            state.L['thoughts'].clear()
+            lanes.retire_residents(self.model, [owner])
+            release.assert_called_once_with(state.CONFIG, self.model, [owner])
+
+    def test_retirement_never_holds_the_ledger_lock_over_native_io(self):
+        import threading
+        callbacks, results = [], []
+        def release(*_):
+            progressed = threading.Event()
+            def callback():
+                with state.LOCK:
+                    progressed.set()
+            thread = threading.Thread(target=callback, daemon=True)
+            callbacks.append(thread)
+            thread.start()
+            results.append(progressed.wait(1))
+        with patch.object(lanes.BACKEND, 'release_residents', side_effect=release):
+            lanes.retire_residents(self.model, ['private/finished'])
+        for thread in callbacks:
+            thread.join(2)
+        self.assertEqual(results, [True], 'native release blocked a streaming callback on the ledger lock')
+
+    def test_private_mismatch_reports_only_lengths_without_decoding_private_tokens(self):
+        owner = 'private/synthetic'
+        lane = state.L['lanes'][0]
+        lane['resident'] = owner
+        lanes.HELD[0] = [1,2,3]
+        with patch.object(lanes.BACKEND, 'select', return_value=[1,2,3]), \
+             patch.object(lanes.BACKEND, 'can_continue', return_value=False), \
+             patch.object(lanes.BACKEND, 'text') as text, \
+             patch.object(lanes, 'log') as log:
+            lanes.switch(0, [1,2,4], owner)
+        text.assert_not_called()
+        mismatch = next(c for c in log.call_args_list if c.args[0]=='divergence')
+        self.assertEqual(mismatch.kwargs['common'],2)
+        self.assertEqual(set(mismatch.kwargs), {'owner','held','next','common'})
+
+    def test_private_prefix_checkpoint_is_ram_only_and_cannot_spill_or_persist(self):
+        owner = 'private/synthetic'
+        with patch.object(snapshots.private_clients, 'live', return_value=True), \
+             patch.dict(state.CONFIG, snapshots='/dev/shm/cointos-test-memory-only'), \
+             patch.object(snapshots.BACKEND, 'save', return_value={'bytes': 1_000_000_000}), \
+             patch.object(snapshots.BACKEND, 'spill') as spill:
+            self.assertTrue(snapshots.keep(0, [1,2], owner, 'checkpoint'))
+            name, saved = next(iter(state.L['snapshots'].items()))
+            self.assertEqual(saved['tier'], 'memory')
+            self.assertFalse(snapshots.shared(self.model, [1,2]))
+            snapshots.evict(name)
+            self.assertNotIn(name, state.L['snapshots'])
+            state.L['snapshots'][name] = dict(saved)
+            snapshots.spill(name)
+            self.assertNotIn(name, state.L['snapshots'])
+            state.L['snapshots'][name] = dict(saved)
+            snapshots.persist()
+            self.assertNotIn(name, state.L['snapshots'])
+            spill.assert_not_called()
+
+    def test_cointel_residents_survive_the_gap_between_requests(self):
+        from cointos import coins
+        owners = [coins.profile(name)['identity'] + '/user' for name in coins.names()]
+        with patch.object(lanes.BACKEND, 'release_residents') as release:
+            lanes.retire_residents(self.model, owners)
+        release.assert_not_called()
+
     def test_guard_uses_physical_headroom_rather_than_unspent_reservations(self):
         self.agent('a')
         state.L['memory']['headroom_gb'] = 5
@@ -169,3 +243,52 @@ class Capacity(unittest.TestCase):
             daemon.guard()
         stop.assert_not_called()
         self.assertFalse(state.L['guard']['blocked'])
+
+
+class MeasuredGrowth(unittest.TestCase):
+    """Admission holds each run's measured room to grow, not its whole process cap."""
+    def setUp(self):
+        support.fresh_ledger(self)
+        self.enterContext(patch.dict(capacity.USAGE, {}, clear=True))
+        state.L['agents'] = {}
+
+    def test_a_measured_run_holds_its_peak_plus_margin_less_current_use(self):
+        state.L['agents']['w'] = {'task': 't', 'started_at': state.now() - 3600}
+        with patch.object(capacity, 'unit_gb', return_value=0.6):
+            capacity.observe()
+        with patch.object(capacity, 'unit_gb', return_value=0.5):
+            capacity.observe()
+        self.assertEqual(capacity.USAGE['w'], {'current_gb': 0.5, 'peak_gb': 0.6})
+        margin = state.CONFIG['memory']['agent_margin_gb']
+        self.assertAlmostEqual(capacity.growth_gb('w'), max(1, 0.6) + margin - 0.5)
+        self.assertLess(capacity.growth_gb('w'), capacity.process_gb())
+
+    def test_growth_never_exceeds_the_hard_cap(self):
+        state.L['agents']['w'] = {'task': 't', 'started_at': state.now() - 3600}
+        with patch.object(capacity, 'unit_gb', return_value=8.5):
+            capacity.observe()
+        self.assertLessEqual(capacity.growth_gb('w'), capacity.process_gb() - 8.5 + 1e-9)
+
+    def test_a_just_launched_run_holds_the_starting_estimate(self):
+        state.L['agents']['new'] = {'task': 't', 'started_at': state.now()}
+        self.assertAlmostEqual(capacity.growth_gb('new'), capacity.starting_gb())
+        self.assertLess(capacity.starting_gb(), capacity.process_gb())
+
+    def test_a_run_that_stays_unmeasurable_holds_the_full_cap(self):
+        state.L['agents']['lost'] = {'task': 't', 'started_at': state.now() - 3600}
+        with patch.object(capacity, 'unit_gb', return_value=None):
+            capacity.observe()
+        self.assertEqual(capacity.growth_gb('lost'), capacity.process_gb())
+
+    def test_finished_runs_are_forgotten(self):
+        state.L['agents']['w'] = {'task': 't', 'started_at': state.now()}
+        with patch.object(capacity, 'unit_gb', return_value=1.0):
+            capacity.observe()
+        state.L['agents'].clear()
+        capacity.observe()
+        self.assertEqual(capacity.USAGE, {})
+
+    def test_unit_usage_counts_anonymous_and_shared_memory_only(self):
+        stat = "anon 600000000\nfile 5000000000\nshmem 100000000\n"
+        with patch.object(capacity.Path, 'read_text', return_value=stat):
+            self.assertAlmostEqual(capacity.unit_gb('w'), 0.7)

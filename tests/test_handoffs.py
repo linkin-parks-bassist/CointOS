@@ -45,7 +45,7 @@ class Handoffs(unittest.TestCase):
 
     def test_an_unlanded_plan_cannot_finish(self):
         support.commit(self.task["worktree"], "unlanded plan")
-        with self.assertRaisesRegex(ValueError, "land your committed branch"):
+        with self.assertRaisesRegex(ValueError, "publish the submitted maintenance files"):
             self.finish("complete", "Plan is done")
         self.assertEqual((self.task["status"], self.task["receipt"]), ("running", None))
 
@@ -181,7 +181,7 @@ class Handoffs(unittest.TestCase):
                     queues.add(self.project, "queued", f"item-{kind}", "b")
                 task = tasks.create(kind, where, f"item-{kind}", "b", [1], item=f"item-{kind}" if schema.KINDS[kind]["record"] else None,
                                     worker="p:x", abilities=["standard"])
-                self.assertIn("cointos finish --blocked", prompts.launch_text(task, where))
+                self.assertIn("Finish with the appropriate CointOS tool.", prompts.launch_text(task, where))
 
 
 class PeriodicSteward(unittest.TestCase):
@@ -202,7 +202,7 @@ class PeriodicSteward(unittest.TestCase):
         self.assertEqual(sum(t["kind"] == "steward" for t in state.L["tasks"].values()), 1)
         text = prompts.launch_text(task, tasks.SYSTEM)
         self.assertNotIn("cointos merge", text)
-        self.assertIn("system task with no project, branch or worktree", text)
+        self.assertIn("system task", text)
 
     def test_a_manual_scout_request_is_immediate_and_deduplicated(self):
         first, second = api.dispatch("scout", {}), api.dispatch("scout", {})

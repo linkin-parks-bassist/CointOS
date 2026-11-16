@@ -8,7 +8,63 @@ import os
 import re
 import secrets
 import tempfile
+import hashlib
 from pathlib import Path
+
+from cointos import config as configuration
+
+
+class OperationError(ValueError):
+    """Private storage diagnostics stay available to operators, outside agent workflow."""
+    public = ('CointOS could not complete file preparation or publication. Preserve your files '
+              'and report this refusal through the task\'s normal recovery path.')
+
+
+def workspace_record(path):
+    key = hashlib.sha256(str(Path(path).resolve()).encode()).hexdigest()
+    return configuration.STATE / 'workspaces' / (key + '.json')
+
+
+def workspace_context(path):
+    """Resolve daemon-private metadata for an exported source directory, including subdirectories."""
+    requested = Path(path).resolve()
+    for root in (requested, *requested.parents):
+        record = workspace_record(root)
+        if record.exists():
+            value = configuration.read_owned_json(record)
+            if value.get('workspace') != str(root) or not Path(value['metadata']).is_dir():
+                raise ValueError('workspace artifact metadata is unavailable; preserve files for recovery')
+            return root, Path(value['metadata'])
+    return None
+
+
+def insulate(workspace):
+    """Remove only a managed linked checkout's Git link; daemon commands retain private identity.
+
+    The linked checkout stays locked against pruning. The durable record is written before
+    unlinking, making interruption safe without putting a metadata locator in the source tree.
+    """
+    root = Path(workspace).resolve()
+    link = root / '.git'
+    existing = workspace_context(root)
+    if existing:
+        if link.exists() or link.is_symlink():
+            if link.is_symlink() or link.read_text().strip() != f'gitdir: {existing[1]}':
+                raise ValueError('workspace has an unexpected metadata link; preserve it for recovery')
+            link.unlink()
+        return
+    if link.is_symlink() or not link.is_file():
+        raise ValueError('artifact export requires a managed source directory')
+    metadata = run(root, 'rev-parse', '--absolute-git-dir')
+    common = run(root, 'rev-parse', '--path-format=absolute', '--git-common-dir')
+    reason = 'CointOS private artifact metadata'
+    locked = Path(metadata) / 'locked'
+    if not locked.exists() or locked.read_text().strip() != reason:
+        run(common, 'worktree', 'lock', '--reason', reason, str(root))
+    record = workspace_record(root)
+    record.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    configuration.write_json(record, {'workspace': str(root), 'metadata': metadata})
+    link.unlink()
 
 
 @contextlib.contextmanager
@@ -145,10 +201,16 @@ def recover_publications(repo) -> None:
         owned.unlink()
 
 
+def command(repo, *args):
+    context = workspace_context(repo)
+    private = [f'--git-dir={context[1]}', f'--work-tree={context[0]}'] if context else []
+    return ["git", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *private, *args]
+
+
 def result(repo, *args) -> subprocess.CompletedProcess:
     # Mechanical operations have explicit test/receipt authority. Local hooks
     # must not add unbounded scripts or extra gates to that control path.
-    return subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "-C", str(repo), *args],
+    return subprocess.run(command(repo, *args),
                           capture_output=True, text=True)
 
 
@@ -156,7 +218,7 @@ def run(repo, *args) -> str:
     """Git's output; a failure raises ValueError with git's own explanation."""
     done = result(repo, *args)
     if done.returncode:
-        raise ValueError(done.stderr.strip() or f"git {' '.join(args)} failed")
+        raise OperationError(done.stderr.strip() or f"git {' '.join(args)} failed")
     return done.stdout.rstrip("\n")
 
 
@@ -166,6 +228,33 @@ def ok(repo, *args) -> bool:
 
 def head(repo, ref: str = "HEAD") -> str:
     return run(repo, "rev-parse", ref)
+
+
+def push_upstream(repo, main: str, timeout: float = 60) -> dict:
+    """Push accepted main to its configured upstream, using ordinary Git auth/rules."""
+    remote = result(repo, 'config', '--get', f'branch.{main}.remote').stdout.strip()
+    target = result(repo, 'config', '--get-all', f'branch.{main}.merge').stdout.strip()
+    if not remote or not target:
+        return {'status': 'skipped', 'reason': 'no configured upstream'}
+    if not target.startswith('refs/heads/') or not ok(repo, 'check-ref-format', target):
+        return {'status': 'failed', 'error': 'configured upstream is not one branch ref'}
+    commit = head(repo, f'refs/heads/{main}')
+    redact = lambda text: re.sub(r'(https?://)[^/\s]+@', r'\1[redacted]@', text)
+    context = {'remote': redact(remote), 'ref': target, 'commit': commit}
+    env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GCM_INTERACTIVE': 'Never', 'GH_PROMPT_DISABLED': '1'}
+    if not env.get('GIT_SSH_COMMAND') and not result(repo, 'config', '--get', 'core.sshCommand').stdout.strip():
+        env['GIT_SSH_COMMAND'] = 'ssh -o BatchMode=yes'
+    try:
+        # Explicit SHA/refspec: never the editor's HEAD, never all refs, never force.
+        # Preserve repository hooks and credential routing; do not switch gh accounts.
+        done = subprocess.run(['git', '-C', str(repo), 'push', '--porcelain', '--', remote,
+                               f'{commit}:{target}'], capture_output=True, text=True,
+                              stdin=subprocess.DEVNULL, timeout=timeout, env=env)
+    except subprocess.TimeoutExpired:
+        return {**context, 'status': 'failed', 'error': f'push timed out after {timeout:g} seconds'}
+    if done.returncode:
+        return {**context, 'status': 'failed', 'error': redact(done.stderr.strip() or done.stdout.strip())[-3000:]}
+    return {**context, 'status': 'pushed'}
 
 
 def contains(repo, commit: str, branch: str) -> bool:
@@ -270,7 +359,7 @@ def resolve_insertions(repo, paths: list[str]) -> None:
             continue
         if len({e[0] for e in entries}) != 1 or entries[0][0] not in {"100644", "100755"}:
             continue
-        current, base, packet = (subprocess.check_output(["git", "-C", str(repo), "show", f":{stage}:{name}"])
+        current, base, packet = (subprocess.check_output(command(repo, 'show', f':{stage}:{name}'))
                                  for stage in (2, 1, 3))
         if b"\0" in current + base + packet:
             continue
@@ -320,7 +409,22 @@ ARCHIVE = "refs/cointos/archive/"
 
 def remove_worktree(repo, worktree: str) -> None:
     """Remove a task's checkout; its branch keeps the commits and `add_worktree` can recreate it."""
-    result(repo, "worktree", "remove", "--force", worktree)
+    context = workspace_context(worktree)
+    if context:
+        # Only terminal managed workspaces reach retirement. Never overwrite a new link.
+        link = Path(worktree) / '.git'
+        expected = f'gitdir: {context[1]}\n'
+        if link.exists() or link.is_symlink():
+            if link.is_symlink() or link.read_text() != expected:
+                raise ValueError('workspace has an unexpected metadata link; preserve it for recovery')
+        else:
+            with link.open('x') as stream:
+                stream.write(expected)
+        if (context[1] / 'locked').exists():
+            run(repo, 'worktree', 'unlock', worktree)
+    removed = result(repo, "worktree", "remove", "--force", worktree)
+    if context and removed.returncode == 0:
+        workspace_record(worktree).unlink()
     result(repo, "worktree", "prune")
 
 

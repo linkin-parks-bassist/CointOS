@@ -1,11 +1,12 @@
 ---
 status: green
-revised_at: "2026-11-03T05:28:37+11:00"
+revised_at: "2026-11-09T03:40:30+11:00"
 ---
 
 Current accidental capability gaps, from source and per-run agent logs. These are defects or friction, not user policy; they are separate from the deliberate guards in what/are/the/cointos/agent/capability/requirements.md.
 
-- **kt writes:** branch-publishing confinement omits `~/.knowledge/.tools` and `~/.local/state/knowledgetrees`; `kt_add`/`kt_rewrite` fail with EACCES. The edit allowlist covers only the worktree, so knowledge edits resolving to canonical paths are also denied.
+- **Runtime inspection:** user-requested follow-up: built-in time-window activity queries with event counts, lane switches, divergence/restore/error evidence and links to relevant records. The Steward screenshot shows manual epoch conversion and raw JSONL inspection wasting reasoning/tool work. Native runtime-review-11 likewise attempted private event-file reads and investigated their permission denial (traces22–25); declared inspection lacks this event-window query. Keep this queued behind Git insulation and message delivery; no implementation/acceptance yet.
+- **kt writes:** full native authoring under current scoped permissions remains to qualify. Managed launch registers local knowledge before confinement and supplies private rewrite state; assigned-tree edits and authorized tool state are distinct from canonical editor drafts. Diagnose refusals against the current launch paths/aliases rather than reusing the old global-state EACCES explanation. Confinement and assignment-preparation owners define the current boundary.
 - **Publishing:** project Operators cannot publish product code, so a verified product fix must go through a queued worker and integrator.
 - **Compaction:** OpenCode summary generation rejects tool calls, ending runs without receipts (`Tool call not allowed while generating summary`).
 - **Read-only denials:** `dpkg -l|-s`, `systemctl` status/cat/show/is-active/list-units and `cointos ... --help` are allowed; other `systemctl` and `dpkg` commands stay denied without the operator control ability.

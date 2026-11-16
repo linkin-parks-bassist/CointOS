@@ -1,6 +1,7 @@
 """Agents' MCP tools: typed CLI commands without a shell, per-role catalogues, and messages
 between tasks and the user."""
 import json
+import copy
 import io
 import os
 from pathlib import Path
@@ -108,6 +109,18 @@ class Tools(unittest.TestCase):
         self.assertTrue(reply['result']['isError'])
         self.assertEqual(reply['result']['structuredContent'],result)
 
+    def test_successful_proposal_check_explicitly_does_not_create_a_handoff(self):
+        before = copy.deepcopy(queues.records())
+        reply = mcp.respond({'id': 1, 'method': 'tools/call', 'params': {
+            'name': 'check_work', 'arguments': {'project': 'p', 'name': 'proposed-child',
+                'kind': 'command', 'brief': 'Plan the next bounded step.',
+                'summary': 'Plan next step', 'dependencies': []}}}, 'manager')
+        result = reply['result']['structuredContent']
+        self.assertTrue(result['ok'])
+        self.assertFalse(result['created'])
+        self.assertIn('no work was queued or dispatched', result['message'])
+        self.assertEqual(queues.records(), before)
+
     def test_malformed_tool_arguments_are_refused_without_a_request(self):
         with patch.object(mcp,'call') as called:
             reply=mcp.respond({'id':1,'method':'tools/call','params':{'name':'check_work','arguments':[]}},'manager')
@@ -115,6 +128,8 @@ class Tools(unittest.TestCase):
         self.assertTrue(reply['result']['isError'])
 
     def test_undeclared_preflight_target_cannot_silently_check_different_work(self):
+        declaration = next(tool for tool in mcp.catalogue('operator') if tool['name'] == 'check_work')
+        self.assertFalse(declaration['inputSchema']['additionalProperties'])
         with patch.object(mcp, 'call') as called:
             reply = mcp.respond({'id': 1, 'method': 'tools/call', 'params': {
                 'name': 'check_work', 'arguments': {'task': 'p:another-assignment'}}}, 'operator')
@@ -138,13 +153,13 @@ class Tools(unittest.TestCase):
     def test_each_role_sees_its_own_tools(self):
         self.assertIn("queue", self.names("manager"))
         self.assertIn("land", self.names("integrator"))
-        self.assertIn("queue", self.names("worker"))
+        self.assertNotIn("queue", self.names("worker"))
         self.assertNotIn("land", self.names("worker"))
         self.assertTrue({"finish", "task", "send", "inbox"} <= self.names("worker"))
         self.assertEqual(mcp.invoke("land", {"summary": "x"}, "worker"), ("unknown tool 'land' for this role", True))
         self.assertIn("dispatch", self.names("manager"))
         self.assertIn("dispatch", self.names("steward"))
-        self.assertIn("dispatch", self.names("worker"))
+        self.assertNotIn("dispatch", self.names("worker"))
         self.assertTrue({"hold", "revise", "cancel", "correct_tests", "resume"} <= self.names("steward"))
         self.assertIn('handoff', self.names('manager'))
         self.assertIn('correct_tests', self.names('manager'))
@@ -452,3 +467,35 @@ class InboxWait(unittest.TestCase):
                              ('cointosd is not reachable (refused)', True))
         with patch.object(mcp, 'call', call):
             self.assertEqual(mcp.message_tool('inbox', {}), ('cointosd is not reachable (refused)', True))
+
+
+class SubjectInspection(unittest.TestCase):
+    def test_supervisor_inspects_its_declared_subject_without_retyping_the_id(self):
+        own = {'id': 'system:check', 'supervises': 'p:long-subject-2'}
+        for name, arguments, expected in [('task', {}, ['task', own['supervises']]),
+                                          ('log', {'show': '3-5'}, ['log', own['supervises'], '--show', '3-5']),
+                                          ('task', {'task': 'p:explicit.2'}, ['task', 'p:explicit.2'])]:
+            before = dict(arguments)
+            with patch.object(mcp, 'identity', return_value={'task': own['id'], 'run': 'check'}), \
+                    patch.object(mcp, 'ledger', return_value={'tasks': {own['id']: own}}), \
+                    patch.object(mcp, 'run_cli', return_value=('record', False)) as run, \
+                    patch.object(mcp, 'unread_notice', return_value=''):
+                result, failed = mcp.invoke(name, arguments, 'supervisor')
+                self.assertFalse(failed)
+                run.assert_called_once_with(expected)
+            self.assertEqual(arguments, before)
+        for tool in mcp.catalogue('supervisor'):
+            if tool['name'] in ('task', 'log'):
+                self.assertNotIn('task', tool['inputSchema']['required'])
+        task = next(t for t in mcp.catalogue('worker') if t['name'] == 'task')
+        self.assertIn('task', task['inputSchema']['required'])
+
+    def test_no_subject_or_an_explicit_empty_target_never_guesses(self):
+        with patch.object(mcp, 'identity', return_value={'task': 'system:check', 'run': 'check'}), \
+                patch.object(mcp, 'ledger', return_value={'tasks': {}}), \
+                patch.object(mcp, 'run_cli') as run:
+            for arguments, expected in [({}, 'no declared subject'), ({'task': ''}, 'missing required')]:
+                result, failed = mcp.invoke('task', arguments, 'supervisor')
+                self.assertTrue(failed)
+                self.assertIn(expected, result)
+            run.assert_not_called()

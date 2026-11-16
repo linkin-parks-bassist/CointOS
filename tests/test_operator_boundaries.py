@@ -199,29 +199,27 @@ class OperatorBoundaries(unittest.TestCase):
         operator = self.repair(source)
         api.dispatch('cancel', {'items': [source['id']], 'reason': 'User withdrew the requested work'})
         self.assertNotIn(source['record'], state.L['queue'])
-        with self.assertRaisesRegex(ValueError, 'repair|scope|withdraw|owning|Operator'):
+        self.assertTrue(operator['cancelled'])
+        with self.assertRaisesRegex(ValueError, 'not running'):
             self.call(operator, 'queue', project='p', name='resurrect', kind='command',
                       brief='Continue the withdrawn obstruction anyway')
         self.assertNotIn('p:resurrect', state.L['queue'])
-        result = self.call(operator, 'finish', outcome='complete', detail='The user withdrew the origin; no work was resurrected')
-        self.assertEqual(result['receipt']['evidence']['withdrawn_record'], source['record'])
+        with self.assertRaisesRegex(ValueError, 'not running'):
+            self.call(operator, 'finish', outcome='complete', detail='The user withdrew the origin')
         self.assertNotIn(source['record'], state.L['queue'])
         self.assertIsNone(source.get('acceptance'))
 
-    def test_withdrawal_handback_still_requires_operator_changes_committed_and_landed(self):
+    def test_cancellation_preserves_uncommitted_repair_work_without_requiring_more_work(self):
         source = self.blocked()
         operator = self.repair(source)
         (Path(operator['worktree']) / 'repair-note.txt').write_text('Verified the abandoned obstruction.\n')
         api.dispatch('cancel', {'items': [source['id']], 'reason': 'User withdrew the work'})
-        with self.assertRaisesRegex(ValueError, 'uncommitted'):
+        with self.assertRaisesRegex(ValueError, 'not running'):
             self.call(operator, 'finish', outcome='complete', detail='Handing back the withdrawn assignment')
-        commit = support.commit(operator['worktree'], 'checked repair note')
-        with self.assertRaisesRegex(ValueError, 'land|merge'):
-            self.call(operator, 'finish', outcome='complete', detail='Handing back the withdrawn assignment')
-        git.publish(self.project['path'], 'main', commit, git.head(self.project['path'], 'main'))
-        result = self.call(operator, 'finish', outcome='complete', detail='The retained repair note is committed and landed')
-        self.assertEqual(result['receipt']['evidence']['commit'], commit)
-        self.assertEqual(result['receipt']['evidence']['withdrawn_record'], source['record'])
+        self.assertEqual((Path(operator['worktree']) / 'repair-note.txt').read_text(),
+                         'Verified the abandoned obstruction.\n')
+        self.assertTrue(operator['cancelled'])
+        self.assertIsNone(operator['receipt'])
         self.assertNotIn(source['record'], state.L['queue'])
 
     def test_replacement_child_itself_terminally_blocked_cannot_prove_handback(self):
@@ -310,7 +308,7 @@ class OperatorBoundaries(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'checked handback'):
             self.call(operator, 'finish', outcome='complete', detail='Unrelated maintenance passed')
 
-    def test_interrupted_started_repair_can_resume_withdrawn_origin_handback(self):
+    def test_lost_repair_diagnosis_does_not_recreate_withdrawn_origin(self):
         source = self.blocked()
         operator = self.repair(source)
         api.dispatch('cancel', {'items': [source['id']], 'reason': 'User withdrew the assignment'})
@@ -319,10 +317,10 @@ class OperatorBoundaries(unittest.TestCase):
         state.L.update(state.fresh(previous))
         operator = state.L['tasks'][operator['id']]
         lifecycle.orphaned(operator)
-        self.assertTrue(spawner.runnable(operator, {}))
-        support.running(operator, 'resumed-repair-run')
-        result = self.call(operator, 'finish', outcome='complete', detail='The withdrawn origin remains withdrawn after replacement')
-        self.assertEqual(result['receipt']['evidence']['withdrawn_record'], source['record'])
+        replacement, created = tasks.request_repair(operator)
+        self.assertFalse(created)
+        self.assertIsNone(replacement)
+        self.assertTrue(operator['cancelled'])
         self.assertNotIn(source['record'], state.L['queue'])
 
     def test_newer_garden_receipt_cannot_bypass_original_selected_leaf_health(self):

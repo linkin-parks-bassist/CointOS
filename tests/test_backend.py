@@ -7,6 +7,16 @@ from cointos.state import CONFIG
 
 
 class Rendering(unittest.TestCase):
+    def test_native_snapshot_size_requires_matching_idle_slot_and_concrete_byte_count(self):
+        with patch.object(backend, '_server', return_value=[
+                {'id': 0, 'is_processing': True, 'state_size_bytes': 900, 'n_prompt_tokens': 10}]):
+            self.assertIsNone(backend.snapshot_size(CONFIG, 'm', 0))
+        with patch.object(backend, '_server', return_value=[
+                {'id': 0, 'is_processing': False, 'state_size_bytes': 600000000, 'n_prompt_tokens': 33842}]):
+            self.assertEqual(backend.snapshot_size(CONFIG, 'm', 0), {'tokens': 33842, 'bytes': 600000000})
+        with patch.object(backend, '_server', return_value=[{'id': 0, 'is_processing': False}]):
+            self.assertIsNone(backend.snapshot_size(CONFIG, 'm', 0))
+
     def test_leading_instruction_messages_render_as_one_without_mutating_history(self):
         messages = [{'role': 'system', 'content': 'System instructions'},
                     {'role': 'developer', 'content': 'Developer instructions'},
@@ -204,6 +214,23 @@ class BoundedSteps(unittest.TestCase):
             result = backend.think(CONFIG, 'm', 0, [1, 2], 1, 1, {}, lambda _: None)
         self.assertEqual(result['generation_seconds'], 2)
 
+    def test_read_decode_and_request_time_remain_distinct(self):
+        event = {'tokens': [3] * 32, 'tokens_predicted': 32, 'tokens_cached': 33,
+                 'stop': True, 'stop_type': 'limit', 'timings': {
+                     'predicted_n': 32, 'predicted_ms': 2000, 'prompt_n': 1,
+                     'prompt_ms': 300, 'draft_n': 40, 'draft_n_accepted': 24}}
+        with patch.object(backend, 'prefill', return_value={'prefill_tokens': 1, 'prefill_seconds': .2}), \
+             patch.object(backend, '_server', return_value=event), \
+             patch.object(backend.time, 'monotonic', side_effect=[0, .5, 4.5, 4.5]):
+            result = backend.think(CONFIG, 'm', 0, [1, 2], 1, 32, {}, lambda _: None)
+        self.assertEqual(result['decode_seconds'], 2)
+        self.assertEqual(result['prefill_seconds'], .5)
+        self.assertEqual(result['prefill_tokens'], 2)
+        self.assertEqual(result['call_seconds'], 4.5)
+        self.assertEqual(result['generation_seconds'], 4)  # Existing budget accounting is preserved.
+        self.assertEqual(result['draft_tokens'], 40)
+        self.assertEqual(result['draft_accepted_tokens'], 24)
+
     def test_cache_check_extends_a_restored_hybrid_prefix(self):
         held = 2063
         class RestoredConnection(FakeConnection):
@@ -231,6 +258,77 @@ class BoundedSteps(unittest.TestCase):
                                                 "processed": 0}},
             {"tokens": [], "stop": True, "stop_type": "limit", "tokens_cached": 6000})
         backend.prefill(CONFIG, "m", 0, list(range(6000)), held)
+
+
+class ResidentSlots(unittest.TestCase):
+    def setUp(self):
+        backend._SLOT_OF.clear()
+        backend._SLOT_TOKENS.clear()
+        backend._SLOT_TOUCH.clear()
+        backend._ACTIVE_SLOT.clear()
+        self.config = {"models": {"m": {"lanes": 1, "slots": 3, "resident": True}},
+                       "snapshots": "/tmp", "timeouts": {"snapshot_seconds": 1}}
+
+    def test_owner_slots_are_distinct_and_released(self):
+        self.assertEqual(backend.select(self.config, "m", 0, "A"), [])
+        backend._note_slot("m", 0, [1, 2, 3])
+        self.assertEqual(backend.select(self.config, "m", 0, "A"), [1, 2, 3])
+        backend.select(self.config, "m", 0, "B")
+        self.assertEqual(sorted(backend.residents(self.config, "m")), ["A", "B"])
+        self.assertNotEqual(backend._SLOT_OF[("m", "A")], backend._SLOT_OF[("m", "B")])
+        backend.release_residents(self.config, "m", ["A"])
+        self.assertEqual(backend.residents(self.config, "m"), ["B"])
+
+    def test_full_slots_evict_the_least_recently_used_owner(self):
+        config = {"models": {"m": {"lanes": 1, "slots": 2, "resident": True}},
+                  "snapshots": "/tmp", "timeouts": {"snapshot_seconds": 1}}
+        backend.select(config, "m", 0, "A")
+        slot_a = backend._SLOT_OF[("m", "A")]
+        backend.select(config, "m", 0, "B")
+        slot_b = backend._SLOT_OF[("m", "B")]
+        backend._SLOT_TOUCH[("m", slot_a)] = 2.0
+        backend._SLOT_TOUCH[("m", slot_b)] = 1.0
+        self.assertEqual(backend.eviction(config, "m", "C"), "B")
+        self.assertIsNone(backend.eviction(config, "m", "A"))
+        backend.select(config, "m", 0, "C")
+        self.assertIn(("m", "A"), backend._SLOT_OF)
+        self.assertNotIn(("m", "B"), backend._SLOT_OF)
+        self.assertEqual(backend._SLOT_OF[("m", "C")], slot_b)
+
+    def test_save_and_restore_use_the_selected_slot(self):
+        paths = []
+        def server(model, path, body, timeout):
+            paths.append(path)
+            return {"n_saved": 1, "n_restored": 1}
+        backend.select(self.config, "m", 0, "A")
+        backend.select(self.config, "m", 0, "B")
+        backend.select(self.config, "m", 0, "A")
+        with patch.object(backend, "_server", side_effect=server), \
+                patch.object(backend.os.path, "getsize", return_value=10):
+            backend.save(self.config, "m", 0, "x")
+        self.assertEqual(paths[-1], "/slots/0?action=save")
+        backend.select(self.config, "m", 0, "B")
+        with patch.object(backend, "_server", side_effect=server):
+            backend.restore(self.config, "m", 0, "x")
+        self.assertEqual(paths[-1], "/slots/1?action=restore")
+
+    def test_launch_flags_request_configured_slots(self):
+        args = backend._wanted_args({"snapshots": "/tmp"},
+                                    {"lanes": 1, "slots": 3, "args": "--x"})
+        self.assertIn("--parallel 3", args)
+
+    def test_resident_shape_reports_zero_extra_state(self):
+        config = {"lemonade": "http://x", "snapshots": "/tmp",
+                  "models": {"m": {"lanes": 1, "slots": 3, "resident": True,
+                                   "ctx_size": 393216, "args": "--x"}},
+                  "timeouts": {"lemonade_health_seconds": 1}}
+        health = {"all_models_loaded": [{
+            "model_name": "m", "loaded": True, "backend_url": "http://127.0.0.1:9/v1",
+            "launch_command": ["--ctx-size", "393216", "--parallel", "3", "--x",
+                               "--slot-save-path", "/tmp"]}]}
+        with patch.object(backend, "_call", return_value=health):
+            found = backend.models(config)
+        self.assertEqual(found["m"].get("resident_state_bytes"), 0)
 
 
 if __name__ == "__main__":

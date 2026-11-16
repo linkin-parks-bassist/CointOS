@@ -85,7 +85,7 @@ class ReplacementHandoff(unittest.TestCase):
     def test_dirty_or_unlanded_operator_artifacts_refuse_before_any_repoint(self):
         source, operator, child, consumer = self.fixture()
         (Path(operator['worktree']) / 'repair-note').write_text('Checked repair evidence.\n')
-        self.refused_unchanged(operator, 'uncommitted')
+        self.refused_unchanged(operator, 'workspace changed')
         commit = support.commit(operator['worktree'])
         self.refused_unchanged(operator, 'land|merge')
         git.publish(self.project['path'], 'main', commit, git.head(self.project['path'], 'main'))

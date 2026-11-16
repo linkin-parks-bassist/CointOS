@@ -7,8 +7,9 @@ from pathlib import Path
 import shutil
 import stat
 import tempfile
+from cointos import config
 
-SEARCH_SECONDS = 30
+SEARCH_SECONDS = config.load()['coin']['search_seconds']
 SEARCH_SKIPS = frozenset(('.git', '.cache', '.worktrees', 'node_modules', '__pycache__', 'containers', 'tmp'))
 
 
@@ -140,10 +141,18 @@ def execute(name, arguments):
                 else:
                     try:
                         with candidate.open(encoding='utf-8') as stream:
-                            matches.extend({'path': str(candidate), 'line': number, 'text': line.rstrip('\n')}
-                                           for number, line in enumerate(stream, 1) if text in line)
+                            for number, line in enumerate(stream, 1):
+                                if time.monotonic() > deadline:
+                                    incomplete = True
+                                    break
+                                if text in line:
+                                    matches.append({'path': str(candidate), 'line': number, 'text': line.rstrip('\n')})
                     except (UnicodeError, OSError):
                         continue
+                if incomplete:
+                    break
+            if incomplete:
+                break
         if incomplete:
             return {'ok': True, 'matches': matches, 'incomplete': f'stopped after {SEARCH_SECONDS} seconds; '
                     'search a narrower path, or ask the user'}

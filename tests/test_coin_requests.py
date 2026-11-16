@@ -56,7 +56,8 @@ class Requests(unittest.TestCase):
                 return {'role': 'assistant', 'tool_calls': [{'id': 'ack', 'function': {
                     'name': 'send', 'arguments': json.dumps({'message': 'Checking the final batch.'})}}, {'id': 'finish', 'function': {
                     'name': 'finish_request', 'arguments': json.dumps({'id': request['id']})}}]}
-            return {'role': 'assistant', 'content': 'Verified.'}
+            from tests.test_coin import assistant, call
+            return assistant(call('done'))
         with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), patch.object(coin, 'report'):
             coin.turn('token', 7, 70, ['Final batch'], lambda: [], None)
         messages, options = calls[0]
@@ -76,7 +77,8 @@ class Requests(unittest.TestCase):
                 return {'role': 'assistant', 'tool_calls': [{'id': 'ack', 'function': {
                     'name': 'send', 'arguments': json.dumps({'message': 'Received the ongoing instruction.'})}}, {'id': 'retain', 'function': {
                     'name': 'retain_request', 'arguments': json.dumps({'instruction': 'Save later batches to ~/album'})}}]}
-            return {'role': 'assistant', 'content': 'Ready.'}
+            from tests.test_coin import sent_reply
+            return sent_reply('Ready.')
         with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), patch.object(coin, 'report'):
             coin.turn('token', 7, 70, ['Save later batches to ~/album'], lambda: [], None)
             coin.turn('token', 7, 70, ['Another batch'], lambda: [], None)

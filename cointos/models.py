@@ -108,11 +108,16 @@ def catalog() -> list[dict]:
     with LOCK:
         recipes = deepcopy(CONFIG['models'])
         roots = list(CONFIG.get('model_directories', []))
+        config = {**CONFIG, 'models': recipes}
     known = {str(Path(s['gufo']['model_path']).expanduser().resolve()): name
              for name, s in recipes.items() if s.get('backend') == 'gufo'}
     roots += [str(Path(path).parent) for path in known]
     paths = set(known)
-    entries = []
+    entries = BACKEND.catalog(config)
+    entries += [{'id': 'halogen:' + name, 'name': name, 'model': name,
+                 'available': Path(shape['halogen']['weights']).expanduser().is_dir(),
+                 'reason': 'Experimental retained-cache switching'}
+                for name, shape in recipes.items() if shape.get('backend') == 'halogen']
     for root in set(roots):
         directory = Path(root).expanduser()
         try:
@@ -148,7 +153,7 @@ def status() -> dict:
     name = CONFIG['work_model']
     shape = CONFIG['models'][name]
     return {'model': name, 'path': str(Path(shape['gufo']['model_path']).expanduser().resolve())
-            if shape.get('backend') == 'gufo' else None,
+            if shape.get('backend') == 'gufo' else ('halogen:' if shape.get('backend') == 'halogen' else 'lemonade:') + name,
             'discovery_seconds': CONFIG['dashboard']['model_discovery_seconds'],
             **L.get('model_change', {'phase': 'ready'})}
 
@@ -159,7 +164,7 @@ def choose(body) -> dict:
         raise ValueError('Expected a discovered model path')
     if L.get('model_change', {}).get('phase') in ('checking', 'draining', 'loading', 'restoring'):
         raise ValueError('A default model change is already in progress')
-    path = str(Path(body['path']).expanduser().resolve())
+    path = body['path'] if body['path'].startswith(('lemonade:', 'halogen:')) else str(Path(body['path']).expanduser().resolve())
     L['model_change'] = {'phase': 'checking', 'requested': path, 'since': now()}
     threading.Thread(target=replace, args=(path,), daemon=True, name='default-model').start()
     return {'ok': True, **status()}
@@ -214,6 +219,8 @@ def _replace(path):
         if not entry or not entry['available']:
             raise ValueError(entry['reason'] if entry else 'Model is not a downloaded catalog choice')
         name, shape = recipe(entry)
+        if not BACKEND.resident_states({**CONFIG, 'models': {name: shape}}, name):
+            raise ValueError('Shared default requires resident-state support for private sessions')
         with LOCK:
             old = deepcopy(CONFIG)
             if name == old['work_model']:
@@ -255,7 +262,7 @@ def _replace(path):
             if name not in L['models']:
                 L['models'][name] = {'up': False, 'launching': False, 'problems': []}
                 L['model_memory'][name] = {k: shape[k] for k in ('memory_gb', 'weights_gb')}
-                L['model_memory'][name]['weights_reclaimable'] = shape.get('backend', 'llama') != 'gufo'
+                L['model_memory'][name]['weights_reclaimable'] = shape.get('backend', 'llama') not in ('gufo', 'halogen')
                 for index in range(shape['lanes']):
                     position = len(L['lanes'])
                     L['lanes'].append({'model': name, 'index': index, 'up': False, 'holder': None,

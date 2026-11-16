@@ -42,8 +42,8 @@ class RuntimeQueue(unittest.TestCase):
                 self.assertTrue(updated.wait(1)); release.set(); first.join(2); second.join(2)
             self.assertFalse(first.is_alive()); self.assertFalse(second.is_alive())
             commands = [b for q,b in written if q=='what is the command queue']
-            self.assertNotIn('Second fixture',commands[0])
-            self.assertIn('Second fixture',commands[-1])
+            self.assertNotIn('p:second',commands[0])
+            self.assertIn('cointos task p:second',commands[-1])
         finally:
             release.set()
             if first.ident is not None: first.join(2)
@@ -70,7 +70,8 @@ class RuntimeQueue(unittest.TestCase):
                 result = subprocess.run(['kt', '--lean', 'open', 'local:what/is/the/command/queue.md'],
                                         cwd=root, check=True, capture_output=True, text=True)
                 self.assertIn('p:plan', result.stdout)
-                self.assertIn('Plan the next stage', result.stdout)
+                self.assertIn('cointos task p:plan', result.stdout)
+                self.assertNotIn('Plan the next stage', result.stdout)
                 revision = result.stderr
                 queues.publish()
                 after = subprocess.run(['kt', '--lean', 'open', 'local:what/is/the/command/queue.md'],

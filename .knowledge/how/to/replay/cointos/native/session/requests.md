@@ -1,7 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-19T20:00:35+11:00"
-checked_at: '2026-11-04T01:32:56+11:00'
+revised_at: "2026-11-06T11:28:58+11:00"
 ---
 
 Replay the actual OpenCode request before attributing a restart cache miss to native inference. Keep session exports and token vectors private; they contain conversation and product material.
@@ -12,4 +11,4 @@ Capture the real SDK body. Reconstruct gateway preparation with the task's pinne
 
 OpenCode 1.18.35's private import can leave an EffectFlock heartbeat after its process exits. Its stale threshold is 60 seconds, so a 45-second bootstrap timeout is inconclusive. Verify the departed private PID and allow native lease handling; do not delete live locks or weaken host protections.
 
-The private workflow-observation-20261019/replay_restart_sdk.py harness and sdk-restart-6bu6ahw0/result.json reproduce the 103,095-token request. restart-continuation-replay.json checks the installed helper against it. Cache-retention and native-reply owners hold outcomes and qualification limits; the global OpenCode export procedure owns safe export mechanics.
+The historical workflow-observation-20261019 harness is absent on halomit; do not assume its paths remain executable. deployment-parity/capture_worker.py implements the private SDK capture with an imported original session, tool guard and no-op provider. Its prepared-request.json records historical-component substitutions explicitly. For newly observed live failures, the optional gateway capture is enabled by state/steer-capture/.enabled: private JSON retains raw request, effective pinned conversation, actual history-reused token vector, reader, model recipe and reasoning settings. Remove the marker to stop capture. The steering owner records active trial/rollback; live capture does not itself prove causality or semantic quality. Cache-retention and native-reply owners hold outcomes and qualification limits; the global OpenCode export procedure owns safe export mechanics.

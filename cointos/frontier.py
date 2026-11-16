@@ -24,13 +24,13 @@ def inspect(task_id: str, ledger: dict, history: bool = False) -> dict:
     original = ledger['tasks'].get(key)
     owned = ledger['queue'].get(key) or ledger['queue'].get((original or {}).get('record'))
     if task is None and owned is None:
-        raise ValueError(f'unknown task {task_id!r}; use cointos jobs --all for existing IDs')
+        raise ValueError(f'unknown task {task_id!r}; use cointos jobs for current IDs')
 
     def execution(value, compact=False):
         if value is None or history:
             return value
         result = {k: v for k, v in value.items()
-                  if k not in ('recovery_context', 'system_context', 'tool_context')}
+                  if k not in ('recovery_context', 'system_context', 'tool_context', 'system_context_v2', 'tool_context_v2')}
         if owned or value.get('repair_origin'):
             result.pop('brief', None)
         receipt = result.get('receipt') or {}
@@ -71,6 +71,13 @@ def inspect(task_id: str, ledger: dict, history: bool = False) -> dict:
                             and not r.get('done') and not r.get('replaced_by')]})
     queue_view = dict(owned) if owned else None
     result = {'task': execution(task), 'queue': queue_view, 'binding_tests': binding}
+    inputs = [*(task or {}).get('carried_work', []), *(owned or {}).get('carried_work', [])]
+    if inputs:
+        result['preserved_inputs'] = [{'task': key, 'role': (ledger['tasks'].get(key) or {}).get('role')}
+                                      for key in dict.fromkeys(reference['task'] for reference in inputs)]
+    if task:
+        import time
+        result['usage'] = usage(task, ledger, time.time())
     failure = (source or {}).get('composition_failure') or ((source or {}).get('submission_failure') or {}).get('composition')
     if failure:
         result['composition_failure'] = failure
@@ -85,6 +92,10 @@ def inspect(task_id: str, ledger: dict, history: bool = False) -> dict:
             'acceptance of a typed correct-tests replacement. An ordinary test packet or revised brief does '
             'not replace them. Pending corrections above are actual typed owners, not claims in prose. '
             'Cancel obsolete queued work by its queue ID, not its derived recovery task ID.')
+    if result.get('composition_failure'):
+        failure = result['composition_failure']
+        result['composition_failure'] = {**failure, 'test_tasks': [entry['packet'] for entry in binding
+            if entry['commit'] == failure.get('failed_packet')]}
     if not history:
         accounts = [(value or {}).get('receipt') or {} for value in
                     (result['task'], result.get('origin_task'))]
@@ -97,6 +108,103 @@ def inspect(task_id: str, ledger: dict, history: bool = False) -> dict:
     return result
 
 
+def usage(task: dict, ledger: dict, at: float) -> dict:
+    agent = next((a for a in ledger['agents'].values() if a['task'] == task['id']), {})
+    if not agent and task.get('last_run_usage'):
+        return {**task['last_run_usage'], 'scope': 'last completed run'}
+    gpu = agent.get('gpu_seconds', 0)
+    if agent.get('gpu_since'):
+        gpu += max(0, at - agent['gpu_since'])
+    return {'scope': 'current run', 'available': bool(agent), 'gpu_seconds': gpu,
+            'generated_tokens': agent.get('generation_tokens', agent.get('generated', 0))}
+
+
+def implementation_view(view: dict) -> dict:
+    """An implementer needs its behaviour and checkout, not acceptance machinery."""
+    task = view.get('task') or {}
+    queue = view.get('queue') or {}
+    fields = ('id', 'role', 'stage', 'status', 'worktree', 'work_remaining')
+    shown = {k: task[k] for k in fields if k in task}
+    brief = queue.get('brief', task.get('brief', ''))
+    # These headers are queue metadata, not behavioural requirements.
+    shown['brief'] = '\n'.join(line for line in brief.splitlines()
+                               if not line.lower().startswith(('depends on:', 'relies on:', 'workflow stage:')))
+    return {'task': shown}
+
+
+def agent_view(view: dict, reader: dict) -> dict:
+    """Keep assignment/recovery evidence while forgetting private repository representations."""
+    if reader.get('role') == 'worker' and reader.get('stage') != 'test-contract':
+        view = implementation_view(view)
+    # Other assignments are inspected through source/diagnostic controls, not
+    # by navigating their private execution directories.
+    view = dict(view)
+    for field in ('task', 'origin_task'):
+        task = view.get(field)
+        if isinstance(task, dict):
+            view[field] = {k: v for k, v in task.items() if k != 'retired'
+                           and (k != 'worktree' or task.get('id') == reader.get('id'))}
+    return file_view(view)
+
+
+def file_view(view):
+    """Public file/task evidence without daemon-private storage identities."""
+    private = {'branch', 'base_commit', 'commit', 'worker_commit', 'main', 'main_branch',
+               'candidate', 'tree', 'prepared_review', 'landing', 'handoff_intent', 'preserved_artifact',
+               'preserved_run', 'carried_work', 'material_snapshots', 'session_store', 'system_context', 'tool_context',
+               'system_context_v2', 'tool_context_v2'}
+
+    def preparation(evidence):
+        from cointos.contracts import CompositionError
+        return CompositionError('', paths=evidence.get('paths')).public
+
+    def public(value):
+        if isinstance(value, dict):
+            if isinstance(value.get('push'), dict):
+                delivery = value['push']
+                shown = {'status': delivery.get('status')}
+                if delivery.get('status') == 'failed':
+                    shown['error'] = 'External delivery failed; accepted work remains recorded. CointOS retains diagnostics for the operator.'
+                value = {**value, 'push': shown}
+            receipt = value.get('receipt')
+            receipt = receipt if isinstance(receipt, dict) else {}
+            evidence = receipt.get('evidence')
+            evidence = evidence if isinstance(evidence, dict) else {}
+            account = f"{value.get('item')} accepted at {evidence.get('commit')}"
+            if (receipt.get('disposition') == 'complete' and evidence.get('via') == 'landing'
+                    and receipt.get('summary') == account):
+                shown = f"{value['item']} accepted"
+                value = {**value, 'receipt': {**receipt, 'summary': shown}}
+                if value.get('note') == 'complete: ' + account:
+                    value['note'] = 'complete: ' + shown
+                if value.get('result') == account:
+                    value['result'] = shown
+            failure = value.get('composition_failure') or (value.get('submission_failure') or {}).get('composition')
+            if failure:
+                value = dict(value)
+                if 'note' in value:
+                    value['note'] = preparation(failure)
+                if isinstance(value.get('queue'), dict) and value['queue'].get('blocker'):
+                    value['queue'] = {**value['queue'], 'blocker': preparation(failure)}
+                if (value.get('receipt') or {}).get('disposition') == 'blocked':
+                    value['receipt'] = {**value['receipt'], 'summary': preparation(failure)}
+            if value.get('category') == 'composition' and value.get('composition'):
+                value = {**value, 'error': preparation(value['composition'])}
+            return {('workspace' if k == 'worktree' else k): public(v)
+                    if k not in ('composition_failure', 'composition') else {
+                        'paths': v.get('paths', []), 'test_tasks': v.get('test_tasks', [])}
+                    for k, v in value.items() if k not in private
+                    and k not in ('failed_packet', 'packets')
+                    and not (k == 'tests' and isinstance(v, list) and all(
+                        isinstance(item, str) and len(item) == 40 and all(c in '0123456789abcdef' for c in item)
+                        for item in v))}
+        if isinstance(value, list):
+            return [public(v) for v in value]
+        return value
+
+    return public(view)
+
+
 def record(source: dict) -> dict | None:
     if 'project' in source:
         return source
@@ -106,9 +214,15 @@ def record(source: dict) -> dict | None:
 
 
 def origin(source: dict) -> dict:
+    if (source.get('kind') == 'integrate' and source['status'] == 'failed'
+            and source.get('runs', 0) > 0 and not source.get('receipt')):
+        return {'task': source['id'], 'version': source.get('record_version')}
     owned = record(source)
+    version = source['version'] if 'project' in source else source.get('record_version')
+    if version is None and owned:
+        version = owned['version']
     return {'task': queues.key(owned) if owned else source['id'],
-            'version': (source['version'] if 'project' in source else source.get('record_version'))}
+            'version': version}
 
 
 def controller(source: dict) -> dict | None:
@@ -173,8 +287,8 @@ def handoff_pending(source: dict) -> bool:
 
 def reason(source: dict) -> str | None:
     """A current obstruction requiring a controller, never a historical run failure."""
-    if L['paused'] or source.get('cancelled') or source.get('replaced_by') or source.get('kind') == 'supervise':
-        return None  # a supervisor's end is never an obstruction: the next threshold brings another
+    if L['paused'] or source.get('cancelled') or source.get('replaced_by'):
+        return None
     owned = record(source)
     if 'project' not in source and source.get('record') and owned is None:
         return None
@@ -187,16 +301,21 @@ def reason(source: dict) -> str | None:
     if ('project' not in source and project is None and place != 'system'
             and schema.KINDS[source['kind']]['scope'] in ('project', 'either')):
         return None
+    task = queues.current(source) if 'project' in source else source
+    died = task and task['status'] == 'failed' and task.get('runs', 0) > 0 and not task.get('receipt')
+    # An unreceipted death needs diagnosis regardless of role, including the
+    # controller itself. A checked blocked receipt is a different outcome.
+    if died and not (owned and (owned.get('done') or owned.get('replaced_by'))):
+        return task.get('note') or 'run ended without a completion receipt'
     if owned:
         if owned.get('done') or owned.get('replaced_by') or owned.get('held_by'):
             return None
         if 'project' not in source and source.get('record_version') != owned['version']:
             return None
-    task = queues.current(source) if 'project' in source else source
     if task is None:
         readiness = queues.readiness(queues.live(place), queues.landed(place)).get(source['item'], '')
         return readiness if readiness.startswith('depends on unknown ') or 'cycle' in readiness else None
-    if task.get('repair_origin') or task['kind'] in ('operator', 'integrate'):
+    if task.get('repair_origin') or task['kind'] in ('operator', 'integrate', 'supervise'):
         return None
     if owned is None and any(t['kind'] == task['kind'] and t['place'] == place
                              and t['created_at'] > task['created_at'] for t in L['tasks'].values()):

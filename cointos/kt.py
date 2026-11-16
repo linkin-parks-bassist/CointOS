@@ -7,6 +7,13 @@ import hashlib
 from pathlib import Path
 
 
+def readable_roots(directory):
+    """Ask KT's actual policy for launch-time readable roots; never infer project grants."""
+    result = subprocess.run(['kt', 'roots'], cwd=directory, check=True, capture_output=True, text=True)
+    return [Path(parts[2]) for line in result.stdout.splitlines()
+            if len(parts := line.split('\t')) == 3 and parts[1] == 'allow' and Path(parts[2]).is_absolute()]
+
+
 def prepare(root) -> None:
     """Register an existing checkout tree before its tools enter the write boundary.
 

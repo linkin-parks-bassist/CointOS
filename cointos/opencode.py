@@ -10,10 +10,12 @@ execution facts only.
 from __future__ import annotations
 
 import json
+import contextlib
 import hashlib
 import os
 import re
 import signal
+import secrets
 import subprocess
 import sys
 import time
@@ -21,11 +23,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from cointos import kt, schema, stations
+from cointos import git, kt, schema, stations
 from cointos.config import ROOT, STATE, api_url, load as load_config, write_json
 
 TIMEOUTS = load_config()["timeouts"]
 OPENCODE = str(Path.home() / ".local/bin/opencode")
+OPENCODE2 = str(Path.home() / '.local/lib/cointos/opencode2/node_modules/.bin/opencode')
+LEGACY_OPENCODE = str(Path.home() / '.local/lib/cointos/opencode1/opencode')
+OPENCODE2_VERSION = '2.2.6'
 COMPACTION_CLI_SHA = "572e9e9f838c0a150558c8b412a50c3130acea0edd07288ab8da73b3b0a2380e"
 PROVIDER = "cointos"
 # Commands no agent may run; `control` ability lifts only the CointOS lifecycle ones.
@@ -36,6 +41,15 @@ LOOKING = ["systemctl status*", "systemctl --user status*", "systemctl cat*", "s
            "systemctl is-active*", "systemctl --user is-active*", "systemctl list-units*",
            "systemctl --user list-units*", "systemctl show*", "systemctl --user show*", "dpkg -l*", "dpkg -s*",
            "cointos *--help*"]
+
+
+def require_opencode2():
+    # The V1 exporter is deliberately absent: David required the old binaries removed, so only
+    # V2 assets are preflight-required. A recognised legacy store still refuses conversion.
+    manifest = Path(OPENCODE2).parent.parent / '@opencode/cli/package.json'
+    if (not Path(OPENCODE2).is_file()
+            or not manifest.is_file() or json.loads(manifest.read_text()).get('version') != OPENCODE2_VERSION):
+        raise ValueError('OpenCode 2 assets are missing or unpinned; run scripts/install-opencode2 before installation')
 
 
 def run_dir(agent_id: str) -> Path:
@@ -52,9 +66,20 @@ def confined_writes(task: dict) -> bool:
     System Operators retain explicitly assigned infrastructure scope.
     """
     role = task.get('role')
-    return stations.stationed(task) or (
+    return observer(task) or stations.stationed(task) or (
         any(kind['role'] == role and kind['lands'] is not None for kind in schema.KINDS.values())
         and not (role == 'operator' and task.get('place') == 'system'))
+
+
+def observer(task):
+    """Branchless coordinators inspect through brokers; system Operators keep assigned scope."""
+    return task.get('branch') is None and task.get('role') in ('supervisor', 'steward', 'test-auditor', 'first-responder')
+
+
+def path_rules(rules: dict[str, str]) -> dict[str, str]:
+    """OpenCode uses root-relative permission paths for directories without Git metadata."""
+    return {name: action for pattern, action in rules.items()
+            for name in ([pattern, pattern.lstrip('/')] if pattern.startswith('/') else [pattern])}
 
 
 def settings(config: dict, key: str, task: dict, protected: list[str], agent_id: str = "") -> dict:
@@ -67,20 +92,24 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
     granted = task.get("tools") or []
     abilities = set(task.get("abilities") or ["standard"])
     denied = DENIED_COMMANDS + ([] if "control" in abilities else LIFECYCLE_COMMANDS)
+    if task.get('branch') or observer(task):
+        denied += ['git *', 'hg *', 'svn *', 'fossil *']
     operator_control = task.get("role") == "operator" and "control" in abilities
     edit_scope = ({"*": "deny"} if task.get("role") == "first-responder"  # it dispatches; it doesn't do the work
                   else {"*": "deny", f"{Path(task['worktree']).resolve()}/**": "allow"}
                   if confined_writes(task) and task.get('worktree')
                   else {"*": "allow"})
+    if agent_id and confined_writes(task) and task.get('role') != 'first-responder':
+        edit_scope[f'{run_dir(agent_id).resolve()}/scratch/**'] = 'allow'
     read_scope = {}
     if confined_writes(task) and task.get('worktree'):
         project = next((p for p in config['projects'] if p['name'] == task.get('place')), None)
         if project and Path(project['path']).resolve() != Path(task['worktree']).resolve():
             origin = Path(project['path']).resolve()
             read_scope = {str(origin): 'deny', f'{origin}/**': 'deny'}
-            for name in ('.knowledge', '.git', '.agents'):
+            for name in ('.knowledge', '.agents'):
                 read_scope.update({str(origin / name): 'allow', f'{origin}/{name}/**': 'allow'})
-    return {
+    result = {
         "$schema": "https://opencode.ai/config.json",
         "model": f"{PROVIDER}/default",
         "provider": {PROVIDER: {
@@ -95,8 +124,10 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
         }},
         # Every agent gets the kt MCP server and CointOS's own tools. Other configured servers
         # are enabled only by its station.
-        "mcp": {**{name: {**server, "enabled": stations.grants(granted, name)}
-                   for name, server in servers.items() if name not in stations.BASE},
+        "mcp": {**{name: {**server, "enabled": name == 'knowledgetrees' or stations.grants(granted, name),
+                          **({'environment': {**server.get('environment', {}), 'KT_MCP_PROJECT_DIR': str(ROOT)}}
+                             if name == 'knowledgetrees' and observer(task) else {})}
+                   for name, server in servers.items() if name != 'cointos'},
                 "cointos": {"type": "local", "enabled": True, "command": [sys.executable, "-P", "-m", "cointos.mcp"],
                             "timeout": (config['timeouts']['validation_seconds'] + config['timeouts']['api_seconds'] * 2) * 1000,
                             "environment": {"PYTHONPATH": str(ROOT), "COINTOS_TASK_ID": task.get("id", ""),
@@ -107,30 +138,57 @@ def settings(config: dict, key: str, task: dict, protected: list[str], agent_id:
                      **({"*probe*": "deny"} if protected else {}),
                      **{command: "allow" for command in LOOKING},
                      **({"systemctl --user *": "allow"} if operator_control else {})},
-            "external_directory": {"*": "deny", f"{home}/**": "allow", **read_scope},
-            "read": {"*": "allow", **read_scope, "*.env": "deny"},
-            "edit": {**edit_scope, **{path: "deny" for path in protected},
-                     **({"*probe*": "deny"} if protected else {})},  # implementers implement; finish runs the tests
+            "external_directory": path_rules({"*": "deny", f"{home}/**": "allow", **read_scope}),
+            "read": path_rules({"*": "allow", **read_scope, "*.env": "deny"}),
+            "edit": path_rules({**edit_scope, **{path: "deny" for path in protected},
+                     **({"*probe*": "deny"} if protected else {})}),  # implementers implement; finish runs the tests
         },
+        "tools": {"task": False, "todowrite": False, "skill": False},
         "autoupdate": False, "share": "disabled",
+        "compaction": config["compaction"],
         "plugin": [(ROOT / "cointos/opencode_resume.mjs").as_uri()],
     }
+    if config.get('opencode_v2'):
+        provider = result.pop('provider')[PROVIDER]
+        model = provider['models']['default']
+        model.pop('tool_call')  # Native chat providers expose tool capability directly.
+        model['limit']['context'] = (
+            shape['ctx_size'] // int(shape.get('slots') or shape['lanes']))
+        result['providers'] = {PROVIDER: {
+            'package': '@opencode/ai/providers/openai-compatible',
+            'settings': provider['options'], 'models': provider['models'],
+        }}
+        result['plugin'] = [str(ROOT / 'cointos/opencode_plugin')]
+        result['permission']['shell'] = result['permission'].pop('bash')
+        result['permission'].update(subagent='deny', skill='deny', question='deny')
+        result['tools'].update(subagent=False)
+    return result
 
 
 
-def write_paths(task: dict, directory: Path) -> list[str] | None:
+def write_paths(task: dict, directory: Path, store: Path | None = None) -> list[str] | None:
     """Branch-publishing runs can write their checkout and Git/tool state."""
     if not confined_writes(task):
         return None
     checkout = Path(task['worktree']).resolve()
     kt.prepare(checkout)
+    if observer(task) or git.workspace_context(checkout):
+        rewrites = STATE / 'knowledge-rewrites'
+        rewrites.mkdir(parents=True, exist_ok=True, mode=0o700)
+        data = store or agent_data(task)
+        data.mkdir(parents=True, exist_ok=True, mode=0o700)
+        catalog = data / 'models.json'
+        if not catalog.exists():
+            write_json(catalog, {})  # The configured CointOS provider is the whole managed catalog.
+        return [str(p) for p in (checkout, directory.resolve(), rewrites, data, Path('/dev/null'))]
     # A station directory need not be a repository; a branch's checkout must be.
     found = subprocess.run(['git', '-C', str(checkout), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
                            text=True, capture_output=True, check=task.get('branch') is not None)
     common = found.stdout.strip() if found.returncode == 0 else None
     rewrite_state = STATE / 'knowledge-rewrites'
     rewrite_state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    paths = [checkout, directory.resolve(), rewrite_state.resolve(), Path('/tmp'), Path('/var/tmp'), Path('/dev/null')]
+    paths = [checkout, directory.resolve(), rewrite_state.resolve(),
+             store or agent_data(task), Path('/tmp'), Path('/var/tmp'), Path('/dev/null')]
     if common:
         paths.append(Path(common))
     if common and task['role'] != 'worker':
@@ -144,13 +202,49 @@ def write_paths(task: dict, directory: Path) -> list[str] | None:
     return [str(path) for path in paths]
 
 
-def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protected: list[str]) -> None:
+def agent_data(task, v2=None):
+    base = STATE / 'agent-data' / hashlib.sha256(task['id'].encode()).hexdigest()
+    return base / 'v2' if (load_config().get('opencode_v2') if v2 is None else v2) else base
+
+
+def read_paths(task, directory, store=None):
+    """Expose source and tools, excluding other workspaces, runtime authority and Git metadata."""
+    if not observer(task) and (not task.get('branch') or not git.workspace_context(task['worktree'])):
+        return None
+    home = Path.home()
+    roots = [Path(task['worktree']), directory, store or agent_data(task), STATE / 'knowledge-rewrites',
+             home / '.knowledge/.tools',
+             *[Path(p) for p in ('/usr', '/bin', '/sbin', '/lib', '/lib64', '/etc', '/proc', '/sys', '/dev')],
+             *[ROOT / p for p in ('cointos', 'bin', 'config', 'roles', 'runtime')],
+             *[home / p for p in ('.opencode/bin', '.local/bin', '.local/lib', '.local/libexec', '.cache/opencode')]]
+    files = [str(Path('/etc/resolv.conf').resolve())] if Path('/etc/resolv.conf').exists() else []
+    if observer(task):
+        files.extend(str(path.resolve()) for path in
+                     (home / '.knowledge/.tools/kt', home / '.knowledge/.tools/kt-mcp',
+                      Path(os.environ.get('KT_CONFIG', str(home / '.knowledge/.tools/roots.json')))) if path.is_file())
+    directories = [str(ROOT)]
+    knowledge_roots = kt.readable_roots(ROOT) if observer(task) else [home / '.knowledge', ROOT / '.knowledge']
+    for knowledge in (*knowledge_roots, home / '.agents/skills'):
+        if not knowledge.is_dir():
+            continue
+        directories.append(str(knowledge))
+        for parent, children, names in os.walk(knowledge):
+            children[:] = [n for n in children if n != '.git' and not (Path(parent) / n).is_symlink()]
+            files.extend(str(Path(parent) / n) for n in names if n != '.git' and not (Path(parent) / n).is_symlink())
+    roots = [str(p.resolve()) for p in roots if p.exists()]
+    return {'trees': roots, 'files': files, 'directories': directories}
+
+
+def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protected: list[str]) -> str | None:
     """Start a run as its own systemd unit, outside the daemon, so that it outlives a daemon
     replacement. `text` is the message the run starts with."""
     structured = config.get("structured_compaction", False)
     if not isinstance(structured, bool):
         raise ValueError("structured_compaction must be a boolean")
-    executable = OPENCODE
+    v2 = config.get('opencode_v2', False)
+    executable = OPENCODE2 if v2 else OPENCODE
+    if v2 and structured:
+        raise ValueError('the V1 structured-compaction binary cannot run a V2 session')
     if structured:
         candidate = ROOT / "bin" / "opencode-compaction"
         if hashlib.sha256(candidate.read_bytes()).hexdigest() != COMPACTION_CLI_SHA:
@@ -164,15 +258,33 @@ def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protect
     # Admission reserves a fresh run directory. Never reuse or clear a scratch path
     # left by another owner, including a symlink inside a damaged run directory.
     (directory / "scratch").mkdir(mode=0o700)
+    if v2:
+        descriptor = os.open(directory / 'server-password', os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            stream.write(secrets.token_urlsafe(32))
     command = [executable, "run", "--dir", task["worktree"], "--format", "json", "--auto",
                "--title", f"{task['role']}: {task['title']}", "--model", f"{PROVIDER}/default"]
+    if v2:
+        command[2:4] = []  # V2 binds its directory from the explicit process environment.
     if task.get("session"):
         command += ["--session", task["session"]]
-    spec = {"task": {"id": task["id"], "worktree": task["worktree"]}, "command": command, "text": text,
-            "structured_compaction": structured,
+    spec = {"task": {"id": task["id"], "worktree": task["worktree"], 'role': task['role']}, "command": command, "text": text,
+            "structured_compaction": structured, 'protocol': 2 if v2 else 1,
             "session": task.get("session"), "model": {"providerID": PROVIDER, "modelID": "default"}}
     with (directory / "run.json").open("x") as stream:
-        spec['write_paths'] = write_paths(task, directory)
+        store = agent_data(task, v2)
+        spec['write_paths'] = write_paths(task, directory, store)
+        spec['read_paths'] = read_paths(task, directory, store)
+        if spec['read_paths'] is not None or v2:
+            spec['agent_data'] = str(store)
+            Path(spec['agent_data']).mkdir(parents=True, exist_ok=True, mode=0o700)
+            write_json(Path(spec['agent_data']) / 'models.json', {})
+            from cointos import sessions
+            if v2:
+                sessions.prepare_v2(task, directory, store, executable, LEGACY_OPENCODE,
+                                    TIMEOUTS['agent_start_seconds'])
+            else:
+                sessions.prepare(task, directory, store, executable, TIMEOUTS['agent_start_seconds'])
         stream.write(json.dumps(spec))
     for stale in ("server.json", "exit.json"):
         (directory / stale).unlink(missing_ok=True)
@@ -186,16 +298,27 @@ def launch(config: dict, agent_id: str, task: dict, key: str, text: str, protect
                     f"--property=MemoryMax={config['memory']['agent_limit_gb']}G", "--property=MemorySwapMax=0",
                     "--property=OOMPolicy=continue",
                     sys.executable, "-m", "cointos.opencode", str(directory)], check=True)
+    return spec.get('agent_data')
 
 
 def environment(directory: Path, spec: dict) -> dict:
     """The run's processes know their run (COINTOS_AGENT, from the unit) and task, so the CLI
     can submit receipts and proposals as them."""
     return {**os.environ, "OPENCODE_CONFIG": str(directory / "opencode.json"),
+            **({'PWD': spec['task']['worktree']} if spec['task'].get('worktree') else {}),
+            'COINTOS_OPENCODE_V2': '1' if spec.get('protocol') == 2 else '0',
+            **({'OPENCODE_PASSWORD': (directory / 'server-password').read_text()}
+               if spec.get('protocol') == 2 else {}),
             "COINTOS_SCRATCH": str(directory / "scratch"),
             "TMPDIR": str(directory / "scratch"),
             "KT_REWRITE_STATE_DIR": str(STATE / "knowledge-rewrites"),
             "COINTOS_WRITE_PATHS": json.dumps(spec.get('write_paths')),
+            "COINTOS_READ_PATHS": json.dumps(spec.get('read_paths')),
+            **({name: str(Path(spec['agent_data']) / suffix) for name, suffix in
+                (('XDG_DATA_HOME', 'data'), ('XDG_STATE_HOME', 'state'), ('XDG_CONFIG_HOME', 'config'),
+                 ('XDG_CACHE_HOME', 'cache'))} if spec.get('agent_data') else {}),
+            **({'OPENCODE_MODELS_PATH': str(Path(spec['agent_data']) / 'models.json'),
+                'OPENCODE_DISABLE_MODELS_FETCH': '1'} if spec.get('agent_data') else {}),
             "COINTOS_OPENCODE_BINARY": spec.get("command", [OPENCODE])[0],
             "COINTOS_STRUCTURED_COMPACTION": "1" if spec.get("structured_compaction") else "0",
             "COINTOS_RESUME_PACKET": str(directory / "resume.json"),
@@ -210,16 +333,20 @@ def environment(directory: Path, spec: dict) -> dict:
             # unnecessary and can exhaust the user's shared inotify quota.
             "OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER": "1",
             "COINTOS_TASK_ID": spec["task"]["id"],
+            'COINTOS_ROLE': spec['task'].get('role', ''),
+            'COINTOS_PROVIDER': PROVIDER,
             "PATH": f"{ROOT / 'bin'}:{Path.home() / '.local/bin'}:{os.environ.get('PATH', '')}"}
 
 
 def start_server(directory: Path, worktree: str, env: dict) -> tuple[subprocess.Popen, str]:
     log_path = directory / "server.log"
     command = [env.get("COINTOS_OPENCODE_BINARY", OPENCODE), "serve", "--hostname", "127.0.0.1", "--port", "0", "--mdns=false"]
+    if env.get('COINTOS_OPENCODE_V2') == '1':
+        command.pop()
     paths = json.loads(env.get('COINTOS_WRITE_PATHS', 'null'))
     if paths is not None:
         command = [sys.executable, str(ROOT / 'cointos/worktree_guard.py'), json.dumps(paths), *command]
-    with open(log_path, "ab") as log:
+    with os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), 'ab') as log:
         server = subprocess.Popen(command,
                                   cwd=worktree, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                   process_group=0)
@@ -227,7 +354,7 @@ def start_server(directory: Path, worktree: str, env: dict) -> tuple[subprocess.
     while time.monotonic() < deadline:
         if server.poll() is not None:
             raise RuntimeError(f"opencode serve exited with {server.returncode}")
-        found = re.search(r"opencode server listening on (http://127\.0\.0\.1:\d+)",
+        found = re.search(r"(?:opencode )?server listening on (http://127\.0\.0\.1:\d+)",
                           log_path.read_text(errors="replace"))
         if found:
             return server, found[1]
@@ -245,12 +372,25 @@ def serve_run(directory: Path) -> None:
     server, url = start_server(directory, spec["task"]["worktree"], env)
     code = 1
     try:
-        write_json(directory / "server.json", {"pid": server.pid, "url": url})
-        if spec["session"]:
+        v2 = spec.get('protocol') == 2
+        write_json(directory / "server.json", {"pid": server.pid, "url": url, **({'protocol': 2} if v2 else {})})
+        resume_v2 = False
+        if spec['session'] and v2:
+            from cointos import opencode2
+            opencode2.AUTH.set(env['OPENCODE_PASSWORD'])
+            opencode2.request(url, opencode2.path(spec['session'], 'model'), {
+                'model': {'providerID': spec['model']['providerID'], 'id': spec['model']['modelID']}})
+            opencode2.finish_compaction(url, spec['session'])
+            history = opencode2.messages(url, spec['session'])
+            resume_v2 = spec['text'] == 'Continue.' and opencode2.unfinished(history)
+        elif spec["session"]:
             finish_compaction(url, spec["session"], spec["task"]["worktree"], spec["model"])
             prepare_resume(directory, url, spec)
-        command = spec["command"][:2] + ["--attach", url] + spec["command"][2:]
+        command = spec["command"][:2] + ["--server" if v2 else "--attach", url] + spec["command"][2:]
         with open(directory / "events.jsonl", "ab") as events, open(directory / "client.log", "ab") as errors:
+            if resume_v2:
+                code = opencode2.resume(url, spec['session'], events)
+                return
             client = subprocess.Popen(command, cwd=spec["task"]["worktree"], env=env, stdin=subprocess.PIPE,
                                       stdout=events, stderr=errors)
             client.stdin.write(spec["text"].encode())
@@ -261,6 +401,8 @@ def serve_run(directory: Path) -> None:
             write_json(directory / "exit.json", {"code": code})
         finally:
             stop_group(server.pid)
+            if spec.get('protocol') == 2:
+                server.wait()
 
 
 def session_request(url: str, session: str, worktree: str, action: str, body=None):
@@ -321,6 +463,31 @@ def finish_compaction(url: str, session: str, worktree: str, model: dict) -> boo
     if compaction_pending(url, session, worktree):
         raise RuntimeError("OpenCode compaction did not establish a completed summary; recovery turn withheld")
     return True
+
+
+@contextlib.contextmanager
+def quiesce(agent_id: str):
+    """Freeze the producing unit only while the daemon captures its files, then always thaw it."""
+    marker = run_dir(agent_id) / 'capture-freeze.json'
+    write_json(marker, {'run': agent_id})
+    try:
+        subprocess.run(['systemctl', '--user', 'freeze', unit(agent_id)], check=True,
+                       capture_output=True, text=True, timeout=TIMEOUTS['api_seconds'])
+        yield
+    finally:
+        thaw_capture(agent_id)
+
+
+def thaw_capture(agent_id: str):
+    """Recover only a freeze owned by our capture, including after daemon death."""
+    marker = run_dir(agent_id) / 'capture-freeze.json'
+    if not marker.exists():
+        return
+    if marker.is_symlink() or json.loads(marker.read_text()) != {'run': agent_id}:
+        raise ValueError('invalid artifact capture ownership')
+    subprocess.run(['systemctl', '--user', 'thaw', unit(agent_id)], check=True,
+                   capture_output=True, text=True, timeout=TIMEOUTS['api_seconds'])
+    marker.unlink()
 
 
 def active(agent_id: str) -> bool:
@@ -439,8 +606,16 @@ def clip(text, limit=1200) -> str:
 
 
 def attach(agent: dict) -> list[str]:
-    """The command that shows a live run in OpenCode's own view."""
+    """The command that shows a live run in its matching native viewer."""
+    server = run_dir(agent['id']) / 'server.json' if agent.get('id') else None
+    if server and server.exists() and json.loads(server.read_text()).get('protocol') == 2:
+        return [OPENCODE2, '--server', agent['url'], '--session', agent['session']]
     return [OPENCODE, "attach", agent["url"], "--session", agent["session"]]
+
+
+def attach_environment(agent):
+    password = run_dir(agent['id']) / 'server-password'
+    return {**os.environ, **({'OPENCODE_PASSWORD': password.read_text()} if password.exists() else {})}
 
 
 # ---------------------------------------------------------------- processes
@@ -530,17 +705,16 @@ def compaction_context(task_id: str, agent_id: str) -> str:
         spent = schema.spent(agent)
         result = {
             'observed_at': datetime.now(timezone.utc).isoformat(),
-            'task': {key: task.get(key) for key in ('id', 'status', 'role', 'branch', 'record_version')},
+            'task': {key: task.get(key) for key in ('id', 'status', 'role', 'record_version')},
             'queue': {key: queue.get(key) for key in ('project', 'item', 'version', 'stage', 'depends', 'held_by')},
-            'accepted_test_bindings': view['binding_tests'],
+            'accepted_test_bindings': [{k: v for k, v in binding.items() if k != 'commit'}
+                                       for binding in view['binding_tests']],
             'budget': {'limit': task['budget'], 'spent_including_grants': spent,
-                       'remaining': {key: max(0, task['budget'][key] - spent[key]) for key in schema.BUDGET_KEYS}},
+                       'remaining': {key: None if task['budget'][key] is None else max(0, task['budget'][key] - spent[key])
+                                     for key in schema.BUDGET_KEYS}},
         }
         worktree = Path(task['worktree']).resolve()
-        def git_read(*args):
-            return subprocess.run(['git', '--no-optional-locks', '-C', str(worktree), *args],
-                                  check=True, capture_output=True, text=True, timeout=1).stdout.strip()
-        checkout = {'path': str(worktree), 'head': git_read('rev-parse', 'HEAD')}
+        checkout = {'path': str(worktree)}
         project = next((p for p in ledger['projects'] if p['name'] == task.get('place')), {})
         manifest = (project.get('test_policy') or {}).get('manifest')
         checkout['manifest'] = {'path': manifest, 'entries': None, 'state': 'unavailable'}

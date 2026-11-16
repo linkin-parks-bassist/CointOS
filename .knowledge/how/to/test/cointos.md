@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-24T02:31:27+11:00"
+revised_at: "2026-11-17T07:40:36+11:00"
 ---
 
 Run python3 -m unittest discover from the source repository. Focused checks use dotted module names. Import tests before any cointos module: tests/__init__.py allocates disposable ledger, journal, keys, run paths, snapshot stores, generated knowledge, root registration and kt rewrite state before production imports capture them. Late initialization refuses rather than pretending an environment change can redirect imported state.
@@ -27,6 +27,6 @@ python3 -m unittest -q tests.test_pipeline_simulator
 
 These are commands, not a current test-count or timing guarantee. Check each result independently. Long integration replays can exceed kt's per-proof or MCP renewal budget even when individual tests pass. The completion-model leaf keeps a focused ownership/receipt proof; focused implementation owners retain the other contracts.
 
-Cache fixtures isolate TRANSFERS, restore pins, active cleanup ownership and save reservations. Logical retirement is distinct from physical cleanup; virtual-GB fixtures mock measured headroom while blocked-I/O tests use actual files/TCP. Source qualification evidence is retained in workflow-observation-20261019/snapshot-cleanup-suite.log; historical counts do not describe today's complete suite.
+Cache fixtures isolate TRANSFERS, restore pins, active cleanup ownership and save reservations. Capacity fixtures exercising estimated snapshot admission must mock BACKEND.snapshot_size to None, so they neither query an unstarted native server nor accidentally exercise exact-size accounting; native-size fixtures cover that separate path. Logical retirement is distinct from physical cleanup; virtual-GB fixtures mock measured headroom while blocked-I/O tests use actual files/TCP. Source qualification evidence is retained in workflow-observation-20261019/snapshot-cleanup-suite.log; historical counts do not describe today's complete suite.
 
-Tests establish mechanisms, not sustained model judgment or product acceptance. Installed validation also uses cointos check and the authorised live scenario. The live-acceptance owner holds native observations; backend experiments and fault simulation have focused procedures. Native-only probes are opt-in and use uniquely named disposable units.
+Tests establish mechanisms, not autonomous judgment or product acceptance. Live observation follows the non-interference policy in how/to/keep/cointos/simple.md. Preserve intervention/deployment boundaries and distinguish affected outcomes from clean autonomous evidence; never rescue inhabitants to improve measured results. Installed validation also uses cointos check and the authorised live scenario. David requires completion checks to catch obvious broken user flows: MCP connection alone is insufficient. For private OpenCode, exercise an actual native tool call, browser launch/close with the isolated environment, resize propagation, scheduler progress and transcript cleanup before claiming those flows work. Report unexercised integrations explicitly; preserve live conversations and use disposable synthetic probes. The live-acceptance owner holds native observations; backend experiments and fault simulation have focused procedures. Native-only probes are opt-in and use uniquely named disposable units.

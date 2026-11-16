@@ -1,14 +1,14 @@
 ---
 status: green
-revised_at: "2026-11-04T01:31:40+11:00"
-checked_at: '2026-11-04T01:32:56+11:00'
+revised_at: "2026-11-12T16:21:08+11:00"
+checked_at: '2026-11-15T23:16:34+11:00'
 ---
 
 Completion is receipt-driven. Runner events describe execution; a run-owned typed receipt states completed, blocked or returned work. lifecycle.py checks artifacts and controls task/queue transitions. Output text, process exit and ancestry cannot settle work.
 
-Receipts are idempotent for the same run and account; changed or foreign receipts refuse. Workers submit exact artifacts, integrators accept exact reviewed candidates, and maintenance publishes before completing. Failed submission returns concrete errors to the live run. A failed assignment gets one First Responder per assignment version. Holds, origins, dependencies and run authority remain binding.
+Receipts are idempotent for the same run and account; changed or foreign receipts refuse. Workers submit exact artifacts, integrators accept exact reviewed candidates, and maintenance publishes before completing. Failed submission returns concrete errors to the live run. With the factory enabled, a failed assignment gets one First Responder per assignment version. Personal mode suppresses automatic supervisors/recovery even for Operators; explicit event-driven dispatch remains available. Holds, origins, dependencies and run authority remain binding.
 
-Managers atomically create children and complete planning with handoff. Recovery replace checks an existing-item graph and landed controller artifacts before repointing dependents and completing atomically. Exact retries replay; invalid handoffs preserve tasks, runs and queue. Supersede remains nonterminal. correct-tests atomically completes recovery with an independent correction request; manager/ad-hoc callers stay active. Independent review activates corrected tests, preserving prior acceptance and implementation artifacts until then. Failed-parent backedges cannot count as runnable handoffs. The deployed rebuild runs ahead of master and carries newer lifecycle mechanisms (supervision retirement guard, split handoff, correction-successor retention); source/runtime module agreement is not current, as where/are/cointos/source/modules.md records.
+Managers atomically create children and complete planning with handoff. Recovery replace checks an existing-item graph and landed controller artifacts before repointing dependents and completing atomically. Exact retries replay; invalid handoffs preserve tasks, runs and queue. Supersede remains nonterminal. correct-tests atomically completes recovery with an independent correction request; manager/ad-hoc callers stay active. Independent review activates corrected tests, preserving prior acceptance and implementation artifacts until then. Failed-parent backedges cannot count as runnable handoffs. Source and installed mechanism modules match.
 
 Complete steward receipts declare scout_result: an owned runnable manager command, freshly checked enabled-project frontiers for no_action, or a specific personal decision. The scout-completion owner defines validation limits.
 

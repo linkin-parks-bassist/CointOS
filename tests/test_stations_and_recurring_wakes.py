@@ -329,14 +329,14 @@ class Stations(unittest.TestCase):
         self.assertEqual(stations.COIN, {'directory': str(Path.home()), 'tools': ['*']})
 
     def test_tools_enable_only_named_servers_and_star_enables_all(self):
-        self.assertEqual(self.enabled(self.stationed()), {'mail', 'cointos'})
+        self.assertEqual(self.enabled(self.stationed()), {'mail', 'cointos', 'knowledgetrees'})
         everything = tasks.request_operator('all', 'Work.', None, None, None, None, station={'tools': ['*']})
-        self.assertEqual(self.enabled(everything), {'mail', 'cad', 'cointos'})
-        self.assertEqual(self.enabled(tasks.request_operator('none', 'Work.', None, None, None, None)), {'cointos'})
+        self.assertEqual(self.enabled(everything), {'mail', 'cad', 'cointos', 'knowledgetrees'})
+        self.assertEqual(self.enabled(tasks.request_operator('none', 'Work.', None, None, None, None)), {'cointos', 'knowledgetrees'})
 
     def test_the_knowledge_server_stays_on_for_every_agent(self):
         servers = opencode.settings(tasks.CONFIG, 'key', self.stationed(), [])['mcp']
-        self.assertNotIn('knowledgetrees', servers, 'it inherits the enabled global definition')
+        self.assertTrue(servers['knowledgetrees']['enabled'], 'private XDG config needs an explicit base server')
 
     def test_requests_are_refused_with_what_would_work(self):
         with self.assertRaisesRegex(ValueError, r"configured: \['cad', 'mail'\]"):
@@ -345,7 +345,7 @@ class Stations(unittest.TestCase):
             tasks.request_operator('a', 'Work.', None, None, None, None, station={'directory': str(self.root / 'nope')})
         with self.assertRaisesRegex(ValueError, 'absolute'):
             tasks.request_operator('a', 'Work.', None, None, None, None, station={'directory': 'relative'})
-        with self.assertRaisesRegex(ValueError, 'not both'):
+        with self.assertRaisesRegex(ValueError, 'either a project or a station directory'):
             tasks.request_operator('a', 'Work.', self.project['name'], None, None, None, station={'directory': str(self.desk)})
         with self.assertRaisesRegex(ValueError, 'control'):
             tasks.request_operator('a', 'Work.', None, ['control'], None, None, station={'directory': str(self.desk)})
@@ -360,7 +360,7 @@ class Stations(unittest.TestCase):
         task = self.stationed()
         self.assertTrue(opencode.confined_writes(task))
         permission = opencode.settings(tasks.CONFIG, 'key', task, [])['permission']
-        self.assertEqual(permission['edit'], {'*': 'deny', f'{self.desk}/**': 'allow'})
+        self.assertEqual(permission['edit'], {'*': 'deny', f'{self.desk}/**': 'allow', f"{str(self.desk).lstrip('/')}/**": 'allow'})
         self.assertIsNone(task['branch'])
         text = prompts.location(task, tasks.place(task))
         self.assertIn(str(self.desk), text)
@@ -371,7 +371,7 @@ class Stations(unittest.TestCase):
         task = tasks.request_operator('sys', 'Work.', None, None, None, None)
         self.assertEqual(prompts.location(task, tasks.place(task)),
                          f"Scope: the installed CointOS runtime ({task['worktree']}) and the explicitly named accessible paths. "
-                         'This is a system task with no project, branch or worktree.')
+                         'This is a system task.')
 
     def test_landlock_confines_writes_to_a_non_git_station(self):
         task = self.stationed()

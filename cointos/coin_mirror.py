@@ -22,7 +22,12 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VIEW_ONLY = 'This window only shows Coin. Message Coin on Telegram.'
+try:  # The mirror names the configured assistant, defaulting to the historical name.
+    from cointos.config import coin_name as _coin_name, load as _load_config
+    NAME = _coin_name(_load_config())
+except Exception:
+    NAME = 'Coin'
+VIEW_ONLY = f'This window only shows {NAME}. Message {NAME} on Telegram.'
 PROVIDER = 'mirror'
 BACKFILL_ENTRIES = 60
 
@@ -67,7 +72,10 @@ class Mirror:
         self.directory, self.opencode = directory, opencode
         self.counter = 0
         self.message = None
-        self.live = None
+        self.live = None  # the reply part still being written
+        self.live_reasoning = None  # the reasoning part still being written
+        self.live_started = 0
+        self.finished = ('', '')  # the last finished step's reasoning and words, never re-shown as live
         self.calls = {}
 
     def start(self) -> None:
@@ -148,7 +156,7 @@ class Mirror:
             for message in self.call(f'/session/{self.session}/message'):
                 info = message['info']
                 if info['id'] not in known and info['role'] == 'assistant' and info.get('finish'):
-                    self.message, self.live = info['id'], None
+                    self.message, self.live, self.live_reasoning, self.finished = info['id'], None, None, ('', '')
                     # The stand-in's single space would otherwise sit above Coin's words.
                     for part in message['parts']:
                         if part['type'] == 'text':
@@ -158,10 +166,20 @@ class Mirror:
         raise RuntimeError('the display server did not open a message')
 
     def words(self, reasoning: str, content: str) -> None:
-        """Text still being generated. The next assistant entry replaces it."""
-        text = content or reasoning
-        if text and self.message:
-            self.live = self.part(self.live, type='text', text=text)
+        """Text still being generated, each kind in its own part: reasoning stays in the thinking
+        block and only content is shown as the reply. The next assistant entry replaces both."""
+        if not self.message:
+            return
+        done_reasoning, done_content = self.finished
+        if done_reasoning.endswith(reasoning) and done_content.endswith(content):
+            return  # the live record still holds the step that has just been finished
+        if reasoning:
+            if self.live_reasoning is None:
+                self.live_started = int(time.time() * 1000)
+            self.live_reasoning = self.part(self.live_reasoning, type='reasoning', text=reasoning,
+                                            time={'start': self.live_started})
+        if content:
+            self.live = self.part(self.live, type='text', text=content)
 
     def feed(self, entry: dict) -> None:
         kind, now = entry.get('kind'), int(time.time() * 1000)
@@ -173,7 +191,11 @@ class Mirror:
         span = {'start': now, 'end': now}
         if kind == 'assistant':
             if entry.get('reasoning'):
-                self.part(type='reasoning', text=entry['reasoning'], time=span)
+                self.part(self.live_reasoning, type='reasoning', text=entry['reasoning'], time=span)
+            elif self.live_reasoning:
+                self.call(f'/session/{self.session}/message/{self.message}/part/{self.live_reasoning}', method='DELETE')
+            self.live_reasoning = None
+            self.finished = (entry.get('reasoning') or '', entry.get('content') or '')
             if entry.get('content'):
                 self.live = self.part(self.live, type='text', text=entry['content'], time=span)
             elif self.live:
@@ -208,16 +230,32 @@ def journal_lines(path: Path, position: int) -> tuple[list[dict], int]:
     return entries, position + len(complete)
 
 
-def show(journal: Path, directory: Path, opencode: str, states, stop=None) -> None:
+def show(journal: Path, directory: Path, opencode: str, states, stop=None, *, name=None) -> None:
     """Run the mirror and its window until `stop` says the slot moved or the window closes."""
-    mirror = Mirror(directory, opencode)
+    from cointos.config import load
+    if load().get('opencode_v2'):
+        from cointos.coin_mirror_v2 import Mirror as NativeMirror
+        from cointos.opencode import OPENCODE2
+        mirror = NativeMirror(directory, OPENCODE2)
+    else:
+        mirror = Mirror(directory, opencode)
+    mirror.name = name or NAME
     mirror.start()
     window = None
     latest = {}
+    finished = threading.Event()
     def follow():
-        for state in states:
-            latest.update(state)
-    threading.Thread(target=follow, daemon=True).start()
+        try:
+            for state in states:
+                if finished.is_set():
+                    break
+                latest.update(state)
+        finally:
+            close = getattr(states, 'close', None)
+            if close is not None:
+                close()
+    follower = threading.Thread(target=follow, daemon=True, name='coin-view-live')
+    follower.start()
     try:
         window = subprocess.Popen(mirror.attach_command(), env=mirror.window_environment(), cwd=directory / 'work')
         entries, position = journal_lines(journal, 0)
@@ -231,12 +269,18 @@ def show(journal: Path, directory: Path, opencode: str, states, stop=None) -> No
             live = (latest.get('coin') or {}).get('live') or {}
             if not entries and (latest.get('coin') or {}).get('busy'):
                 mirror.words(live.get('reasoning') or '', live.get('content') or '')
+            elif not entries and hasattr(mirror, 'idle'):
+                mirror.idle()
             time.sleep(0.5)
     finally:
+        finished.set()
         if window is not None and window.poll() is None:
             window.terminate()
             try:
                 window.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 window.kill()
-        mirror.stop()
+        try:
+            mirror.stop()
+        finally:
+            follower.join(timeout=load()['timeouts']['api_seconds'])

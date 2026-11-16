@@ -1,16 +1,12 @@
 ---
 status: green
-revised_at: "2026-11-07T14:47:45+11:00"
+revised_at: "2026-11-12T16:21:05+11:00"
 ---
 
-CointOS is enabled as one of its own managed projects by the user. Its governing outcomes remain Coin responsiveness/capability/reachability, autonomous delivery without user oversight, minimal blockage/GPU waste, and sustained parallel progress with appropriate GPU allocation.
+Autonomous CointOS self-development is suspended by the user's factory-disable instruction. The installed CointOS, pigen and todo-cli enrollments are disabled and `factory_enabled: false` blocks factory admission even if an enrollment is accidentally enabled. Existing self-enrollment tasks, draft refs, editor work, tests, receipts and acceptance remain preserved; they must not be rescued or resumed merely to occupy idle GPU capacity.
 
-Use the existing agents, queues and checked product pipeline for self-maintenance. Scouts/stewards discover concerns, managers arrange work, workers implement, integrators review, supervisors inspect ongoing work and First Responders recover blockages. Their existing observation and event/recovery paths must notice poor live outcomes and get them corrected without the user repeatedly prompting. This requirement does not prescribe an additional watcher service, agent hierarchy or observation-record protocol.
+Coin, requested system Operators and independent unavailable-runtime repair remain available. Automatic supervisors and First Responders are disabled; additional roles require explicit Coin/user/tool or timer/reminder dispatch. User-requested system work must retain scope, evidence and checked completion. This mode does not broaden permissions. No additional background self-improvement loop is authorised.
 
-Judge changes by what they do in the running system over an appropriate period. Green tests, a merge or a successful installation do not prove responsiveness, autonomous progress or fair scheduling. Existing observers must check real effects, spot regressions and initiate ordinary corrective work. Preserve evidence and continuity through the existing durable tasks, queues, plans and recovery. The user supplies intent and consequential authority, not routine polling and reminders to keep checking.
+If the user later re-enables self-development, reuse the existing product pipeline and durable frontier. Reconcile the accepted draft branch with the explicit master gardening configuration and establish reviewed test/landing coverage before claiming readiness. Use isolated workspaces, independent tests/review and recoverable installation; preserve settings, keys and artifacts. Judge native outcomes separately from fixtures and assisted deployments. The non-interference policy remains binding.
 
-Keep source acceptance and installed acceptance distinct. Use isolated worktrees, independent tests/review and compatible, recoverable installation. Preserve editor drafts, sessions, keys, queues, artifacts and user settings. Existing independent repair handles an unavailable runtime. The non-interference policy still applies: improve shared code/configuration/instructions, rather than manually steering or rescuing live product inhabitants. Normal autonomous supervision/recovery remains part of the factory. There is no extra per-change human approval requirement.
-
-Current readiness: enrollment is enabled against a work/draft ref with no test manifest/profile. Reconcile the accepted branch against the source tree's documented master contract while preserving draft/editor work; establish reviewed test/landing coverage before claiming ordinary self-development code acceptance is ready. Inspect the current registry. Existing test failures need classification against intended contracts, without weakening those contracts.
-
-The current external Codex session already owns scheduler verification; scouts must avoid duplicating it. The plan owns remaining self-maintenance concerns and the acceptance contract owns observable outcomes. These are requirements and current limits, not a claim that autonomous oversight has already been proven. Stored knowledge never grants authority.
+how/to/disable/the/cointos/factory.md owns suspension/restoration. Stored knowledge grants no authority.

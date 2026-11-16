@@ -1238,7 +1238,12 @@ print(json.dumps(refused))
                 if mode == 'before':
                     state.L['agents'].clear()
                     lifecycle.orphaned(integration)
-                    self.start(integration, 'reviewer-replaced')
+                    controller, created = tasks.request_repair(integration)
+                    assert created and controller['role'] == 'first-responder'
+                    assert integration['status'] == 'failed' and w['status'] == 'review'
+                    assert not w.get('acceptance'), 'lost pre-save review invented acceptance'
+                    self.invariants()
+                    continue
                 with patch.object(contracts, 'production', return_value=[]):
                     landing.land(integration['id'], self.candidate, integration['agent'])
                 assert w['acceptance']['via'] == 'tests' and self.refs['main'] == parent
@@ -1403,7 +1408,8 @@ print(json.dumps(refused))
                 with patch.object(opencode, 'active', return_value=False):
                     runs.follow('worker', None, None)
         assert stopped == ['worker'] and 'worker' not in state.L['agents']
-        assert w['status'] == 'waiting' and not w['receipt'] and not w['acceptance']
+        assert w['status'] == 'failed' and not w['receipt'] and not w['acceptance']
+        assert frontier.reason(w) is not None, 'unreceipted death lost recovery obligation'
         return 'atomic-run-artifacts-observed'
 
     def observer_trial(self):
@@ -1519,7 +1525,7 @@ print(json.dumps(refused))
             assert facts_seen[0]['error'] == error, 'observer lost structured final error'
             assert 'upstream unavailable' in w['note'], 'unreceipted retry lost error diagnosis'
         if not receipted:
-            assert w['status'] == 'waiting' and not w['receipt'], 'exit code replaced completion receipt'
+            assert w['status'] == 'failed' and not w['receipt'], 'unreceipted exit bypassed recovery'
             return 'observed-terminal-without-receipt'
         assert w['status'] == 'review' and w['receipt']['run'] == 'worker'
         self.integration = integration = spawner.integrations()[0][1]()
@@ -1609,6 +1615,14 @@ print(json.dumps(refused))
         assert target['runs'] == before_runs, 'replacement charged a new run before admission'
         assert target['session'] == 'session-' + original_run, 'replacement discarded session'
         assert self.refs[target['branch']] == before_commit, 'replacement discarded committed work'
+        if not survived:
+            controller, created = tasks.request_repair(target)
+            assert created and controller['role'] == 'first-responder', 'dead run lacked diagnosis'
+            assert target['status'] == 'failed', 'dead run was automatically readmitted'
+            if not worker_case:
+                assert w['status'] == 'review' and w['receipt'], 'reviewer death invalidated worker receipt'
+            self.invariants()
+            return 'dead-run-first-responder'
         if receipted:
             receipt = copy.deepcopy(w['receipt'])
             recovery.enforce()

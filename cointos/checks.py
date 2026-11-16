@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from cointos import memory
-from cointos.scheduler import draw, held_for, lane_allows, slot
+from cointos.scheduler import draw, held_for, lane_allows, rank
 
 
 def silent_agents(config: dict, ledger: dict, now: float) -> list[str]:
@@ -48,9 +48,8 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
              blocked: frozenset = frozenset()) -> list[dict]:
     """`processes` maps agent id to the live pids found carrying that id."""
     limits = config["checks"]
-    rank = {klass: position for position, klass in enumerate(config["classes"])}
     lanes, thoughts = ledger["lanes"], list(ledger["thoughts"].values())
-    waiting = [t for t in thoughts if t["lane"] is None and t["class"] not in blocked]
+    waiting = [t for t in thoughts if t["lane"] is None and t["class"] not in blocked and t.get("waiting_for") != "memory"]
     results = []
 
     def check(name, problems):
@@ -70,23 +69,20 @@ def evaluate(config: dict, ledger: dict, now: float, processes: dict[str, list[i
         return [lane for lane in lanes if lane["model"] == t["model"] and lane["holder"] in ledger["thoughts"]
                 and test(ledger["thoughts"][lane["holder"]]) and lane_allows(config, lane, t["class"])]
 
-    check("higher classes pre-empt", [
-        f"{t['agent']} ({t['class']}) waited {now - t['waiting_since']:.0f}s behind a lower class"
-        for t in waiting if now - t["waiting_since"] > limits["preempt_seconds"]
-        and held_by(lambda h, t=t: rank.get(h["class"], 99) > rank.get(t["class"], 99), t)])
-
-    def overdue(h, t):  # how long h has held on past its slice, this slot, while t was waiting
+    def overdue(h, t):  # how long h has held on past its slice while t was waiting
         slice_seconds = config["scheduler"]["slice_seconds"]
-        return now - max(t["waiting_since"], h["since"] + slice_seconds, slot(config, now) * slice_seconds)
+        return now - max(t["waiting_since"], h["since"] + slice_seconds)
 
-    def beaten(h, t):  # h holds on past its slice although t won this slot's draw against it
-        return (h["class"] == t["class"] and (not h["reading"] or h.get("read_checkpoint"))
-                and draw(config, t, now) > draw(config, h, now)
+    def beaten(h, t):  # h holds past its slice despite a winning eligible waiter
+        return ((t["class"] == "coin" or not h["reading"] or h.get("read_checkpoint"))
+                and (rank(config, t['class']) < rank(config, h['class'])
+                     or (rank(config, t['class']) == rank(config, h['class'])
+                         and draw(config, t, now) > draw(config, h, now)))
                 and overdue(h, t) > limits["preempt_seconds"])
 
     check("no agent starves", [
-        f"{t['agent']} won the draw but waited {max(overdue(h, t) for h in thoughts if h['lane'] is not None):.0f}s"
-        f" behind an equal past its slice" for t in waiting if held_by(lambda h, t=t: beaten(h, t), t)])
+        f"{t['agent']} won allocation but waited {max(overdue(h, t) for h in thoughts if h['lane'] is not None):.0f}s"
+        f" behind a holder past its slice" for t in waiting if held_by(lambda h, t=t: beaten(h, t), t)])
 
     check("no silent agent", [
         f"{agent_id} without a thought or event for {now - ledger['agents'][agent_id]['last_activity']:.0f}s"

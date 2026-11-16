@@ -32,6 +32,51 @@ class Admission(unittest.TestCase):
         self.addCleanup(lambda: (keys.ENDED.clear(), keys.ENDED.update(ended)))
         self.task = tasks.create('steward', tasks.SYSTEM, 'inspect-admission', 'Inspect admission', [6])
 
+    def test_operators_share_user_priority_without_assuming_user_identity(self):
+        operator = tasks.create('operator', tasks.SYSTEM, 'lookup', 'Lookup.', [1])
+        with patch.object(runs.threading, 'Thread'):
+            agent = runs.start(operator)
+        self.assertEqual(state.L['agents'][agent]['class'], 'user')
+        self.assertEqual(keys.owner(keys.ISSUED[agent]), (agent, 'user'))
+        self.assertEqual(runs.scheduling_class({'role': 'supervisor'}), 'background')
+        self.assertEqual(runs.scheduling_class({'role': 'worker'}), 'background')
+
+    def test_existing_operator_is_promoted_on_adoption_without_session_or_key_change(self):
+        operator = tasks.create('operator', tasks.SYSTEM, 'lookup', 'Lookup.', [1])
+        with patch.object(runs.threading, 'Thread'):
+            agent = runs.start(operator)
+        previous = json.loads(json.dumps(state.L))
+        previous['agents'][agent]['class'] = 'background'
+        prior_session = operator['session']
+        prior_key = keys.ISSUED[agent]
+        keys.OWNERS.clear(); keys.ISSUED.clear()
+        with patch.object(runs.threading, 'Thread'), patch.object(opencode, 'active', return_value=True), \
+             patch.object(opencode, 'find_processes', return_value={}):
+            runs.adopt(previous)
+        self.assertEqual(state.L['agents'][agent]['class'], 'user')
+        self.assertEqual(operator['session'], prior_session)
+        self.assertEqual(keys.ISSUED[agent], prior_key)
+
+    def test_factory_roles_share_background_on_start_and_adoption(self):
+        for kind, old_class in (('first-response', 'first-responder'), ('supervise', 'supervisor')):
+            with self.subTest(kind=kind):
+                task = tasks.create(kind, tasks.SYSTEM, kind, 'Inspect the run.', [1])
+                with patch.object(runs.threading, 'Thread'):
+                    agent = runs.start(task)
+                self.assertEqual(state.L['agents'][agent]['class'], 'background')
+                self.assertEqual(keys.owner(keys.ISSUED[agent]), (agent, 'background'))
+                previous = json.loads(json.dumps(state.L))
+                previous['agents'][agent]['class'] = old_class
+                prior_key, prior_session = keys.ISSUED[agent], task['session']
+                keys.OWNERS.clear(); keys.ISSUED.clear()
+                with patch.object(runs.threading, 'Thread'), patch.object(opencode, 'active', return_value=True), \
+                        patch.object(opencode, 'find_processes', return_value={}):
+                    runs.adopt(previous)
+                self.assertEqual(state.L['agents'][agent]['class'], 'background')
+                self.assertEqual(keys.owner(prior_key), (agent, 'background'))
+                self.assertEqual(task['session'], prior_session)
+
+
     def snapshot(self):
         return copy.deepcopy((state.L, keys.OWNERS, keys.ISSUED, keys.ENDED))
 
@@ -389,7 +434,8 @@ class Admission(unittest.TestCase):
             stop.assert_not_called()
             thread.assert_called_once_with(target=runs.follow, args=('legacy-shared', None, None), daemon=True)
         self.assertEqual((displaced['status'], displaced['agent'], displaced['session']),
-                         ('waiting', None, 'displaced-session'))
+                         ('failed', None, 'displaced-session'))
+        self.assertEqual(tasks.request_repair(displaced)[0]['role'], 'first-responder')
         self.assertEqual((survivor['status'], survivor['agent'], survivor['session']),
                          ('running', 'legacy-shared', 'surviving-session'))
         self.assertEqual(state.L['agents']['legacy-shared']['task'], survivor['id'])

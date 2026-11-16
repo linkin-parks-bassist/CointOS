@@ -25,6 +25,16 @@ class HistoryBlocks(unittest.TestCase):
             self.assertEqual([item['at'] for item in actual], list(range(expected_start + 1, count + 1)))
         self.assertEqual(len(coin.history_path(7).read_text().splitlines()), 42)
 
+    def test_private_history_keeps_only_the_context_window(self):
+        with patch.dict(coin.SETTINGS, retain_archive=False):
+            for count in range(1, 43):
+                coin.remember(7, 'user' if count % 2 else 'assistant', str(count), at=count)
+                expected_start = 0 if count < 20 else ((count - 20) // 7 + 1) * 7
+                stored = [json.loads(line) for line in coin.history_path(7).read_text().splitlines()]
+                self.assertEqual([int(row['content']) for row in stored], list(range(expected_start + 1, count + 1)))
+                self.assertLess(len(stored), 20)
+            self.assertNotIn('older messages remain', coin.system_prompt(None)[0])
+
     def test_block_size_is_configurable_and_user_histories_are_independent(self):
         with patch.dict(coin.SETTINGS, history_messages=8, history_trim_messages=3):
             for count in range(1, 9):
@@ -74,7 +84,8 @@ class HistoryBlocks(unittest.TestCase):
             if len(requests) == 1:
                 return {'role': 'assistant', 'tool_calls': [{'id': 'status', 'function': {
                     'name': 'status', 'arguments': '{}'}}]}
-            return {'role': 'assistant', 'content': 'Checked.'}
+            from tests.test_coin import sent_reply
+            return sent_reply('Checked.')
         with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), \
                 patch.object(coin, 'report'), patch.object(coin, 'execute', return_value={'ok': True}):
             coin.turn('token', 7, 70, ['20'], lambda: [], None)
@@ -93,7 +104,8 @@ class HistoryBlocks(unittest.TestCase):
                 return {'role': 'assistant', 'content': '', 'reasoning_content': f'thinking {len(requests)}',
                         'tool_calls': [{'id': f'status-{len(requests)}', 'type': 'function',
                                         'function': {'name': 'status', 'arguments': '{}'}}]}
-            return {'role': 'assistant', 'content': 'Checked.'}
+            from tests.test_coin import sent_reply
+            return sent_reply('Checked.')
         coin.remember(7, 'assistant', 'earlier', at=1)
         with patch.object(coin, 'complete', side_effect=complete), patch.object(coin, 'send'), \
                 patch.object(coin, 'report'), patch.object(coin, 'execute', return_value={'ok': True}):

@@ -1,9 +1,10 @@
 ---
 status: green
-revised_at: "2026-11-04T07:25:16+11:00"
+revised_at: "2026-11-16T19:29:44+11:00"
+checked_at: '2026-11-17T07:40:24+11:00'
 ---
 
-Snapshots are disposable performance hints, never task/conversation authority. Startup retires unreachable caches; terminal tasks retain them while a run survives. Native execution residency has the shorter run/thought lifetime owned by how/does/gufo/select/resident/agent/state.md.
+Snapshots are disposable performance hints, never task/conversation authority. A namespace rotation must retire the old tmpfs store after verifying no runner uses it; scanning only the new configured store cannot reclaim those orphan bytes. Coin profiles with retain_diagnostics=false save no checkpoints. Private user requests use ordinary owner-bound prefix/checkpoint reuse, but their binary KV files stay in tmpfs: no publication of private prefixes, disk spill or shutdown persistence. Private requests can restore an exact matching non-private cache; private-owned caches remain inaccessible to other owners. Memory pressure may discard these optional caches. Orphan reconciliation removes disabled-profile and unreachable-client caches; private restore/deduplication stays owner-bound. Private KV state survives tool/turn gaps for the live client process; PID/start/boot receipts establish its lifetime without transcript persistence. Startup retires unreachable caches; terminal tasks retain them while a run survives. Native execution residency has the client/run lifetime owned by how/does/gufo/select/resident/agent/state.md.
 
 Reachability never ends Coin, user and shared conversations, and waiting tasks can wait indefinitely, so reconciliation also retires memory/disk caches whose `last_run` is older than memory.snapshot_idle_hours (36, user-requested). Saves, identical-bytes reuse, prefix retention and restores refresh `last_run`; transfers and pinned restore inputs wait for a later pass. Expiry costs only a reread.
 
@@ -15,9 +16,9 @@ Disk admission waits for actual capacity. Ordinary lane work retains its RAM fal
 
 Restoration tries compatible prefixes longest first; an admission-refused/invalid longer cache cannot hide a shorter one. Interrupted transfers choose the configured namespace and retain a regular copy matching recorded positive length, preferring RAM. Native restore validates bytes. Missing/partial/discarded/retired copies remain misses. Startup can synchronously remove a losing transfer copy, unlike ordinary retirement.
 
-Estimates use nearest measured same-model context at least as large, preserve fixed overhead, scale upward beyond range, never undercut smaller measured files, round upward and reconcile actual saves. Installed native first-save estimation uses the runner's state claim; capture also reserves a state claim for the GPU copy coexisting with the RAM file. Pending saves/copy-backs and active execution capacity stay protected across measurements. Non-native first saves remain unestimated. Eviction prefers inactive owners/recency; headroom shedding prefers shared starts/recency. RAM/disk budgets remain 40/300 GB.
+Admission prefers an idle llama slot's native byte count when held-token positions agree (server-build owner). Older servers use sample estimation: nearest larger context, upward scaling beyond range, fixed-state floor and upward rounding. Actual saves reconcile the estimate. Installed native first-save estimation uses the runner's state claim; capture also reserves a state claim for the GPU copy coexisting with the RAM file. Pending saves/copy-backs and active execution capacity stay protected across measurements. Non-native first saves remain unestimated. Eviction prefers inactive owners/recency; headroom shedding prefers shared starts/recency. RAM/disk budgets remain 40/300 GB.
 
-Historical cleanup qualification: 117 focused and 1,061 full source tests (three native-only skips); 4.42-second activation preserved native/Coin, three agents, sessions/spend/config. A 237.94-second observation had 120 API responses (median 142.49/max 244.97 ms), no cleanup errors and 5.20 GB physically reclaimed. I/O PSI peaked at 0.18; severe-pressure resilience/fallback speedups remain unproved. Evidence: workflow-observation-20261019/snapshot-cleanup-{verified.json,activation/recovery.json,live-summary.json} and snapshot-unlink-lock-stall.json.
+Historical cleanup qualification found no cleanup errors, reclaimed 5.20 GB and preserved live sessions; severe-pressure resilience remains unproved. Evidence: workflow-observation-20261019/snapshot-cleanup-{verified.json,activation/recovery.json,live-summary.json} and snapshot-unlink-lock-stall.json.
 
 Proof:
 

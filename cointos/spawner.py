@@ -21,11 +21,24 @@ BLOCKED_DEPENDENCY = 'depends on a blocked item'
 COMPOSITIONS_TRIED: set[tuple] = set()
 
 
+def factory_enabled() -> bool:
+    return CONFIG.get('factory_enabled', True)
+
+
+def allowed(task: dict) -> bool:
+    """Personal mode admits requested work, never implicit supervision/recovery."""
+    if factory_enabled():
+        return True
+    if task.get('kind') == 'operator' and task.get('place') == 'system':
+        return True  # Operators originate at an explicit dispatch/tool boundary.
+    return bool(task.get('dispatch_requested')) and task.get('kind') not in ('item', 'breakdown', 'integrate')
+
+
 def refresh() -> tuple[dict, dict]:
     """Live queue records and dependency readiness, current even while admission is full or
     paused: ({project: its live records}, {project: {item: readiness}})."""
     lifecycle.reconcile()
-    projects = tasks.enabled_projects()
+    projects = tasks.enabled_projects() if factory_enabled() else []
     scanned = {p["name"]: queues.live(p["name"]) for p in projects}
     ready = {p["name"]: queues.readiness(scanned[p["name"]], queues.landed(p["name"])) for p in projects}
     problems = {f"{project}:{item}": state for project, states in ready.items() for item, state in states.items()
@@ -64,19 +77,25 @@ def retry_compositions(scanned: dict) -> None:
             attempt = (key, record['version'], main, tuple(commits))
             if commits and attempt not in COMPOSITIONS_TRIED:
                 COMPOSITIONS_TRIED.add(attempt)
-                threading.Thread(target=retry_composition, args=(project, key, attempt, rules), daemon=True).start()
+                threading.Thread(target=retry_composition, args=(deepcopy(project), key, attempt, deepcopy(rules), runs.material_baselines(project['name'], commits)), daemon=True).start()
 
 
-def retry_composition(project: dict, key: str, attempt: tuple, rules: dict) -> None:
+def retry_composition(project: dict, key: str, attempt: tuple, rules: dict, prior=()) -> None:
     try:
-        with contracts.combined(project['path'], attempt[2], list(attempt[3]), rules, non_code='ours'):
-            pass
+        runs.prepare_test_inputs(project, attempt[2], list(attempt[3]), prior)
     except Exception as error:  # still a real clash, or an unusable repository
         log('composition still clashes', item=key, error=str(error)[:300])
         return
     with LOCK:
         record = queues.records().get(key)
         if not record or record['version'] != attempt[1] or queues.state(record)['status'] != 'blocked':
+            return
+        repair = frontier.controller(record)
+        current_project = next((p for p in tasks.enabled_projects() if p['name'] == project['name']), None)
+        if (L['paused'] or L['restarting'] or STOPPING.is_set() or record['held_by']
+                or packets.pending(record) or (repair and tasks.active(repair))
+                or current_project != project):
+            COMPOSITIONS_TRIED.discard(attempt)
             return
         task = queues.current(record)
         if git.head(project['path'], project['main_branch']) != attempt[2] or landing.tests_of(task) != list(attempt[3]):
@@ -90,17 +109,10 @@ def retry_composition(project: dict, key: str, attempt: tuple, rules: dict) -> N
 
 def repair_work(scanned: dict) -> None:
     """Reconcile one First Responder per unchanged failure, including taskless bad dependencies."""
-    if L["paused"]:
+    if not factory_enabled() or L["paused"]:
         return
     for source in list(L["tasks"].values()):
-        if source.get("exhausted") and source["role"] == "first-responder":
-            source["exhausted"] = False  # one decision per exhaustion; a refusal is not retried
-            try:  # when even the diagnosis runs out, cut an oversized job up anyway
-                lifecycle.split(source["id"], "its First Responder ran out of budget before dispatching", "service")
-            except ValueError as error:
-                log("split unavailable", task=source["id"], detail=str(error))
-            continue
-        if frontier.reason(source) is not None and not draft_blocked(source):
+        if allowed(source) and frontier.reason(source) is not None and not draft_blocked(source):
             tasks.request_repair(source)
     for records in scanned.values():
         for record in records:
@@ -113,12 +125,23 @@ def repair_work(scanned: dict) -> None:
 def spawn() -> None:
     """Start runs while there is room, work and memory."""
     if (STOPPING.is_set() or models.changing() or L["restarting"] or L["paused"] or lanes.blocked()
-            or not L["models"][CONFIG["work_model"]]["up"]
-            or now() - L["user_last_thought"] < CONFIG["spawner"]["user_quiet_seconds"]):
+            or not L["models"][CONFIG["work_model"]]["up"]):
+        return
+    # User-requested Operators may start while Coin is still answering and the
+    # ordinary pool is full. Agent-created helpers keep ordinary admission.
+    operators = [t for t in L['tasks'].values() if t.get('kind') == 'operator'
+                 and t['status'] == 'waiting' and not t.get('spawned_by') and not t.get('replaced_by')
+                 and not any(a['task'] == t['id'] for a in L['agents'].values())]
+    if operators:
+        _, ready = refresh()
+        for task in sorted(operators, key=lambda t: (t['rank'], t['created_at'])):
+            if runnable(task, ready) and snapshots.make_room(capacity.agent_gb(task['id']), claim=False):
+                runs.start(task)
+    if now() - L['user_last_thought'] < CONFIG['spawner']['user_quiet_seconds']:
         return
     # A supervisor takes a slot at once, past max_agents, while memory allows it.
     for task in [t for t in L["tasks"].values() if t["kind"] == "supervise" and t["status"] == "waiting"]:
-        if snapshots.make_room(capacity.agent_gb(task['id']), claim=False):
+        if runnable(task, {}) and snapshots.make_room(capacity.agent_gb(task['id']), claim=False):
             runs.start(task)
     while len(L["agents"]) < CONFIG["spawner"]["max_agents"]:
         task = next_task()
@@ -156,7 +179,7 @@ def held(task: dict) -> bool:
 
 
 def runnable(task: dict, ready: dict) -> bool:
-    if held(task) or frontier.obsolete(task):
+    if not allowed(task) or held(task) or task.get('split_supervisor') or frontier.obsolete(task):
         return False
     if task.get('repair_origin') and not frontier.runnable(task):
         return False
@@ -208,6 +231,8 @@ def reorder(scanned: dict) -> None:
 def queued_work(scanned: dict, ready: dict) -> list:
     """New worker or planning tasks for ready records; recovery has already been reconciled.
     Test contracts relying on absent APIs are refused before a worker run."""
+    if not factory_enabled():
+        return []
     options = []
     for project in tasks.enabled_projects():
         for record in scanned[project["name"]]:
@@ -234,9 +259,9 @@ def dispatch(kind: str, project: dict, record: dict, rank: list) -> dict | None:
     if not missing:
         return task
     log("brief infeasible", task=task["id"], missing=missing)
-    lifecycle.refuse_dispatch(task, f"Dispatch check: the brief relies on {', '.join(missing)}, absent on "
-                                    f"{project.get('main_branch', 'main')}. Correct the brief to the owner APIs "
-                                    f"that exist (hold/revise), or queue the prerequisite skeleton it needs first.")
+    lifecycle.refuse_dispatch(task, f"Dispatch check: the brief relies on {', '.join(missing)}, absent from "
+                                    "accepted source. Revise the brief to use existing owner APIs, "
+                                    "or queue the prerequisite skeleton it needs first.")
     return None
 
 
@@ -265,6 +290,8 @@ def integrations() -> list:
     """One integration at a time per project, of its oldest reviewed item. An integration occupies
     its project only while it can proceed: one that is held, or whose worker is back at work,
     does not keep the project's other reviewed items from being integrated."""
+    if not factory_enabled():
+        return []
     options = []
     for project in tasks.enabled_projects():
         active = [t for t in L["tasks"].values() if t["kind"] == "integrate" and t["place"] == project["name"]
@@ -296,6 +323,8 @@ def tree_work() -> list:
     """Per owned tree, at most one maintenance task: a gardening batch when its health changed or
     its routine interval passed, else a structural audit when that interval passed. A disabled
     project's tree is left alone."""
+    if not factory_enabled():
+        return []
     options = []
     disabled = {p["name"] for p in CONFIG["projects"] if not p.get("enabled", True)}
     for tree in managed_trees(CONFIG):
@@ -336,13 +365,20 @@ def request_role(role: str, body: dict) -> dict:
             known["former_repair_origin"] = known.pop("repair_origin")
         responder = tasks.request_repair(source)[0] if source else None
         if responder is None:
-            raise ValueError("a first-responder needs task: an assignment whose run went wrong")
+            if body.get('task'):
+                raise ValueError('a first-responder needs an existing task or a standalone runtime diagnostic brief')
+            if not body.get('brief', '').strip():
+                raise ValueError('a first-responder needs a concrete runtime diagnostic brief')
+            existing = next((t for t in L['tasks'].values() if t['kind'] == 'first-response'
+                             and t['title'] == body['name'] and tasks.active(t) and not t.get('repair_origin')), None)
+            return existing or tasks.create('first-response', tasks.SYSTEM, body['name'], body['brief'],
+                                            [schema.KINDS['first-response']['rank']])
         return responder
     if role == "supervisor":
         target = L["tasks"].get(body.get("task", ""))
         if target is None or not tasks.active(target):
             raise ValueError("a supervisor needs task: a live agent's task to look at")
-        return tasks.request_supervisor(target, schema.spent(L["agents"][target["agent"]])["generation_seconds"]
+        return tasks.request_supervisor(target, schema.spent(L["agents"][target["agent"]])["generation_tokens"]
                                         if target.get("agent") in L["agents"] else 0)
     effort = {"reasoning_effort": body["reasoning_effort"]} if body.get("reasoning_effort") else {}
     if role in ("steward", "test-auditor"):
@@ -368,6 +404,8 @@ def periodic() -> list:
     """The system-wide steward, inversely as frequent as the factory is busy (work the user
     killed is not busyness) and once soon after the GPU goes idle, and a retrospective
     test audit after new accepted work."""
+    if not factory_enabled():
+        return []
     options = []
     projects = tasks.enabled_projects()
     spawner = CONFIG["spawner"]
@@ -408,7 +446,7 @@ def refresh_trees() -> None:
     receipt-time health checks may supersede an observation still in flight.
     """
     with LOCK:
-        if STOPPING.is_set() or L['restarting']:
+        if not factory_enabled() or STOPPING.is_set() or L['restarting']:
             return
         configured = deepcopy({key: CONFIG[key] for key in ('projects', 'trees')})
         seen = dict(L['trees'])
@@ -432,7 +470,7 @@ def refresh_trees() -> None:
                 continue
             if fresh.get('deferred_health') and fresh['deferred_health'] != (previous or {}).get('deferred_health', []):
                 alert(f"Cannot garden pending or absent canonical answers in {tree['name']}: " +
-                      ', '.join(fresh['deferred_health']) + '. Preserve and reconcile their owning answers before branch maintenance.')
+                      ', '.join(fresh['deferred_health']) + '. Preserve and reconcile their owning answers before maintenance.')
             if 'error' in fresh and fresh['error'] != (previous or {}).get('error'):
                 alert(f"Cannot read the {tree['name']} knowledge tree's health: {fresh['error']}")
             L['trees'][tree['name']] = fresh

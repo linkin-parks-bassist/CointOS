@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 
-from cointos import (checks, gateway, keys, messages, lanes, lifecycle, memory, models, opencode, queues, recovery, runs, settings,
+from cointos import (capacity, checks, gateway, keys, messages, lanes, lifecycle, memory, models, opencode, queues, recovery, runs, settings,
                      snapshots, snapshot_cleanup, spawner, startup, viewers)
 from cointos.config import LEDGER, read_owned_json
 from cointos.state import BACKEND, CONFIG, LOCK, L, STARTUP, STOPPING, alert, fresh, flush_journal, log, now, save
@@ -93,6 +93,7 @@ def guard() -> None:
     Caller holds LOCK."""
     measured, server = memory.measure(), BACKEND.budget(CONFIG)
     L["memory"] = {**measured, "server": server, "headroom_gb": memory.headroom_gb(CONFIG, measured, server)}
+    capacity.observe()  # agents' actual usage sizes the room admission holds for them
     snapshots.room(0.0)  # bound caches before general pressure reaches the desktop
     state, limits = L["guard"], CONFIG["memory"]
     short = L["memory"]["headroom_gb"] < 0 and not snapshots.make_room(0.0)  # rung 1 happens here, always

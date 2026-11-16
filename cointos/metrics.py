@@ -1,6 +1,7 @@
 """Pipeline effectiveness over a recent window, read from the bounded event journal.
 
-`cointos metrics` reads the two journal files directly (no daemon needed), so it covers at most
+Human `cointos metrics` reads the two journal files directly (no daemon needed); managed clients
+ask the daemon for the same report. It covers at most
 what they still hold. It reports what the construction pipeline produced and what it spent on
 recovery, including the brief check and packet test failures.
 """
@@ -65,7 +66,7 @@ def summary(entries: list[dict], hours: float) -> str:
     blocked = sum(n for (k, d), n in receipts.items() if k == "item" and d == "blocked")
     complete = sum(n for (k, d), n in receipts.items() if k == "item" and d == "complete")
     lines.append(f"Worker receipts:      {complete} complete, {blocked} blocked")
-    lines.append(f"Packet test failures: {packet_failures} sent straight back to their implementers")
+    lines.append(f"Submission validation failures: {packet_failures}")
     lines.append("")
     lines.append(f"Recoveries per landing: {(created['decompose'] + repairs) / total:.2f}" if total else
                  "Recoveries per landing: n/a (nothing landed)")

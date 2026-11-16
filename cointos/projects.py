@@ -12,6 +12,12 @@ from cointos.config import PROJECTS, write_json
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 
+class SetupError(git.OperationError):
+    public = ("CointOS could not initialize project storage. Files are retained and the project was not enrolled. "
+              "Report this setup failure for system recovery; do not modify the retained directory.")
+
+
+
 def about(project: dict) -> str:
     """The first line of the project's orientation answer: what the dashboard says the project is."""
     try:
@@ -32,7 +38,7 @@ def normalize(project: dict) -> dict:
         raise ValueError(f"project path does not exist: {path}")
     top = git.result(path, "rev-parse", "--show-toplevel")
     if top.returncode or Path(top.stdout.strip()).resolve() != path:
-        raise ValueError(f"project path is not a Git repository root: {path}")
+        raise ValueError(f"directory is not an enrollable project root: {path}")
     current = git.result(path, "branch", "--show-current").stdout.strip()
     branch = str(project.get("main_branch") or current or "main").strip()
     if not branch or any(c.isspace() for c in branch):
@@ -86,7 +92,7 @@ def create(config: dict, project: dict, registry_path: Path = PROJECTS) -> dict:
     branch = str(project.get("main_branch") or "main")
     initialized = git.result(target, "init", "-b", branch)
     if initialized.returncode:
-        raise ValueError(initialized.stderr.strip() or "git init failed")
+        raise SetupError(initialized.stderr.strip() or "git init failed")
     orientation = (f"{name} is a CointOS-managed project in {target}. "
                    "where/ owns orientation; what/is/the/spec.md owns requirements; "
                    "what/is/the/plan.md owns the remaining frontier; what/is/broken.md owns known defects. "
@@ -98,8 +104,7 @@ def create(config: dict, project: dict, registry_path: Path = PROJECTS) -> dict:
     staged = git.result(target, "add", ".knowledge")
     committed = git.result(target, "commit", "-m", "Initialize project") if not staged.returncode else staged
     if committed.returncode:
-        raise ValueError("project was created, but its initial knowledge-tree commit failed; fix Git identity/state, "
-                         "commit it, then use cointos project add")
+        raise SetupError(committed.stderr.strip() or "initial project capture failed")
     return add(config, {**project, "name": name, "path": str(target), "main_branch": branch}, registry_path)
 
 

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-18T22:33:50+11:00"
+revised_at: "2026-11-07T11:47:21+11:00"
 ---
 
 Use the least disruptive level that can apply the change:
@@ -18,7 +18,7 @@ Stopping cointosd saves lane state and cuts replies. OpenCode retains partial ou
 
 Startup requires regular, non-symlink authority JSON, rejecting corruption, duplicate fields, unreadability and invalid retained ledger containers before mutation/adoption/save. Only absence initializes defaults. Preserve refused files for inspection/repair rather than deleting them to force startup. A managed Operator requires the daemon/gateway. Fatal Python exceptions exit 2 and trigger independent remote Codex through `cointos-repair.service`. It retains incident/thread evidence and checks native/API health, authority, sessions, enrollment and explicit holds. Native retries have no inherited start cap. Installation shares repair ownership; native repair waits through replacement. Acceptance owns deployment status and validation limits.
 
-Valid startup settles published verified intents before adoption/budgets. Adoption requires persisted exact task/current-receipt ownership and an active unit, injects nothing and stops unknown units. Dead keyed units requeue uncharged. Coin/agents/models survive compatible replacement. Gufo requires an independent systemd user scope; a new session still inherits daemon cgroup cleanup. Verify native PID survival. Coin retains imports/startup settings; refresh it separately only when quiet.
+Valid startup settles published verified intents before adoption/budgets. Adoption requires persisted exact task/current-receipt ownership and an active unit, injects nothing and stops unknown units. Missing unreceipted units get First Responders regardless of role, preserving sessions/files. Coin/agents/models survive compatible replacement. Gufo requires an independent systemd user scope; a new session still inherits daemon cgroup cleanup. Verify native PID survival. Coin retains imports/startup settings; refresh it separately only when quiet.
 
 ## Emergency containment
 
@@ -28,6 +28,6 @@ For a detached thought preventing drain, stop Coin first, then pause/requeue wit
 
 Machine shutdown orders cointosd before agent units. Context saving, RAM-to-disk spill and ledger saving are attempted independently. Services carry runtime/user-local/system PATH.
 
-Startup removes unreachable conversation caches after adoption and discards interrupted transfers. Completed compatible states remain reusable; missing caches reread without deleting conversations/branches. Reboot destroys RAM snapshots/units. Disk reuse and uncharged recovery still require the next authorized reboot; never reboot merely to test them.
+Startup removes unreachable conversation caches after adoption and discards interrupted transfers. Completed compatible states remain reusable; missing caches reread without deleting conversations/branches. Reboot destroys RAM snapshots/units. Disk reuse and death-triggered recovery across reboot still require the next authorized reboot; never reboot merely to test them.
 
 New units reuse unfinished short-gap turns, use Continue for completed replies and reorient longer gaps. Surviving servers keep captured configuration. Patched fixtures preserve metadata/tools/events; natural acceptance remains open. Pending compaction finishes through native summarize with auto:false; failure withholds continuation.

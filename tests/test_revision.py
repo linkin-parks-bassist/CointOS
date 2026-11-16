@@ -30,6 +30,19 @@ class Revision(unittest.TestCase):
             support.running(worker, "worker-1")
         return worker
 
+    def test_unchanged_revision_reports_no_restart_or_handoff(self):
+        worker = self.worker(brief='Implement it' + SUMMARY, start=False)
+        worker['status'] = 'failed'
+        record = state.L['queue'][worker['record']]
+        before = copy.deepcopy(state.L)
+        result = api.dispatch('revise', {'item': worker['id'], 'brief': record['brief'],
+                              'reason': 'Retry after preparation repair',
+                              'caller': support.caller(self.manager, 'manager-1')})
+        self.assertFalse(result['changed'])
+        self.assertIn('no work restarted', result['message'])
+        for field in ('tasks', 'queue', 'agents'):
+            self.assertEqual(state.L[field], before[field])
+
     def test_agent_repair_cannot_discard_accepted_test_dependencies(self):
         queues.add(self.project, "queued", "contract", "Test A\nRelies on: a", "test-contract")
         queues.finish(state.L['queue']['p:contract'], commit='accepted-tests', via='tests')
@@ -84,12 +97,12 @@ class Revision(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already accepted"):
             api.dispatch("cancel", {"items": ["p:landed"], "reason": "r"})
 
-    def test_a_fresh_run_is_told_what_its_assignment_already_queued(self):
+    def test_a_fresh_run_looks_up_its_work_without_a_queue_history_dump(self):
         self.as_manager("queue", project="p", kind="queued", name="first-try",
                         brief="Do it.\nSummary: Removes the old rollback checks from the tests.")
         text = prompts.launch_text(self.manager, self.project)
-        self.assertIn("p:first-try (queued): Removes the old rollback checks from the tests.", text)
-        self.assertIn("Do not queue this work again", text)
+        self.assertNotIn("p:first-try", text)
+        self.assertIn("cointos_task " + self.manager["id"], text)
 
     # ------------------------------------------------ holding
 
@@ -236,8 +249,8 @@ class Revision(unittest.TestCase):
                          ("Implement the extended interface" + SUMMARY, state.L["queue"]["p:impl"]["version"]))
         self.assertTrue((Path(worker["worktree"]) / "partial.c").exists(), "the branch keeps earlier work")
         text = prompts.launch_text(worker, self.project)
-        self.assertIn(f"Revised by {self.manager['id']}: interface extended", text)
-        self.assertIn("Implement the extended interface", text)
+        self.assertNotIn(f"Revised by {self.manager['id']}: interface extended", text)
+        self.assertIn("cointos_task " + worker["id"], text)
         self.assertEqual(spawner.next_task()["id"], "p:impl")
 
     def test_revising_a_reviewed_item_sends_it_back_to_its_worker(self):
@@ -265,7 +278,7 @@ class Revision(unittest.TestCase):
         self.assertEqual(spawner.next_task()["id"], worker["id"])
         self.assertEqual((integration["brief"], integration["session"], integration["runs"], integration["branch"]),
                          (worker["brief"], None, 0, branch))
-        self.assertIn(worker["brief"], prompts.launch_text(integration, self.project))
+        self.assertIn("cointos_task " + integration["id"], prompts.launch_text(integration, self.project))
         self.assertFalse(spawner.runnable(integration, {}))
         support.reviewed(worker, "worker-2")
         self.assertEqual(spawner.next_task()["id"], integration["id"])

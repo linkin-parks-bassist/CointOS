@@ -39,13 +39,32 @@ class ResultDelivery(unittest.TestCase):
         item['id'] = 'check'
         return item
 
+    def test_result_contains_an_id_the_model_can_read_and_cite(self):
+        import json
+        check = self.check()
+        check['id'] = 'opaque-native-call-71'
+        rounds = iter([0, 1, 2])
+        def complete(_model, messages, **kwargs):
+            step = next(rounds)
+            if step == 0:
+                return assistant(check)
+            if step == 1:
+                # The model can read result text, even when its chat template hides call IDs.
+                result = json.loads(next(m['content'] for m in reversed(messages) if m['role'] == 'tool'))
+                return assistant(self.report(evidence=[result['evidence_call_id']]))
+            return assistant(call('done'))
+        with patch.object(coin, 'complete', side_effect=complete):
+            coin.turn('fixture', 7, 70, [], lambda: [], None,
+                      wake={'message': 'Report completion of requested work. Wire the CLI.'})
+        self.assertEqual(self.sent, ['The CLI is wired.'])
+
     def test_completion_wake_cannot_bypass_verification_with_send_or_closing_prose(self):
         captured = self.run_completion([
             assistant(call('send', {'message': 'Done and verified!'})),
             assistant(call('done'), content='Done and verified!')])
         self.assertEqual(self.sent, [])
         self.assertIn('Use report_result', captured[1][-2]['content'])
-        self.run_completion([assistant(content='Done and verified!')])
+        self.run_completion([assistant(content='Done and verified!'), assistant(call('done'))])
         self.assertEqual(self.sent, [])
         self.run_completion([assistant(call('send', {'message': 'Another victory lap'}), call('done'))],
                             wake={'message': 'Check the wiring task.',
@@ -74,6 +93,18 @@ class ResultDelivery(unittest.TestCase):
         self.assertEqual(len(coin_reports.context(self.root / 'reports', 7, 70)), 1)
         self.assertEqual(coin_reports.context(self.root / 'reports', 8, 70), [])
         self.assertEqual(coin_reports.context(self.root / 'reports', 7, 71), [])
+
+    def test_reporting_periods_are_distinct_but_same_period_replay_is_suppressed(self):
+        for week in ('2026-11-09', '2026-11-16', '2026-11-16'):
+            report = self.report(message=f'Report for {week}')
+            import json
+            args = json.loads(report['function']['arguments'])
+            args['milestone'] = f'weekly-report-{week}'
+            report['function']['arguments'] = json.dumps(args)
+            self.run_completion([assistant(self.check()), assistant(report, call('done'))],
+                                wake={'message': 'Prepare the report for the current week.',
+                                      'condition': {'kind': 'schedule'}})
+        self.assertEqual(self.sent, ['Report for 2026-11-09', 'Report for 2026-11-16'])
 
     def test_failed_delivery_does_not_retire_result(self):
         with patch.object(coin, 'send', side_effect=OSError('offline')):

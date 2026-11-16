@@ -22,7 +22,33 @@ def assistant(*calls, content=None):
     return {"role": "assistant", "content": content, "tool_calls": list(calls)}
 
 
+def sent_reply(text):
+    return assistant(call("send", {"message": text}), call("done"))
+
+
 class Delivery(unittest.TestCase):
+    def test_replayed_input_reuses_delivery_but_new_input_can_repeat_text(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        with patch.object(coin, 'COIN_STATE', Path(directory)), \
+                patch.object(coin, 'send', return_value={'message_id': 31}) as sender:
+            coin.deliver_text('fixture', 7, 70, 'Checking.', input_ids=[100])
+            coin.deliver_text('fixture', 7, 70, 'Checking.', input_ids=[100])
+            self.assertEqual(sender.call_count, 1)
+            coin.deliver_text('fixture', 7, 70, 'Checking.', input_ids=[101])
+            self.assertEqual(sender.call_count, 2)
+
+    def test_partial_delivery_replay_sends_only_missing_parts(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        text = 'a' * coin.TELEGRAM_LIMIT + 'tail'
+        with patch.object(coin, 'COIN_STATE', Path(directory)), \
+                patch.object(coin, 'send', side_effect=[{'message_id': 31}, OSError('offline')]):
+            with self.assertRaises(OSError):
+                coin.deliver_text('fixture', 7, 70, text, input_ids=[100])
+        with patch.object(coin, 'COIN_STATE', Path(directory)), \
+                patch.object(coin, 'send', return_value={'message_id': 32}) as sender:
+            coin.deliver_text('fixture', 7, 70, text, input_ids=[100])
+            sender.assert_called_once_with('fixture', 70, 'tail')
+
     def test_chunks_log_only_native_success_and_correlate_without_text_or_credentials(self):
         text='Private report ' + 'x' * coin.TELEGRAM_LIMIT
         receipts=[{'message_id':31,'date':100},{'message_id':32,'date':101}]
@@ -100,8 +126,8 @@ class Turn(unittest.TestCase):
         archived = 'An earlier caption\n\n<cointos-attachments>\n{"update_id": 1, "files": [{"path": "/old/photo.jpg"}]}\n</cointos-attachments>'
         coin.remember(7, 'user', archived, at=1, input_id=1)
         text = {'id': 2, 'text': 'Quick?', 'at': 2}
-        failed = self.run_turn([assistant(call('done'), content='Received.')], texts=[text])
-        retried = self.run_turn([assistant(call('done'), content='Received.')], texts=[text])
+        failed = self.run_turn([sent_reply('Received.')], texts=[text])
+        retried = self.run_turn([sent_reply('Received.')], texts=[text])
         prefix = failed[0][1]['cache_prefix_messages']
         self.assertEqual(failed[0][0][:prefix], retried[0][0][:prefix])
         for request in (failed[0][0], retried[0][0]):
@@ -133,21 +159,21 @@ class Turn(unittest.TestCase):
         knowledge = {"names": {"kt_read", "kt_init"}, "tools": [
             {"type": "function", "function": {"name": "kt_read"}},
             {"type": "function", "function": {"name": "kt_init"}}]}
-        first = self.run_turn([assistant(content="Hi.")], texts=["hello"], knowledge=knowledge)
-        second = self.run_turn([assistant(content="Yes.")], texts=["still there?"], knowledge=knowledge)
+        first = self.run_turn([sent_reply("Hi.")], texts=["hello"], knowledge=knowledge)
+        second = self.run_turn([sent_reply("Yes.")], texts=["still there?"], knowledge=knowledge)
         self.assertEqual(first[0][0][0], second[0][0][0])
         self.assertEqual(first[0][1]["tools"], second[0][1]["tools"])
         names = {t["function"]["name"] for t in first[0][1]["tools"]}
         self.assertLessEqual({"kt_read", "kt_init"}, names)
 
-    def test_plain_content_is_sent_and_ends_the_turn(self):
-        self.run_turn([assistant(content="Morning.")], texts=["hi"])
+    def test_explicit_send_ends_the_turn_with_done(self):
+        self.run_turn([sent_reply("Morning.")], texts=["hi"])
         self.assertEqual(self.sent, ["Morning."])
 
     def test_internal_time_headers_are_removed_from_all_reply_routes_and_history(self):
         header = "<cointos-message-time>2026-10-15T18:33:30+00:00</cointos-message-time>\n"
-        for reply in [assistant(content=header + "Ready."),
-                      assistant(call("done"), content=header + "Ready."),
+        for reply in [sent_reply(header + "Ready."),
+                      sent_reply(header + "Ready."),
                       assistant(call("send", {"message": header + "Ready."}), call("done"))]:
             with self.subTest(reply=reply):
                 self.run_turn([reply])
@@ -163,12 +189,12 @@ class Turn(unittest.TestCase):
         headers = header + "\n<cointos-current-time>clock</cointos-current-time>\n"
         headers += "<cointos-message-times>timeline</cointos-message-times>\n"
         self.assertEqual(coin.reply_text(headers + "Ready."), "Ready.")
-        self.run_turn([assistant(content=headers)], texts=[])
+        self.run_turn([sent_reply(headers)], texts=[])
         self.assertEqual(self.sent, [])
         self.assertFalse(any(m["role"] == "assistant" for m in coin.recent(7)))
 
-    def test_closing_content_with_done_is_delivered_after_a_tool_result(self):
-        self.run_turn([assistant(call("status")), assistant(call("done"), content="Paused; Qwen is running.")])
+    def test_explicit_send_after_a_tool_result_is_delivered(self):
+        self.run_turn([assistant(call("status")), sent_reply("Paused; Qwen is running.")])
         self.assertEqual(self.sent, ["Paused; Qwen is running."])
         self.assertEqual(coin.recent(7)[-1]["content"], "Paused; Qwen is running.")
 
@@ -176,18 +202,57 @@ class Turn(unittest.TestCase):
         self.run_turn([assistant(call("send", {"message": "All green."}), call("done"), content="All green.")])
         self.assertEqual(self.sent, ["All green."])
 
-    def test_failed_closing_send_is_not_recorded_as_delivered(self):
+    def test_ordinary_output_never_delivers_and_cannot_acknowledge_user_input(self):
+        requests = self.run_turn([
+            assistant(content='Internal closing note.'),
+            assistant(call('done'), content='Still internal.'),
+            sent_reply('Explicit reply.')])
+        self.assertEqual(self.sent, ['Explicit reply.'])
+        self.assertTrue(any('was not delivered' in m.get('content', '') for m in requests[1][0]))
+        self.assertFalse(any(m.get('content') == 'Internal closing note.' for m in coin.recent(7)))
+
+    def test_after_send_plain_output_and_done_content_remain_silent(self):
+        for ending in (assistant(content='Already sent; nothing else needed.'),
+                       assistant(call('done'), content='Already sent; nothing else needed.')):
+            with self.subTest(ending=ending):
+                self.sent.clear()
+                replies = [assistant(call('send', {'message': 'Reminder.'})), ending]
+                if not ending.get('tool_calls'):
+                    replies.append(assistant(call('done')))
+                self.run_turn(replies, texts=[])
+                self.assertEqual(self.sent, ['Reminder.'])
+
+    def test_answer_after_acknowledgement_and_read_is_not_silently_discarded(self):
+        requests = self.run_turn([
+            assistant(call('send', {'message': 'Reading it now.'})),
+            assistant(call('fs_read', {'path': '/fixture/record.txt'})),
+            assistant(content='The record contains five entries.'),
+            sent_reply('The record contains five entries.'),
+        ], texts=['What does the record say?'])
+        self.assertEqual(self.sent, ['Reading it now.', 'The record contains five entries.'])
+        self.assertIn('earlier acknowledgement is not the answer', requests[-1][0][-2]['content'])
+        self.assertEqual([m['content'] for m in coin.recent(7) if m['role'] == 'assistant'], self.sent)
+
+    def test_direct_turn_can_explicitly_finish_after_delegation_without_extra_message(self):
+        self.run_turn([
+            assistant(call('send', {'message': 'On it.'}), call('status')),
+            assistant(content='Internal bookkeeping only.'),
+            assistant(call('done')),
+        ])
+        self.assertEqual(self.sent, ['On it.'])
+
+    def test_failed_explicit_send_is_not_recorded_as_delivered(self):
         with patch.object(coin, "send", side_effect=OSError("transport unavailable")):
             with self.assertRaises(OSError):
-                self.run_turn([assistant(call("done"), content="Not delivered.")])
+                self.run_turn([sent_reply("Not delivered.")])
         self.assertFalse(any(m["role"] == "assistant" for m in coin.recent(7)))
 
-    def test_failed_send_does_not_record_a_successful_reply(self):
+    def test_failed_send_does_not_record_a_successful_sent_reply(self):
         with patch.object(coin, 'send', side_effect=OSError('transport unavailable')):
             with self.assertRaises(OSError):
-                self.run_turn([assistant(content='Generated but not delivered.')])
+                self.run_turn([sent_reply('Generated but not delivered.')])
         self.assertFalse(any(m['role'] == 'assistant' for m in coin.recent(7)))
-        requests = self.run_turn([assistant(content='Delivered on retry.')])
+        requests = self.run_turn([sent_reply('Delivered on retry.')])
         self.assertFalse(any(m.get('content') == 'Generated but not delivered.'
                              for m in requests[0][0]))
         self.assertEqual(self.sent, ['Delivered on retry.'])
@@ -195,7 +260,7 @@ class Turn(unittest.TestCase):
 
     def test_coin_model_is_independent_of_worker_model_in_direct_and_wake_turns(self):
         with patch.dict(coin.SETTINGS, {"model": "trial-model"}), \
-                patch.object(coin, "complete", return_value=assistant(content="Ready.")) as complete:
+                patch.object(coin, "complete", return_value=sent_reply("Ready.")) as complete:
             coin.turn("token", 7, 70, ["hello"], lambda: [], None)
             coin.turn("token", 7, 70, [], lambda: [], None, wake={"message": "check"})
         self.assertEqual([request.args[0] for request in complete.call_args_list],
@@ -204,9 +269,9 @@ class Turn(unittest.TestCase):
         self.assertEqual(complete.call_args_list[1].kwargs["request_class"], "background")
 
     def test_each_user_has_a_stable_opaque_cache_identity(self):
-        first = self.run_turn([assistant(content="Hi.")])
-        second = self.run_turn([assistant(content="Yes.")])
-        with patch.object(coin, "complete", return_value=assistant(content="Hi.")) as complete:
+        first = self.run_turn([sent_reply("Hi.")])
+        second = self.run_turn([sent_reply("Yes.")])
+        with patch.object(coin, "complete", return_value=sent_reply("Hi.")) as complete:
             coin.turn("token", 8, 80, ["Hello"], lambda: [], None)
         self.assertEqual(first[0][1]["user"], second[0][1]["user"])
         self.assertNotEqual(first[0][1]["user"], complete.call_args.kwargs["user"])
@@ -216,7 +281,7 @@ class Turn(unittest.TestCase):
         later = iter([["actually, pigen too"], []])
         requests = self.run_turn([
             assistant(call("send", {"message": "On it."}), call("jobs")),
-            assistant(call("done"), content='Including pigen too.'),
+            sent_reply('Including pigen too.'),
         ], arrivals=lambda: next(later))
         self.assertEqual(requests[1][0][-1]["role"], "user")
         self.assertTrue(any(m["content"] == "actually, pigen too" and "at" in m for m in requests[1][0]))
@@ -227,9 +292,9 @@ class Turn(unittest.TestCase):
         second_time = first_time + timedelta(days=1)
         with patch.object(coin, "datetime") as clock:
             clock.now.return_value = first_time
-            direct = self.run_turn([assistant(content="Ready.")], texts=["Was that event last week?"])
+            direct = self.run_turn([sent_reply("Ready.")], texts=["Was that event last week?"])
             clock.now.return_value = second_time
-            with patch.object(coin, "complete", return_value=assistant(content="Checked.")) as complete:
+            with patch.object(coin, "complete", return_value=sent_reply("Checked.")) as complete:
                 coin.turn("token", 7, 70, [], lambda: [], None, wake={"message": "check the event"})
             wake_messages = complete.call_args.args[1]
         self.assertEqual(direct[0][0][0], wake_messages[0])
@@ -300,7 +365,7 @@ class Controls(unittest.TestCase):
         self.assertEqual(captured[0]["reasoning_effort"], "medium")
         self.assertEqual(captured[1]["reasoning_effort"], "xhigh")
 
-    def test_stream_keepalives_and_fragmented_tools_preserve_complete_reply(self):
+    def test_stream_keepalives_and_fragmented_tools_preserve_complete_sent_reply(self):
         events = [b': waiting for a lane\n\n'] * 4
         for delta, finish in [({'reasoning_content': 'Checked.'}, None),
                               ({'content': 'Ready'}, None),

@@ -2,17 +2,55 @@ import json
 import io
 from pathlib import Path
 import runpy
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
 
-from cointos import config, replacement
+from cointos import config, opencode, replacement  # noqa: F401  (patched by name)
 
 
 INSTALL = Path(__file__).resolve().parents[1] / "scripts/install"
 
 
 class LiveInstallBoundaryTests(unittest.TestCase):
+    def test_runtime_copy_preserves_confined_reads_and_removes_retired_modules(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, target = root / 'source', root / 'target'
+            for tree in (source, target):
+                (tree / 'cointos').mkdir(parents=True)
+            (source / 'cointos/new.py').write_text('new code')
+            (target / 'cointos/retired.py').write_text('old code')
+            inode = (target / 'cointos').stat().st_ino
+            script = '''
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from cointos.worktree_guard import restrict
+target = Path(sys.argv[2])
+restrict([], {'trees': [str(target)]})
+print('ready', flush=True)
+sys.stdin.readline()
+assert (target / 'new.py').read_text() == 'new code'
+assert not (target / 'retired.py').exists()
+'''
+            process = subprocess.Popen([sys.executable, '-c', script, str(INSTALL.parents[1]),
+                                        str(target / 'cointos')], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                self.assertEqual(process.stdout.readline().strip(), 'ready')
+                with mock.patch.dict(self.install.__globals__, source=source, target=target):
+                    self.install.__globals__['copy_runtime'](['cointos'])
+                _, stderr = process.communicate('continue\n', timeout=10)
+                self.assertEqual(process.returncode, 0, stderr)
+                self.assertEqual((target / 'cointos').stat().st_ino, inode)
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.communicate()
+
     def test_runtime_templates_refresh_without_removing_other_answers(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -59,6 +97,18 @@ class LiveInstallBoundaryTests(unittest.TestCase):
         contact.assert_not_called()
         native.assert_not_called()
         self.assertEqual(path.read_bytes(), before)
+
+    def test_live_scheduler_controls_survive_source_default_changes(self):
+        retain = self.install.__globals__['retained_models']
+        candidate = {'scheduler': {'slice_seconds': 30, 'chunk_tokens': 96, 'weights': {'coin': 1000}}}
+        previous = {'scheduler': {'slice_seconds': 10, 'chunk_tokens': 32, 'weights': {'coin': 1}}}
+        result = retain(candidate, previous)
+        self.assertEqual(result['scheduler'], {'slice_seconds': 10, 'chunk_tokens': 32, 'weights': {'coin': 1000}})
+
+    def test_factory_suspension_survives_upgrade_defaults(self):
+        retain = self.install.__globals__['retained_models']
+        self.assertIs(retain({'factory_enabled': True}, {'factory_enabled': False})['factory_enabled'], False)
+        self.assertIs(retain({'factory_enabled': False}, {})['factory_enabled'], False)
 
     def test_retained_model_recipes_alone_do_not_replace_the_daemon(self):
         environment = self.install.__globals__
@@ -213,6 +263,8 @@ class LiveInstallBoundaryTests(unittest.TestCase):
                                   'work_model': 'downloaded', 'policy': 'new'})
 
     def setUp(self):
+        # Installation boundary tests do not provision host harness binaries.
+        self.enterContext(mock.patch('cointos.opencode.require_opencode2'))
         self.script = runpy.run_path(str(INSTALL), run_name="cointos_install_test")
         self.install = self.script["install"]
         self.temporary = tempfile.TemporaryDirectory()

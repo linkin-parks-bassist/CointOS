@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from cointos import daemon, models, state
+from cointos import backend_llama, daemon, models, state
 from tests import support
 
 
@@ -25,6 +25,8 @@ class ModelSelection(unittest.TestCase):
     def setUp(self):
         saved = copy.deepcopy(state.CONFIG)
         self.addCleanup(lambda: (state.CONFIG.clear(), state.CONFIG.update(saved)))
+        state.CONFIG['work_model'] = next(name for name, shape in state.CONFIG['models'].items()
+                                          if shape.get('backend') == 'gufo')
         support.fresh_ledger(self)
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.path = self.root / 'config.json'
@@ -110,6 +112,41 @@ class ModelSelection(unittest.TestCase):
         self.assertEqual(state.L['model_change']['phase'], 'failed')
         self.assertIn('bad weights', state.L['model_change']['error'])
         self.assertEqual(self.launch.call_args_list[-1].args[1], self.old)
+
+    def test_lemonade_recipe_is_selectable_without_reading_its_protected_weights(self):
+        name = 'Flash-Next'
+        shape = {'backend': 'llama', 'ctx_size': 8192, 'lanes': 1,
+                 'weights_gb': 60, 'memory_gb': 70, 'args': '--spec-type none', 'resident': True}
+        state.CONFIG['models'][name] = shape
+        state.CONFIG['model_directories'] = ['/does-not-exist/protected-cache']
+        with patch.object(backend_llama, '_call', return_value={'data': [
+                {'id': 'user.' + name, 'downloaded': True}]}):
+            entry = next(e for e in models.catalog() if e['model'] == name)
+            self.assertTrue(entry['available'])
+            self.assertEqual(entry['id'], 'lemonade:' + name)
+            models.replace(entry['id'])
+        self.assertEqual(state.CONFIG['work_model'], name)
+        self.assertEqual(models.status()['path'], 'lemonade:' + name)
+        self.launch.assert_called_once()
+        self.assertEqual(self.launch.call_args.args[0]['models'][name], shape)
+
+    def test_unavailable_lemonade_model_does_not_replace_the_default(self):
+        state.CONFIG['models']['missing'] = {'backend': 'llama'}
+        with patch.object(backend_llama, '_call', return_value={'data': []}):
+            models.replace('lemonade:missing')
+        self.assertEqual(state.CONFIG['work_model'], self.old)
+        self.assertIn('not downloaded', state.L['model_change']['error'])
+        self.kill.assert_not_called()
+
+    def test_shared_default_preserves_private_session_support_before_unloading(self):
+        state.CONFIG['models']['nonresident'] = {'backend': 'llama', 'resident': False}
+        with patch.object(backend_llama, '_call', return_value={'data': [
+                {'id': 'nonresident', 'downloaded': True}]}):
+            models.replace('lemonade:nonresident')
+        self.assertEqual(state.CONFIG['work_model'], self.old)
+        self.assertIn('private sessions', state.L['model_change']['error'])
+        self.kill.assert_not_called()
+        self.launch.assert_not_called()
 
     def test_failed_persistence_restores_previous_engine(self):
         with patch.object(models.configuration, 'write_json', side_effect=OSError('disk full')):

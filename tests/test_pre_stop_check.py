@@ -27,6 +27,15 @@ class PreStop(unittest.TestCase):
         self.assertEqual(self.task['status'],'running')
         self.assertIs(gateway.pre_stop_check(self.body,'worker',self.final),self.final)
 
+    def test_native_v2_check_uses_only_the_advertised_mcp_dispatch_path(self):
+        body = {'tools': [{'type': 'function', 'function': {'name': 'execute'}}],
+                'messages': [{'role': 'system', 'content': 'tools.cointos.check_work({})'}]}
+        checked = gateway.pre_stop_check(body, 'worker', self.final)['tool_calls'][0]['function']
+        self.assertEqual(checked['name'], 'execute')
+        self.assertEqual(json.loads(checked['arguments']), {'code': 'return await tools.cointos.check_work({})'})
+        self.assertEqual(self.task['status'], 'running')
+        self.assertIs(gateway.pre_stop_check(body, 'worker', self.final), self.final)
+
     def test_real_calls_and_unmanaged_or_terminal_replies_are_unchanged(self):
         called={**self.final,'tool_calls':[{'id':'actual'}]}
         self.assertIs(gateway.pre_stop_check(self.body,'worker',called),called)
@@ -37,17 +46,19 @@ class PreStop(unittest.TestCase):
         self.task['status']='done'
         self.assertIs(gateway.pre_stop_check(self.body,'worker',self.final),self.final)
 
-    def test_dirty_worker_gets_a_concrete_problem_before_receipt(self):
-        (Path(self.task['worktree'])/'artifact').write_text('not committed')
-        result=api.check_work({'caller':{'task':self.task['id'],'run':'worker'}})
-        self.assertFalse(result['ok'])
-        self.assertFalse(result['worktree_clean'])
+    def test_worker_files_need_no_commit_before_preflight_or_submission(self):
+        artifact = Path(self.task['worktree']) / 'artifact'
+        artifact.write_text('authored work')
+        before = git.head(self.task['worktree'])
+        result = api.check_work({'caller': support.caller(self.task, 'worker')})
+        self.assertTrue(result['ok'], result)
+        self.assertIn('artifact', result['changed_files'])
         self.assertTrue(result['completion_receipt_required'])
-        self.assertTrue(any('uncommitted' in item for item in result['problems']))
-        self.assertIn('artifact',result['worktree_status'])
-        support.commit(self.task['worktree'])
-        self.assertTrue(api.check_work({'caller':{'task':self.task['id'],'run':'worker'}})['ok'])
-        self.assertEqual(self.task['status'],'running')
+        self.assertEqual(git.head(self.task['worktree']), before)
+        self.assertEqual(self.task['status'], 'running')
+        receipt = api.dispatch('finish', {'caller': support.caller(self.task, 'worker'),
+                                          'outcome': 'complete', 'detail': 'Authored artifact'})['receipt']
+        self.assertNotEqual(receipt['evidence']['commit'], before)
 
     def test_json_and_stream_replies_carry_executable_tool_identity(self):
         for stream in (False,True):
@@ -102,7 +113,7 @@ class PreStop(unittest.TestCase):
                 expected = ['src/code.c', 'src/new.c'] if stage == 'test-contract' else ['Makefile', 'tests/new.py']
                 self.assertFalse(result['ok'])
                 self.assertEqual(result['out_of_scope_paths'], expected)
-                self.assertTrue(any('preserve diagnostic work separately' in p for p in result['problems']))
+                self.assertTrue(any('preserve diagnostics in scratch' in p for p in result['problems']))
                 self.assertEqual(git.run(root, 'status', '--porcelain=v1', '-z'), before)
                 self.assertEqual(self.task['status'], 'running')
                 self.assertIsNone(self.task['receipt'])
@@ -117,8 +128,8 @@ class PreStop(unittest.TestCase):
         (Path(self.task['worktree'])/'candidate').write_text('reviewed candidate')
         result=api.check_work({'caller':{'task':self.task['id'],'run':'worker'}})
         self.assertTrue(result['ok'],result)
-        self.assertFalse(result['worktree_clean'])
-        self.assertIn('candidate',result['worktree_status'])
+        self.assertTrue(result['changed_files'])
+        self.assertIn('candidate', result['changed_files'])
         self.assertTrue(result['completion_receipt_required'])
 
     def test_inspection_and_empty_commits_cannot_create_construction_review(self):

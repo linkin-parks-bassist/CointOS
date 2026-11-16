@@ -36,7 +36,7 @@ from cointos import cron, schema, privatejson
 UNIT_STATES = frozenset(('active', 'reloading', 'inactive', 'failed', 'activating', 'deactivating', 'maintenance', 'refreshing'))
 TASK_STATES = frozenset(schema.ACTIVE + schema.SETTLED)
 RECURRING = frozenset(('schedule', 'unit-change', 'task-change', 'path-change'))
-AGENT_FIELDS = frozenset(('name', 'brief', 'project', 'station', 'abilities', 'reasoning_effort', 'budget'))
+AGENT_FIELDS = frozenset(('name', 'brief', 'project', 'station', 'abilities', 'reasoning_effort', 'budget', 'role'))
 
 
 def clock() -> float:
@@ -306,6 +306,8 @@ def _agent(agent):
     if (not isinstance(agent, dict) or not {'name', 'brief'} <= set(agent) or set(agent) - AGENT_FIELDS
             or not isinstance(agent['name'], str) or not isinstance(agent['brief'], str) or not agent['brief'].strip()):
         raise ValueError('agent needs a name and brief, and only dispatch fields')
+    if agent.get('role', 'operator') not in {spec['role'] for spec in schema.KINDS.values()}:
+        raise ValueError('unknown scheduled agent role')
 
 
 def _validate(data):

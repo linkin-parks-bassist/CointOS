@@ -1,5 +1,5 @@
-// The run supervisor authorizes one unfinished-turn resume through OpenCode's
-// native message upsert. The CLI still receives text; the conversation does not.
+// CointOS's native message adapter: resume identity, summary context and
+// permission-refusal presentation. Stored tool diagnostics remain unchanged.
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,24 @@ export default async ({ client, directory } = {}) => {
   let used = false;
   const anchored = new Set();
   return {
+    "experimental.chat.messages.transform": async (_input, output) => {
+      if (!process.env.COINTOS_TASK_ID) return;
+      const native = new Set(["bash", "read", "write", "edit", "glob", "grep", "list", "multiedit", "apply_patch"]);
+      const refusal = "The user has specified a rule which prevents you from using this specific tool call.";
+      for (let index = 0; index < output.messages.length; index++) {
+        const message = output.messages[index];
+        if (message.info?.role !== "assistant") continue;
+        let changed = false;
+        const parts = message.parts.map(part => {
+          if (part.type !== "tool" || !native.has(part.tool) || part.state?.status !== "error" ||
+              typeof part.state.error !== "string" || !part.state.error.startsWith(refusal)) return part;
+          changed = true;
+          return { ...part, state: { ...part.state, error:
+            "This operation is outside this run's permitted scope. Use assigned files and declared CointOS controls; report a required blocked step through normal recovery." } };
+        });
+        if (changed) output.messages[index] = { ...message, parts };
+      }
+    },
     "experimental.text.complete": async (input, output) => {
       const command = process.env.COINTOS_COMPACTION_CONTEXT_COMMAND;
       if (!command || !client?.session?.message) return;
@@ -36,10 +54,10 @@ export default async ({ client, directory } = {}) => {
         }).trim();
         if (!context) throw new Error("empty context");
       } catch {
-        context = "Current task/checkout facts unavailable. Re-read cointos_task and inspect the checkout before acting.";
+        context = "Current task/file facts unavailable. Re-read cointos_task and inspect assigned files before acting.";
       }
       output.text += "\n\n[CointOS observed context; separate from the model summary]\n" + context +
-        "\nAccepted test bindings are not evidence that their files or build targets exist in this checkout. " +
+        "\nAccepted test bindings are not evidence that their files or build targets exist in the assigned directory. " +
         "This snapshot can become stale; re-read cointos_task before changing work.\n[/CointOS observed context]";
       anchored.add(key);
     },

@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-24T10:42:39+11:00"
+revised_at: "2026-11-09T10:19:52+11:00"
 ---
 
 Matched greedy continuation of the retained real 95,766-token prefix favors the existing adaptive policy over fixed one/two/three proposals. draft-greedy-20261019/{run,summary}.json uses temperature zero, seed 193, three 32-token chunks per measured mode and a restore before each trial. All six runs emit the identical 96-token vector. Adaptive before/after reaches 21.35/22.73 native tokens/s (80/82 drafts accepted); fixed one 12.76, two 15.78/16.00 and three 17.95. Full-width round medians are 150.2 ms for one, 177.6/175.7 for two and 209.9 for three. Two's repeat and adaptive controls show timing drift; these results reject forcing a short default on this high-acceptance greedy history. They do not establish the best policy for low-acceptance sampled work. Model/client identity, authority and active autonomy restore.
@@ -13,9 +13,9 @@ The private long-context cost fit in draft-cost-candidate-20261019 is not select
 | 321 | 13.04 | 14.40 |
 | 777 | 13.26 | 13.27 |
 
-Aggregate throughput is 13.37 versus 13.54 (+1.28%). Mixed seeds, different sampled trajectories and reversal of seed 193's shorter result establish no dependable gain. Greedy baseline/candidate emit identical 96-token vectors at 12.90/13.68; the candidate's 192-token sampled replay exactly preserves tokens/draft counts at 12.92 versus 13.04. Keep the original policy; further testing needs a revised cost hypothesis. Production, clients, authority and active autonomy restore after 227 seconds. hardware-observation.json records a baseline segment at 98–100% GPU utilization, 60–62°C and 1.87–1.99 GHz; it establishes no thermal bottleneck. Short trials establish no adoption case.
+Aggregate throughput is 13.37 versus 13.54 (+1.28%). Mixed seeds, different sampled trajectories and reversal of seed 193's shorter result establish no dependable gain. Greedy baseline/candidate emit identical 96-token vectors at 12.90/13.68; the candidate's 192-token sampled replay exactly preserves tokens/draft counts at 12.92 versus 13.04. Keep the original policy; further testing needs a revised cost hypothesis. Production, clients, authority and active autonomy restore after 227 seconds. hardware-observation.json records a baseline segment at 98–100% GPU utilization, 60–62°C and 1.87–1.99 GHz; it establishes no thermal bottleneck.
 
-Gufo retains adaptive maximum seven. Installed configuration: 32 tokens/10 seconds; source: 32/30. Verify effective values through the daemon. Calibration's 32-token chunks establish no default.
+Gufo retains adaptive maximum seven. Source defaults 32 tokens/10 seconds; installed is 16/5 (ledger.scheduler). Verify effective values through the daemon. Calibration's 32-token chunks establish no default.
 
 draft-calibration-20261019/{recipe,run,summary}.json records an unprofiled, warmed native replay at 95,845 occupied tokens: 95,766 captured agent tokens plus a fixed 79-token coding turn. Sampling is temperature 1, seed 193, top-k 20, top-p .95, min-p .05. Each measured output has 32 tokens. A private executable overrides only draft selection between trials while retaining the original policy/maximum in the snapshot format. Its mode zero exactly matches production tokens and draft counts. Per-round telemetry includes proposal, verification and feedback; the final pending-token advance remains in the complete generation timer.
 

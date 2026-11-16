@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,10 @@ TIMEOUTS = configuration.load()['timeouts']
 
 class ExecutionError(ValueError):
     """Validation did not produce assertion evidence; it cannot reject product code."""
+
+
+class ProductTestFailure(ValueError):
+    """A product test failed; independent recovery must diagnose code, test or scope."""
 
 
 def matches(path: str, patterns: list[str]) -> bool:
@@ -110,7 +115,7 @@ def worker_artifact(repo, task, commit):
                          'Inspection and status belong to planning or an assigned Operator, not code integration.')
 
 
-def maintenance_history(where, task, main, *, include_worktree=False):
+def maintenance_history(where, task, main, *, include_worktree=False, publication=True):
     """Maintenance cannot replace independently reviewed project construction.
 
     Check unpublished history, including reverted diagnostics; preflight also
@@ -144,17 +149,19 @@ def maintenance_history(where, task, main, *, include_worktree=False):
     if include_worktree:
         paths = [p for p in working_paths(task['worktree']) if not allowed(p)]
         if paths:
-            raise ValueError('uncommitted maintenance changes require a worker and independent review: '
+            raise ValueError('maintenance files require a worker and independent review: '
                              + ', '.join(paths) + '; preserve these artifacts for their construction owner, '
                              'not maintenance publication')
     changed = git.changed(repo, main, head)
     if include_worktree:
         changed += working_paths(task['worktree'])
+    if not publication:
+        return  # Preservation checks scope; pending editor answers still guard actual publication.
     knowledge = [p for p in changed if p.startswith(prefix) and p.endswith('.md')]
     conflicts = trees.answer_edits(repo, knowledge)
     if conflicts:
         raise ValueError('maintenance overlaps pending canonical knowledge answers or policy: ' + ', '.join(conflicts) +
-                         '; this guard compares canonical working files and index with their checkout HEAD. '
+                         '; overlapping editor answers have unpublished changes. '
                          'It does not identify a queue owner. Preserve the pending answers; retry publication '
                          'only after authorized reconciliation, or finish blocked.')
 
@@ -299,6 +306,13 @@ class CompositionError(ValueError):
         self.evidence = {'main': main, 'packets': list(packets or []),
                          'failed_packet': failed_packet, 'paths': list(paths or []), 'candidate': candidate}
 
+    @property
+    def public(self):
+        paths = ', '.join(self.evidence['paths']) or 'the assigned files'
+        return ('CointOS could not prepare the accepted test inputs for ' + paths +
+                '. Preserve the implementation and requirements. Recovery must determine whether '
+                'file preparation or the accepted test contract needs correction; do not repair storage manually.')
+
     @classmethod
     def retained(cls, message, evidence):
         return cls(message, **evidence)
@@ -317,6 +331,25 @@ def keep_current(path, conflicts: list[str]) -> None:
         git.run(path, "add", "-A", "--", name)
 
 
+def material_ref(repo, commit, tests, rules):
+    """Content-address the complete protected tree and its exact ordered inputs."""
+    inputs = [git.head(repo, test + '^{commit}') for test in tests]
+    key = hashlib.sha256(json.dumps([inputs, rules], sort_keys=True).encode()).hexdigest()
+    entries = [entry for entry in git.run(repo, 'ls-tree', '-r', '-z', commit).split('\0')
+               if entry and protected(entry.split('\t', 1)[1], rules)]
+    content = hashlib.sha256(json.dumps(entries).encode()).hexdigest()
+    return f'refs/cointos/test-material/{key}/{content}'
+
+
+def materialized(repo, commit, tests, rules):
+    if not tests:
+        return False
+    reference = material_ref(repo, commit, tests, rules)
+    saved = git.result(repo, 'rev-parse', '--verify', '--quiet', reference + '^{commit}')
+    return (saved.returncode == 0 and
+            material_ref(repo, saved.stdout.strip(), tests, rules) == reference)
+
+
 @contextlib.contextmanager
 def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str = "reject"):
     """A fresh detached checkout of `commit` with a packet's test commits merged in: (path, head).
@@ -325,11 +358,15 @@ def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str 
     protected test contract, or that are executing a reviewed candidate, use
     ``non_code="ours"``: unrelated knowledge/document conflicts take the candidate's side
     while protected test insertions are still composed exactly. A protected conflict that
-    cannot be composed stays a real refusal.
+    cannot be composed stays a real refusal. Exact previously composed protected material
+    is reused only for identical ordered inputs and policy; validation still executes normally.
     """
     if non_code not in ("reject", "ours"):
         raise ValueError("non_code must be reject or ours")
     with checkout(repo, commit) as path:
+        if non_code == 'ours' and materialized(repo, commit, tests, rules):
+            yield path, git.head(path)
+            return
         for test in tests:
             merged = git.result(path, "-c", "user.name=CointOS", "-c", "user.email=cointos@localhost",
                                 "merge", "-q", "--no-edit", test)
@@ -349,7 +386,10 @@ def combined(repo, commit: str, tests: list[str], rules: dict, *, non_code: str 
                                        f"binding set: {tests}; conflicts: {conflicts}:\n"
                                  + (merged.stdout + merged.stderr).strip()[-2000:],
                                        main=commit, packets=tests, failed_packet=test, paths=conflicts)
-        yield path, git.head(path)
+        head = git.head(path)
+        if tests and non_code == 'ours':
+            git.run(repo, 'update-ref', material_ref(repo, head, tests, rules), head)
+        yield path, head
 
 
 LOCATIONS = (re.compile(r'File "([^"]+)", line (\d+)'), re.compile(r"([\w./-]+\.\w+):(\d+)"))
@@ -427,15 +467,16 @@ def failures(path, results: list[tuple[list[str], str]], files: list[str]) -> st
 def packet_check(repo, main: str, commit: str, tests: list[str], bundled: list[list[str]], rules: dict,
                  timeout: float, memory_gb=None) -> dict:
     """Run a packet's own tests (and any bundled in by its integrator) against its code; a
-    ValueError reveals each failing test."""
+    ProductTestFailure preserves each failing test for independent recovery."""
     own = packet_tests(repo, main, tests, rules)
     own += [list(c) for c in bundled if list(c) not in own]
     deadline = time.monotonic() + timeout
     with combined(repo, commit, tests, rules, non_code="ours") as (path, head):
         counts, failed = compare_main(repo, main, path, head, own, rules, deadline, memory_gb)
         if failed:
-            raise ValueError(f"{len(failed)} of the packet's {len(own)} tests fail. They are shown here; the rest "
-                             f"stay hidden. Fix the code (not the tests), commit, then finish again.\n\n"
+            raise ProductTestFailure(f"{len(failed)} of the packet's {len(own)} tests fail. They are shown here; the rest "
+                             f"stay hidden. Independent recovery must determine whether the code, accepted tests "
+                             f"or assignment needs repair. Preserve the candidate and acceptance inputs.\n\n"
                              + failures(path, failed, packet_files(repo, main, tests, rules)
                                         + [c for c in bundled_files(path, failed)]))
     return {"tests": list(tests), "packet_tests": len(own), "packet_gate": counts}

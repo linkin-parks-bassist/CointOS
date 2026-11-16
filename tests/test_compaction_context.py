@@ -37,7 +37,8 @@ class ObservedContext(unittest.TestCase):
         authority = copy.deepcopy(self.snapshot)
         result = json.loads(opencode.compaction_context('p:impl', 'worker-a'))
         self.assertEqual(result['local_checkout']['manifest']['entries'], 57)
-        self.assertEqual(result['accepted_test_bindings'], self.view['binding_tests'])
+        self.assertEqual(result['accepted_test_bindings'], [{'packet': 'p:hidden', 'pending_corrections': []}])
+        self.assertNotIn('head', result['local_checkout'])
         self.assertEqual(result['budget']['remaining'], {'generation_seconds': 65, 'generation_tokens': 700})
         self.assertEqual(before, (git.head(self.repo), (self.repo / '.git/index').read_bytes(), self.manifest.read_bytes()))
         self.assertEqual(authority, self.snapshot)
@@ -53,6 +54,12 @@ class ObservedContext(unittest.TestCase):
             manifest = result['local_checkout']['manifest']
             self.assertIsNone(manifest['entries'])
             self.assertEqual(manifest['state'], 'absent' if body is None else 'unavailable')
+
+    def test_uncapped_token_budget_stays_explicit_in_summary_context(self):
+        self.snapshot['tasks']['p:impl']['budget']['generation_tokens'] = None
+        result = json.loads(opencode.compaction_context('p:impl', 'worker-a'))
+        self.assertIsNone(result['budget']['remaining']['generation_tokens'])
+        self.assertEqual(result['budget']['remaining']['generation_seconds'], 65)
 
     def test_obsolete_run_unreachable_daemon_and_oversized_context_are_explicitly_unavailable(self):
         self.snapshot['tasks']['p:impl']['agent'] = 'replacement'

@@ -1,0 +1,18 @@
+---
+status: green
+revised_at: "2026-11-10T13:56:29+11:00"
+---
+
+Coordinators use daemon-authorized log/source readers rather than opening peer databases or run directories. Supervisors may omit task on MCP task/log: the daemon supplies their declared subject, never an ID inferred from prose. Empty/missing subjects refuse; other roles and human CLI retain explicit targets. Workers inspect only their own trace. Supervisors and First Responders may inspect Coin; other coordinating roles cannot.
+
+cointos log TASK provides numbered entries: filter by kind/turn/grep, then show N or N-M for full selected text. cointos transcript TASK exports retained history to a local file. Native recovery/idle/error controls have kind system, separate from actual user turns. Native compaction records expose summary/status. Thought/reply/tool/user distinctions and turn offsets remain across private/legacy stores.
+
+transcript.task_sources resolves historical string and current dict-shaped run identities. Current owned-run agent_data outranks session_store; its private database is authoritative and disappearance refuses rather than using a stale global duplicate. Historical sessions search owned private stores, then the legacy database; unavailable coverage is reported. Read-only SQLite snapshots handle both V1 message/part and V2 session_message/session_part projections in native sequence order, including consolidated content and persisted running parts. They start no server or job scheduler. Ephemeral native text deltas need not yet be durable: the trace reports stored evidence, while live gateway progress remains a separate observation. Empty assistants retain turn offsets.
+
+Task/source presentation exposes only the reader's assigned directory and authorized evidence, omitting peer/origin execution paths and internal retirement markers while preserving IDs, receipts, bindings and product evidence. Historical records are not current authority. Product requirements and raw developer history remain intact.
+
+cointos_source/source names exactly one task or project. Project means accepted source excluding editor drafts; task means assigned or retained immutable material. Omit path for file lists, use relative text paths or trailing-/ directories, and page with start/limit. Reads occur outside the ledger lock. Absolute/traversal paths, VCS metadata, maintained knowledge, escaping/replacement links, nonregular files and non-UTF8 text refuse. KT owns knowledge retrieval. Workers cannot inspect peers or accepted hidden material through this broker.
+
+Test-auditor diagnostic(project) prepares accepted files in run scratch for builds/counterexamples; copying freezes only the owned unit, preserves editor drafts and privately records provenance. Integrators retain diagnostic(path) for worker probes. First Responder diagnostic() prepares its stopped current origin's retained files, preserving authored material; stale origins and path/project overrides refuse. Managed metrics uses daemon reads outside the ledger lock; human metrics remains usable offline. Broader switch/error/time-window queries remain planned.
+
+Source trace/source/observer suites cover store precedence, missing-data refusal, retained material, path/role boundaries, accepted diagnostics and kernel denial. Native V1 fixtures verified selected-history migration and authorized KT/MCP inspection; managed supervisor task/peer-log calls provide version-scoped adoption evidence. V2 fixtures additionally verify offline completed-tool/recovery/compaction reading. Inspection judgment and sustained useful recovery remain unqualified.

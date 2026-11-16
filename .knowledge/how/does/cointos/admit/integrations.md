@@ -1,6 +1,7 @@
 ---
 status: green
 revised_at: "2026-10-16T06:38:24+11:00"
+checked_at: '2026-11-07T16:01:52+11:00'
 ---
 
 New and retained admission through spawner.integrations/runnable admits at most one integration per enabled project at a time. A new reviewer takes the oldest eligible reviewed worker: status review, not held, with any owned queue item ready and no retained integration of its own. Readiness includes pending independently reviewed test corrections. Integration rank combines schema.KINDS["integrate"]["rank"] and project priority.

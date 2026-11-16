@@ -87,7 +87,7 @@ class OperatorHandback(unittest.TestCase):
             ordinary = opencode.settings(state.CONFIG, 'fixture-key', {**operator, 'abilities': ['standard']}, [])['permission']
         for permission in ('read', 'edit', 'external_directory'):
             self.assertEqual(broad[permission], ordinary[permission])
-        self.assertEqual(broad['bash']['systemctl --user *'], 'allow')
+        self.assertEqual(broad['shell']['systemctl --user *'], 'allow')
 
     def test_terminal_blocked_source_does_not_prove_unverified_repair_complete(self):
         source = self.blocked()
@@ -315,7 +315,7 @@ class OperatorHandback(unittest.TestCase):
         self.assertEqual(operator['runs'], 0)
         self.assertIsNone(operator['receipt'])
 
-    def test_started_repair_can_resume_and_report_handback_after_restart(self):
+    def test_started_repair_lost_after_restart_gets_its_own_first_responder(self):
         source = self.blocked()
         operator = self.repair(source)
         self.call(operator, 'revise', item=source['id'], brief='Corrected', reason='Verified contract correction')
@@ -324,8 +324,8 @@ class OperatorHandback(unittest.TestCase):
         state.L.update(state.fresh(previous))
         operator = state.L['tasks'][operator['id']]
         lifecycle.orphaned(operator)
-        self.assertTrue(spawner.runnable(operator, {}))
-        support.running(operator, 'repair-run-2')
-        result = self.call(operator, 'finish', outcome='complete', detail='The corrected origin remains runnable')
-        self.assertEqual(result['receipt']['run'], 'repair-run-2')
-        self.assertEqual(result['receipt']['evidence']['repaired_record'], source['record'])
+        replacement, created = tasks.request_repair(operator)
+        self.assertTrue(created)
+        self.assertEqual(replacement['role'], 'first-responder')
+        self.assertEqual(replacement['repair_origin']['task'], operator['id'])
+        self.assertEqual(state.L['queue'][source['record']]['version'], 2)

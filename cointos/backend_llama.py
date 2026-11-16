@@ -22,6 +22,7 @@ import re
 import shlex
 import shutil
 import stat
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -36,6 +37,91 @@ class Lost(Exception):
 
 
 _urls: dict[str, str] = {}  # model -> its llama-server, as last reported by Lemonade
+
+# Resident slot bookkeeping. One CointOS lane can time-share several llama slots: an owner
+# change then selects the owner's slot instead of serializing its KV. Slot tokens record what
+# the server advertises it retained, so a selection can be verified as a prefix continuation.
+_SLOT_LOCK = threading.Lock()
+_SLOT_OF: dict[tuple[str, str], int] = {}  # (model, owner) -> llama slot
+_SLOT_TOKENS: dict[tuple[str, int], list[int]] = {}  # (model, slot) -> tokens it holds
+_SLOT_TOUCH: dict[tuple[str, int], float] = {}  # (model, slot) -> last use
+_ACTIVE_SLOT: dict[tuple[str, int], int] = {}  # (model, lane position) -> slot in use
+
+
+def _slots(config: dict, model: str) -> int:
+    shape = config.get("models", {}).get(model, {})
+    return int(shape.get("slots") or shape.get("lanes") or 1)
+
+
+def resident_states(config: dict, model: str) -> bool:
+    return bool(config.get("models", {}).get(model, {}).get("resident"))
+
+
+def resident_capacity(config: dict, model: str) -> int:
+    return _slots(config, model)
+
+
+def eviction(config: dict, model: str, owner: str) -> str | None:
+    """Report the owner select would evict, before its slot can be overwritten."""
+    with _SLOT_LOCK:
+        owners = [(o, s) for (m, o), s in _SLOT_OF.items() if m == model]
+        if (model, owner) in _SLOT_OF or len(owners) < _slots(config, model):
+            return None
+        return min(owners, key=lambda item: (_SLOT_TOUCH.get((model, item[1]), 0.0), item[0]))[0]
+
+
+def _slot(model: str, lane: int) -> int:
+    return _ACTIVE_SLOT.get((model, lane), lane)
+
+
+def _note_slot(model: str, lane: int, tokens: list[int]) -> None:
+    slot = _slot(model, lane)
+    with _SLOT_LOCK:
+        _SLOT_TOKENS[(model, slot)] = list(tokens)
+        _SLOT_TOUCH[(model, slot)] = time.monotonic()
+
+
+def select(config: dict, model: str, lane: int, owner: str) -> list[int]:
+    """Resolve the owner's resident slot and return the tokens it advertises holding. A first
+    use takes a free slot; when all are taken the least-recently-used slot is reused, so the
+    evicted owner reads cold later rather than any owner change copying bulk state."""
+    with _SLOT_LOCK:
+        slot = _SLOT_OF.get((model, owner))
+        if slot is None:
+            taken = {s for (m, _), s in _SLOT_OF.items() if m == model}
+            free = next((s for s in range(_slots(config, model)) if s not in taken), None)
+            if free is None:
+                candidates = [(_SLOT_TOUCH.get((model, s), 0.0), (m, o), s)
+                              for (m, o), s in _SLOT_OF.items() if m == model]
+                if candidates:
+                    _, key, free = min(candidates, key=lambda item: (item[0], item[1][1]))
+                    _SLOT_OF.pop(key, None)
+                    _SLOT_TOKENS.pop((model, free), None)
+                    _SLOT_TOUCH.pop((model, free), None)
+                else:
+                    free = 0
+            _SLOT_OF[(model, owner)] = free
+            slot = free
+        _ACTIVE_SLOT[(model, lane)] = slot
+        return list(_SLOT_TOKENS.get((model, slot), []))
+
+
+def residents(config: dict, model: str) -> list[str]:
+    with _SLOT_LOCK:
+        return [owner for (m, owner) in _SLOT_OF if m == model]
+
+
+def release_residents(config: dict, model: str, owners: list[str]) -> None:
+    with _SLOT_LOCK:
+        for owner in owners:
+            slot = _SLOT_OF.pop((model, owner), None)
+            if slot is not None:
+                _SLOT_TOKENS.pop((model, slot), None)
+                _SLOT_TOUCH.pop((model, slot), None)
+
+
+def resident_bytes(config: dict, model: str) -> int:
+    return int(config["models"][model].get("resident_bytes", 0))
 
 # Native token steps have no chat message to parse. In b10723, even /completion
 # otherwise runs the UTF-8 chat parser on each isolated step's text; a continuation
@@ -57,8 +143,29 @@ def _server(model: str, path: str, body: dict | None, timeout: float):
 
 # ---------------------------------------------------------------- models
 
+def catalog(config: dict) -> list[dict]:
+    """Configured Lemonade recipes resolve checkpoints through their service owner."""
+    shapes = {name: shape for name, shape in config['models'].items()
+              if shape.get('backend', 'llama') == 'llama'}
+    if not shapes:
+        return []
+    try:
+        downloaded = {entry['id'].removeprefix('user.') for entry in
+                      _call(config['lemonade'] + '/api/v1/models', None,
+                            config['timeouts']['lemonade_health_seconds'])['data']
+                      if entry.get('downloaded')}
+        failure = None
+    except (OSError, ValueError, KeyError) as error:
+        downloaded, failure = set(), f'Cannot query Lemonade: {error}'
+    return [{'id': 'lemonade:' + name, 'name': name, 'model': name,
+             'available': name in downloaded,
+             'reason': failure or ('' if name in downloaded else 'Model is not downloaded in Lemonade')}
+            for name in shapes]
+
+
 def _wanted_args(config: dict, shape: dict) -> str:
-    return f"--parallel {shape['lanes']} {shape['args']} --slot-save-path {config['snapshots']}"
+    slots = int(shape.get("slots") or shape["lanes"])
+    return f"--parallel {slots} {shape['args']} --slot-save-path {config['snapshots']}"
 
 
 def _problems(config: dict, shape: dict, entry: dict | None) -> list[str]:
@@ -91,6 +198,10 @@ def models(config: dict) -> dict[str, dict]:
         else:
             _urls[name] = health[name]["backend_url"].removesuffix("/v1").rstrip("/")
             found[name] = {"lanes": shape["lanes"]}
+            if shape.get("resident"):
+                # Resident slots are preallocated by the server and already inside the model's
+                # measured footprint, so admission reserves no extra per-owner native state.
+                found[name]["resident_state_bytes"] = int(shape.get("resident_state_bytes", 0))
     return found
 
 
@@ -152,7 +263,7 @@ def can_continue(config: dict, model: str, held: list[int] | None, tokens: list[
     return bool(held) and len(held) < len(tokens) and tokens[:len(held)] == held
 
 
-def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> None:
+def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -> dict:
     """Read a bounded prefix, checking both initial cache retention and final state.
 
     Prompt progress can abandon a lost prefix before an unbounded reread. The
@@ -161,7 +272,7 @@ def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -
     target = urllib.parse.urlparse(_urls[model])
     connection = http.client.HTTPConnection(target.hostname, target.port, timeout=config["timeouts"]["server_seconds"])
     body = {"prompt": tokens, "n_predict": 0, "stream": True, "return_progress": True,
-            "id_slot": lane, "cache_prompt": True, "return_tokens": True,
+            "id_slot": _slot(model, lane), "cache_prompt": True, "return_tokens": True,
             "chat_parser": TOKEN_PARSER, "response_fields": TOKEN_FIELDS}
     try:
         connection.request("POST", "/completion", json.dumps(body), {"Content-Type": "application/json"})
@@ -181,7 +292,11 @@ def prefill(config: dict, model: str, lane: int, tokens: list[int], held: int) -
             elif event.get("stop"):
                 if event.get("tokens_cached") != len(tokens):
                     raise RuntimeError(f"{model} lane {lane}: prefill retained an unknown prefix {event}")
-                return
+                timings = event.get('timings') or {}
+                if resident_states(config, model):
+                    _note_slot(model, lane, tokens)
+                return {'prefill_tokens': timings.get('prompt_n', len(tokens) - held),
+                        'prefill_seconds': timings['prompt_ms'] / 1000 if 'prompt_ms' in timings else None}
         raise RuntimeError(f"{model} lane {lane}: completion stream ended without a stop event")
     finally:
         connection.close()
@@ -200,10 +315,11 @@ def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max
     # Rechecking an equal-length restored prefix makes hybrid memory rewind without
     # an internal checkpoint and discards the cache. This extension establishes the
     # checkpoint the following buffered request needs to reevaluate its last token.
-    prefill(config, model, lane, tokens, held)
+    call_started = time.monotonic()
+    preparation = prefill(config, model, lane, tokens, held) or {}
     started = time.monotonic()  # prefix preparation does not spend the agent's generation budget
     event = _server(model, "/completion", {**sampling, "prompt": tokens, "n_predict": max_new,
-                    "id_slot": lane, "cache_prompt": True, "stream": False, "return_tokens": True,
+                    "id_slot": _slot(model, lane), "cache_prompt": True, "stream": False, "return_tokens": True,
                     "chat_parser": TOKEN_PARSER,
                     "response_fields": TOKEN_FIELDS},
                     config["timeouts"]["server_seconds"])
@@ -219,8 +335,17 @@ def think(config: dict, model: str, lane: int, tokens: list[int], held: int, max
     rate = (timings["predicted_n"] * 1000 / timings["predicted_ms"]
             if timings.get("predicted_n", 0) >= 16 and timings.get("predicted_ms") else None)
     known = tokens + new
+    held = known[:cached] if cached <= len(known) else []
+    if resident_states(config, model):
+        _note_slot(model, lane, held)
     return {"tokens": new, "done": event.get("stop_type") != "limit", "rate": rate,
-            "held": known[:cached] if cached <= len(known) else [],
+            "held": held,
+            "draft_tokens": timings.get("draft_n", 0),
+            "draft_accepted_tokens": timings.get("draft_n_accepted", 0),
+            "decode_seconds": timings['predicted_ms'] / 1000 if 'predicted_ms' in timings else None,
+            "prefill_tokens": preparation.get('prefill_tokens', 0) + timings.get('prompt_n', 0),
+            "prefill_seconds": (preparation.get('prefill_seconds') or 0) + timings.get('prompt_ms', 0) / 1000,
+            "call_seconds": time.monotonic() - call_started,
             "generation_seconds": time.monotonic() - started}
 
 
@@ -228,15 +353,26 @@ def _snapshot(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", name) + ".bin"
 
 
+def snapshot_size(config: dict, model: str, lane: int) -> dict | None:
+    """Read native serialized size when this server exposes target-only state accounting."""
+    for slot in _server(model, '/slots', None, config['timeouts']['snapshot_seconds']):
+        if slot.get('id') != _slot(model, lane) or slot.get('is_processing'):
+            continue
+        size, tokens = slot.get('state_size_bytes'), slot.get('n_prompt_tokens')
+        if type(size) is int and size > 0 and type(tokens) is int:
+            return {'bytes': size, 'tokens': tokens}
+    return None
+
+
 def save(config: dict, model: str, lane: int, name: str) -> dict:
     """Save the lane's context as snapshot `name`: {"tokens": how many it holds, "bytes": its size}."""
-    saved = _server(model, f"/slots/{lane}?action=save", {"filename": _snapshot(name)}, config["timeouts"]["snapshot_seconds"])
+    saved = _server(model, f"/slots/{_slot(model, lane)}?action=save", {"filename": _snapshot(name)}, config["timeouts"]["snapshot_seconds"])
     return {"tokens": saved["n_saved"], "bytes": os.path.getsize(Path(config["snapshots"]) / _snapshot(name))}
 
 
 def restore(config: dict, model: str, lane: int, name: str) -> bool:
     try:
-        return bool(_server(model, f"/slots/{lane}?action=restore", {"filename": _snapshot(name)},
+        return bool(_server(model, f"/slots/{_slot(model, lane)}?action=restore", {"filename": _snapshot(name)},
                             config["timeouts"]["snapshot_seconds"]).get("n_restored"))
     except (OSError, ValueError):
         return False

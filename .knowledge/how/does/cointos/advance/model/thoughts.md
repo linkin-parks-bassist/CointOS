@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-10-26T07:02:05+11:00"
+revised_at: "2026-11-10T06:23:37+11:00"
 ---
 
 An agent is waiting, reading, reasoning, writing or running a tool. Reading/reasoning/writing require a lane; tools do not.
@@ -13,9 +13,9 @@ Gufo receives the read-step budget as max_input_tokens. Control::Prefill rejects
 
 At each boundary:
 
-1. Higher-class work pre-empts lower-class work. Direct Coin requests outrank user sessions, which outrank background work. request_class can demote a request without changing ownership; priority elevation is refused. A generating holder is displaced before a reading holder when possible.
-2. Checkpointed reads and generation share a weighted lottery; unsaved reads stay protected. The scheduler procedure owns clocks and eligibility.
+1. Coin takes precedence at completed steps, including over background reads and tool grace. Other requests compete by a local priority-weighted random draw without usage history or debt. request_class may demote Coin without changing ownership; elevation is refused. A generating holder is displaced before a reader when possible.
+2. Peer slices and unsaved reads remain protected; checkpointed/resident partial reads may yield after the slice expires. The scheduler procedure owns clocks and eligibility.
 3. A tool call yields the lane. A bounded grace may retain it for a quick follow-up within the same unexpired slice; grace never extends the slice.
 4. Placement prefers the agent's held lane, then a warm lane, then a free lane, then an eligible unreserved lane. Warmth uses each backend's can_continue contract: Gufo accepts an identical complete vector; llama requires extension. Equality is not divergence.
 
-lanes.py advances thoughts at these boundaries. The equal-class lottery, clocks and checkpoint eligibility retain how/does/the/cointos/scheduler/share/a/lane/among/equal/agents.md. Native validation retains how/does/cointos/validate/model/token/state.md.
+lanes.py advances thoughts at these boundaries. The local weighted-lottery policy, clocks and checkpoint eligibility retain how/does/the/cointos/scheduler/share/a/lane/among/equal/agents.md. Native validation retains how/does/cointos/validate/model/token/state.md.

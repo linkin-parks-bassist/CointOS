@@ -24,11 +24,18 @@ import traceback
 from cointos import capacity, scheduler, snapshots, snapshot_cleanup, performance, memory
 from cointos.state import BACKEND, CONFIG, LOCK, L, STOPPING, alert, log, now
 
+class ResidentAdmissionPending(MemoryError):
+    def __init__(self, need_gb: float):
+        super().__init__('resident state is waiting for memory')
+        self.need_gb = need_gb
+
+
 RUNS: dict[str, dict] = {}  # thought id -> its tokens and plumbing (kept out of the ledger)
 BUSY: dict[int, str] = {}  # lane position -> the thought whose chunk is in flight there
 HELD: dict[int, list[int]] = {}  # lane position -> the tokens its state holds
 PROMPTS: dict[str, list[int]] = {}  # task -> the tokens of its last rendered prompt
 RESIDENT: dict[tuple[str, str], list[int]] = {}  # native resident metadata, not tensor copies
+RETIRING: set[tuple[str, str]] = set()  # native releases in flight; admission waits without LOCK
 
 
 def begins(held: list[int] | None, tokens: list[int]) -> bool:
@@ -52,10 +59,14 @@ def shared_prefix(thought_id: str, model: str) -> int:
     """The longest start this thought's context shares with another context of the model that
     CointOS holds or runs; 0 if it is too short to be worth a snapshot of its own. Caller holds LOCK."""
     tokens, owner = tokens_of(thought_id), L["thoughts"][thought_id]["owner"]
+    if RUNS[thought_id].get('private'):
+        return 0
     # Only other conversations: a conversation shares everything with its own earlier states.
     others = [tokens_of(t) for t, thought in L["thoughts"].items()
-              if thought["owner"] != owner and thought["model"] == model]
-    others += [held for p, held in HELD.items() if L["lanes"][p]["model"] == model and L["lanes"][p]["resident"] != owner]
+              if thought["owner"] != owner and thought["model"] == model and not RUNS[t].get('private')]
+    others += [held for p, held in HELD.items() if L["lanes"][p]["model"] == model
+               and L["lanes"][p]["resident"] != owner
+               and not (L["lanes"][p]["resident"] or '').startswith('private/')]
     longest = max((common(tokens, other) for other in others), default=0)
     return longest if longest >= CONFIG["scheduler"]["shared_prefix_tokens"] else 0
 
@@ -73,7 +84,7 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
     thought_id = secrets.token_hex(6)
     with LOCK:
         task = L["tasks"].get((L["agents"].get(agent) or {}).get("task"))
-        weight = CONFIG["scheduler"]["weights"].get(task["role"], 1) if task else 1
+        weight = (task or {}).get("scheduling_weight", scheduler.weight(CONFIG, klass, task["role"] if task else None))
         L["thoughts"][thought_id] = {"id": thought_id, "agent": agent, "class": klass, "weight": weight, "owner": owner, "model": model,
                                      "lane": None, "since": None, "waiting_since": now(), "warm": [], "reading": True, "opens_turn": False,
                                      "started_at": now(), "generated": 0, "prompt": len(rendered["tokens"]),
@@ -81,7 +92,8 @@ def begin(agent: str, klass: str, owner: str, model: str, rendered: dict, sampli
         RUNS[thought_id] = {"prompt": rendered["tokens"], "reader": rendered["reader"], "sampling": sampling,
                             "max": max_new, "generated": [], "queue": queue.Queue(), "cancelled": False,
                             "shared": rendered.get("shared", []),
-                            "retained_prefix": rendered.get('retained_prefix')}
+                            "retained_prefix": rendered.get('retained_prefix'),
+                            "private": rendered.get('private', False)}
         if klass == "user":
             L["user_last_thought"] = now()
         if owner in L["tasks"]:
@@ -133,7 +145,23 @@ def cancel_agent(agent: str) -> None:
             cancel(thought_id)
 
 
-def finish(thought_id: str, how: str) -> None:
+def interrupt_reasoning(thought_ids: list[str]) -> None:
+    """A delivered session message may end these requests at a thinking boundary."""
+    with LOCK:
+        for thought_id in thought_ids:
+            if thought_id in RUNS:
+                RUNS[thought_id]['message_pending'] = True
+
+
+def message_boundary(model: str, run: dict, tokens: list[int]) -> bool:
+    """Inspect the complete step, never a stale dashboard phase or partial tool call."""
+    if not run.get('message_pending') or not tokens:
+        return False
+    current = BACKEND.read(CONFIG, model, run['reader'], tokens, False)
+    return current['phase'] == 'reasoning' and not current['content'] and not current['tool_calls']
+
+
+def finish(thought_id: str, how: str, reason: str | None = None) -> None:
     """End a thought and free its lane, whose state stays for whoever continues it. A thought
     that ended by handing control back (a message or a tool call) yields the lane, but while its
     turn is inside its slice the lane stays held for its agent for `yield_grace_seconds` (never
@@ -146,9 +174,9 @@ def finish(thought_id: str, how: str) -> None:
         lane.update(holder=None, free_since=now())
         slice_ends = lane["turn_since"] + CONFIG["scheduler"]["slice_seconds"]
         if how == "done" and now() < slice_ends:
-            lane.update(held_for=thought["agent"], held_class=thought["class"],
+            lane.update(held_for=scheduler.client(thought), held_class=thought["class"],
                         held_until=min(now() + CONFIG["scheduler"]["yield_grace_seconds"], slice_ends))
-    run["queue"].put({"end": how})
+    run["queue"].put({"end": how, **({"reason": reason} if reason else {})})
     agent = L["agents"].get(thought["agent"])
     if agent is not None:
         agent["last_activity"] = now()  # thinking is activity: silence counts from its end
@@ -185,12 +213,24 @@ def schedule() -> None:
             and checkpoint["model"] == thought["model"]
             and checkpoint["tokens"] == thought["held"]
             and checkpoint["tier"] != "moving" and not checkpoint.get("discard"))
-        if resident:
+        if resident and BACKEND.resident_capacity(CONFIG, thought['model']) is None:
             thought['read_checkpoint'] = bool(reading and known and begins(known, tokens))
+        if thought["reading"] and not reading and thought["lane"] is not None and thought.get('opens_turn'):
+            # The opening read earns a generation slice; Coin can
+            # still preempt it at the next safe step. Tool followups do not reset it.
+            L['lanes'][thought['lane']]['turn_since'] = thought['since'] = now()
         if thought["reading"] != reading:
             thought["activity_since"] = now()
         thought["reading"] = reading
-    contenders = list(L["thoughts"].values())
+    contenders = []
+    for thought_id, thought in L['thoughts'].items():
+        need = RUNS[thought_id].get('admission_gb', 0)
+        if need and capacity.headroom_gb(thought['owner']) + capacity.conversation_cache_gb(thought['owner']) < need:
+            thought['waiting_for'] = 'memory'
+            continue
+        RUNS[thought_id].pop('admission_gb', None)
+        thought.pop('waiting_for', None)
+        contenders.append(thought)
     wanted = scheduler.assign(CONFIG, L["lanes"], contenders, now(), blocked())
     for position, thought_id in wanted.items():
         lane = L["lanes"][position]
@@ -208,8 +248,8 @@ def schedule() -> None:
         else:
             thought = L["thoughts"][thought_id]
             # An agent back within its grace continues its turn: its slice keeps counting.
-            returning = scheduler.held_for(lane, now()) == thought["agent"] and lane.get("turn_agent") == thought["agent"]
-            lane.update(turn_agent=thought["agent"], turn_since=lane["turn_since"] if returning else now(),
+            returning = scheduler.held_for(lane, now()) == scheduler.client(thought) and lane.get("turn_agent") == scheduler.client(thought)
+            lane.update(turn_agent=scheduler.client(thought), turn_since=lane["turn_since"] if returning else now(),
                         held_for=None, held_until=0)
             thought.update(lane=position, since=lane["turn_since"], waiting_since=None, opens_turn=not returning,
                            progress_at=now(), activity_since=now())
@@ -224,14 +264,15 @@ def checkpoint_read(position: int, thought_id: str, held: list[int]) -> None:
     """
     with LOCK:
         thought = L["thoughts"][thought_id]
-        if BACKEND.resident_states(CONFIG, thought['model']):
+        if (BACKEND.resident_states(CONFIG, thought['model'])
+                and BACKEND.resident_capacity(CONFIG, thought['model']) is None):
             return  # the partial native read stays resident without a checkpoint
         if now() - thought["since"] < CONFIG["scheduler"]["slice_seconds"]:
             return
         candidates = [dict(t, read_checkpoint=True) if t["id"] == thought_id else t
                       for t in L["thoughts"].values()]
         winner = scheduler.assign(CONFIG, L["lanes"], candidates, now(), blocked()).get(position)
-        if winner in (None, thought_id) or L["thoughts"][winner]["class"] != thought["class"]:
+        if winner in (None, thought_id):
             return
     try:
         if not snapshots.keep(position, held, thought["owner"], "suspended"):
@@ -262,13 +303,14 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
         held = HELD.get(position) or []
         # A task's conversation is one line: when the lane holds the same task's conversation
         # but not the start of where it goes on, that state has diverged and is of no use.
-        single_history = owner in L["tasks"] or snapshots.coin_conversation(owner)
+        private_owner = owner.startswith("private/")
+        single_history = owner in L["tasks"] or snapshots.coin_conversation(owner) or private_owner
         diverged = bool(held) and lane["resident"] == owner and single_history and not begins(held, tokens)
         worth = bool(held) and snapshots.live(lane["resident"]) and not diverged
     if diverged:  # where the conversation stopped reproducing what the lane holds
         at = common(held, tokens)
         try:
-            text = {key: BACKEND.text(CONFIG, lane["model"], part) for key, part in
+            text = {} if private_owner else {key: BACKEND.text(CONFIG, lane["model"], part) for key, part in
                     (("before", held[max(0, at - 40):at]), ("held_after", held[at:at + 60]), ("next_after", tokens[at:at + 60]))}
         except Exception as error:  # a diagnostic never stops the switch
             text = {"text_unavailable": f"{type(error).__name__}: {error}"}
@@ -277,6 +319,13 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
     saving = time.monotonic()
     resident = BACKEND.resident_states(CONFIG, lane['model'])
     if resident:
+        victim = BACKEND.eviction(CONFIG, lane['model'], owner)
+        if victim is not None:
+            outgoing = BACKEND.select(CONFIG, lane['model'], lane['index'], victim)
+            if outgoing and snapshots.live(victim):
+                snapshots.keep(position, outgoing, victim, 'suspended')
+            with LOCK:
+                RESIDENT.pop((lane['model'], victim), None)
         selected = BACKEND.select(CONFIG, lane['model'], lane['index'], owner)
         if BACKEND.can_continue(CONFIG, lane['model'], selected, tokens):
             with LOCK:
@@ -292,22 +341,15 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
             # Admission of a new execution object is separate from a hot pointer
             # selection. Reclaim disposable checkpoint caches before allocation.
             need = BACKEND.resident_bytes(CONFIG, lane['model']) / memory.GB
-            deadline = time.monotonic() + CONFIG['timeouts']['server_seconds']
-            while True:
-                with LOCK:
-                    measured = memory.measure()
-                    L['memory'].update(measured, headroom_gb=memory.headroom_gb(
-                        CONFIG, measured, BACKEND.budget(CONFIG)))
-                    enough = capacity.headroom_gb(owner) + capacity.conversation_cache_gb(owner) >= need
-                    if not enough:
-                        snapshots.make_room(need, resident_owner=owner, claim=False, cache_owner=owner)
-                if enough:
-                    break
-                snapshot_cleanup.drain('memory', wait=True)
-                if time.monotonic() >= deadline:
-                    raise MemoryError('resident state admission exceeds available headroom')
-                with LOCK:
-                    LOCK.wait(0.1)  # queued spills must physically release RAM before allocation
+            with LOCK:
+                measured = memory.measure()
+                L['memory'].update(measured, headroom_gb=memory.headroom_gb(
+                    CONFIG, measured, BACKEND.budget(CONFIG)))
+                enough = capacity.headroom_gb(owner) + capacity.conversation_cache_gb(owner) >= need
+                if not enough:
+                    snapshots.make_room(need, resident_owner=owner, claim=False, cache_owner=owner)
+            if not enough:
+                raise ResidentAdmissionPending(need)
         # First admission or a changed token history initializes this resident
         # from a compatible persistence hint. The outgoing resident stays intact.
     saved = not resident and worth and snapshots.keep(position, held, lane["resident"], "suspended")
@@ -315,6 +357,7 @@ def switch(position: int, tokens: list[int], owner: str) -> str | None:
     with LOCK:
         candidates = sorted(((s["tokens"], name) for name, s in L["snapshots"].items()
                     if s["model"] == lane["model"] and s["tier"] != "moving"
+                    and (not s["owner"].startswith("private/") or s["owner"] == owner)
                     and BACKEND.can_continue(CONFIG, lane["model"], tokens[:s["tokens"]], tokens)
                     and s["tokens"] <= len(tokens)
                     and snapshots.digest(tokens[:s["tokens"]]) == s["digest"]), reverse=True)
@@ -406,7 +449,8 @@ def worker(position: int) -> None:
     while not STOPPING.is_set():
         with LOCK:
             lane = L["lanes"][position]
-            while not STOPPING.is_set() and (not lane["up"] or lane["holder"] is None):
+            while not STOPPING.is_set() and (not lane["up"] or lane["holder"] is None
+                    or (lane['model'], L['thoughts'][lane['holder']]['owner']) in RETIRING):
                 LOCK.wait(1)
             if STOPPING.is_set():
                 return
@@ -429,6 +473,7 @@ def worker(position: int) -> None:
         generating = False
         generation_started = None
         prefill_measurement = None
+        prefill_wall_seconds = None
         try:
             if not warm:
                 restored = switch(position, tokens, thought["owner"])
@@ -466,8 +511,10 @@ def worker(position: int) -> None:
                 keep_shared = shared is not None
                 upto = tokens[:shared if keep_shared else end]
                 prefill_started = time.monotonic()
-                BACKEND.prefill(CONFIG, model, index, upto, held)
-                prefill_measurement = (len(upto) - held, time.monotonic() - prefill_started)
+                reading = BACKEND.prefill(CONFIG, model, index, upto, held) or {}
+                prefill_wall_seconds = time.monotonic() - prefill_started
+                prefill_measurement = ((reading['prefill_tokens'], reading['prefill_seconds'])
+                    if reading.get('prefill_seconds') is not None else (len(upto) - held, prefill_wall_seconds))
                 if keep_shared:  # the start other contexts share: save it once, for all of them
                     snapshots.keep_shared(position, upto, thought['owner'])
                 elif prefix is not None:
@@ -487,6 +534,17 @@ def worker(position: int) -> None:
                     raise RuntimeError("generation step neither advanced nor ended the thought")
                 holds = result["held"]
             failure = None
+        except ResidentAdmissionPending as pending:
+            with LOCK:
+                BUSY.pop(position, None)
+                RUNS[thought_id]['admission_gb'] = pending.need_gb
+                thought.update(lane=None, since=None, waiting_since=now(), waiting_for='memory')
+                lane.update(holder=None, resident=None, free_since=now())
+                HELD.pop(position, None)
+                if timing is not None:
+                    timing['gpu_since'] = None
+                schedule()
+            continue  # admission cannot monopolize the model worker while peers can run
         except BACKEND.Lost as error:  # the server dropped the lane's state: it holds nothing known
             result, holds, failure = {"tokens": [], "done": False}, [], None
             with LOCK:
@@ -496,17 +554,30 @@ def worker(position: int) -> None:
         except Exception as error:  # the backend failed under this thought
             traceback.print_exc()
             result, holds, failure = {"tokens": [], "done": False}, [], f"{type(error).__name__}: {error}"
+        interrupted = False
+        if failure is None and generating and not result['done']:
+            try:
+                interrupted = message_boundary(model, run, run['generated'] + result['tokens'])
+            except Exception as error:
+                log('message boundary unavailable', agent=thought['agent'], error=str(error))
         with LOCK:
             BUSY.pop(position, None)
             if prefill_measurement is not None:
                 performance.record("prefill", *prefill_measurement)
+                performance.record('active', 0, prefill_wall_seconds)
             if generating and failure is None:
+                if result.get('prefill_seconds', 0) > 0:
+                    performance.record('prefill', result['prefill_tokens'], result['prefill_seconds'])
                 performance.record("generation", len(result["tokens"]),
+                    result['decode_seconds'] if result.get('decode_seconds') is not None else
                     result.get("generation_seconds", time.monotonic() - generation_started),
                     draft_tokens=result.get("draft_tokens", 0),
                     accepted_tokens=result.get("draft_accepted_tokens", 0))
+                performance.record('active', len(result['tokens']),
+                    result.get('call_seconds', time.monotonic() - generation_started))
+            gpu_seconds = time.monotonic() - gpu_started
             if timing is not None:
-                timing["gpu_seconds"] = timing.get("gpu_seconds", 0) + time.monotonic() - gpu_started
+                timing["gpu_seconds"] = timing.get("gpu_seconds", 0) + gpu_seconds
                 timing["gpu_since"] = None
             run["generated"] += result["tokens"]
             thought["generated"] = len(run["generated"])
@@ -544,7 +615,9 @@ def worker(position: int) -> None:
                 pass  # its model went away; lanes_down made the thought wait for another lane
             elif failure:
                 alert(f"{model} lane {index} failed a thought of {thought['agent']}: {failure}")
-                finish(thought_id, "failed")
+                finish(thought_id, "failed", failure)
+            elif interrupted and not run['cancelled']:
+                finish(thought_id, 'message')
             elif result["done"] or run["cancelled"] or len(run["generated"]) >= run["max"]:
                 finish(thought_id, "done" if result["done"] else "cancelled" if run["cancelled"] else "limit")
             else:
@@ -640,15 +713,24 @@ def retire_residents(model: str, owners: list[str]) -> None:
         running = {a.get('task') for a in L['agents'].values()}
         thinking = {t['owner'] for t in L['thoughts'].values()}
         thinking.update(L['thoughts'][t]['owner'] for t in BUSY.values() if t in L['thoughts'])
-        gone = [owner for owner in owners if not snapshots.live(owner)
-                or (owner in L['tasks'] and owner not in running and owner not in thinking)]
+        gone = [owner for owner in owners if (model, owner) not in RETIRING and owner not in thinking and
+                (not snapshots.live(owner) or (owner in L['tasks'] and owner not in running))]
         if not gone:
             return
+        RETIRING.update((model, owner) for owner in gone)
+    try:
+        # Native streaming invokes callbacks that need LOCK. Holding LOCK while
+        # waiting for the native model mutex deadlocks that stream and the daemon.
         BACKEND.release_residents(CONFIG, model, gone)
-        for owner in gone:
-            RESIDENT.pop((model, owner), None)
-            for position, lane in enumerate(L['lanes']):
-                if lane['model'] == model and lane['resident'] == owner:
-                    HELD.pop(position, None)
-                    lane['resident'] = None
+    finally:
+        with LOCK:
+            for owner in gone:
+                RESIDENT.pop((model, owner), None)
+                for position, lane in enumerate(L['lanes']):
+                    if lane['model'] == model and lane['resident'] == owner:
+                        HELD.pop(position, None)
+                        lane['resident'] = None
+                RETIRING.discard((model, owner))
+            LOCK.notify_all()
+    with LOCK:
         log('resident states retired', model=model, owners=gone)

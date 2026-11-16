@@ -52,11 +52,11 @@ class RequestClass(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-    def request(self, key, **body):
+    def request(self, key, *, private=False, **body):
         self.finished.clear()
         body = {'model': self.model, **body}
         request = urllib.request.Request(
-            f'http://127.0.0.1:{self.server.server_address[1]}/v1/chat/completions',
+            f'http://127.0.0.1:{self.server.server_address[1]}/v1/' + ('private/' if private else '') + 'chat/completions',
             json.dumps(body).encode(), {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key})
         try:
             with urllib.request.urlopen(request, timeout=2) as response:
@@ -70,7 +70,29 @@ class RequestClass(unittest.TestCase):
                 with self.subTest(key=key, fields=fields):
                     self.assertEqual(self.request(key, **fields), {'accepted': True})
                     self.assertEqual(self.observed[-1]['class'], klass)
+                    self.assertEqual(self.observed[-1]['weight'], {'coin': 1000, 'user': 100, 'background': 1}[klass])
         self.assertFalse(state.L['thoughts'])
+
+    def test_private_user_requests_use_scheduler_with_independent_volatile_owners(self):
+        with patch.object(gateway.BACKEND, 'resident_states', return_value=True):
+            for key in ('private-a', 'private-b'):
+                self.request(key, private=True)
+                thought = self.observed[-1]
+                self.assertEqual(thought['class'], 'user')
+                self.assertEqual(thought['owner'], 'private/' + hashlib.sha256(key.encode()).hexdigest())
+                self.assertFalse(lanes.snapshots.live(thought['owner']))
+                self.assertTrue(self.render.call_args.kwargs['private'])
+
+    def test_private_route_refuses_managed_keys_and_nonresident_backends(self):
+        with patch.object(gateway.BACKEND, 'resident_states', return_value=True):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('coin-key', private=True)
+            self.assertEqual(error.exception.code, 400)
+        with patch.object(gateway.BACKEND, 'resident_states', return_value=False):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.request('private-key', private=True)
+            self.assertEqual(error.exception.code, 400)
+        self.render.assert_not_called()
 
     def test_coin_demotion_preserves_identity_context_and_template(self):
         before = dict(keys.OWNERS)
@@ -84,6 +106,7 @@ class RequestClass(unittest.TestCase):
         self.assertEqual((wake['agent'], wake['owner'], wake['class']), ('coin', owner, 'background'))
         self.assertEqual((direct['agent'], direct['owner'], direct['class']), ('coin', owner, 'coin'))
         self.assertEqual(keys.OWNERS, before)
+        self.assertEqual((wake['weight'], direct['weight']), (1, 1000))
         for call in self.render.call_args_list:
             self.assertEqual(call.args[1:4], ('coin', self.model, {'enable_thinking': True, 'reasoning_effort': 'medium'}))
 
@@ -101,8 +124,8 @@ class RequestClass(unittest.TestCase):
         self.assertEqual(self.observed, [])
         self.assertFalse(state.L['thoughts'])
 
-    def test_override_uses_configured_priority_order(self):
-        with patch.dict(state.CONFIG, classes=['coin', 'background', 'user']):
+    def test_override_uses_configured_weights_not_label_order(self):
+        with patch.dict(state.CONFIG['scheduler'], weights={'coin': 1000, 'background': 100, 'user': 1}):
             self.request('worker-key', request_class='user')
             self.assertEqual(self.observed[-1]['class'], 'user')
             self.render.reset_mock()

@@ -55,6 +55,26 @@ class ProjectRegistry(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already registered"):
             projects.add(self.config, {"name": "alias", "path": str(path)}, self.registry)
 
+    def test_storage_setup_failures_preserve_directory_without_enrollment(self):
+        for operation in ('init', 'add', 'commit'):
+            with self.subTest(operation=operation):
+                target = self.root / ('failed-' + operation)
+                def storage(path, *args):
+                    failed = args[0] == operation
+                    return subprocess.CompletedProcess(args, int(failed), '', 'private storage diagnostic' if failed else '')
+                candidate = {'name': target.name, 'path': str(target),
+                             'test_policy': {'manifest': 'tests/contracts.json'}}
+                with patch.object(projects.git, 'result', side_effect=storage), \
+                        patch.object(projects.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')), \
+                        patch.object(projects.kt, 'write'):
+                    with self.assertRaises(projects.SetupError) as caught:
+                        projects.create(self.config, candidate, self.registry)
+                self.assertIn('private storage diagnostic', str(caught.exception))
+                self.assertIn('not enrolled', caught.exception.public)
+                self.assertTrue(target.is_dir())
+                self.assertFalse(self.registry.exists())
+                self.assertEqual(self.config['projects'], [])
+
     def test_new_project_commits_all_orientation_routes_before_enrollment(self):
         real_run = subprocess.run
 

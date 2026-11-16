@@ -1,31 +1,25 @@
 ---
 status: green
-revised_at: "2026-11-02T12:52:30+11:00"
+revised_at: "2026-11-11T11:38:06+11:00"
 ---
 
-Agents are OpenCode sessions using only the CointOS gateway. The on-disk CLI is ~/.local/bin/opencode 1.18.35; surviving servers retain launch settings. opencode.py owns configuration, units, supervision and events; runs.py owns admission/adoption; prompts.py owns assignments.
+Source managed launches select OpenCode2.2.6 with opencode_v2=true. opencode.py owns run configuration, units, servers and observation; opencode2.py owns the native API/recovery boundary; sessions.py owns retained-history migration. Host override: `~/.local/lib/cointos/opencode2/node_modules/.bin/opencode` symlinks to canonical 2.2.7; David required all older binaries removed, including the V1 exporter. Source provisioning/preflight still pins old versions and needs reconciliation before reuse. Managed stores remain separate; execution on 2.2.7 is unqualified. Surviving V1 units retain their executable, configuration and hooks; run/server metadata selects the matching transport/viewer.
 
-Admission exclusively reserves state/agents/<id>/ before preparation. The ledger lock prevents unregistered followers. Thread/key failure leaves work waiting. Authority reads reject malformed, unreadable, duplicate-field and nonregular/symlink files; only absence initializes defaults. Adoption requires exact task/run or current receipt ownership; displaced work requeues and receipted survivors are watch-only.
+Admission exclusively reserves state/agents/<id> before preparation. Exact task/run or receipt ownership governs adoption. Thread/key/preparation failure preserves waiting work and evidence; unexpected unreceipted termination requires canonical recovery. Authority reads reject malformed/nonregular/symlink data rather than inventing defaults.
 
-Each new run creates mode-0700 scratch inside its reserved directory. COINTOS_SCRATCH and TMPDIR identify it for server, client and descendants. Existing paths, including symlinks, refuse launch without clearing/adoption. Agents use fresh invocation directories and remove only their artifacts. Scratch remains with run evidence. This avoids deterministic names, not hardcoded /tmp collisions. Adopted processes retain their environment. Builds that hard-code shared temporary paths still need separate isolation; scratch environment variables do not rewrite their behaviour.
+Every V2 assignment has a private versioned XDG store, local model catalog and mode-0700 per-run scratch. COINTOS_SCRATCH/TMPDIR identify scratch; cwd and PWD explicitly identify the assigned worktree because V2 has no run --dir. Existing scratch paths refuse without clearing/adoption. Kernel read/write confinement, insulated source, runtime-rooted observer KT and rewrite-state permissions remain in force. Local knowledge registration adds no access grants. Hardcoded external temporary paths are not rewritten.
 
-Preparation registers checkout knowledge trees through kt before confinement, preserving access policy. Native kt_add can establish local answers without global-policy write access; confinement owns MCP/kernel evidence.
+A private authenticated loopback serve process precedes run --server URL --format json --auto with title, cointos/default and optional retained session. Password/config/log files are mode0600. Clients/viewers receive the matching password; no shared desktop service is used. Native JSON events already retain sessionID/part/step_finish fields. Recovery controls project native events into the same observer format. Transport reports execution facts, never completion authority.
 
-Mode-0600 opencode.json contains the gateway key and:
+Configuration retains:
+- only the CointOS gateway provider, configured through native providers/package/settings with @opencode/ai/providers/openai-compatible; native model transforms remove other providers. Legacy V1 provider/npm/options with disabled timeouts leaves V2 without a model route;
+- actual per-slot context capacity, ctx_size/(slots or lanes), currently131072 for the three-slot resident recipe, and configured output limits;
+- disabled provider request/header/chunk timeouts, sharing, autoupdate, automatic compaction and file watching; lifecycle owns stalls;
+- KT/CointOS MCP and only station-granted additional servers, with role/run-bound identity and existing validation/API timeout;
+- shell command/path denials and inherited kernel confinement. Native subagents, interactive questions and OpenCode session/worktree mutation tools are removed; task ownership remains CointOS's. Capability requirements/gaps remain separately owned.
 
-- local /v1 cointos provider through @ai-sdk/openai-compatible, stable cointos/default model in config, command and session spec, per-lane context/output limits. Surviving clients sending an older configured concrete name also follow the current default;
-- disabled provider request/header/chunk timeouts; lifecycle owns stalls;
-- knowledgetrees/CointOS MCP always enabled; other configured global servers enabled only when the task's station grants them (how/do/cointos/stations/work.md);
-- MCP timeout validation_seconds plus twice api_seconds, in milliseconds;
-- disabled sharing, autoupdate and file watching;
-- role/ability controls for web, lifecycle/services; no sudo, package installation or Git push. No machine-local directory blacklist is injected; kt privacy is separate from normal task write confinement. These denials are current launch mechanics, not user policy; broad capability requirements and known accidental gaps are owned by what/are/the/cointos/agent/capability/{requirements,gaps}.md.
+V2 uses shell/subagent names and execute for exact MCP catalog signatures. The native plugin keeps KT declarations role-scoped, replaces generic harness prose, refreshes the native catalog and appends bounded observed facts to compaction responses. Recovery and prompt-contract owners specify those boundaries. No V1 attached-event patch is applied. The hash-pinned V1 structured-compaction prototype is incompatible with managed V2 and refuses rather than silently selecting the wrong binary.
 
-Installed construction servers use native-accepted 1,820,000 ms MCP configuration. The versioned 1.18.35 implementation applies it to execution and connection/catalogue calls; this verifies configuration, not completed slow validation.
+Generation budgets, explicit grants and reasoning effort retain their existing owners. The installed original-steer trial has no source-default per-reply reasoning caps; installation must preserve its actual configuration.
 
-New launch environments capture COINTOS_COMPACTION_CONTEXT_COMMAND for their exact task/run. opencode_resume.mjs identifies native summary metadata through the SDK, then invokes a bounded read-only helper and appends task/bindings, local HEAD/manifest count and remaining budget including grants. Unavailable facts remain explicit; failed metadata lookup leaves text unchanged. It neither reads hidden packet bodies nor verifies model prose. Existing servers retain loaded plugin/environment. Compaction recovery owns native transport evidence and unresolved fidelity.
-
-structured_compaction defaults false/header off; enabling requires the checked CLI hash. Captured executable/header remain coupled; its benchmark owns acceptance.
-
-Reasoning effort is pinned task metadata. Per-reply caps are 256/384/1,024 for low/medium/xhigh; interruptions retain charges. Test writers/managers/integrators default medium; reviews use their own settings. The caps are deliberate Qwen3.8-27B performance control: without a forced stop the model reasons indefinitely. Do not remove them as a capability restriction.
-
-Run files live in ~/.CointOS/state/agents/<id>. Use cointos agents, watch, view and journalctl --user -u cointos-agent-ID.service; watch/view need terminals. Bounded state/events.jsonl retains diagnostics without prompts. OpenCode V2 and alternative harnesses are under assessment with phone control; adoption remains pending supervision/tools/permissions/events/recovery compatibility. what/is/the/cointos/harness/transition/assessment.md owns the shortlist and evaluation boundary.
+Use cointos agents/watch/view and the owned unit journal. Native tests use local stub providers, disposable stores and uniquely named units, never the model gateway. Passing transport fixtures does not establish judgment, compaction fidelity or unattended throughput. The harness assessment owns rollout status and remaining acceptance.

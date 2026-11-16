@@ -65,7 +65,8 @@ def fresh(previous: dict) -> dict:
              for name, shape in CONFIG["models"].items() for index in range(shape["lanes"])]
     tasks = previous.get("tasks", {})
     live_contexts = {digest for task in tasks.values() if task.get("status") in schema.ACTIVE
-                     for digest in (task.get("system_context"), task.get("tool_context"))}
+                     for digest in (task.get("system_context"), task.get("tool_context"),
+                                    task.get('system_context_v2'), task.get('tool_context_v2'))}
     system_contexts = {digest: text for digest, text in previous.get("system_contexts", {}).items()
                        if digest in live_contexts}
     previous_coin = previous.get("coin") if isinstance(previous.get("coin"), dict) else {}
@@ -82,7 +83,7 @@ def fresh(previous: dict) -> dict:
         "snapshots": previous.get("snapshots", {}), "tasks": tasks, "system_contexts": system_contexts,
         "snapshot_garbage": previous.get("snapshot_garbage", {}),
         "memory": {}, "model_memory": {name: {"memory_gb": shape["memory_gb"], "weights_gb": shape["weights_gb"],
-                                              "weights_reclaimable": shape.get("backend", "llama") != "gufo"}
+                                              "weights_reclaimable": shape.get("backend", "llama") not in ("gufo", "halogen")}
                                         for name, shape in CONFIG["models"].items()}, "guard": {"rung": 0, "rung_at": 0, "calm_since": None, "distress_since": None,
                                                         "killed": False, "blocked": False},
         "history": previous.get("history", []), "alerts": previous.get("alerts", []),

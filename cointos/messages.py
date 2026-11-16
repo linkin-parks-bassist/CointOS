@@ -2,18 +2,21 @@
 
 A message is posted once to the recipient run's session as a `noReply` user message: OpenCode
 stores it, shows it in the session's TUI, and includes it in the model's very next request even
-mid-turn, so the agent sees it on its next step without a new turn. A message waits while its
+mid-turn. Successful delivery requests a reasoning-only yield at a complete generation step;
+OpenCode then rereads history. Writing and tool calls are never cut short. A message waits while its
 recipient has no live session (not yet started, or between runs) and is delivered on a later
 tick. Caller holds LOCK for `pending`; posting happens outside it.
 """
 from __future__ import annotations
 
 import json
+import secrets
 import threading
 import urllib.parse
 import urllib.request
 
 from cointos.state import CONFIG, LOCK, L, log
+from cointos import lanes
 
 
 def text(message: dict) -> str:
@@ -31,9 +34,36 @@ def post(url: str, session: str, directory: str | None, body: str) -> None:
         pass
 
 
-def deliver(message: dict, body: str, url: str, session: str, directory: str | None) -> None:
+def post_native(url, session, body, password, identifier):
+    """Admit peer guidance without cancelling the active provider/tool or waking an idle loop."""
+    from cointos import opencode2
+    token = opencode2.AUTH.set(password)
     try:
-        post(url, session, directory, body)
+        opencode2.request(url, opencode2.path(session, 'prompt'), {
+            'id': identifier, 'text': body, 'resume': False, 'delivery': 'steer'},
+            timeout=CONFIG['timeouts']['api_seconds'])
+    finally:
+        opencode2.AUTH.reset(token)
+
+
+def deliver(message: dict, body: str, url: str, session: str, directory: str | None) -> None:
+    with LOCK:
+        task = L['tasks'].get(message['to']) or {}
+        agent = L['agents'].get(task.get('agent')) or {}
+        thoughts = [key for key, thought in L['thoughts'].items()
+                    if thought['agent'] == task.get('agent') and agent.get('url') == url
+                    and agent.get('session') == session]
+    try:
+        from cointos import opencode
+        owner = task.get('agent')
+        run = opencode.run_dir(owner) if owner else None
+        metadata = json.loads((run / 'server.json').read_text()) if run and (run / 'server.json').exists() else {}
+        if metadata.get('protocol') == 2:
+            with LOCK:
+                identifier = message.setdefault('delivery_id', 'msg_' + secrets.token_hex(16))
+            post_native(url, session, body, (run / 'server-password').read_text(), identifier)
+        else:
+            post(url, session, directory, body)
     except (OSError, ValueError) as error:
         with LOCK:
             message.pop("posting", None)  # retried on a later tick
@@ -42,6 +72,7 @@ def deliver(message: dict, body: str, url: str, session: str, directory: str | N
     with LOCK:
         message.pop("posting", None)
         message["read"] = True
+        lanes.interrupt_reasoning(thoughts)
     log("message delivered", sender=message["from"], to=message["to"])
 
 

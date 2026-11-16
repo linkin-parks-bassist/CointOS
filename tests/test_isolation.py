@@ -59,7 +59,8 @@ with patch.object(kt, 'write', side_effect=isolated_write):
 opened = subprocess.run(['kt', '--lean', 'open', 'local:what/is/queued.md'],
                         cwd=queues.ROOT, check=True, capture_output=True, text=True)
 assert 'fixture:isolated' in opened.stdout
-assert 'Real generated queue evidence' in opened.stdout
+assert 'cointos task fixture:isolated' in opened.stdout
+assert 'Real generated queue evidence' not in opened.stdout
 ''', root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(list(Path(root).iterdir()), [policy])

@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import math
 
-from cointos import config as configuration, lanes
-from cointos.state import CONFIG, L, log
+from cointos import config as configuration, lanes, scheduler
+from cointos.state import CONFIG, L, log, now
 
 
 def slice_seconds(value) -> float:
@@ -68,3 +68,26 @@ def set_scheduler(changes: dict) -> dict:
     configuration.write_json(path, document, mode=path.stat().st_mode & 0o777)
     apply(value, chunk)
     return {"ok": True, **effective()}
+
+
+def set_priority(task_id: str, weight) -> dict:
+    """A live user override; preserve ownership, context and charged budgets."""
+    from cointos import runs
+    task = L['tasks'].get(task_id)
+    if task is None or task['status'] not in ('waiting', 'running'):
+        raise ValueError('GPU priority requires a waiting or running task')
+    if weight is not None and (type(weight) not in (int, float) or not math.isfinite(weight) or weight <= 0):
+        raise ValueError('GPU priority weight must be finite and greater than zero')
+    effective = runs.scheduling_default(task) if weight is None else weight
+    if weight is None:
+        task.pop('scheduling_weight', None)
+    else:
+        task['scheduling_weight'] = weight
+    thoughts = list(L['thoughts'].values())
+    for peer in thoughts:
+        if peer['owner'] == task_id:
+            peer['weight'] = effective
+    task['updated_at'] = now()
+    lanes.schedule()  # BUSY retains the in-flight step; the next decision uses the new weight
+    log('GPU priority changed', task=task_id, weight=effective, override=weight)
+    return {'ok': True, 'task': task_id, 'weight': effective, 'override': weight}

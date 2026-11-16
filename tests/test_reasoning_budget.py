@@ -2,7 +2,7 @@ import queue
 import unittest
 from unittest.mock import patch
 
-from cointos import lanes, backend_llama as backend
+from cointos import lanes, prompts, backend_llama as backend
 from cointos.state import CONFIG
 
 

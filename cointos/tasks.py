@@ -144,7 +144,7 @@ def requested_station(station, project: str | None, abilities: list, spawner: tu
     directory = stations.directory(station['directory']) if station.get('directory') else None
     tools = stations.tools(station.get('tools'))
     if directory and project:
-        raise ValueError("a project's agents work in their checkouts; give a station directory or a project, not both")
+        raise ValueError("give either a project or a station directory; project agents receive an assigned directory")
     if directory and 'control' in abilities:
         raise ValueError('a station directory confines an agent; the control ability belongs to system Operators')
     if spawner:
@@ -228,12 +228,8 @@ def request_repair(source: dict) -> tuple[dict | None, bool]:
             return None, False  # its tree is no longer configured
     else:
         return None, False
-    brief = (f"An agent's run on {origin['task']} (assignment version {origin['version']}) went wrong. "
-             f"Find out what happened and dispatch the right agent to deal with it.\n"
-             f"Place: {place_name}. Scope: {scope}.\n\n"
-             f"What was reported, which may not be the real story:\n{reason[:1000]}\n\n"
-             f"Current assignment and binding contracts: cointos task {origin['task']}.\n"
-             f"Full preserved execution evidence: cointos task {origin['task']} --history.")
+    brief = (schema.RECOVERY_GOAL.format(task=origin['task']) +
+             " Read its current task and relevant failure evidence. Preserve requirements and existing work.")
     name = "first-response-" + queues.slug(origin["task"])
     rank = [schema.KINDS["first-response"]["rank"], where.get("priority", 0)]
     task = create("first-response", where, name, brief, rank, repair_origin=origin,
@@ -245,22 +241,41 @@ def request_repair(source: dict) -> tuple[dict | None, bool]:
     return task, True
 
 
-def request_supervisor(target: dict, spent_seconds: float) -> dict:
+def request_supervisor(target: dict, spent_tokens: int, *, must_split=False) -> dict:
     """One supervisor looking at a running task: the live one, or a new one now."""
-    for task in L["tasks"].values():
+    must_split = must_split or bool(target.get('split_supervisor'))
+    if not must_split and (L['agents'].get(target.get('agent')) or {}).get('task') != target['id']:
+        raise ValueError('ordinary supervision requires a live run; inspect the task or its recovery owner instead')
+    for task in list(L["tasks"].values()):
         if task["kind"] == "supervise" and task.get("supervises") == target["id"] and pending(task):
-            return task
-    brief = (f"{target['id']} ({target['role']}{', ' + target['name'] if target.get('name') else ''}) has spent "
-             f"{spent_seconds / 60:.0f} minutes of GPU generating. Look at what it is actually doing and steer it.\n"
-             f"Its assignment: cointos_task {target['id']}.\n"
-             f"Everything it thought, said and ran: cointos transcript {target['id']}.\n"
-             f"Message it with cointos_send to {target['id']}.")
+            from cointos import lifecycle
+            lifecycle.stand_down(task)
+            if not pending(task):
+                continue
+            if not must_split or task.get('must_split'):
+                return task
+            from cointos import lifecycle
+            lifecycle.cancel_task(task, 'cointos', 'the 40,000-token supervisor must split the implementer job')
+    brief = ("Inspect your declared subject with cointos_task and the newest relevant cointos_log entries. "
+             "Make one progress decision and finish.")
+    if must_split:
+        brief = (f"Split the remaining work of {target['id']}. Its worker is stopped and files are preserved. "
+                 f"Read cointos_task {target['id']} and its newest relevant trace. "
+                 "Divide the remaining obligations; verification belongs to the children. "
+                 "Original prerequisites carry over automatically.")
     task = create("supervise", SYSTEM, "supervise-" + queues.slug(target["id"]), brief,
-                  [schema.KINDS["supervise"]["rank"]], supervises=target["id"],
+                  [schema.KINDS["supervise"]["rank"]], supervises=target["id"], supervises_run=target.get("agent"),
+                  **({'must_split': True} if must_split else {}),
                   reasoning_effort=CONFIG["reasoning"].get("manager", CONFIG["reasoning"]["default"]))
-    L["messages"] = L["messages"] + [{"at": now(), "from": "cointos", "to": target["id"], "read": False,
-        "text": f"{task['id']} is supervising this run. Message it with cointos_send if you're stuck or need a decision."}]
-    log("supervisor requested", task=task["id"], supervises=target["id"], seconds=round(spent_seconds))
+    if must_split:
+        from cointos import lifecycle
+        target['split_supervisor'] = task['id']
+        record = queues.records()[target['record']]
+        if record.get('held_by') is None:
+            lifecycle.hold(target['record'], task['id'])
+        from cointos import snapshots
+        snapshots.forget_owner(target['id'])
+    log("supervisor requested", task=task["id"], supervises=target["id"], tokens=spent_tokens)
     return task
 
 
@@ -320,9 +335,10 @@ def set_budget(task_id: str, changes) -> dict:
         raise ValueError("budget changes require a waiting task or undispatched queue item")
     if not changes:
         raise ValueError("budget changes must contain at least one limit")
-    schema.budget(CONFIG, changes)  # validate the request before any mutation
-    effective = schema.budget(CONFIG, {**(task or record).get("budget", {}), **changes})
-    if task and task['status'] == 'running' and any(effective[key] < task['budget'][key] for key in schema.BUDGET_KEYS):
+    role = (task or {}).get("role")
+    schema.budget(CONFIG, changes, role=role)  # validate before mutation
+    effective = schema.budget(CONFIG, {**(task or record).get("budget", {}), **changes}, role=role)
+    if task and task['status'] == 'running' and any(effective[key] is not None and (task['budget'][key] is None or effective[key] < task['budget'][key]) for key in schema.BUDGET_KEYS):
         raise ValueError("a running task's budget can only increase; spent generation and session are preserved")
     increased = task and task['status'] == 'running' and effective != task['budget']
     for holder in (task, record):
@@ -332,10 +348,10 @@ def set_budget(task_id: str, changes) -> dict:
         agent = L['agents'].get(task.get('agent'))
         if agent is not None:
             agent.pop('budget_warned', None)
+        token_limit = 'no token cap' if effective['generation_tokens'] is None else format(effective['generation_tokens'], ',')
         L['messages'].append({'at': now(), 'from': 'cointos', 'to': task['id'], 'read': False,
                               'text': f"Your generation budget was explicitly increased to "
-                                      f"{effective['generation_seconds']:g} seconds or "
-                                      f"{effective['generation_tokens']:,} tokens, whichever comes first. "
+                                      f"{token_limit} tokens. There is no automatic time stop. "
                                       "These limits supersede your launch allowance; existing usage, grants, "
                                       "session and work remain. Continue the assigned work under the new limits."})
     log("task budget changed", task=task_id, budget=effective)

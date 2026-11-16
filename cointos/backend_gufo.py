@@ -206,6 +206,11 @@ def can_continue(config: dict, model: str, held: list[int] | None, tokens: list[
     return bool(held) and len(held) <= len(tokens) and tokens[:len(held)] == held
 
 
+def resident_states(config: dict, model: str) -> bool:
+    """Gufo always retains per-owner native objects selected without serialization."""
+    return True
+
+
 def select(config: dict, model: str, lane: int, owner: str) -> list[int]:
     """Select the resident native object, never a serialized copy."""
     result = _call(config, model, 'select', lane=lane, owner=owner)

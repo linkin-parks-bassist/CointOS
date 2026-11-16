@@ -3,6 +3,7 @@ makes them (`tasks.create`, `lifecycle.start`), so tests exercise the real recor
 from __future__ import annotations
 
 import copy
+import contextlib
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -27,6 +28,7 @@ def fresh_ledger(test, previous: dict | None = None) -> dict:
 def quiet(test) -> None:
     """No systemd, no background threads, no kt: runs and publication stay in the ledger."""
     test.enterContext(patch.object(opencode, "stop"))
+    test.enterContext(patch.object(opencode, "quiesce", side_effect=lambda _: contextlib.nullcontext()))
     test.enterContext(patch.object(lifecycle.threading, "Thread"))
     test.enterContext(patch.object(queues, "publish"))
 

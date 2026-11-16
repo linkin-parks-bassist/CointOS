@@ -238,7 +238,8 @@ class RepairProgress(unittest.TestCase):
         self.certify_again()
         integration = state.L['tasks'][self.sim.integration['id']]
         worker = state.L['tasks'][self.sim.worker['id']]
-        self.assertEqual(integration['status'], 'waiting')
+        self.assertEqual(integration['status'], 'failed')
+        self.assertEqual(tasks.request_repair(integration)[0]['role'], 'first-responder')
         self.assertFalse(state.L['agents'])
         self.assertEqual(worker['status'], 'review')
         self.assertEqual(worker['receipt'], receipt)

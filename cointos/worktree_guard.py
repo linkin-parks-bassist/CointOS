@@ -1,4 +1,4 @@
-"""Inherited write boundary for branch-publishing runs; reads stay unchanged."""
+"""Inherited filesystem boundary for managed agent processes and their descendants."""
 import ctypes
 import json
 import os
@@ -7,7 +7,7 @@ import platform
 import sys
 
 
-def restrict(paths):
+def restrict(paths, reads=None):
     if platform.machine() not in ('x86_64', 'aarch64'):
         raise RuntimeError('project write boundary needs supported Landlock syscall numbers')
     libc = ctypes.CDLL(None, use_errno=True)
@@ -30,7 +30,8 @@ def restrict(paths):
         _pack_ = 1
         _fields_ = [('allowed_access', ctypes.c_uint64), ('parent_fd', ctypes.c_int32)]
 
-    rules = Ruleset(writes)
+    reading = (1 << 2) | (1 << 3)
+    rules = Ruleset(writes | (reading if reads is not None else 0))
     fd = checked(444, ctypes.byref(rules), ctypes.sizeof(rules), 0)
     try:
         for name in paths:
@@ -42,6 +43,19 @@ def restrict(paths):
                 checked(445, fd, 1, ctypes.byref(rule), 0)
             finally:
                 os.close(parent)
+        if reads is not None:
+            for category, rights in (('trees', reading), ('files', 1 << 2), ('directories', 1 << 3)):
+                for name in reads.get(category, []):
+                    path = Path(name).resolve(strict=True)
+                    granted = rights if path.is_dir() else rights & ~(1 << 3)
+                    if not granted:
+                        continue
+                    parent = os.open(path, os.O_PATH | os.O_CLOEXEC)
+                    try:
+                        rule = Beneath(granted, parent)
+                        checked(445, fd, 1, ctypes.byref(rule), 0)
+                    finally:
+                        os.close(parent)
         if libc.prctl(38, 1, 0, 0, 0):
             error = ctypes.get_errno()
             raise OSError(error, os.strerror(error))
@@ -51,5 +65,5 @@ def restrict(paths):
 
 
 if __name__ == '__main__':
-    restrict(json.loads(sys.argv[1]))
+    restrict(json.loads(sys.argv[1]), json.loads(os.environ.get('COINTOS_READ_PATHS', 'null')))
     os.execvpe(sys.argv[2], sys.argv[2:], os.environ)

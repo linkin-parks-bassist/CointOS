@@ -16,9 +16,10 @@ class Turns(unittest.TestCase):
         # These fixtures exercise the checkpoint backend. Resident scheduling has
         # independent tests with per-owner native-state metadata.
         self.enterContext(patch.object(lanes.BACKEND, 'resident_states', return_value=False))
+        self.enterContext(patch.object(lanes.BACKEND, 'snapshot_size', return_value=None))
         previous = copy.deepcopy(state.L)
         self.addCleanup(lambda: (state.L.clear(), state.L.update(previous)))
-        for table in (lanes.RUNS, lanes.BUSY, lanes.HELD):
+        for table in (lanes.RUNS, lanes.BUSY, lanes.HELD, lanes.RESIDENT):
             saved = dict(table)
             self.addCleanup(lambda table=table, saved=saved: (table.clear(), table.update(saved)))
             table.clear()
@@ -41,6 +42,21 @@ class Turns(unittest.TestCase):
         lanes.HELD[0] = lanes.tokens_of(agent)[:-1]
         lanes.schedule()
 
+    def test_memory_waiter_does_not_block_ready_peer_and_reenters_after_headroom_returns(self):
+        self.thought('waiting-memory', [1, 2])
+        self.thought('ready-peer', [3, 4])
+        lanes.RUNS['waiting-memory']['admission_gb'] = 11
+        with patch.object(lanes.capacity, 'headroom_gb', return_value=4), \
+             patch.object(lanes.capacity, 'conversation_cache_gb', return_value=0):
+            lanes.schedule()
+        self.assertEqual(state.L['lanes'][0]['holder'], 'ready-peer')
+        self.assertEqual(state.L['thoughts']['waiting-memory']['waiting_for'], 'memory')
+        with patch.object(lanes.capacity, 'headroom_gb', return_value=20), \
+             patch.object(lanes.capacity, 'conversation_cache_gb', return_value=0):
+            lanes.schedule()
+        self.assertNotIn('waiting_for', state.L['thoughts']['waiting-memory'])
+        self.assertNotIn('admission_gb', lanes.RUNS['waiting-memory'])
+
     def test_a_tool_call_does_not_restart_the_slice(self):
         lane = state.L["lanes"][0]
         turn_began = state.now() - self.slice - 5
@@ -58,7 +74,7 @@ class Turns(unittest.TestCase):
             lanes.schedule()
         self.assertEqual(lane["holder"], "b", "a's turn is past its slice, so a waiting equal that draws higher gets the lane")
 
-    def test_finishing_a_cold_read_does_not_restart_the_slice(self):
+    def test_finishing_an_opening_read_earns_a_generation_slice(self):
         lane = state.L["lanes"][0]
         self.thought("a", [1, 2, 3, 4, 5])
         lanes.schedule()
@@ -66,11 +82,23 @@ class Turns(unittest.TestCase):
         state.L["thoughts"]["a"]["since"] = lane["turn_since"] = state.now() - self.slice - 5  # a long cold read
         began = lane["turn_since"]
         self.read_done("a")
-        self.assertEqual(lane["turn_since"], began)
+        self.assertGreater(lane["turn_since"], began)
         self.thought("b", [9, 9, 9])
         with patch.object(lanes.scheduler, "draw", lambda config, thought, now: {"a": 0.1, "b": 0.9}[thought["agent"]]):
             lanes.schedule()
-        self.assertEqual(lane["holder"], "b")
+        self.assertEqual(lane["holder"], "a")
+
+    def test_read_completion_does_not_extend_a_slice_over_an_urgent_waiter(self):
+        lane = state.L['lanes'][0]
+        self.thought('a', [1, 2, 3, 4, 5])
+        state.L['thoughts']['a']['weight'] = 2
+        lanes.schedule()
+        began = state.now() - self.slice - 5
+        state.L['thoughts']['a']['since'] = lane['turn_since'] = began
+        self.thought('user', [9, 9, 9])
+        state.L['thoughts']['user'].update(weight=1000, **{'class': 'coin'})
+        self.read_done('a')
+        self.assertEqual(lane['holder'], 'user')
 
     def test_partial_read_yields_and_resumes_its_saved_prefix(self):
         self.addCleanup(state.STOPPING.clear)
@@ -105,6 +133,7 @@ class Turns(unittest.TestCase):
             def think(config, model, index, tokens, held, count, sampling, on_tokens):
                 self.assertEqual(native, tokens[:held])
                 replies.append(tokens[0])
+                clock[0] += self.slice + 1
                 on_tokens([77])
                 native[:] = tokens
                 return {'tokens': [77], 'held': list(tokens), 'done': True}
@@ -123,6 +152,38 @@ class Turns(unittest.TestCase):
         self.assertEqual(reads, [(0, 0, chunk), (9001, 0, 2), (0, chunk, chunk * 2)])
         self.assertEqual(replies, [9001])
         self.assertIn('a', state.L['thoughts'])
+
+    def test_finite_resident_slots_checkpoint_partial_reads_before_yielding(self):
+        with patch.object(lanes.BACKEND, 'resident_states', return_value=True), \
+             patch.object(lanes.BACKEND, 'resident_capacity', return_value=1), \
+             patch.object(lanes.BACKEND, 'resident_bytes', return_value=0), \
+             patch.object(lanes.BACKEND, 'eviction', return_value=None), \
+             patch.object(lanes.BACKEND, 'select', return_value=[]):
+            self.test_partial_read_yields_and_resumes_its_saved_prefix()
+
+    def test_eviction_saves_the_victim_before_selecting_the_new_owner(self):
+        held = [1, 2, 3]
+        lane = state.L['lanes'][0]
+        lane['resident'] = 'a'
+        lanes.HELD[0] = held
+        lanes.RESIDENT[WORK, 'a'] = held
+        calls = []
+        def select(config, model, index, owner):
+            calls.append(('select', owner))
+            return held if owner == 'a' else []
+        def keep(position, tokens, owner, kind):
+            calls.append(('save', owner, list(tokens)))
+            return True
+        with patch.object(lanes.BACKEND, 'resident_states', return_value=True), \
+             patch.object(lanes.BACKEND, 'eviction', return_value='a'), \
+             patch.object(lanes.BACKEND, 'select', side_effect=select), \
+             patch.object(lanes.BACKEND, 'resident_bytes', return_value=0), \
+             patch.object(lanes.snapshots, 'live', return_value=True), \
+             patch.object(lanes.snapshots, 'keep', side_effect=keep), \
+             patch.object(lanes.capacity, 'headroom_gb', return_value=100):
+            lanes.switch(0, [9, 10], 'b')
+        self.assertEqual(calls, [('select', 'a'), ('save', 'a', held), ('select', 'b')])
+        self.assertNotIn((WORK, 'a'), lanes.RESIDENT)
 
     def test_small_tail_edit_reuses_the_single_earlier_checkpoint(self):
         self.addCleanup(state.STOPPING.clear)
@@ -235,7 +296,12 @@ class Turns(unittest.TestCase):
             self.assertEqual(sorted((s['tokens'], s['kind']) for s in state.L['snapshots'].values() if s['owner'] == owner),
                              [(1900, 'prefix'), (2967, 'checkpoint')])
 
-    def test_exhausted_reasoning_continuation_keeps_the_prompt_before_tool_retokenization(self):
+    def test_private_user_reuses_ram_checkpoint_after_a_message_changes_the_tail(self):
+        with patch.dict(state.CONFIG, snapshots='/dev/shm/cointos-test-memory-only'), \
+             patch.object(lanes.snapshots.private_clients, 'live', return_value=True):
+            self.test_exhausted_reasoning_continuation_keeps_the_prompt_before_tool_retokenization('private/synthetic')
+
+    def test_exhausted_reasoning_continuation_keeps_the_prompt_before_tool_retokenization(self, owner="user"):
         self.addCleanup(state.STOPPING.clear)
         original = list(range(3000))
         native, cache, reads = [], {}, []
@@ -262,6 +328,8 @@ class Turns(unittest.TestCase):
              patch.object(lanes.snapshots, 'room', return_value=True), \
              patch.object(lanes.snapshots, 'make_room', return_value=True), patch.object(lanes, 'log'):
             self.thought('user', original)
+            state.L['thoughts']['user']['owner'] = owner
+            lanes.RUNS['user']['private'] = owner.startswith('private/')
             lanes.RUNS['user'].update(sampling={}, max=100, reader={
                 'reasoning_budget': 4, 'reasoning_used': 4, 'think_end': 9900, 'think_close': [10, 9900, 10]})
             lanes.schedule(); lanes.worker(0)
@@ -269,9 +337,11 @@ class Turns(unittest.TestCase):
             # The native transcript splits the closed reasoning and following answer
             # into separate messages, changing only the new tail after the old prompt.
             next_prompt = original + [10, 9900, 10, 8000, 8001, 8002, 8003]
-            lanes.snapshots.forget_diverged('user', WORK, next_prompt)
+            lanes.snapshots.forget_diverged(owner, WORK, next_prompt)
             state.STOPPING.clear(); lanes.HELD.clear(); native.clear(); reads.clear()
             self.thought('user', next_prompt)
+            state.L['thoughts']['user']['owner'] = owner
+            lanes.RUNS['user']['private'] = owner.startswith('private/')
             lanes.RUNS['user'].update(sampling={}, max=100, reader={})
             lanes.schedule(); lanes.worker(0)
             self.assertEqual(reads[0][0], 2967)
@@ -544,7 +614,9 @@ class Turns(unittest.TestCase):
             lanes.worker(0)
         self.assertFalse(state.L['thoughts'])
         self.assertEqual(lanes.HELD[0], [])
-        self.assertEqual(run['queue'].get_nowait(), {'end': 'failed'})
+        end = run['queue'].get_nowait()
+        self.assertEqual(end['end'], 'failed')
+        self.assertIn('neither advanced nor ended', end['reason'])  # the client learns why
 
     def test_gufo_complete_state_continues_across_chunks_without_restore_or_reread(self):
         self.addCleanup(state.STOPPING.clear)

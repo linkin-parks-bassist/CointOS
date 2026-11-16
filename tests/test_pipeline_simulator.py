@@ -46,6 +46,8 @@ class FaultCampaign(unittest.TestCase):
                 self.assertEqual(result['failures'], [])
                 expected = ('adopted-and-landed' if fault in (
                     'adopt_live_worker', 'adopt_live_integrator', 'adopt_receipted_worker') else 'readmitted-and-landed')
+                if fault in ('adopt_missing_key', 'adopt_dead_integrator'):
+                    expected = 'dead-run-first-responder'
                 if fault == 'adopt_published_exhausted':
                     expected = 'published-intent-before-budget'
                 self.assertEqual(result['outcomes'], {expected: 1})

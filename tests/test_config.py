@@ -10,7 +10,7 @@ class LiveCompatibilityTests(unittest.TestCase):
 
     def test_daemon_policy_can_change_around_surviving_processes(self):
         candidate = copy.deepcopy(self.installed)
-        candidate["reasoning"]["budgets"]["medium"] += 1
+        candidate["reasoning"]["budgets"]["medium"] = candidate["reasoning"]["budgets"].get("medium", 0) + 1
         candidate["recovery"]["generation_tokens"] += 1
         candidate["scheduler"]["slice_seconds"] += 1
         candidate["spawner"]["max_agents"] += 1

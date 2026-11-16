@@ -1,12 +1,29 @@
 # CointOS
 
-**An operating system for local AI agents.** CointOS runs a small team of autonomous coding
-agents on a single workstation using local models. An independent startup repair service
+**An operating system for local AI agents.** CointOS keeps Coin reachable through Telegram
+and schedules requested Operators on a single workstation using local models.
+The shipped `factory_enabled: false` setting suspends project construction, stewards,
+test audits, gardening and their recovery/supervision chains. It preserves their tasks,
+queues and files. Automatic supervisors and First Responders are also disabled for Operators.
+Only explicit dispatch (Coin, user tools, timers or reminders) can start those roles.
+System Operators, reminders, user schedules,
+the gateway and memory controls remain available. All existing projects are disabled in
+the user-managed runtime registry. Re-enabling the factory requires setting
+`factory_enabled` to `true` in the installed `config/cointos.json` and restarting the daemon;
+enable individual projects separately. This switch is read at daemon startup, not live.
+Installations retain an existing factory setting across upgrades.
+An independent startup repair service
 uses the installed Codex CLI's remote provider when the daemon cannot start.
 It treats the GPU the way a kernel
 treats a CPU: more agents than the hardware can serve at once take turns on pre-emptible model
 lanes, while their conversations, context caches and work survive being paused, swapped out,
 or even having the daemon replaced underneath them.
+
+The governing outcomes are responsive, capable, always-reachable Coin; autonomous work without
+user oversight; minimal blockage and GPU waste; and sustained parallel progress with appropriate
+GPU allocation. The maintained [intent](.knowledge/what/is/cointos.md),
+[requirements](.knowledge/what/is/the/spec.md), [acceptance contract](.knowledge/what/is/the/cointos/acceptance/contract.md)
+and [self-development contract](.knowledge/what/is/the/cointos/self-development/contract.md) own the details.
 
 ![The CointOS dashboard: live agent cards, the work queue, GPU lanes and memory on one page](docs/dashboard.png)
 
@@ -15,10 +32,10 @@ or even having the daemon replaced underneath them.
 - **Explains decisions in plain Australian English.** Coin checks current task records and
   explains the code, failure, responsible role and next action before asking you to choose.
 - **Schedules GPU time like CPU time.** A thought advances in bounded steps; between steps a
-  higher-priority conversation (a chat with you) pre-empts background work, and equal agents
-  share lanes by time slice. Gufo selects resident per-agent state by pointer;
+  local priority-weighted random draw shares slices without tracking past GPU usage. Coin
+  takes precedence at execution boundaries; other requests use configured lottery weights. Gufo selects resident per-agent state by pointer;
   checkpoint persistence is separate from ordinary switching.
-- **Runs a software pipeline, not a chatbot.** Managers break work into small staged items;
+- **Retains an optional software pipeline.** With the factory enabled, managers break work into small staged items;
   workers write adversarial test contracts first, then implementations on isolated branches;
   integrators review and land through a gate that re-runs the protected tests on the exact
   candidate. Stewards, test auditors and gardeners keep the projects and their knowledge honest.
@@ -67,13 +84,17 @@ or even having the daemon replaced underneath them.
   Its service reloads the disk registry after reboot; missed deadlines remain
   due, while interrupted processes have unknown results. Ordinary wakes bring up the model at background
   priority; work explanations and requested-work completion updates use Coin priority.
-  Routine mistakes and recoverable failures stay local. Unfixable problems and concrete workflow improvements queue durable model explanations without canned placeholders. Sizeable requested jobs get completion and significant usable-milestone updates with result locations; conversational dispatches are tracked durably. `report_result` records announced outcomes outside rolling history and suppresses repeated location/milestone keys across task changes. Completion wakes require current inspection call IDs and cannot bypass reporting through ordinary prose; evidence relevance still requires model judgment. Coin uses its own `KT_ACTOR` identity
+  Routine mistakes and recoverable failures stay local. Unfixable problems and concrete workflow improvements queue durable model explanations without canned placeholders. Sizeable requested jobs get completion and significant usable-milestone updates with result locations; conversational dispatches are tracked durably. Only explicit `send`/`report_result` calls deliver Telegram text; ordinary model output and `done` stay internal. Multiple voluntary replies remain possible. `report_result` records announced outcomes outside rolling history and suppresses repeated location/milestone keys across task changes. Completion wakes require current inspection call IDs and cannot bypass reporting through ordinary prose; evidence relevance still requires model judgment. Coin uses its own `KT_ACTOR` identity
   for knowledge access across registered trees, rather than a grant to its working folder.
   It avoids engagement questions; genuinely consequential decisions get contextual options and a recommendation. Routine engineering choices take the recommendation without stopping.
+  Direct turns require explicit `send` or `done` after tool-free ordinary output, so an earlier acknowledgement cannot silently discard a generated answer. This prevents one delivery-loss path; it does not prove a substantive answer was sent.
   Conversation history grows to `coin.history_messages` (20), then discards the oldest
   `coin.history_trim_messages` (7), leaving 13. Text/captions and delivered replies count;
   captionless attachments do not enter conversation history;
-  the on-disk archive stays intact. A separate native history-prefix checkpoint allows
+  ordinary profiles keep the on-disk archive. Profiles with `retain_archive: false`
+  prune it to the rolling window; `retain_diagnostics: false` suppresses diagnostic
+  transcripts, request captures and persistent inference checkpoints.
+  A separate native history-prefix checkpoint for ordinary profiles allows
   growing history to reuse cached state despite changing clocks and tool context.
   Unfinished instructions can be retained independently with `retain_request`; they stay
   in later turns until verified completion or cancellation via `finish_request`.
@@ -84,11 +105,10 @@ CointOS is a personal system built for one machine and is shared as-is. It expec
 
 - Linux with systemd user services and Python 3.
 - Python Rich (`python3-rich` on Ubuntu) for Coin’s terminal monitor.
-- The native [Gufo](https://github.com/gufo-org/gufo) bridge serving Qwen3.8-27B
-  UD-Q4_K_XL for Coin and construction on one shared 131k lane. The reference
-  setup is a 128 GB unified-memory AMD workstation. Gufo uses DFlash2 with a
-  Q4_K_M draft and adaptive block width. The optional [Lemonade](https://github.com/lemonade-sdk/lemonade)
-  / llama.cpp adapter supports other configured models.
+- [Lemonade](https://github.com/lemonade-sdk/lemonade) as the model service.
+  The Flash-Next recipe uses its llama.cpp backend. The reference setup is a
+  128 GB unified-memory AMD workstation. Gufo is intended to be managed as a
+  Lemonade backend; the retained private 27B Gufo bridge still needs migration.
 - [OpenCode](https://opencode.ai) as the agent harness.
 - [knowledgetrees](https://github.com/linkin-parks-bassist/knowledgetrees) (`kt` and its MCP
   server), which agents use for orientation, specs, plans and runtime state.
@@ -96,27 +116,50 @@ CointOS is a personal system built for one machine and is shared as-is. It expec
 Model names, lanes, memory sizes and paths live in `config/cointos.json`.
 `work_model` is the shared default for agents, Coin and user sessions. Omit `coin.model`
 unless Coin explicitly requires another configured model. The dashboard's Machine panel
-discovers GGUF files under `model_directories` and offers a **Default model** chooser.
+discovers GGUF files under `model_directories` and configured downloaded Lemonade models
+through Lemonade's catalog, and offers a **Default model** chooser.
+The shared Flash-Next recipe has one 128k server slot and one CointOS lane; CointOS
+schedules Coin, agents and ordinary/private sessions on it.
 It finishes current replies, unloads the previous default, checks headroom and loads
 the selection; a failed load restores the previous choice. Sessions and work survive.
+The shared default must support resident inference state so private sessions remain usable;
+an incompatible recipe is rejected before the current model unloads.
+The qualified Flash setup uses `patches/llama-state-size/` to report checkpoint bytes
+from the native server; older servers retain sample-based estimates.
 Draft/vision companions are excluded; unqualified architectures and split files are
-disabled with a reason. Newly discovered Qwen35 models use Gufo without an unqualified
+disabled with a reason for disk discovery. Configured Lemonade recipes resolve their own
+checkpoints, including split files and protected caches. Newly discovered Qwen35 models use Gufo without an unqualified
 draft. Model hashes are checked before native use. Dashboard selections survive upgrades.
 
 For a user-driven GPU session, configure the OpenCode `cointos` provider with
 `@ai-sdk/openai-compatible`, base URL `http://127.0.0.1:4200/v1`, any user API key,
 disabled request/header/chunk timeouts, and model ID `default`. Run
-`opencode --model cointos/default`. It shares the loaded model and pre-empts background
-work at GPU step boundaries; Coin retains higher priority. Loading another engine
+`opencode --model cointos/default`. It shares the loaded model with a high scheduling weight; Coin has a larger weight.
+For a disposable local session without a retained OpenCode transcript, run
+`cointos-private`. It uses an in-memory database and isolated temporary stores,
+routes only through the scheduler's private endpoint, and suppresses request capture
+and persistent inference checkpoints. Normal OpenCode sessions still retain history.
+Terminal scrollback and files deliberately written by tools remain outside transcript cleanup.
+All requests compete for time slices. Loading another engine
 through Lemonade bypasses that scheduler.
-The per-model dispatcher `cointos.backend_native` selects Gufo for Qwen and defaults
-other models to llama.cpp. Build the pinned native bridge in `patches/gufo` with
+The per-model dispatcher `cointos.backend_native` selects each configured native
+backend: llama.cpp, Gufo, or experimental Halogen. Build the pinned native bridge in `patches/gufo` with
 `scripts/build-gufo-control --source GUFO_CHECKOUT --package DEST --runtime-library-dir SDK_LIB`.
 The Qwen `gufo` configuration names the launcher, weights, private socket and weight
 SHA256; paths must match the local package and SDK. Its `dflash` object names the
 draft `model_path` and `sha256`, with `max_draft_tokens` (1–7, default 7) and
 `policy` (`adaptive` or `fixed`, default `adaptive`). Omit it for autoregressive
 decoding. Both weights and draft settings bind native snapshot identity.
+Experimental Halogen uses a pinned container with adaptive MTP and a shared 128k lane.
+Its native token bridge keeps attention KV in place but copies recurrent state between
+retained-cache selections, an explicitly authorized exception to resident pointer switching.
+Cache mode 2 resumes anywhere and can differ numerically from a cold read. Caches are
+RAM-only disposable hints; complete histories remain authoritative and lost caches reread.
+The model chooser exposes the configured `halogen:` recipe. `patches/halogen/qualify.py`
+checks interleaved token continuity, typed tools, tool-history continuation and lost-state
+refusal against a standalone bridge using synthetic data. Stop the CointOS daemon first;
+direct lane fixtures must not compete with its scheduler. Production probes use the gateway.
+
 Live Gufo steps expose draft proposals/acceptances, native time, context and effective
 sampling in ledger `thoughts[*].decode`. Agent/Coin `speculation` counters aggregate
 only measured steps with their own output-token/time totals; agent-ended events retain
@@ -196,7 +239,8 @@ cointos project set NAME --priority N --enable|--disable
 cointos project list
 cointos queue PROJECT NAME "BRIEF" --kind queued|urgent|command
 cointos task PROJECT:ITEM           # current assignment, dependencies and receipts
-cointos coin                        # live Coin log: words, tools and turns
+cointos coin professional           # watch Professional’s journal and live output
+cointos coin amateur                # watch Amateur; omit profile to choose
 cointos view --coin                 # enable viewers so Coin takes a slot while active
 ```
 
@@ -227,18 +271,26 @@ hardcoded shared temporary paths. Existing processes retain their launch environ
 - **Managers** plan one coherent behavior boundary, keep the project plan's remaining frontier
   honest and atomically dispatch children with `cointos_handoff`. They change queued work with `cointos hold` then `cointos revise`.
 - **Workers** implement one `skeleton`, `test-contract`, `implementation` or `integration` item
-  on an isolated branch and submit an exact commit; their receipt is their account of it.
-- **Integrators** review a worker against main and its contracts, maintain the project tree and
+  in prepared files and submit through CointOS; their receipt is their account of it.
+- **Integrators** review a worker against the accepted product and its contracts, maintain the project tree and
   land through the daemon's exact-candidate gate (`cointos land|incorporate|return`).
 - **Stewards** periodically roam the runtime and projects for concrete loose ends and may queue
   one manager command; they never implement. Cadence is a six-hour baseline multiplied by one
   plus the active/queued concern count. **Spawn scout** on the dashboard schedules one now.
 - **Test auditors** (medium reasoning) sample a recent landing, compare its tests with the spec
-  and raise at most one manager command for a real coverage gap.
+  and raise at most one manager command for a real coverage gap. `cointos_diagnostic` prepares
+  accepted project files in scratch for suites and counterexample mutations.
 - **Gardeners** verify a small batch of knowledge leaves per tree; **tree auditors** check one
   structural concern across a sample.
-- **Operators** own recovery directly, one per assignment/version, or carry an ad-hoc assignment started by the owner or a non-worker agent
+- **First Responders** diagnose recovery, one per assignment/version, and hand off the next action.
+- **Operators** carry an ad-hoc assignment started by the owner or a non-worker agent
   for work the pipeline has no route for, paid from that agent's own run budget.
+
+Source supervisors, Stewards, test auditors and system First Responders work from private scratch with separate session
+storage. Coordinators inspect assignment records and accepted/assigned source through
+`cointos_log` and `cointos_source`; `cointos_metrics` supplies recent pipeline aggregates.
+Knowledge-tree tools retain their access policy. Existing processes retain launch permissions
+until replacement; these source changes require deployment.
 
 Every run ends with exactly one receipt the daemon checks against its artifacts:
 `cointos finish --complete "evidence"` or `--blocked "reason"`; an integrator's verified
@@ -311,10 +363,10 @@ Run admission reserves each directory exclusively and gates follower launch behi
 lock until its key and ownership are established. Thread/key failures preserve waiting work;
 unreadable, malformed, ambiguous or nonregular key registries cannot erase existing identities. Keys
 resample collisions; adoption preserves one owner and permits exact retries. Adoption follows
-exact task or current receipt ownership, preserving sessions and requeueing displaced tasks.
+exact task or current receipt ownership, preserving sessions and sending missing/displaced unreceipted runs to First Responder diagnosis.
 
 Failed systemd status queries keep the observer following the run; only a confirmed
-terminal unit permits exit reconciliation. Run server/exit metadata publishes atomically; the observer tolerates malformed event fields and keeps valid recovery evidence. Failed metadata writes still run server cleanup. OpenCode error events remain retry diagnostics.
+terminal unit permits exit reconciliation. Run server/exit metadata publishes atomically; the observer tolerates malformed event fields and keeps valid recovery evidence. Failed metadata writes still run server cleanup. OpenCode error events remain recovery diagnostics. Engaged runs exiting without a receipt enter First Responder recovery immediately; sessions and artifacts are preserved.
 
 A reasoning-only or empty non-length model reply is an incomplete response, not a successful
 assistant stop. The gateway returns `incomplete_response` (JSON HTTP 502 or streaming server
@@ -406,23 +458,39 @@ Real Git publication and crash-recovery checks are in `tests.test_publication` a
 `cointos cancel PROJECT:ITEM... --reason WHY` withdraws unaccepted work for good: it stops any run on
 it, drops the queue records and retires their branches. Live dependents must be cancelled with it.
 
-Every worker brief an agent queues or revises carries a `Summary:` line of 5-20 plain words saying
-what the task is for; the dashboard shows it beside the task, and the API refuses a brief without one.
-`Depends on:` accepts comma-separated item names or same-project `PROJECT:ITEM` IDs.
+Initial prompts identify an autonomous CointOS role, then label Your role and Your assignment.
+Role instructions are read from disk, with only the worker's current stage and applicable shared rules. Initial messages omit budget notices. Regular Supervisors receive only
+check/decide/finish guidance; mandatory split Supervisors receive only their two-child split job,
+without their own shared base or unrelated hidden-test listings. Both modes receive
+only their subject's task identity, usage counters and immediate job. Task tools supply details on demand.
+Briefs use a few sentences: result, relevant input/path and completion check.
+No launch dumps of dependencies, failure history, revision identifiers or unrelated skills.
+Knowledge lookup remains available; integrators update affected answers and the remaining
+plan in the same accepted change as code. Existing histories retain their original prompts.
+
+Supervisors inspect evidence at 5,000-output-token or 30-GPU-minute milestones. They receive
+GPU time and token counts and must distinguish useful advancement from repeated analysis.
+Tasks should finish or hand off within 30 GPU minutes; time alone does not terminate them.
+Only implementers stop at the existing 40k-token threshold for a mandatory two-child split.
+Supervisors have no token cap or automatic time stop. Managers size small jobs; integrators
+review behaviour and tests, then accept or return substantial implementation.
+
+Agent tools supply a 5–20-word summary and dependencies through structured fields, separately
+from the product brief. Human CLI briefs may still use `Summary:` and `Depends on:` lines.
+Dependencies accept local item names or same-project `PROJECT:ITEM` IDs.
 Creation and revision store local names in both the brief and graph, deduplicating aliases;
 another project's IDs are refused before changing the assignment. Local forward references
 remain possible, so managers must check that prerequisites are actually queued.
 
-Test-contract work is checked mechanically too. Its brief must name the existing owner APIs it
-relies on (`Relies on: name, ...`; names, `path::name` citations or file paths; prose periods
-and semicolons are ignored); once its dependencies land,
+Test-contract work is checked mechanically too. Supply existing owner APIs through the typed
+`relies_on` field (human CLI briefs also accept `Relies on: name, ...`); once its dependencies land,
 the daemon checks that each name exists somewhere on main and sends an infeasible brief straight to its recovery controller before any worker runs.
 `cointos metrics [--hours N]` reports landings by stage, gate returns, infeasible briefs and
 recovery controllers, legacy manager passes and recorded generation use from the event journal.
 `cointos jobs` shows every unfinished task plus recent terminal history; `--project PROJECT`
 filters before selecting history. `cointos task PROJECT:TASK` shows the current queue assignment,
 binding accepted test packets, actual correction owners, receipts and holds. The canonical brief
-and checked receipt appear once. Recovery launches use the same current view.
+and checked receipt appear once. Recovery launches point to task inspection; detailed evidence is not preloaded.
 `task PROJECT:TASK --history` retrieves complete execution records;
 old recovery briefs and ordinary packets claiming replacement do not change acceptance authority.
 `jobs --all` includes older tasks without expanding every report. New queue items cannot
@@ -440,14 +508,10 @@ from its next reply, and explicit overrides always win.
 Coin also sends the configured default effort on its model requests, so deep tool turns
 receive the same reasoning cap.
 
-The common run allowance is configured in `recovery.generation_seconds` and
-`recovery.generation_tokens`; manager and Operator defaults have no shorter overrides.
-Reasoning counts; lane wait, prefill and tools do not. Override with
-`--generation-seconds`/`--generation-tokens` on `cointos queue`, or use
-`cointos budget PROJECT:TASK ...` for waiting work and explicit increases to live runs.
-Live decreases are refused; existing spend, grants, sessions and artifacts remain.
-The run budget is the only per-run work limit; long silent work does
-not trigger an earlier artifact checkpoint.
+Token allowances come from `recovery.generation_tokens`, role defaults and task overrides.
+Elapsed time never automatically ends a run; legacy time allowances remain compatibility
+metadata. Token-budget controls preserve existing spend, sessions and work. The dashboard
+shows no automatic time limit. Useful progress and timely handoffs require supervision.
 
 ## Recovery
 
@@ -471,10 +535,12 @@ not trigger an earlier artifact checkpoint.
   default to zero fresh budget retries: a failed worker reaches its recovery controller instead of
   automatically receiving another full allowance. Other roles use their configured retry
   policy. Hidden reasoning is never copied.
-- A process that exits before its first model request is a launch failure: refunded, retried at
-  most twice, then held for independent Operator recovery.
+- Every unexpected unreceipted agent death triggers a First Responder, without role
+  exemptions: Supervisors, First Responders, pre-model failures and missing runs after
+  restart are included. Explicit cancellation withdraws work; it is not a hold and never
+  triggers recovery or revives cancelled work.
 - `cointos kill AGENT` stops one run and holds its task until `cointos resume TASK`.
-- A failed assignment gets one capable recovery Operator per canonical work version,
+- A failed assignment gets one capable First Responder per canonical work version,
   with its assignment, receipt and preserved artifact evidence. Recovery is serial per project;
   unrelated workers continue. There is no intermediate recovery-manager chain.
   Recovery waits while its unheld, unchanged child frontier can progress, including review
@@ -571,6 +637,8 @@ following up on work). **Open viewer** enables viewer windows so Coin occupies a
 active; it uses a scrolling log because Coin is not an OpenCode session. Messages, Machine
 (GPU controls, viewer-window switch, lanes, memory and collapsed Diagnostics) and Recently
 (machine events switched off unless asked) sit beside the main column.
+Each viewer window owns its live-update subscription and closes it when the window exits,
+so reopening windows does not accumulate background update readers.
 Diagnostics describe failed checks as problems, link affected work to its drawer and show
 the current blocker. Technical details stay folded. Checks do not create additional recovery
 attempts or refill exhausted budgets; the normal recovery lifecycle owns corrective work.

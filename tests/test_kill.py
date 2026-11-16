@@ -39,6 +39,16 @@ class Kill(unittest.TestCase):
                 self.assertTrue(spawner.runnable(task, {"p": {"child": "ready"}}))
                 task["status"] = "done"
 
+    def test_resume_does_not_invent_a_user_hold_for_failed_work(self):
+        worker = support.queued(self.project, 'failed')
+        worker['status'] = 'failed'
+        caller = support.running(tasks.create('operator', self.project, 'inspect', 'Diagnose', [1]),
+                                 'operator-1', False)
+        with self.assertRaisesRegex(ValueError, 'no infrastructure admission hold.*unchanged revision'):
+            api.dispatch('resume-task', {'task': worker['id'], 'caller': support.caller(caller, 'operator-1')})
+        self.assertEqual(worker['status'], 'failed')
+        self.assertNotIn('admission_hold', worker)
+
     def test_kill_after_receipt_preserves_the_terminal_outcome(self):
         task = support.running(tasks.create("steward", tasks.SYSTEM, "scout", "Work", [6]), "run", False)
         support.review_frontier(task)

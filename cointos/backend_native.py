@@ -1,18 +1,18 @@
 """Per-model native backend dispatch; CointOS retains lane and snapshot ownership."""
 from pathlib import Path
-from . import backend_gufo, backend_llama
+from . import backend_gufo, backend_llama, backend_halogen
 
 Lost = backend_llama.Lost
 
 
 def _backend(config, model):
     name = config['models'][model].get('backend', 'llama')
-    return {'llama': backend_llama, 'gufo': backend_gufo}[name]
+    return {'llama': backend_llama, 'gufo': backend_gufo, 'halogen': backend_halogen}[name]
 
 
 def models(config):
     found = {}
-    for backend in (backend_llama, backend_gufo):
+    for backend in (backend_llama, backend_gufo, backend_halogen):
         shapes = {name: shape for name, shape in config['models'].items() if _backend(config, name) is backend}
         if shapes:
             found.update(backend.models({**config, 'models': shapes}))
@@ -20,14 +20,28 @@ def models(config):
 
 
 def budget(config):
+    if config.get('work_model') in config['models'] and _backend(config, config['work_model']) is backend_halogen:
+        return backend_halogen.budget(config)
     return backend_llama.budget(config) if any(_backend(config, name) is backend_llama for name in config['models']) else None
 
 
+def catalog(config):
+    return backend_llama.catalog(config)
+
+
 def launch(config, model): return _backend(config, model).launch(config, model)
+def snapshot_size(config, model, lane):
+    return backend_llama.snapshot_size(config, model, lane) if _backend(config, model) is backend_llama else None
+
+
 def kill(config, model): return _backend(config, model).kill(config, model)
 def render(config, model, conversation): return _backend(config, model).render(config, model, conversation)
 def can_continue(config, model, held, tokens): return _backend(config, model).can_continue(config, model, held, tokens)
-def resident_states(config, model): return _backend(config, model) is backend_gufo
+def resident_states(config, model): return _backend(config, model).resident_states(config, model)
+def resident_capacity(config, model):
+    return backend_llama.resident_capacity(config, model) if _backend(config, model) is backend_llama else None
+def eviction(config, model, owner):
+    return backend_llama.eviction(config, model, owner) if _backend(config, model) is backend_llama else None
 def select(config, model, lane, owner): return _backend(config, model).select(config, model, lane, owner)
 def release_residents(config, model, owners): return _backend(config, model).release_residents(config, model, owners)
 def residents(config, model): return _backend(config, model).residents(config, model)
@@ -37,6 +51,10 @@ def think(config, model, lane, tokens, held, max_new, sampling, on_tokens):
     return _backend(config, model).think(config, model, lane, tokens, held, max_new, sampling, on_tokens)
 def text(config, model, tokens): return _backend(config, model).text(config, model, tokens)
 def read(config, model, reader, tokens, final): return _backend(config, model).read(config, model, reader, tokens, final)
+def persistent_snapshots(config, model):
+    return config['models'].get(model, {}).get('backend') != 'halogen'
+
+
 def save(config, model, lane, name): return _backend(config, model).save(config, model, lane, name)
 def restore(config, model, lane, name): return _backend(config, model).restore(config, model, lane, name)
 
@@ -50,7 +68,7 @@ def spill(config, name): _stored(config, name, 'snapshots').spill(config, name)
 def unspill(config, name): _stored(config, name, 'disk_snapshots').unspill(config, name)
 def copy_back(config, name): _stored(config, name, 'disk_snapshots').copy_back(config, name)
 def forget(config, name):
-    for backend in (backend_llama, backend_gufo): backend.forget(config, name)
+    for backend in (backend_llama, backend_gufo, backend_halogen): backend.forget(config, name)
 
 
 def cache_kind(config, model):

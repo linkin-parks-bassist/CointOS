@@ -1,3 +1,4 @@
+import copy
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +9,16 @@ from tests import support
 class OperatorTasks(unittest.TestCase):
     def setUp(self):
         support.fresh_ledger(self)
+
+    def test_construction_fields_cannot_silently_create_a_default_operator(self):
+        for fields in ({'stage': 'test-contract'}, {'role': 'operator', 'stage': 'implementation'},
+                       {'role': 'manager', 'stage': 'skeleton'}, {'dependencies': ['prerequisite']},
+                       {'relies_on': ['existing_api']}):
+            with self.subTest(fields=fields):
+                before = copy.deepcopy(state.L)
+                with self.assertRaisesRegex(ValueError, 'requires? role|prerequisites require role'):
+                    api.run_agent({'name': 'new-work', 'brief': 'Add the scoped witness.', **fields})
+                self.assertEqual(state.L, before)
 
     def test_system_operator_has_explicit_scope_abilities_effort_and_budget(self):
         task = tasks.request_operator("inspect", "Inspect the runtime.", None, ["standard", "network"],
@@ -33,9 +44,9 @@ class OperatorTasks(unittest.TestCase):
         standard = opencode.settings(state.CONFIG, "key", {"abilities": ["standard"]}, [])["permission"]
         powerful = opencode.settings(state.CONFIG, "key", {"abilities": ["control", "network"]}, [])["permission"]
         self.assertEqual((standard["websearch"], powerful["websearch"]), ("allow", "allow"))
-        self.assertEqual(standard["bash"]["systemctl --user status*"], "allow")
-        self.assertIn("cointos stop*", standard["bash"])
-        self.assertNotIn("cointos stop*", powerful["bash"])
+        self.assertEqual(standard["shell"]["systemctl --user status*"], "allow")
+        self.assertIn("cointos stop*", standard["shell"])
+        self.assertNotIn("cointos stop*", powerful["shell"])
 
     def test_no_machine_local_directory_blacklist_is_injected(self):
         for abilities in (["standard"], ["control", "network"]):

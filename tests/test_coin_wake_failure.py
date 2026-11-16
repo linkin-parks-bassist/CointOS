@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from cointos import coin, coin_input, wakeups
-from tests.test_coin import assistant, call
+from tests.test_coin import assistant, call, sent_reply
 
 
 class MixedWakeFailure(unittest.TestCase):
@@ -42,7 +42,7 @@ class MixedWakeFailure(unittest.TestCase):
             coin.worker('fixture-only-token', inbox, {7, 8})
         return requests
 
-    def test_same_user_arrival_model_failure_retains_input_without_canned_reply(self):
+    def test_same_user_arrival_model_failure_retains_input_without_canned_sent_reply(self):
         requests = self.run_worker((7, 71, 'Please explain the result.'))
         self.assertEqual(requests[0][1]['request_class'], 'background')
         self.assertNotIn('request_class', requests[1][1])
@@ -53,7 +53,7 @@ class MixedWakeFailure(unittest.TestCase):
         self.assertNotIn('fixture model failure after arrival', coin.recent(7)[-1]['content'])
 
     def test_other_user_arrival_is_queued_without_sending_failure_to_wake_owner(self):
-        requests = self.run_worker((8, 80, 'My separate question.'), assistant(content='Your separate reply.'))
+        requests = self.run_worker((8, 80, 'My separate question.'), sent_reply('Your separate reply.'))
         self.assertEqual(requests[0][1]['request_class'], 'background')
         self.assertEqual(requests[1][1]['request_class'], 'background')
         self.assertNotIn('My separate question.', str(requests[1][0]))

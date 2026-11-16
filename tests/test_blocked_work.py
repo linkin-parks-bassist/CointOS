@@ -90,7 +90,7 @@ class BlockedWork(unittest.TestCase):
 
     def test_manager_exhaustion_goes_to_one_operator_without_fresh_planning(self):
         self.assertEqual(self.manager["budget"], schema.budget(state.CONFIG, role="manager"))
-        state.L["agents"]["manager-1"]["generation_seconds"] = self.manager["budget"]["generation_seconds"]
+        state.L["agents"]["manager-1"]["generation_tokens"] = self.manager["budget"]["generation_tokens"]
         with patch.object(recovery, "packet", return_value="The same harness edit was refused"):
             recovery.enforce()
         self.assertEqual(self.manager["status"], "failed")

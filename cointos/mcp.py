@@ -13,11 +13,11 @@ import io
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
 from cointos import cli
+from cointos.config import ROOT
 from cointos.client import Unreachable, call, ledger
 
 PROTOCOL = "2025-06-18"
@@ -70,8 +70,7 @@ def queue_fields(arguments: dict) -> list[str]:
     return argv
 
 
-BUDGET = {"generation_seconds": {"type": "number", "description": "override the run's generation-seconds budget"},
-          "generation_tokens": {"type": "integer", "description": "override the run's generated-token budget"}}
+BUDGET = {"generation_tokens": {"type": "integer", "description": "override the run's generated-token budget"}}
 BUDGET_FLAGS = {"generation_seconds": "--generation-seconds", "generation_tokens": "--generation-tokens"}
 WORK = {"stage": choice(cli.schema.STAGES, "construction stage of a worker item"),
         "reasoning_effort": choice(cli.schema.EFFORTS, "deliberate reasoning-effort override")}
@@ -94,49 +93,55 @@ def finish_args(arguments):
 
 # name: (roles or EVERYONE, description, properties, required, argv builder)
 TOOLS = {
-    'handoff': (MANAGERS, 'Finish planning by atomically queueing a runnable set of child assignments and '
+    'handoff': ((*MANAGERS, 'supervisor'), 'Capture and publish the plan while atomically queueing a runnable set of child assignments and '
                 'submitting your completion receipt. Use this as soon as the next boundary is clear; '
-                'children continue independently. Requires a clean published planning branch. '
+                'children continue independently. '
                 'Invalid graphs create no children. Ends this run.',
                 {'summary': text('planning decision and remaining frontier'),
                  'items': {'type': 'array', 'minItems': 1, 'items': {'type': 'object', 'properties': {
-                     'name': text('new item name'), 'brief': text('behavior, scope and acceptance'),
+                     'name': text('new item name'), 'brief': text(cli.schema.BRIEF_DESCRIPTION),
                      'kind': choice(cli.schema.QUEUE_KINDS, 'queued, urgent or command'),
                      **WORK, **QUEUE_FIELDS}, 'required': ['name', 'brief', 'summary', 'dependencies']}}},
                 ['summary', 'items'], lambda a: ['handoff', a['summary'], '--items-json', json.dumps(a['items'])]),
-    "finish": (EVERYONE, "Submit this run's one completion receipt: exactly one of complete (evidence that the "
+    "finish": (EVERYONE, "Capture this run's files and submit its completion receipt: exactly one of complete (evidence that the "
                "assigned concern is done) or blocked (the specific blocker). Ends the run.",
                {"complete": text("evidence the assigned concern is complete"),
                 "blocked": text("specific blocker requiring intervention")}, [],
                finish_args),
-    "task": (EVERYONE, "Show current work, binding accepted tests, actual correction owners and receipts. "
+    "task": (EVERYONE, "Inspect the named current assignment. "
              "Recovery IDs resolve their canonical assignment. Request history only for older execution evidence.",
              {"task": text("PROJECT:NAME task id"),
               "history": {"type": "boolean", "description": "include full historical execution narratives"}},
              ["task"], lambda a: ["task", a["task"]] + (["--history"] if a.get("history") else [])),
-    "jobs": (EVERYONE, "List every unfinished task, including held work, plus recent terminal history. "
+    "jobs": (EVERYONE, "List unfinished tasks, including held work, and recent queue outcomes. Completed standalone runs require all=true. "
              "Filter by project for current work discovery; use all only for historical investigation. "
              "Use task for the full brief, linked queue, holds and receipts.",
              {"all": {"type": "boolean", "description": "include complete history for historical investigation"},
               "project": text("exact project name; omit to inspect all projects")}, [],
              lambda a: ["jobs"] + (["--all"] if a.get("all") else []) + flags(a, {"project": "--project"})),
     "status": (EVERYONE, "Show the daemon, agents, work counts, memory and models.", {}, [], lambda a: ["status"]),
-    "merge": (LANDERS, "Land this run's committed maintenance branch on main. Refuses pending canonical knowledge "
+    "merge": (LANDERS, "Publish this run's scoped maintenance changes. Refuses pending canonical knowledge "
               "answer/policy overlaps; preserve both drafts and report blocked rather than overwriting the owner.",
               {}, [], lambda a: ["merge"]),
     "review": (("integrator",), "Show the worker's submitted change and report for review.", {}, [], lambda a: ["review"]),
-    "land": (("integrator",), "Land the reviewed worker item through the daemon's exact-candidate gate. Ends the run.",
+    'diagnostic': (('integrator', 'test-auditor', 'first-responder'),
+                   'Integrator: list retained worker probes or copy one into scratch. '
+                   'Test auditor: name project to prepare accepted files in scratch. '
+                   'First Responder: omit arguments to prepare your failed assignment\'s retained files in scratch for reproduction.',
+                   {'path': text('integrator: relative diagnostic file; omit to list'),
+                    'project': text('test auditor: project whose accepted files to prepare')}, [],
+                   lambda a: ['diagnostic'] + flags(a, {'path': '--path', 'project': '--project'})),
+    "land": (("integrator",), "Accept the reviewed files. CointOS validates and publishes the exact result. Ends the run.",
              {"summary": text("what landed and the evidence it is correct")}, ["summary"], lambda a: ["land", a["summary"]]),
     "return": (("integrator",), "Send the item back to its worker with actionable notes. Ends the run.",
                {"notes": text("what the worker must change")}, ["notes"], lambda a: ["return", a["notes"]]),
     "incorporate": (("integrator",), "Settle an implementation already present on main. Ends the run.",
-                    {"task": text("PROJECT:NAME task in review"), "commit": text("exact current main commit SHA"),
-                     "worker_commit": text("exact submitted worker commit SHA")}, ["task", "commit", "worker_commit"],
-                    lambda a: ["incorporate", a["task"], "--commit", a["commit"], "--worker-commit", a["worker_commit"]]),
+                    {"task": text("PROJECT:NAME task in review")}, ["task"],
+                    lambda a: ["incorporate", a["task"]]),
     "queue": (EVERYONE, "Add an item to a project's queue. The brief is plain text: "
               "no quoting or escaping is needed.",
               {"project": text("project name"), "name": text("new item name"),
-               "brief": text("product behavior, scope and acceptance in plain prose; metadata uses separate fields"),
+               "brief": text(cli.schema.BRIEF_DESCRIPTION),
                "kind": choice(cli.schema.QUEUE_KINDS, "queued (default), urgent or command"), **WORK, **BUDGET, **QUEUE_FIELDS},
               ["project", "name", "brief", "summary", "dependencies"],
               lambda a: ["queue", a["project"], a["name"], a["brief"]] + flags(a, {"kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
@@ -149,9 +154,9 @@ TOOLS = {
                      'implementations then resume automatically with their artifacts preserved. Repeated '
                      'requests for the same contract return its existing correction owner. For a recovery '
                      'controller this also checks and records complete handback atomically, ending its run; '
-                     'commit and merge your changes first. Managers and ad-hoc Operators only queue the correction.',
+                     'publish your scoped changes first. Managers and ad-hoc Operators only queue the correction.',
                      {'project': text('project name'), 'packet': text('accepted PROJECT:ITEM test packet'),
-                      'name': text('new correction item name'), 'brief': text('correct behavior and assertions'),
+                      'name': text('new correction item name'), 'brief': text(cli.schema.BRIEF_DESCRIPTION),
                       'reason': text('contract defect and independently checked evidence'),
                       'summary': text('short description'), 'relies_on': QUEUE_FIELDS['relies_on']},
                      ['project', 'packet', 'name', 'brief', 'reason', 'summary', 'relies_on'],
@@ -159,30 +164,23 @@ TOOLS = {
                                 '--reason', a['reason'], '--summary', a['summary'],
                                 '--relies-on-json', json.dumps(a['relies_on'])]),
     'resume': (EVERYONE, 'Release a repaired infrastructure admission hold in your scope. '
-               'Explicit user holds remain under user authority.', {'task': text('PROJECT:TASK')}, ['task'],
+               'Not a retry/restart for failed work: the task must have an infrastructure admission_hold. '
+               'For failed work inspect its task and recovery owner. Explicit user holds remain under user authority.',
+               {'task': text('PROJECT:TASK')}, ['task'],
                lambda a: ['resume', a['task']]),
     "check_work": (EVERYONE,
-                   "Validate before handoff: omit brief to inspect your queued frontier. For scouts this supplies "
-                   "every enabled project's accepted plan, current queue and recent acceptances; a fresh "
-                   "review is required before no_action. Supply a draft to "
-                   "check metadata, dependency IDs, unknown prerequisites, cycles and declared APIs without "
-                   "queueing it. Existing-work checks also report uncommitted work and the required native "
-                   "receipt, uncommitted files outside a worker's stage, staged/unstaged review candidate integrity "
-                   "including untracked protected files, and production edits in test-packet reviews. Preserve out-of-scope diagnostics "
-                   "separately and restore those files before committing. "
-                   "Maintenance checks include forbidden staged, unstaged and untracked paths as well as committed history. "
-                   "Pending canonical knowledge answer/policy overlaps also refuse; lifecycle stamps alone do not. "
-                   "Allowed integrator staging is valid. Green preflight is not semantic acceptance. "
-                   "Ordinary dependency waits are valid. Returns exact problems to fix.",
+                   "Check current work or validate a proposal. A proposal check creates no work; dispatch separately.",
                    {"project": text("project name; defaults to your project"), "name": text("new proposal name"),
                     "brief": text("draft product assignment; omit to check existing queued work"),
                     "kind": choice(cli.schema.QUEUE_KINDS, "queued, urgent or command"),
                     **WORK, **BUDGET, **QUEUE_FIELDS}, [],
                    lambda a: ["check-work"] + flags(a, {"project": "--project", "name": "--name",
                        "brief": "--brief", "kind": "--kind", **WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
-    "revise": (EVERYONE, "Replace a held item's brief; omitted stage, effort and budget are retained. "
-               "Retain accepted test-contract dependencies on implementation/integration work; discarding them is refused.",
-               {"item": text("PROJECT:ITEM"), "brief": text("the complete revised brief"),
+    "revise": (EVERYONE, "Revise an unaccepted assignment within your authority; no prior hold is required. "
+               "A changed assignment starts a fresh conversation; identical input is a no-op. "
+               "Omitted stage, effort and budget metadata and explicit user holds remain. "
+               "Retain accepted test-contract dependencies; discarding them is refused.",
+               {"item": text("PROJECT:ITEM"), "brief": text(cli.schema.BRIEF_DESCRIPTION),
                 "reason": text("why the item changes"), **WORK, **BUDGET, **QUEUE_FIELDS},
                ["item", "brief", "reason", "summary", "dependencies"],
                lambda a: ["revise", a["item"], a["brief"], "--reason", a["reason"]] + flags(a, {**WORK_FLAGS, **BUDGET_FLAGS}) + queue_fields(a)),
@@ -192,23 +190,39 @@ TOOLS = {
                lambda a: ["cancel", *a["items"], "--reason", a["reason"]]),
     "replace": (("operator", "first-responder"), "Hand this First Responder's origin to existing same-project queue items, "
                 "repointing dependents and recording your complete receipt atomically, without duplicating work. "
-                "Commit and merge your own changes first. This ends your run; no separate finish call is needed. "
+                "This ends your run; no separate finish call is needed. "
                 "Revising another item alone does not establish this handoff.",
                 {"children": {"type": "array", "items": {"type": "string"}, "description": "existing item names without project prefixes"}},
                 ["children"], lambda a: ["replace", *a["children"]]),
-    "log": (("supervisor", "first-responder"), "Read an agent's record, or Coin's with task coin. With no show: a numbered "
+    'metrics': (("first-responder", "manager", "integrator", "operator", "steward", "test-auditor"),
+                'Summarize recent pipeline landings, gate returns and recovery spending through CointOS. '
+                'Reports retained journal coverage; does not require runtime-file access.',
+                {'hours': {'type': 'number', 'description': 'recent window in hours; omit for the CLI default'}}, [],
+                lambda a: ['metrics'] + flags(a, {'hours': '--hours'})),
+    'source': (("supervisor", "first-responder", "manager", "integrator", "operator", "steward", "test-auditor"),
+               'Read accepted project source or assigned task files through CointOS. Name exactly one task or project. '
+               'Omit path to list files (task lists changed files); use a relative file to read numbered lines. '
+               'A task that never prepared files may have no retained source view; use project for accepted source. '
+               'Use log for execution/tool records and knowledge-tree tools for maintained answers.',
+               {'task': text('PROJECT:TASK'), 'project': text('project name'),
+                'path': text('relative file, or directory ending in /'),
+                'start': {'type': 'integer', 'description': 'first line or list entry, starting at 1'},
+                'limit': {'type': 'integer', 'description': 'page size; omit for configured default'}}, [],
+               lambda a: ['source'] + flags(a, {key: '--' + key for key in ('task', 'project', 'path', 'start', 'limit')})),
+    "log": (("supervisor", "first-responder", "manager", "integrator", "operator", "steward", "test-auditor"),
+            "Read an assignment's record through CointOS. Supervisors/First Responders can also inspect Coin. With no show: a numbered "
             "index of its thoughts, replies and tool calls, newest last, filtered by kind, turn or grep. With show N or N-M: "
             "those entries in full.",
             {"task": text("PROJECT:TASK, or coin"), "show": text("entry N or range N-M to read in full"),
-             "kind": choice(("thought", "reply", "tool", "user", "compaction"), "only this kind"),
+             "kind": choice(("thought", "reply", "tool", "user", "compaction", "system"), "only this kind"),
              "turn": {"type": "integer", "description": "only this turn"}, "grep": text("only entries containing this text"),
              "last": {"type": "integer", "description": "how many index lines (default 40)"}}, ["task"],
             lambda a: ["log", a["task"]] + flags(a, {"show": "--show", "kind": "--kind", "turn": "--turn", "grep": "--grep", "last": "--last"})),
-    "split": (EVERYONE, "This job is too big for one agent: stop an implementer or Operator and hand its work, branch "
+    "split": (EVERYONE, "This job is too big for one agent: stop an implementer or Operator and hand its work "
               "and files to a manager to cut up much smaller.",
               {"task": text("PROJECT:TASK"), "reason": text("why it is too big and what is worth keeping")}, ["task", "reason"],
               lambda a: ["split", a["task"], "--reason", a["reason"]]),
-    "recover": (EVERYONE, "This assignment is malformed: stop its run, keeping its branch and files, and send it to "
+    "recover": (EVERYONE, "This assignment is malformed: stop its run, preserving its work, and send it to "
                 "a First Responder to work out and dispatch the fix.",
                 {"task": text("PROJECT:TASK"), "reason": text("what is wrong with the assignment, with evidence")},
                 ["task", "reason"], lambda a: ["recover", a["task"], "--reason", a["reason"]]),
@@ -248,12 +262,11 @@ def summary(brief: str) -> str:
 
 
 def changed_files(task: dict) -> str:
-    """What a run's worktree has changed since its base commit, committed or not."""
-    worktree, base = task.get("worktree"), task.get("base_commit")
-    if not (worktree and base and os.path.isdir(worktree) and task.get("branch")):
-        return ""
-    result = subprocess.run(["git", "-C", worktree, "diff", "--stat=120", base], capture_output=True, text=True)
-    return result.stdout.strip() if result.returncode == 0 else ""
+    """Ask the artifact owner for a file summary; agents never open peer repositories."""
+    try:
+        return call('workspace-changes', {'task': task['id']})['changes']
+    except (ValueError, Unreachable):
+        return ''
 
 
 def peers() -> tuple[str, bool]:
@@ -280,7 +293,7 @@ def peers() -> tuple[str, bool]:
 
 MESSAGE_TOOLS = {
     "peers": ("See every other live agent run: its task id, role, what it is for, what it is doing now and which "
-              "files its branch has changed. Check it before changing shared files or interfaces.", {}, []),
+              "files it has changed. Check it before changing shared files or interfaces.", {}, []),
     "send": ("Send a short message to another active task (PROJECT:NAME, as `jobs` shows), a local external mailbox "
              "('mailbox:NAME', without phone alerts), or to the user ('user'). "
              "Use it to ask or tell, not to hand off work: queued work still goes through the queue.",
@@ -356,9 +369,31 @@ def granted(name: str) -> bool:
 
 def catalogue(for_role: str | None) -> list[dict]:
     tools = [{"name": name, "description": description,
-              "inputSchema": {"type": "object", "properties": properties, "required": required}}
+              "inputSchema": {"type": "object", "properties": properties, "required": required,
+                              "additionalProperties": False}}
              for name, (roles, description, properties, required, _) in TOOLS.items()
              if roles is EVERYONE or for_role in roles or granted(name)]
+    if for_role == 'worker':
+        tools = [tool for tool in tools if tool['name'] in
+                 ('finish', 'task', 'check_work', 'inbox', 'send', 'peers', 'split', 'recover', 'status')]
+        check = next(tool for tool in tools if tool['name'] == 'check_work')
+        check['inputSchema'] = {'type': 'object', 'properties': {}, 'required': [], 'additionalProperties': False}
+        task = next(tool for tool in tools if tool['name'] == 'task')
+        task['description'] = 'Read the named current assignment.'
+        task['inputSchema'] = {'type': 'object', 'properties': {'task': text('task ID')}, 'required': ['task'],
+                               'additionalProperties': False}
+    if for_role == 'supervisor':
+        for tool in tools:
+            if tool['name'] in ('task', 'log'):
+                tool['description'] += ' Omit task to inspect your declared subject.'
+                tool['inputSchema']['required'] = [key for key in tool['inputSchema']['required'] if key != 'task']
+        handoff = next(tool for tool in tools if tool['name'] == 'handoff')
+        handoff['description'] = ('Complete a mandatory second-Supervisor split by creating exactly two fresh '
+            'worker jobs, roughly half the remaining work each. Replaces the stopped job and ends your run. '
+            'No separate maintenance publication is required. First Supervisors do not use this tool.')
+        properties = dict(handoff['inputSchema']['properties'])
+        properties['items'] = {**properties['items'], 'minItems': 2, 'maxItems': 2}
+        handoff['inputSchema']['properties'] = properties
     if for_role == 'steward':
         finish = next(tool for tool in tools if tool['name'] == 'finish')
         finish['inputSchema']['properties'] = {**finish['inputSchema']['properties'], 'scout_result': {
@@ -366,14 +401,15 @@ def catalogue(for_role: str | None) -> list[dict]:
             'description': 'Required for complete. Approved unfinished work needs manager_handoff, not user_decision. '
                            'A local user alert is not a manager handoff or Telegram delivery.',
             'properties': {
-                'kind': {'type': 'string', 'enum': ['no_action', 'manager_handoff', 'user_decision']},
-                'handoff': text('exact PROJECT:ITEM command queued by this steward; required for manager_handoff'),
+                'kind': {'type': 'string', 'enum': ['no_action', 'manager_handoff', 'recovery_handoff', 'user_decision']},
+                'handoff': text('exact command queued by this steward for manager_handoff, or First Responder task for recovery_handoff'),
                 'checked_projects': {'type': 'array', 'items': {'type': 'string'},
                                      'description': 'all enabled projects whose remaining plans were checked; required for no_action'},
                 'question': text('specific new decision requiring personal user authority; required for user_decision')},
             'required': ['kind']}}
     tools += [{"name": name, "description": description,
-               "inputSchema": {"type": "object", "properties": properties, "required": required}}
+               "inputSchema": {"type": "object", "properties": properties, "required": required,
+                               "additionalProperties": False}}
               for name, (description, properties, required) in MESSAGE_TOOLS.items()]
     return tools
 
@@ -386,6 +422,14 @@ def missing(required: list[str], arguments: dict) -> str | None:
 def invoke(name: str, arguments: dict, for_role: str | None) -> tuple[str, bool]:
     if problem := unexpected_arguments(name, arguments, for_role):
         return problem, True
+    if for_role == 'supervisor' and name in ('task', 'log') and 'task' not in arguments:
+        try:
+            own = ledger()['tasks'].get(identity()['task']) or {}
+        except Unreachable as error:
+            return str(error), True
+        if not own.get('supervises'):
+            return 'this run has no declared subject; provide task explicitly', True
+        arguments = {**arguments, 'task': own['supervises']}
     if name in MESSAGE_TOOLS:
         if problem := missing(MESSAGE_TOOLS[name][2], arguments):
             return problem, True
@@ -416,7 +460,8 @@ def respond(request: dict, for_role: str | None) -> dict | None:
         return None  # a notification
     if method == "initialize":
         result = {"protocolVersion": request.get("params", {}).get("protocolVersion", PROTOCOL),
-                  "capabilities": {"tools": {}}, "serverInfo": {"name": "cointos", "version": "1"}}
+                  "capabilities": {"tools": {}}, "serverInfo": {"name": "cointos", "version": "1"},
+                  "instructions": (ROOT / 'roles/_workflow.md').read_text().strip()}
     elif method == "tools/list":
         result = {"tools": catalogue(for_role)}
     elif method == "tools/call":
@@ -436,7 +481,7 @@ def respond(request: dict, for_role: str | None) -> dict | None:
             if budget:
                 body['budget'] = budget
             try:
-                checked = call('check-work', body)
+                checked = cli.frontier.file_view(call('check-work', body))
                 result = {'content': [{'type': 'text', 'text': json.dumps(checked)}],
                           'structuredContent': checked, 'isError': not checked['ok']}
                 if notice := unread_notice():

@@ -1,0 +1,6 @@
+{
+  "name": "Cointel Amateur",
+  "identity": "cointelamateur",
+  "station": "~",
+  "telegram_env": "~/.config/agent-ecosystem/cointelamateur.env"
+}

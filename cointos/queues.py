@@ -86,7 +86,7 @@ def blocker(task: dict) -> str:
               f"Evidence: {receipt.get('evidence', {})}\n\n"
               f"Task failed: {task['note'] or 'run retries exhausted'}")
     if task.get("recovery_context"):
-        report += (f"\n\nThe worker's last evidence before it stopped (branch {task['branch']}, files preserved); "
+        report += ("\n\nThe worker's last evidence before it stopped (files preserved); "
                    f"treat its claims as leads until verified:\n{task['recovery_context']}")
     return report
 
@@ -167,7 +167,7 @@ def preview(project: dict, kind: str, name: str, brief: str, stage=None,
         head = git.head(project["path"], project.get("main_branch", "main"))
         missing = missing_reliances(project["path"], head, relies_on(candidate["brief"]))
         if missing:
-            problems.append(f"{key(candidate)}: declared APIs absent on main: {', '.join(missing)}")
+            problems.append(f"{key(candidate)}: declared APIs absent from accepted source: {', '.join(missing)}")
     return {"ok": not problems, "problems": problems, "item": item,
             "readiness": readiness(items, landed(project["name"]))[item]}
 
@@ -305,7 +305,7 @@ def finish(record: dict, **facts) -> None:
     record["done"] = {"at": now(), **facts}
 
 
-def replacement(record: dict, replacements: list[str], reason: str) -> tuple[dict, list[str]]:
+def replacement(record: dict, replacements: list[str], reason: str, *, carry_material=True) -> tuple[dict, list[str]]:
     """Replace a record with existing same-project records: dependents of it depend on the
     replacements instead, except a replacement that depended on it, which inherits its
     dependencies. Changed assignments get a new version and matching dependency metadata.
@@ -323,6 +323,13 @@ def replacement(record: dict, replacements: list[str], reason: str) -> tuple[dic
         if name == item or other is None or status(other) in ("replaced", "blocked"):
             raise ValueError(f"invalid same-project replacement: {name}")
     revised = copy.deepcopy(current_records)
+    from cointos import artifacts
+    for name in replacements if carry_material else ():
+        target = revised[f'{project}:{name}']
+        artifacts.carry(target, record)
+        source = current(record)
+        if source:
+            artifacts.carry(target, source)
     for other in revised.values():
         if (other["project"] == project and item in other["depends"]
                 and status(current_records[key(other)]) not in ("done", "replaced")):
@@ -335,7 +342,8 @@ def replacement(record: dict, replacements: list[str], reason: str) -> tuple[dic
         return {n for n, s in readiness(mine, landed(project)).items() if "cycle" in s}
     if cycles(revised) - cycles(current_records):
         raise ValueError("replacement would leave a dependency cycle; no records changed")
-    changed = [k for k, other in revised.items() if current_records[k]["depends"] != other["depends"]]
+    changed = [k for k, other in revised.items() if any(current_records[k].get(field) != other.get(field)
+               for field in ('depends', 'carried_work'))]
     for k in changed:
         other = revised[k]
         other.update(brief=dependency_brief(other["brief"], other["depends"]),
@@ -344,9 +352,9 @@ def replacement(record: dict, replacements: list[str], reason: str) -> tuple[dic
     return revised, changed
 
 
-def replace(record: dict, replacements: list[str], reason: str, preflight=None) -> list[str]:
+def replace(record: dict, replacements: list[str], reason: str, preflight=None, *, carry_material=True) -> list[str]:
     """Apply a valid replacement, preserving record identities. Preflight precedes mutation."""
-    revised, changed = replacement(record, replacements, reason)
+    revised, changed = replacement(record, replacements, reason, carry_material=carry_material)
     if preflight:
         preflight(changed)
     for k in [*changed, key(record)]:
@@ -398,6 +406,7 @@ def history_frontier(active_tasks: set[str]) -> set[str]:
         related = [f"{record['project']}:{name}" for name in
                    (*record.get('depends', []), *record.get('replaced_by', []))]
         related += [record.get('corrected_by'), (record.get('correction') or {}).get('packet')]
+        related += [reference['task'] for reference in record.get('carried_work', [])]
         for other in related:
             if other in current_records and other not in protected:
                 protected.add(other)
@@ -431,14 +440,17 @@ def publish() -> None:
 
 
 def projection(kind: str) -> str:
-    """One queue answer from the caller's locked ledger view."""
+    """A discovery index; task inspection owns complete assignments and receipts."""
     body = "The daemon alone owns this queue. Submit changes through its API.\n"
     for r in sorted(records().values(), key=lambda r: r["priority"]):
         found = state(r)
         if r["kind"] != kind or found["status"] in ("done", "replaced"):
             continue
         body += (f"\n## {key(r)}\n\nStatus: {found['status']}\n"
-                 f"Stage: {r['stage'] or 'manager command'}\nReasoning effort: {r['reasoning_effort'] or 'stage default'}\n\n{r['brief']}\n")
+                 f"Stage: {r['stage'] or 'manager command'}\nReasoning effort: {r['reasoning_effort'] or 'stage default'}\n")
+        if r.get("summary"):
+            body += f"Summary: {r['summary']}\n"
+        body += f"Assignment and current evidence: cointos task {key(r)}\n"
         body += "\nCurrent dependencies: " + (", ".join(r["depends"]) or "none") + "\n"
         if corrections := packets.pending(r):
             body += "Waiting for independently reviewed test correction: " + ", ".join(key(c) for c in corrections) + ".\n"
@@ -446,7 +458,7 @@ def projection(kind: str) -> str:
         if r["held_by"]:
             body += f"Held by {r['held_by']}: it will not start until revised or released.\n"
         if found["blocker"]:
-            body += f"\nCurrent blocker: {found['blocker']}\n"
+            body += f"\nCurrent blocker and recovery evidence: cointos task {key(r)}\n"
     if "\n## " not in body:
         body += "\nThe queue is empty.\n"
     return body

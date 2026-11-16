@@ -16,6 +16,9 @@ os.environ["KT_REWRITE_STATE_DIR"] = str(_state / "kt/rewrites")
 
 from cointos import queues, state
 
+# Factory mechanism fixtures opt in independently of the shipped personal mode.
+state.CONFIG['factory_enabled'] = True
+
 # Startup/cache reconciliation can run even in a failing regression. Isolate its
 # filesystem roots for the entire suite, rather than relying on per-test mocks.
 state.CONFIG["snapshots"] = str(_state / "memory-snapshots")

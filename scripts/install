@@ -14,7 +14,7 @@ import urllib.request
 
 source = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(source))
-from cointos import config as configuration, kt  # noqa: E402  (standalone: only subprocess)
+from cointos import coins, config as configuration, kt  # noqa: E402  (standalone: only subprocess)
 dependency_aliases = runpy.run_path(str(source / 'scripts/upgrade-ledger'),
                                    run_name='cointos_install_migrations')['dependency_aliases']
 target = Path.home() / '.CointOS'
@@ -40,7 +40,9 @@ def require_compatible_frontier(ledger, live):
 # CLI code is imported by clients/Coin, not the daemon. Existing client processes
 # retain imported code; new processes can receive it without replacing the daemon.
 DAEMON_PARTS = ('cointos', 'config', 'systemd')
-CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'), Path('cointos/coin_mirror.py'), Path('cointos/transcript.py'))
+CLIENT_FILES = (Path('cointos/cli.py'), Path('cointos/coin_view.py'), Path('cointos/coin_mirror.py'),
+                Path('cointos/coin_mirror_v2.py'), Path('cointos/coin_view_plugin/index.mjs'),
+                Path('cointos/progress.py'), Path('cointos/transcript.py'))
 COPIED = ('cointos', 'roles', 'web', 'bin', 'systemd', 'config')
 
 
@@ -88,10 +90,16 @@ def copy_client_files():
 
 
 def retained_models(candidate, previous):
-    """Dashboard selection and discovered recipes are user-managed across upgrades."""
+    """Dashboard selections, live scheduler controls and recipes survive upgrades."""
     if isinstance(previous, dict) and previous.get('work_model') in previous.get('models', {}):
         candidate['models'] = {**previous['models'], **candidate['models']}
         candidate['work_model'] = previous['work_model']
+    if isinstance(previous, dict):
+        if 'factory_enabled' in previous:
+            candidate['factory_enabled'] = previous['factory_enabled']
+        for key in ('slice_seconds', 'chunk_tokens'):
+            if key in previous.get('scheduler', {}):
+                candidate.setdefault('scheduler', {})[key] = previous['scheduler'][key]
     return candidate
 
 
@@ -104,15 +112,38 @@ def copy_runtime(names):
         configuration.project_entries(registry.get('projects') if isinstance(registry, dict) else registry)
     for name in names:
         dest = target / name
+        # Surviving confined processes hold read grants on these directory inodes.
+        # Replace files atomically, but retain directories still owned by source.
+        origin = source / name
         if dest.exists():
-            shutil.rmtree(dest)
-        shutil.copytree(source / name, dest, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+            for path in sorted(dest.rglob('*'), key=lambda p: len(p.parts), reverse=True):
+                relative = path.relative_to(dest)
+                if not (origin / relative).exists() or '__pycache__' in relative.parts or path.suffix == '.pyc':
+                    if path.is_dir() and not path.is_symlink():
+                        shutil.rmtree(path)
+                    else:
+                        path.unlink()
+        shutil.copytree(origin, dest, dirs_exist_ok=True,
+                        copy_function=copy_runtime_file,
+                        ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     if 'config' in names:
         path = target / 'config/cointos.json'
         document = retained_models(configuration.read_owned_json(path), previous_models)
         configuration.write_json(path, document, mode=path.stat().st_mode & 0o777)
     if saved_projects is not None:
         projects_registry.write_bytes(saved_projects.encode('utf-8'))
+
+
+def copy_runtime_file(origin, destination):
+    destination = Path(destination)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        shutil.copy2(origin, temporary)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return str(destination)
 
 
 def write_runtime_knowledge():
@@ -123,16 +154,43 @@ def write_runtime_knowledge():
         kt.write(target, template.stem.replace('-', ' '), template.read_text())
 
 
+def coin_units(config):
+    """One Coin service per Cointel identity: same daemon and code, own token and station."""
+    here = Path(__file__).resolve().parents[1]
+    template = (here / 'systemd/cointos-coin.service').read_text()
+    rendered = {}
+    for name in coins.names(here / 'config/coins'):
+        identity = coins.profile(name, here / 'config/coins')
+        place = coins.station(identity['station'])
+        if not place.is_dir():
+            raise SystemExit(f'Installation refused: station {place} for {name} does not exist.')
+        rendered[coins.unit(name)] = (template.replace('@ROOT@', str(target))
+                                      .replace('@HOME@', str(Path.home()))
+                                      .replace('@STATION@', str(place))
+                                      .replace('@DAEMON_UNIT@', 'cointosd.service')
+                                      .replace('@COINTEL@', name)
+                                      .replace('@SERVICE_RESTART_SECONDS@', str(config['service_restart_seconds'])))
+    return rendered
+
+
 def install(live=False):
     if source == target:
         raise SystemExit('Run scripts/install from the source repository.')
     if target.exists() and not (target / '.runtime-install').exists():
-        raise SystemExit('Archive the previous ~/.CointOS installation before installing.')
+        raise SystemExit(f'Archive the previous {target} installation before installing.')
     config = configuration.load(source / 'config/cointos.json')
+    if config.get('opencode_v2'):
+        from cointos.opencode import require_opencode2
+        require_opencode2()
     rendered_units = {template.name: (template.read_text().replace('@ROOT@', str(target))
                       .replace('@HOME@', str(Path.home()))
+                      .replace('@STATION@', str(target))
+                      .replace('@REPAIR_UNIT@', 'cointos-repair.service')
+                      .replace('@DAEMON_UNIT@', 'cointosd.service')
+                      .replace('@COINTEL@', '')
                       .replace('@SERVICE_RESTART_SECONDS@', str(config['service_restart_seconds'])))
                       for template in (source / 'systemd').glob('*.service')}
+    rendered_units.update(coin_units(config))
     installed_config = target / 'config/cointos.json'
     retained_models(config, configuration.read_owned_json(installed_config, {}))
     if live:
@@ -207,16 +265,26 @@ def install_owned(config, previous, rendered_units, live):
         replace_runtime(config, rendered_units, live)
 
 
+def stop(names):
+    """Stop units this installation owns; a first instance installation has none yet."""
+    for unit in names:
+        try:
+            run('systemctl', '--user', 'stop', unit)
+        except subprocess.CalledProcessError:
+            pass
+
+
 def replace_runtime(config, rendered_units, live):
     """Caller owns both installation/repair and exclusive replacement leases."""
+    coin_services = sorted(name for name in rendered_units if name.startswith('cointel-'))
     # A stopped/waiting old repair must not wake against a deliberately replaced
     # runtime. A running repair cannot coexist with our ownership lease.
-    run('systemctl', '--user', 'stop', 'cointos-repair.service')
+    stop(['cointos-repair.service'])
     if live:
         # No waiting for agents: stopping cointosd ends the GPU step in flight, saves every lane's
         # state and cuts the replies. OpenCode retains partial output; backend rendering
         # must accept its explicit continuation without rewriting conversation history.
-        run('systemctl', '--user', 'stop', 'cointosd.service')
+        stop(['cointosd.service'])
         restart_needed = [True]
         def restore_daemon():
             if restart_needed[0]:
@@ -224,7 +292,7 @@ def replace_runtime(config, rendered_units, live):
         atexit.register(restore_daemon)
     else:
         restart_needed = [False]
-        run('systemctl', '--user', 'stop', 'cointos-coin.service', 'cointosd.service')
+        stop(['cointos-coin.service', 'cointosd.service', *coin_services])
     # The stopped daemon may have saved between the first check and shutdown.
     retained = configuration.validate_ledger(configuration.read_owned_json(target / 'state/cointos.json', {}))
     dependency_aliases(retained)
@@ -240,12 +308,16 @@ def replace_runtime(config, rendered_units, live):
     units.mkdir(parents=True, exist_ok=True)
     for name, rendered in rendered_units.items():
         (units / name).write_text(rendered)
-    executable = Path.home() / '.local/bin/cointos'
-    executable.parent.mkdir(parents=True, exist_ok=True)
-    executable.unlink(missing_ok=True)
-    executable.symlink_to(target / 'bin/cointos')
+    for name in ('cointos', 'cointos-private', 'cointos-personal'):
+        executable = Path.home() / '.local/bin' / name
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.unlink(missing_ok=True)
+        executable.symlink_to(target / 'bin' / name)
     run('systemctl', '--user', 'daemon-reload')
-    run('systemctl', '--user', 'enable', 'cointosd.service', 'cointos-coin.service')
+    run('systemctl', '--user', 'enable', 'cointosd.service', *coin_services)
+    if coin_services:
+        # The historical single Coin would poll the same bot as one identity.
+        subprocess.run(['systemctl', '--user', 'disable', 'cointos-coin.service'], text=True)
     from cointos.repair import supersede_installation
     supersede_installation(target)
     if live:
