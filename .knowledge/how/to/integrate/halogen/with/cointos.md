@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-17T10:23:20+11:00"
+revised_at: "2026-11-17T10:28:11+11:00"
 ---
 
 Halogen is the deployed shared CointOS default on halomit: Qwen3.8-Flash-Next-Halogen, selectable as halogen:Qwen3.8-Flash-Next-Halogen. GET /api/models owns current selection. The user authorized experimental retained-cache switching: roughly 58 MiB recurrent-state copies while attention KV remains in place. Other backends retain their resident-switch requirement.
@@ -13,6 +13,6 @@ Retained conversation data is volatile and RAM-only. Caches are disposable hints
 
 halogen_runtime.py owns rootless cointos-halogen in independent cointos-halogen-runtime.scope. Daemon restart preserves the container and engine PID, so a halogen_control.py change takes effect only after the container is recreated. The pinned image mounts read-only weights; per-request context is 131072, shared pool 262144, one slot, adaptive MTP and 8192 prefill workspace. The configured footprint estimate is 81 decimal GB; native startup reported 74.8 GiB. Admission/readiness preserve the 24 GB reserve. Host budget subtracts the verified 66.687678432 GB SVM-pinned payload from apparently available RAM and excludes Lemonade's unrelated cgroup allowance. Factory-disabled state and histories are preserved.
 
-Evidence under ~/.local/state/halogen-trial/: cointos-native-qualification.json covers interleaved greedy continuity, typed tools and lost-state refusal; cointos-live-reply.json records HALOGEN IS LIVE in 0.26 s; cointos-gateway-speed.json records 768 code tokens in 10.53 s (72.93 wall tok/s); cointos-two-clients.json covers concurrent greedy/sampled clients. restart-survival.json covers engine survival; tool-history-fix.json covers the exact mapping failure and corrected gateway continuation. Native adapter code measured 84.58 tok/s. Live generation steps are 64 tokens with the existing 5-second slice; token delivery no longer waits for the step boundary. The broader suite retains unrelated baseline failures.
+Evidence under ~/.local/state/halogen-trial/: cointos-native-qualification.json covers interleaved greedy continuity, typed tools and lost-state refusal; cointos-live-reply.json records HALOGEN IS LIVE in 0.26 s; cointos-gateway-speed.json records 768 code tokens in 10.53 s (72.93 wall tok/s); cointos-two-clients.json covers concurrent greedy/sampled clients. restart-survival.json covers engine survival; tool-history-fix.json covers the exact mapping failure and corrected gateway continuation. Native adapter code measured 84.58 tok/s. Live generation steps are 128 tokens with the existing 5-second slice; token delivery no longer waits for the step boundary. The broader suite retains unrelated baseline failures.
 
 Rollback: POST /api/default-model with path lemonade:Qwen3.8-27B-GGUF. pre-halogen-runtime/ retains old modules/config. The completed demo controller released its parking lease before deployment. Host acquisition and original benchmarks belong to global:how/to/run/halogen/flash-next/on/halomit.md.
