@@ -1,0 +1,14 @@
+---
+status: green
+revised_at: "2026-11-17T10:25:07+11:00"
+---
+
+`halogen_control.py` forwards accepted native `T` tokens from `engine.generate` during a bounded generation step. `think` with `stream: true` returns newline-delimited JSON (`application/x-ndjson`): each `stream` frame contains token IDs and base64-encoded raw `token_bytes`; a final `result` contains the authoritative completed vector and timing/cache metadata. Speculative proposals are not displayed: these are the same accepted tokens the native frontend exposes to ordinary clients.
+
+`backend_halogen._call_stream` validates IDs, byte encoding and the requested token bound before calling `on_tokens(ids, bytes)`. It rejects a truncated stream or disagreement with the final vector. The terminal vector is never published twice. Older JSON-only frontends remain compatible through whole-step fallback. `lanes.arrived` decodes UTF-8 across token and step boundaries, queues deltas and forwards them through the normal gateway SSE path without per-token detokenize requests or disk polling.
+
+The producer holds the native gate and slot through the terminal event. Reader disconnection or cancellation leaves the bounded native step to drain, preserving known ownership before the next operation. This does not change the scheduling/preemption boundary, retained-cache policy, sampling or adaptive MTP settings. Installing frontend changes still requires recreating its container; daemon replacement alone cannot reload the running frontend.
+
+Qualification uses `tests.test_backend_halogen`, `tests.test_backend_gufo`, `tests.test_settings` and `tests.test_gateway_disconnect` (41 checks). They cover early delivery before completion, partial emoji bytes, malformed/truncated streams, final-vector mismatch, JSON fallback, disconnect and cancellation ownership. A disposable container using the real FastAPI HTTP stack delivered its first token at 30 ms and its terminal event at 631 ms, preserving split Unicode and the final vector.
+
+Live 64-token-step probes delivered the same 256-token reply as the eight-token baseline (matching SHA-256) in 252 visible updates. Active output lasted 3.92–4.64 seconds versus 5.66 seconds before streaming. One repeat measured mean gaps 18.5 ms, p95 60 ms and maximum 133 ms; another maximum was 152 ms. Speculative acceptance produces small bursts. These short probes do not establish long-context throughput or total request latency under scheduler contention. Live Unicode and typed-tool/result continuation checks pass. A disposable OpenCode 2.3.0 full TUI showed 12 distinct numbered-line updates over 0.83 seconds during generation; its 28-second cold-start delay is separate from stream cadence. Evidence: ~/.local/state/cointos/halogen-streaming/ and ~/.local/state/cointos/stream-cadence/.

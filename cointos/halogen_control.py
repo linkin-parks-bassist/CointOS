@@ -4,6 +4,8 @@ All conversation data is volatile. Attention KV stays in the engine pool; its
 retained cache copies recurrent state. No checkpoint or request recording is used.
 """
 import asyncio
+import base64
+import json
 import secrets
 import sys
 import time
@@ -37,7 +39,7 @@ def install(app, tok, engine):
     # client_markers_setup(); its helpers own marker shielding for this tokenizer.
     api = sys.modules['__main__']
     if not all(hasattr(api, name) for name in
-               ('shield_messages', 'shield_kwargs', 'tokenize_offsets', 'textify_pad_mentions')):
+               ('shield_messages', 'shield_kwargs', 'tokenize_offsets', 'textify_pad_mentions', 'token_bytes')):
         raise RuntimeError('Pinned Halogen frontend lacks client-marker shielding')
     from fastapi import Request  # present only inside the pinned frontend image
     owners = {}
@@ -45,16 +47,14 @@ def install(app, tok, engine):
     gate = asyncio.Lock()
     epoch = secrets.token_hex(16)
 
-    @app.post('/cointos/control')
-    async def control(request: Request):
-        body = await request.json()
+    async def operate(body, emit=None):
         op = body['op']
         async with gate:
             try:
                 if op == 'info':
                     await engine._ensure()
                     return {'result': {'protocol': 1, 'epoch': epoch,
-                        'version': engine.info.get('version'), 'context': engine.info['ctx'],
+                        'version': engine.info.get('version'), 'token_stream': True, 'context': engine.info['ctx'],
                         'resident_state_bytes': max(1, engine.info.get('cache_mb', 58)) * 1024**2,
                         'owners': list(owners), 'experimental_cache_switch': True}}
                 if op == 'render':
@@ -126,6 +126,9 @@ def install(app, tok, engine):
                             progress=progress, ctl=ctl):
                         if tid is not None:
                             new.append(tid)
+                            if emit is not None and op == 'think':
+                                emit({'stream': {'tokens': [tid], 'pieces':
+                                    base64.b64encode(api.token_bytes(tok, tid)).decode('ascii')}})
                         if result is not None:
                             done = result
                 finally:
@@ -154,3 +157,35 @@ def install(app, tok, engine):
                     'call_seconds': time.monotonic() - started}}
             except Exception as error:
                 return {'error': f'{type(error).__name__}: {error}'}
+
+    @app.post('/cointos/control')
+    async def control(request: Request):
+        body = await request.json()
+        if body.get('op') != 'think' or not body.get('stream'):
+            return await operate(body)
+        from fastapi.responses import StreamingResponse
+
+        async def events():
+            queue = asyncio.Queue()
+
+            async def produce():
+                try:
+                    queue.put_nowait(await operate(body, queue.put_nowait))
+                except Exception as error:
+                    queue.put_nowait({'error': f'{type(error).__name__}: {error}'})
+                finally:
+                    queue.put_nowait(None)
+
+            # Drain the bounded native step even if the HTTP reader disconnects.
+            # The operation retains the gate and slot until its terminal event.
+            producer = asyncio.create_task(produce())
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield (json.dumps(event) + '\n').encode()
+            finally:
+                await asyncio.shield(producer)
+
+        return StreamingResponse(events(), media_type='application/x-ndjson')

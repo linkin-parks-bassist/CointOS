@@ -39,7 +39,7 @@ def run(owner, rendered, count, sampling=None):
     tokens = rendered['tokens']
     backend.prefill(c, model, 0, tokens, len(held) if tokens[:len(held)] == held else 0)
     return backend.think(c, model, 0, tokens, len(tokens), count,
-                         sampling or {'temperature': 0}, lambda new: None)
+                         sampling or {'temperature': 0}, lambda *_: None)
 
 try:
     prompt = render('Write a complete Python fair multi-tenant scheduler with typed jobs, retries, cancellation and tests. Output Python code only.')
@@ -81,7 +81,7 @@ try:
     backend.release_residents(c, model, [owners[1]])
     backend.select(c, model, 0, owners[1])
     try:
-        backend.think(c, model, 0, prompt['tokens'], len(prompt['tokens']), 16, {'temperature': 0}, lambda new: None)
+        backend.think(c, model, 0, prompt['tokens'], len(prompt['tokens']), 16, {'temperature': 0}, lambda *_: None)
         raise AssertionError('lost retained state accepted')
     except backend.Lost:
         result['lost_state_refused'] = True

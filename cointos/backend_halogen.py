@@ -1,5 +1,6 @@
 """Experimental bounded Halogen steps with RAM-only retained-cache switching."""
 import json
+import base64
 import math
 import subprocess
 import urllib.request
@@ -25,6 +26,46 @@ def _call(config, model, op, **body):
             raise Lost(event['error'])
         raise RuntimeError(event['error'])
     return event['result']
+
+
+def _call_stream(config, model, on_tokens, **body):
+    options = _options(config, model)
+    req = urllib.request.Request(options['url'] + '/cointos/control',
+        json.dumps({'op': 'think', 'stream': True, **body}).encode(),
+        {'Content-Type': 'application/json'})
+    delivered = []
+    with urllib.request.urlopen(req, timeout=config['timeouts']['server_seconds']) as response:
+        if response.headers.get_content_type() != 'application/x-ndjson':
+            # Allows the daemon and frontend to be replaced independently.
+            event = json.load(response)
+        else:
+            for line in response:
+                event = json.loads(line)
+                if 'stream' not in event:
+                    break
+                frame = event['stream']
+                tokens, pieces = frame.get('tokens'), frame.get('pieces')
+                if (not isinstance(tokens, list) or not tokens
+                        or any(type(t) is not int or not 0 <= t < 248077 for t in tokens)
+                        or len(delivered) + len(tokens) > body['max_new']
+                        or not isinstance(pieces, str)):
+                    raise RuntimeError('Halogen returned an invalid token frame')
+                try:
+                    raw = base64.b64decode(pieces, validate=True)
+                except ValueError as error:
+                    raise RuntimeError('Halogen returned invalid token bytes') from error
+                delivered.extend(tokens)
+                on_tokens(tokens, raw)
+            else:
+                raise RuntimeError('Halogen stream ended without a terminal response')
+    if 'error' in event:
+        if event['error'].startswith('lost:'):
+            raise Lost(event['error'])
+        raise RuntimeError(event['error'])
+    result = event['result']
+    if delivered and delivered != result.get('tokens'):
+        raise RuntimeError('Halogen streamed tokens differ from its completed step')
+    return result, bool(delivered)
 
 
 def models(config):
@@ -158,7 +199,7 @@ def prefill(config, model, lane, tokens, held):
 
 
 def think(config, model, lane, tokens, held, max_new, sampling, on_tokens):
-    event = _call(config, model, 'think', lane=lane, tokens=tokens, held=held,
+    event, streamed = _call_stream(config, model, on_tokens, lane=lane, tokens=tokens, held=held,
                   max_new=max_new, sampling=sampling,
                   max_input_tokens=config['scheduler']['read_chunk_tokens'])
     new = event['tokens']
@@ -168,7 +209,7 @@ def think(config, model, lane, tokens, held, max_new, sampling, on_tokens):
             or type(event['generation_seconds']) not in (int, float)
             or not math.isfinite(event['generation_seconds']) or event['generation_seconds'] < 0):
         raise RuntimeError('Halogen returned an incomplete bounded step')
-    if new:
+    if new and not streamed:
         on_tokens(new)
     seconds = event['generation_seconds']
     return {**event, 'held': tokens + new, 'sampling': sampling,
