@@ -9,7 +9,7 @@ from cointos import gateway, lanes, private_clients, private_session, snapshots,
 
 
 class PrivateSession(unittest.TestCase):
-    @unittest.skipUnless(Path.home().joinpath('.local/lib/opencode/2.2.7/opencode').exists(), 'requires installed launcher binary')
+    @unittest.skipUnless(Path.home().joinpath('.local/lib/opencode/2.3.0/opencode').exists(), 'requires installed launcher binary')
     def test_terminal_resize_reaches_the_detached_child(self):
         import fcntl
         import pty
@@ -35,7 +35,7 @@ while True: time.sleep(1)
 from cointos import private_session
 real=subprocess.Popen
 def launch(command,**kw):
- if command[0].endswith('/2.2.7/opencode'): command=[sys.executable,'-u','-c',%r]
+ if command[0].endswith('/2.3.0/opencode'): command=[sys.executable,'-u','-c',%r]
  return real(command,**kw)
 private_session.subprocess.Popen=launch
 raise SystemExit(private_session.main([]))
@@ -284,7 +284,7 @@ for line in sys.stdin:
             project_override = {'providers': {'cointos': {'settings': {'baseURL': 'http://127.0.0.1:1/v1'}}}}
             for project_config in (root / 'work/opencode.json', root / 'work/.opencode/opencode.json'):
                 project_config.write_text(json.dumps(project_override))
-            result = subprocess.run([str(Path.home() / '.local/lib/opencode/2.2.7/opencode'),
+            result = subprocess.run([str(Path.home() / '.local/lib/opencode/2.3.0/opencode'),
                 'run', '--standalone', '--auto', '--log-level', 'none', '--format', 'json', 'Use the synthetic echo fixture'],
                 env=env, cwd=root / 'work', capture_output=True, timeout=40)
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
@@ -362,7 +362,7 @@ for line in sys.stdin:
             cfg['providers']['cointos']['settings']['baseURL'] = f'http://127.0.0.1:{server.server_port}/v1'
             path.write_text(json.dumps(cfg))
             (root / 'work').mkdir()
-            result = subprocess.run([str(Path.home() / '.local/lib/opencode/2.2.7/opencode'),
+            result = subprocess.run([str(Path.home() / '.local/lib/opencode/2.3.0/opencode'),
                 'run', '--standalone', '--log-level', 'none', '--format', 'json', marker],
                 env=env, cwd=root / 'work', capture_output=True, timeout=40)
             self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))

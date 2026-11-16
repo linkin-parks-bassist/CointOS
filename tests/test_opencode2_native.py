@@ -342,6 +342,7 @@ for line in sys.stdin:
                 window.kill(); window.wait()
             os.close(master)
 
+    @unittest.skipUnless(Path(opencode.LEGACY_OPENCODE).is_file(), "requires separately installed legacy V1 exporter")
     def test_source_migrates_only_the_assigned_legacy_conversation(self):
         legacy_run, legacy_store = self.root / 'legacy-run', self.root / 'legacy-store'
         legacy_run.mkdir(); legacy_store.mkdir()

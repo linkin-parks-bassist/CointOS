@@ -30,7 +30,7 @@ TIMEOUTS = load_config()["timeouts"]
 OPENCODE = str(Path.home() / ".local/bin/opencode")
 OPENCODE2 = str(Path.home() / '.local/lib/cointos/opencode2/node_modules/.bin/opencode')
 LEGACY_OPENCODE = str(Path.home() / '.local/lib/cointos/opencode1/opencode')
-OPENCODE2_VERSION = '2.2.6'
+OPENCODE2_VERSION = '2.3.0'
 COMPACTION_CLI_SHA = "572e9e9f838c0a150558c8b412a50c3130acea0edd07288ab8da73b3b0a2380e"
 PROVIDER = "cointos"
 # Commands no agent may run; `control` ability lifts only the CointOS lifecycle ones.

@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-11-10T14:07:02+11:00"
+revised_at: "2026-11-17T09:59:51+11:00"
 ---
 
 Benchmark compaction only in isolated copies, preserving exact identifiers, completed effects, pending work, tool-free summary execution, window limits and recovery. Generation-floor experiments remain paused. Do not restart managed inhabitants for benchmarks or enable automatic compaction.
 
-Current managed source selects OpenCode2.2.6. Its normal native compactor and factual-response hook have separate transport fixtures. The structured-v1 candidate below is a V1-specific prototype, not the managed V2 compactor. structured_compaction=true with opencode_v2=true refuses. Never downgrade an advanced V2 store or replace the shared executable to try this candidate.
+Current managed source selects OpenCode2.3.0. Its normal native compactor and factual-response hook have separate transport fixtures. The structured-v1 candidate below is a V1-specific prototype, not the managed V2 compactor. structured_compaction=true with opencode_v2=true refuses. Never downgrade an advanced V2 store or replace the shared executable to try this candidate.
 
 The V1 cache problem was measured on1.18.35: flattening/truncated tool outputs changed114322 input tokens to44335 with only three common tokens; later continuation recovered18729 shared tokens. A tool-free structured-v1 gateway accepts a managed envelope containing summary instructions c and complete native flattened fallback f. Pinned declarations preserve rendering while tool-call decoding stays disabled. Actual input plus output reserve must fit; overflow/missing declarations selects the native tool-free fallback.
 

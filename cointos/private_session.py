@@ -137,9 +137,9 @@ def main(argv=None) -> int:
     if any(a in ('--server', '--session', '-s', '--continue', '-c', '--model', '-m')
            or a.startswith(('--server=', '--session=', '--model=')) for a in args):
         raise SystemExit('Private sessions cannot attach, resume or select another model.')
-    binary = Path.home() / '.local/lib/opencode/2.2.7/opencode'
+    binary = Path.home() / '.local/lib/opencode/2.3.0/opencode'
     if not binary.is_file():
-        raise SystemExit('The qualified OpenCode 2.2.7 executable is unavailable.')
+        raise SystemExit('The qualified OpenCode 2.3.0 executable is unavailable.')
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     # /dev/shm is tmpfs; do not silently fall back to persistent /tmp storage.
     with tempfile.TemporaryDirectory(prefix='cointos-private-', dir='/dev/shm') as temp:

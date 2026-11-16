@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-10T14:27:52+11:00"
+revised_at: "2026-11-17T10:00:47+11:00"
 ---
 
 A run uses transient cointos-agent-ID.service, a private server/store, explicit worktree/PWD, existing memory/budget controls and atomic run/server/exit metadata. Adopted processes retain their launch protocol; metadata selects V1 or V2 APIs and viewers. Metadata publication failure still cleans up the server.
@@ -10,7 +10,7 @@ V2 fresh/ordinary recovery input uses run --server with JSON events. An unfinish
 Before recovery input, pending native compaction is retried through compact and awaited through experimental session wait. A noncompleted summary withholds recovery. Automatic compaction remains disabled. V1 survivors retain summarize(auto:false) and the one-use original-user hook. Neither path grants budget or establishes useful completion.
 
 V1/V2 databases share a default pathname, but schemas and exports differ. Direct V1 JSON import into V2 returns400; never treat that as a converted conversation. sessions.prepare_v2:
-1. Uses retained1.19.5 to export/import only the assigned conversation into a private V1 staging store, with regular-file capture and existing exact-history checks.
+1. Requires a separately provisioned V1 exporter (currently absent) to export/import only the assigned conversation into a private V1 staging store, with regular-file capture and existing exact-history checks.
 2. Makes a SQLite read-only-source backup into that assignment's versioned V2 store; original/global V1 stores remain intact.
 3. Starts an execution-blocked conversion server outside the project, without gateway credentials/MCP/project plugins, waits for native V1 migration and exports its projection.
 4. Verifies session/directory, original user IDs/text/times, retained assistant context, completed tool inputs/results/attachments and compaction text before publishing a controller-owned digest receipt.

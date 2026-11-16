@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-10T16:41:37+11:00"
+revised_at: "2026-11-17T10:00:47+11:00"
 ---
 
-cointos/mcp.py serves protocol-only stdio with COINTOS_TASK_ID/COINTOS_AGENT. V2 uses execute with exact native catalog signatures such as tools.cointos.task({}); surviving V1 runs expose direct cointos_<name> calls. The broker rejects undeclared fields and publishes closed schemas. V2.2.6 silently strips unknown fields even with additionalProperties:false; the adapter preserves them until broker validation. Owned identity and original arguments reach the API. Read results: execute can complete around a refusal. search takes {query}; resume releases infrastructure admission holds, not failed work. source needs retained files; project/log inspect accepted source/execution. check_work returns structured/readable evidence and isError on refusal. A harness change does not grant another task identity.
+cointos/mcp.py serves protocol-only stdio with COINTOS_TASK_ID/COINTOS_AGENT. V2 uses execute with exact native catalog signatures such as tools.cointos.task({}); surviving V1 runs expose direct cointos_<name> calls. The broker rejects undeclared fields and publishes closed schemas. V2 silently strips unknown fields even with additionalProperties:false; the adapter preserves them until broker validation. Owned identity and original arguments reach the API. Read results: execute can complete around a refusal. search takes {query}; resume releases infrastructure admission holds, not failed work. source needs retained files; project/log inspect accepted source/execution. check_work returns structured/readable evidence and isError on refusal. A harness change does not grant another task identity.
 
 Everyone receives finish/task/jobs/status/peers/send/inbox. Role controls retain independent review, protected tests, budgets and explicit holds. Managers coordinate handoffs/corrections; integrators review/diagnose/land/return/incorporate; maintenance roles publish assigned scope. Withdrawn origins lose mutation authority but retain checked closure. Explicit construction stages require workers; other roles cannot silently accept construction prerequisites. Capability owners retain broader requirements/gaps.
 

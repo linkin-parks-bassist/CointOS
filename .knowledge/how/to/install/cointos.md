@@ -1,11 +1,11 @@
 ---
 status: green
-revised_at: "2026-11-16T10:00:08+11:00"
+revised_at: "2026-11-17T09:59:50+11:00"
 ---
 
 Run scripts/install from the source or a retained deployment stage into absent/marked ~/.CointOS. Cointel uses three profile services in this single installation; separate instance installs were removed. CLI up/halt select profile services. Installation and independent repair share state/repairs/owner.lock; refuse before contact/copy while repair owns it. Hold ownership through copying/start and release before failure restoration. The persistent .runtime-install marker identifies the actual deployment source.
 
-David required old OpenCode binaries removed: managed V2 paths now symlink to canonical 2.2.7; the V1 exporter is absent. Preflight now requires only the V2 binary and its pinned 2.2.6 manifest: the V1 exporter's absence is intended, not a failure, and a recognised legacy store still refuses conversion. Source `scripts/install-opencode2` still provisions 1.19.5 for future V1 work. CointOS execution on 2.2.7 is unqualified. Source opencode_v2=true selects new managed runs/viewers; surviving V1 units keep their launch protocol. V1/V2 transport support does not introduce old CointOS ledger-schema readers. Disabling the flag is not a downgrade procedure for advanced V2 stores; legacy exports refuse recognized native stores.
+David required old OpenCode binaries removed: managed V2 paths now symlink to canonical 2.3.0; the V1 exporter is absent. Preflight now requires only the V2 binary and its pinned 2.3.0 manifest: the V1 exporter's absence is intended, not a failure, and a recognised legacy store still refuses conversion. `scripts/install-opencode2` installs matching V2 CLI/client/plugin assets. Native V2 fixtures pass; legacy export needs a separately installed V1 prerequisite. Source opencode_v2=true selects new managed runs/viewers; surviving V1 units keep their launch protocol. V1/V2 transport support does not introduce old CointOS ledger-schema readers. Disabling the flag is not a downgrade procedure for advanced V2 stores; legacy exports refuse recognized native stores.
 
 Preflight strictly reads configuration, ledger, keys and enrollment and renders services. Malformed/unreadable/duplicate/nonregular/symlink authority, invalid dependencies and containers refuse; only absence initializes defaults. scripts/upgrade-ledger owns stopped migration; back up authority first, recheck stopped state and preserve enrollment bytes. Registry mutations persist before memory replacement.
 

@@ -1,9 +1,9 @@
 ---
 status: green
-revised_at: "2026-11-11T11:38:06+11:00"
+revised_at: "2026-11-17T09:58:40+11:00"
 ---
 
-Source managed launches select OpenCode2.2.6 with opencode_v2=true. opencode.py owns run configuration, units, servers and observation; opencode2.py owns the native API/recovery boundary; sessions.py owns retained-history migration. Host override: `~/.local/lib/cointos/opencode2/node_modules/.bin/opencode` symlinks to canonical 2.2.7; David required all older binaries removed, including the V1 exporter. Source provisioning/preflight still pins old versions and needs reconciliation before reuse. Managed stores remain separate; execution on 2.2.7 is unqualified. Surviving V1 units retain their executable, configuration and hooks; run/server metadata selects the matching transport/viewer.
+Source managed launches select OpenCode2.3.0 with opencode_v2=true. opencode.py owns run configuration, units, servers and observation; opencode2.py owns the native API/recovery boundary; sessions.py owns retained-history migration. Host override: `~/.local/lib/cointos/opencode2/node_modules/.bin/opencode` symlinks to canonical 2.3.0; David required all older binaries removed, including the V1 exporter. Source provisioning/preflight pins 2.3.0 with matching CLI/client/plugin manifests. Managed stores remain separate; native qualification uses disposable stub-provider fixtures. Surviving V1 units retain their executable, configuration and hooks; run/server metadata selects the matching transport/viewer.
 
 Admission exclusively reserves state/agents/<id> before preparation. Exact task/run or receipt ownership governs adoption. Thread/key/preparation failure preserves waiting work and evidence; unexpected unreceipted termination requires canonical recovery. Authority reads reject malformed/nonregular/symlink data rather than inventing defaults.
 
