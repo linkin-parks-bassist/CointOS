@@ -733,10 +733,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(404, {"error": {"message": f"unknown model {model!r}"}})
         if private and not BACKEND.resident_states(CONFIG, model):
             raise ValueError('private inference requires a resident-state backend')
+        # A restart or relaunch is a short outage, not a refusal: hold the
+        # request until the daemon reports the model up again. Leave early for
+        # shutdown, a default-model change (which drains active chats) or a
+        # client that hung up.
+        deadline = time.monotonic() + CONFIG["scheduler"]["model_wait_seconds"]
         with LOCK:
-            up = L["models"][model]["up"]
+            while not (up := L["models"][model]["up"]):
+                if STOPPING.is_set() or models.changing() or time.monotonic() >= deadline:
+                    break
+                LOCK.wait(1)
+                if self.peer_closed():
+                    return
+            problems = "; ".join(L["models"][model]["problems"])
         if not up:
-            return self.reply(503, {"error": {"message": f"{model} is not running right now"}})
+            if STOPPING.is_set():
+                return self.reply(503, {"error": {"message": "daemon restarting; retry shortly"}})
+            if models.changing():
+                return self.reply(503, {"error": {"message": "default model changing; retry shortly"}})
+            return self.reply(503, {"error": {"message": f"{model} did not come up within "
+                                              f"{CONFIG['scheduler']['model_wait_seconds']} s"
+                                              + (f": {problems}" if problems else "")}})
         cap = CONFIG["scheduler"]["max_thought_tokens"]
         max_new = min(int(body.get("max_tokens") or body.get("max_completion_tokens") or cap), cap)
         template = template_options(body, agent)

@@ -198,6 +198,7 @@
  "scheduler": {
   "chunk_tokens": 32,
   "max_thought_tokens": 16384,
+  "model_wait_seconds": 300,
   "read_chunk_tokens": 1024,
   "shared_prefix_tokens": 4096,
   "slice_seconds": 10,

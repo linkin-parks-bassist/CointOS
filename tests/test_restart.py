@@ -228,3 +228,63 @@ class PromptRewrites(unittest.TestCase):
         self.assertTrue(self.begin("t", list(range(97)) + [7] * 30).called)
         thread = self.begin("t", [1] * 50)
         self.assertEqual(thread.call_args.kwargs["target"], lanes.report_rewrite)
+
+
+class ModelOutage(unittest.TestCase):
+    """A chat sent while its model restarts waits for it instead of failing at once."""
+
+    def setUp(self):
+        support.fresh_ledger(self, {'paused': False})
+        self.model = state.CONFIG['work_model']
+        self.enterContext(patch.dict(state.CONFIG['scheduler'], model_wait_seconds=30))
+        self.enterContext(patch.object(gateway.keys, 'ended', return_value=False))
+        self.enterContext(patch.object(gateway, 'identity', return_value=('user', 'user', 'c')))
+        self.enterContext(patch.object(gateway, 'request_class', return_value='user'))
+        self.enterContext(patch.object(gateway.models, 'resolve', return_value=self.model))
+        self.admitted = threading.Event()
+        def admitted(*args, **kwargs):
+            self.admitted.set()
+            raise RuntimeError('admitted')
+        self.enterContext(patch.object(gateway, 'render_request', admitted))
+        self.handler = object.__new__(gateway.Handler)
+        self.handler.headers, self.handler.path = {}, '/v1/chat/completions'
+        self.enterContext(patch.object(self.handler, 'peer_closed', return_value=False))
+        state.L['models'][self.model].update(up=False, problems=['connection refused'])
+
+    def request(self):
+        def run():
+            try:
+                self.handler.stream_thought({})
+            except RuntimeError:
+                pass
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread
+
+    def test_request_waits_until_the_model_is_up(self):
+        with patch.object(self.handler, 'reply') as reply:
+            thread = self.request()
+            self.assertFalse(self.admitted.wait(1.5))
+            with state.LOCK:
+                state.L['models'][self.model].update(up=True, problems=[])
+                state.LOCK.notify_all()
+            self.assertTrue(self.admitted.wait(5))
+            thread.join(5)
+            reply.assert_not_called()
+
+    def test_request_fails_with_the_cause_after_the_wait(self):
+        state.CONFIG['scheduler']['model_wait_seconds'] = 0
+        with patch.object(self.handler, 'reply') as reply:
+            self.request().join(5)
+            self.assertFalse(self.admitted.is_set())
+            self.assertEqual(reply.call_args.args[0], 503)
+            self.assertIn('connection refused', reply.call_args.args[1]['error']['message'])
+
+    def test_a_client_that_hangs_up_stops_waiting(self):
+        with patch.object(self.handler, 'reply') as reply, \
+                patch.object(self.handler, 'peer_closed', return_value=True):
+            thread = self.request()
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(self.admitted.is_set())
+            reply.assert_not_called()
