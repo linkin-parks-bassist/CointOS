@@ -68,7 +68,7 @@
   "disk_snapshots_gb": 300,
   "distress_seconds": 30,
   "max_psi": 1.5,
-  "reserve_gb": 24,
+  "reserve_gb": 12,
   "shed_step_seconds": 3,
   "snapshot_idle_hours": 36,
   "snapshots_gb": 40
