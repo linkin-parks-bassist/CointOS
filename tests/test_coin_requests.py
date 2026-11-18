@@ -42,6 +42,25 @@ class Requests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 coin_requests.retain(self.directory, 7, 70, value)
 
+    def test_stored_entry_with_nonderived_id_stays_active_and_deduplicated(self):
+        """A retained entry whose opaque id no longer matches the content hash must not stop Coin."""
+        self.directory.mkdir(mode=0o700)
+        ident = 'f' * 64
+        entry = {'id': ident, 'user': 7, 'chat': 7, 'instruction': 'Report weekday work \u2013 at 18:00', 'created_at': 1.0}
+        path = self.directory / 'requests.json'
+        path.write_text(json.dumps({'version': 1, 'requests': {ident: entry}}))
+        path.chmod(0o600)
+        self.assertEqual(coin_requests.active(self.directory, 7), [entry])
+        self.assertEqual(coin_requests.retain(self.directory, 7, 7, entry['instruction'])['id'], ident)
+        self.assertEqual(len(coin_requests.active(self.directory, 7)), 1)
+        self.assertTrue(coin_requests.finish(self.directory, 7, ident))
+        self.assertEqual(coin_requests.active(self.directory, 7), [])
+        for bad in ({**entry, 'id': 'other'}, {**entry, 'instruction': ' '}):
+            with self.subTest(bad=bad):
+                path.write_text(json.dumps({'version': 1, 'requests': {ident: bad}}))
+                with self.assertRaises(ValueError):
+                    coin_requests.active(self.directory, 7)
+
     def test_original_instruction_survives_294_messages_without_changing_history_policy(self):
         instruction = 'Save all 294 arriving pictures to ~/Pictures/AOW. Finish only after all are verified.'
         request = coin.invoke('retain_request', {'instruction': instruction}, 'token', 7, 70, None)['request']

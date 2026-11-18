@@ -106,6 +106,21 @@ class ResultDelivery(unittest.TestCase):
                                       'condition': {'kind': 'schedule'}})
         self.assertEqual(self.sent, ['Report for 2026-11-09', 'Report for 2026-11-16'])
 
+    def test_report_whose_stored_key_predates_a_directory_rename_stays_readable_and_deduplicated(self):
+        import json
+        directory = self.root / 'reports'
+        directory.mkdir(mode=0o700)
+        item = {'user': 7, 'chat': 70, 'location': str(self.root.resolve()), 'milestone': 'cli-wiring',
+                'message': 'The CLI is wired.', 'evidence': [{'call': 'check'}], 'at': 1.0}
+        stale = coin_reports.identity(7, 70, '/renamed/before', 'cli-wiring')
+        path = directory / 'reports.json'
+        path.write_text(json.dumps({'version': 1, 'reports': {stale: item}}))
+        path.chmod(0o600)
+        self.assertEqual(coin_reports.context(directory, 7, 70), [item])
+        self.run_completion([assistant(self.check()), assistant(self.report(message='Again'), call('done'))])
+        self.assertEqual(self.sent, [])
+        self.assertEqual(len(coin_reports.context(directory, 7, 70)), 1)
+
     def test_failed_delivery_does_not_retire_result(self):
         with patch.object(coin, 'send', side_effect=OSError('offline')):
             with self.assertRaises(OSError):

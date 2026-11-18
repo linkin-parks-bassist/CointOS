@@ -24,7 +24,8 @@ def _validate(data):
                 or any(not isinstance(e, dict) for e in item['evidence'])
                 or type(item['at']) not in (int, float)
                 or not math.isfinite(item['at']) or item['at'] < 0
-                or key != identity(item['user'], item['chat'], item['location'], item['milestone'])):
+                # Keys are opaque once stored: renamed paths must not disable Coin.
+                or not isinstance(key, str) or not key):
             raise ValueError('invalid result report')
     return data
 
@@ -50,6 +51,8 @@ def deliver(directory, user, chat, location, milestone, message, evidence, sende
         raise ValueError('a result needs a milestone, message and current verification evidence')
     key = identity(user, chat, location, milestone)
     with _registry(directory) as (fd, data):
+        key = next((k for k, r in data['reports'].items() if (r['user'], r['chat'], r['location'], r['milestone'])
+                    == (user, chat, location, milestone)), key)
         if key in data['reports']:
             return {'ok': True, 'sent': False, 'reason': 'already reported',
                     'report': {k: data['reports'][key][k] for k in ('location', 'milestone', 'message', 'at')}}

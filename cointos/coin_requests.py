@@ -21,7 +21,9 @@ def _validate(data):
         _identity(item['user'])
         _identity(item['chat'], chat=True)
         text = item['instruction']
-        if not isinstance(text, str) or not text.strip() or ident != _id(item['user'], text) or item['id'] != ident:
+        # The id is an opaque handle keyed in the registry. Content hashing only names
+        # new entries; a stored id that no longer matches it must not disable Coin.
+        if not isinstance(text, str) or not text.strip() or not isinstance(ident, str) or not ident or item['id'] != ident:
             raise ValueError('invalid retained instruction')
         at = item['created_at']
         if isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at) or at < 0:
@@ -46,7 +48,11 @@ def retain(directory, user, chat, instruction):
     instruction = instruction.strip()
     ident = _id(user, instruction)
     with _registry(directory) as (fd, data):
-        if ident not in data['requests']:
+        existing = next((key for key, item in data['requests'].items()
+                         if item['user'] == user and item['instruction'] == instruction), None)
+        if existing is not None:
+            ident = existing
+        elif ident not in data['requests']:
             data['requests'][ident] = {'id': ident, 'user': user, 'chat': chat,
                                       'instruction': instruction, 'created_at': time.time()}
         privatejson.write(fd, 'requests.json', data, _validate)
