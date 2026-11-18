@@ -35,10 +35,11 @@ def attachments(message):
     return result
 
 
-def validate(entry):
+def validate(entry, current=True):
+    """current=False checks a stored entry's shape without today's media vocabulary."""
     if (not isinstance(entry, dict) or not {'kind', 'file_id'} <= entry.keys()
             or entry.keys() - {'kind', 'file_id', 'file_unique_id', 'file_name', 'mime_type', 'file_size'}
-            or entry['kind'] not in ('photo', *MEDIA)
+            or (current and entry['kind'] not in ('photo', *MEDIA))
             or any(not isinstance(value, str) or not value for key, value in entry.items() if key != 'file_size')
             or ('file_size' in entry and (type(entry['file_size']) is not int or entry['file_size'] < 0))):
         raise ValueError('invalid retained attachment')

@@ -13,7 +13,8 @@ def _validate(data):
                 or type(item['chat']) is not int or not item['chat']
                 or not isinstance(item['task'], str) or not item['task']
                 or not isinstance(item['description'], str)
-                or key != identity(item['user'], item['task'])
+                # Stored keys are opaque: renamed task ids must not disable Coin.
+                or not isinstance(key, str) or not key
                 or type(item['created_at']) not in (int, float)):
             raise ValueError('invalid completion follow-up')
     return data
@@ -30,8 +31,9 @@ def _registry(directory):
 
 def retain(directory, user, chat, task, description):
     with _registry(directory) as (fd, data):
-        data['items'].setdefault(identity(user, task), {'user': user, 'chat': chat, 'task': task,
-            'description': description, 'created_at': time.time()})
+        if not any(item['user'] == user and item['task'] == task for item in data['items'].values()):
+            data['items'][identity(user, task)] = {'user': user, 'chat': chat, 'task': task,
+                'description': description, 'created_at': time.time()}
         privatejson.write(fd, 'followups.json', data, _validate)
 
 

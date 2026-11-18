@@ -26,6 +26,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import traceback
 import time
 import uuid
 from zoneinfo import ZoneInfo
@@ -260,7 +261,8 @@ def _condition(condition: dict, now: float) -> dict:
     return captured
 
 
-def _stored_condition(condition):
+def _stored_condition(condition, current=True):
+    """current=False checks a stored record's shape; registration also checks today's vocabulary."""
     if not isinstance(condition, dict):
         raise ValueError('invalid stored condition')
     kind = condition.get('kind')
@@ -276,22 +278,25 @@ def _stored_condition(condition):
             raise ValueError('invalid stored process identity')
     elif kind == 'unit-state' and set(condition) == {'kind', 'unit', 'state'}:
         _unit(condition['unit'])
-        if not isinstance(condition['state'], str) or condition['state'] not in UNIT_STATES:
+        if not isinstance(condition['state'], str) or (current and condition['state'] not in UNIT_STATES):
             raise ValueError('invalid stored unit state')
     elif kind == 'task-state' and set(condition) == {'kind', 'task', 'state', 'created_at'}:
         _task(condition['task'])
-        if (not isinstance(condition['state'], str) or condition['state'] not in TASK_STATES
+        if (not isinstance(condition['state'], str) or (current and condition['state'] not in TASK_STATES)
                 or not _number(condition['created_at'])):
             raise ValueError('invalid stored task identity')
     elif kind == 'schedule' and set(condition) == {'kind', 'cron', 'timezone'}:
         cron.parse(condition['cron'])
-        _zone(condition['timezone'])
+        if current:
+            _zone(condition['timezone'])
+        elif not isinstance(condition['timezone'], str) or not condition['timezone'].strip():
+            raise ValueError('invalid stored timezone')
     elif kind == 'unit-change' and set(condition) == {'kind', 'unit', 'state'}:
         _unit(condition['unit'])
-        if not isinstance(condition['state'], str) or condition['state'] not in UNIT_STATES:
+        if not isinstance(condition['state'], str) or (current and condition['state'] not in UNIT_STATES):
             raise ValueError('invalid stored unit state')
     elif kind == 'task-change' and set(condition) == {'kind', 'state', 'project'}:
-        if not isinstance(condition['state'], str) or condition['state'] not in TASK_STATES:
+        if not isinstance(condition['state'], str) or (current and condition['state'] not in TASK_STATES):
             raise ValueError('unknown task status')
         if condition['project'] is not None and not isinstance(condition['project'], str):
             raise ValueError('project must be a project name')
@@ -302,11 +307,11 @@ def _stored_condition(condition):
         raise ValueError('invalid stored condition fields')
 
 
-def _agent(agent):
+def _agent(agent, current=True):
     if (not isinstance(agent, dict) or not {'name', 'brief'} <= set(agent) or set(agent) - AGENT_FIELDS
             or not isinstance(agent['name'], str) or not isinstance(agent['brief'], str) or not agent['brief'].strip()):
         raise ValueError('agent needs a name and brief, and only dispatch fields')
-    if agent.get('role', 'operator') not in {spec['role'] for spec in schema.KINDS.values()}:
+    if current and agent.get('role', 'operator') not in {spec['role'] for spec in schema.KINDS.values()}:
         raise ValueError('unknown scheduled agent role')
 
 
@@ -315,9 +320,6 @@ def _validate(data):
             or not isinstance(data['version'], int) or isinstance(data['version'], bool) or not isinstance(data['wakeups'], dict)):
         raise ValueError('invalid wake registry')
     required = {'id', 'user', 'chat', 'message', 'condition', 'created_at'}
-    outcomes = {'deadline': {'due'}, 'process-exit': {'exited', 'interrupted'},
-                'unit-state': {'matched', 'unavailable'}, 'task-state': {'matched', 'unavailable', 'replaced', 'cancelled'},
-                'schedule': {'due'}, 'unit-change': {'matched'}, 'task-change': {'matched'}, 'path-change': {'matched'}}
     optional = {'event', 'agent', 'cursor', 'runs', 'last_run', 'paused'}
     for ident, record in data['wakeups'].items():
         _id(ident)
@@ -328,17 +330,19 @@ def _validate(data):
         _identity(record['chat'], 'chat')
         if not isinstance(record['message'], str) or not record['message'].strip() or not _number(record['created_at']):
             raise ValueError('invalid wake message or registration time')
-        _stored_condition(record['condition'])
+        _stored_condition(record['condition'], current=False)
         recurring = record['condition']['kind'] in RECURRING
         if recurring != ('cursor' in record) or recurring != ('runs' in record) or (('last_run' in record or 'paused' in record) and not recurring):
             raise ValueError('invalid repeating wake state')
         if 'agent' in record:
-            _agent(record['agent'])
+            # Dispatch refuses a retired role and tells the user; it must not disable every wake.
+            _agent(record['agent'], current=False)
         if 'event' in record:
             event = record['event']
             if (not isinstance(event, dict) or set(event) != {'at', 'outcome', 'result', 'detail'}
-                    or not _number(event['at']) or not isinstance(event['outcome'], str)
-                    or event['outcome'] not in outcomes[record['condition']['kind']]
+                    or not _number(event['at']) or not isinstance(event['outcome'], str) or not event['outcome']
+                    # Only due/matched outcomes may claim an observation; other stored outcome
+                    # names stay readable after the per-kind vocabulary changes.
                     or event['result'] != ('observed' if event['outcome'] in ('due', 'matched') else 'unknown')
                     or not isinstance(event['detail'], str) or not event['detail'].strip()):
                 raise ValueError('invalid pending wake event')
@@ -378,8 +382,14 @@ def _view(record):
     """A copy for callers, with a schedule's next run on its own wall clock."""
     view = copy.deepcopy(record)
     if record['condition']['kind'] == 'schedule' and not record.get('paused'):
-        view['next_run'] = (datetime.fromisoformat(record['cursor'])
-                            .astimezone(ZoneInfo(record['condition']['timezone'])).isoformat())
+        try:
+            zone = ZoneInfo(record['condition']['timezone'])
+        except (LookupError, ValueError, OSError):
+            # A zone removed from tzdata stops this schedule, not every listing.
+            view['next_run'] = None
+            view['problem'] = f"timezone {record['condition']['timezone']!r} is no longer available"
+        else:
+            view['next_run'] = datetime.fromisoformat(record['cursor']).astimezone(zone).isoformat()
     return view
 
 
@@ -575,8 +585,10 @@ def ready(directory):
             try:
                 event = (_observe_repeating(record, now, cache) if record['condition']['kind'] in RECURRING
                          else _observe(record['condition'], now, cache))
-            except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-                # One temporarily unavailable observer must not block other due wakes.
+            except Exception:
+                # One unavailable observer, removed timezone or malformed record must not
+                # block other due wakes. Its trace stays visible in the service log.
+                traceback.print_exc()
                 continue
             changed |= record.get('cursor') != before
             if event is not None:

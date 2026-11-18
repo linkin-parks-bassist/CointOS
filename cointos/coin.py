@@ -1145,6 +1145,8 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
     retry: dict[str, float] = {}
     input_retry: dict[int, float] = {}
     next_check = 0.0
+    failures: dict[str, int] = {}
+    notified: set[str] = set()
 
     def ready_inputs():
         records = coin_input.pending(directory)
@@ -1225,6 +1227,7 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
                         turn(token, user, chat, texts, arrivals, knowledge, wake={**wake, 'message': notice}, input_chat=lambda: reply_chat)
             except Exception as error:
                 traceback.print_exc()
+                notify_failure(token, chat, error, failures, notified)
                 if wake is not None:
                     retry[wake['id']] = time.monotonic() + SETTINGS['error_pause_seconds']
                 for ident in consumed:
@@ -1234,6 +1237,7 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
             else:
                 # Persistence failures are not model failures. Let the service
                 # restart and replay retained work without fabricating a reply.
+                failures.clear()
                 coin_input.complete(directory, consumed)
                 for ident in consumed:
                     input_retry.pop(ident, None)
@@ -1242,6 +1246,26 @@ def worker(token: str, inbox: queue.Queue, allowed: set[int] | None = None) -> N
                     retry.pop(wake['id'], None)
         finally:
             report(False)
+
+
+FAILURE_NOTICE_AFTER = 3
+
+
+def notify_failure(token, chat, error, failures, notified) -> None:
+    """A turn that keeps failing must not leave the user waiting in silence.
+
+    Retries continue as before; after the same failure repeats, the user hears once
+    what broke. Inputs stay retained and are answered after repair."""
+    signature = f'{type(error).__name__}: {error}'.replace(token, '[redacted]')[:300]
+    failures[signature] = failures.get(signature, 0) + 1
+    if failures[signature] < FAILURE_NOTICE_AFTER or signature in notified:
+        return
+    notified.add(signature)
+    try:
+        send(token, chat, f'{NAME} cannot complete turns right now: {signature}\n'
+                          'Your messages are kept and will be answered once this is fixed.')
+    except Exception:
+        traceback.print_exc()
 
 
 def start_wake_agent(wake: dict) -> dict:

@@ -26,14 +26,15 @@ def _validate(data):
                 or not _integer(item['id']) or item['id'] < 0 or ident != str(item['id'])
                 or not _integer(item['user']) or item['user'] <= 0 or not _integer(item['chat']) or item['chat'] == 0
                 or not isinstance(item['text'], str) or not (item['text'].strip() or item.get('attachments'))
-                or item['kind'] != ('status' if item['text'].strip().lower() in ('status', '/status') else 'message')
+                # Recorded at acceptance; re-deriving it here would invalidate all intake if the keywords change.
+                or item['kind'] not in ('status', 'message')
                 or data['offset'] is None or item['id'] >= data['offset']):
             raise ValueError('invalid pending Coin input')
         if 'attachments' in item:
             if not isinstance(item['attachments'], list) or not item['attachments']:
                 raise ValueError('invalid pending attachments')
             for entry in item['attachments']:
-                coin_attachments.validate(entry)
+                coin_attachments.validate(entry, current=False)
         if 'media_group_id' in item and (not isinstance(item['media_group_id'], str) or not item['media_group_id']):
             raise ValueError('invalid Telegram album identity')
         if 'at' in item and (isinstance(item['at'], bool) or not isinstance(item['at'], (int, float))
