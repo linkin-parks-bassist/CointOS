@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-20T18:07:31+11:00"
+revised_at: "2026-11-20T18:07:38+11:00"
 ---
 
 Coin is a Python service. `cointos coin professional|amateur` selects an identity; standalone omission asks or uses COINTEL. Automatic slots never ask: the reported worker PID selects its profile service. Slot identity changes detach the old display. The watcher reads state/coin-<identity>/turns.jsonl. Live text requires matching owner identity; untagged/other-profile previews are suppressed. Viewer titles and model labels use the selected profile's name. cli.coin_log/show create a private derived display from the selected journal, backfill the latest60 entries and follow the current live record. The bounded journal owns history; display storage/server disappear when the window closes. Rich coin_view remains the startup-failure fallback. Ordinary Cointel archives and turn journals remain independent of viewer cleanup; global steer-capture can also retain their full requests. Personal disables diagnostics, so it produces no journal to replay. OpenCode incognito settings alone cannot remove those copies.
@@ -14,5 +14,5 @@ Live reasoning remains reasoning_content and live words remain content. Append-o
 User entries enter the native inbox in queue mode; journal tools close a provider step with a replay call, and subsequent journal reasoning/text continue after its recorded result. Idle/next-user boundaries finish the display stream. Backfill can lag while native events are replayed; no latency or resident-memory claim from V1 is transferred to V2. A viewer slot ends when Coin becomes idle, while cointos coin remains open between turns.
 
 tests.test_opencode2_native covers native replay of reasoning, words, a recorded tool/result, following reply, refusal of typed control and cleanup using no real model. Its terminal case separately verifies attachment to the owned private session. The V1 viewer's older native/PTY tests remain scoped to that implementation. These are assisted display/transport checks, not Coin judgment or Telegram-delivery acceptance.
- 
+
 Repeated window opening: [[why/do/coin/viewer/windows/repeatedly/flash.md]].
