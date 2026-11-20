@@ -116,6 +116,10 @@ class CoinIdentityViews(unittest.TestCase):
         self.assertEqual(selected['coin']['live'], {})
         state['coin']['live'] = {'owner': 'synthetic/abc', 'content': 'our text'}
         self.assertEqual(cli.coin_view_state(state, profile)['coin']['live']['content'], 'our text')
+        state['coin']['live']['owner'] = None
+        state['thoughts']['unowned'] = {'agent': 'coin', 'owner': None}
+        self.assertEqual(set(cli.coin_view_state(state, profile)['thoughts']), {'ours'})
+        self.assertEqual(cli.coin_view_state(state, profile)['coin']['live'], {})
         del state['coin']['live']['owner']
         self.assertEqual(cli.coin_view_state(state, profile)['coin']['live'], {})
 
@@ -144,6 +148,7 @@ class AutomaticCoinViews(unittest.TestCase):
                 patch('builtins.input', side_effect=AssertionError('automatic viewer must never ask')):
             self.assertEqual(cli.automatic_coin_profile({'coin': {'process': {'pid': 42}}}), profiles['professional'])
             self.assertIsNone(cli.automatic_coin_profile({'coin': {}}))
+            self.assertEqual(cli.automatic_coin_profile({'coin': {'process': {'pid': 42}, 'live': {'owner': None}}}), profiles['professional'])
 
     def test_slot_passes_its_identity_to_the_journal_viewer(self):
         profile = {'identity': 'synthetic', 'name': 'Synthetic'}

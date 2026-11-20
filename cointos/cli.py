@@ -395,7 +395,7 @@ def coin_profile(name=None):
 def automatic_coin_profile(state):
     """Resolve the worker that owns the automatic slot without asking the user."""
     coin = state.get('coin') or {}
-    owner = (coin.get('live') or {}).get('owner', '').split('/', 1)[0]
+    owner = ((coin.get('live') or {}).get('owner') or '').split('/', 1)[0]
     profiles = [(name, coins.profile(name)) for name in coins.names()]
     pid = (coin.get('process') or {}).get('pid')
     if pid:
@@ -419,9 +419,9 @@ def coin_view_state(state, profile):
         return state
     prefix = profile['identity'] + '/'
     thoughts = {key: item for key, item in state.get('thoughts', {}).items()
-                if item.get('agent') == 'coin' and item.get('owner', '').startswith(prefix)}
+                if item.get('agent') == 'coin' and (item.get('owner') or '').startswith(prefix)}
     live = (state.get('coin') or {}).get('live') or {}
-    if not live.get('owner', '').startswith(prefix):
+    if not (live.get('owner') or '').startswith(prefix):
         live = {}
     return {**state, 'thoughts': thoughts, 'coin': {
         'name': profile['name'], 'busy': bool(thoughts), 'live': live,
