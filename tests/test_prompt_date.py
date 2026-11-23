@@ -214,6 +214,23 @@ class ToolPinning(unittest.TestCase):
             env = opencode.environment(Path('/installed/state/agents') / agent, spec)
             self.assertEqual(env['COINTOS_SCRATCH'], f'/installed/state/agents/{agent}/scratch')
 
+    def test_knowledge_tool_pruning_follows_bare_tool_names(self):
+        support.fresh_ledger(self)
+        names = ['knowledgetrees_read', 'knowledgetrees_lookup', 'knowledgetrees_rewrite',
+                 'knowledgetrees_rm', 'cointos_dispatch', 'bash']
+        tools = [{'type': 'function', 'function': {'name': name}} for name in names]
+        worker = tasks.create('steward', tasks.SYSTEM, 'worker', 'Assignment', [6])['id']
+        state.L['agents']['worker'] = {'task': worker}
+        state.L['tasks'][worker]['role'] = 'worker'
+        kept = {t['function']['name'] for t in gateway.stable_tools(deepcopy(tools), 'worker')}
+        self.assertEqual(kept, {'knowledgetrees_read', 'knowledgetrees_lookup',
+                                'cointos_dispatch', 'bash'})
+        gardener = tasks.create('steward', tasks.SYSTEM, 'garden', 'Garden', [6])['id']
+        state.L['agents']['gardener'] = {'task': gardener}
+        state.L['tasks'][gardener]['role'] = 'gardener'
+        kept = {t['function']['name'] for t in gateway.stable_tools(deepcopy(tools), 'gardener')}
+        self.assertEqual(kept, set(names))
+
     def test_existing_tool_prefix_and_non_bash_contracts_are_unchanged(self):
         support.fresh_ledger(self)
         self.enterContext(patch.object(gateway, 'ROOT', Path('/installed')))

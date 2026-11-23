@@ -156,15 +156,15 @@ class Turn(unittest.TestCase):
         self.assertEqual(self.reports, [(False, None), (True, None), (False, None)])
 
     def test_the_prompt_is_fixed_and_carries_every_kt_tool(self):
-        knowledge = {"names": {"kt_read", "kt_init"}, "tools": [
-            {"type": "function", "function": {"name": "kt_read"}},
-            {"type": "function", "function": {"name": "kt_init"}}]}
+        knowledge = {"names": {"read", "init"}, "tools": [
+            {"type": "function", "function": {"name": "read"}},
+            {"type": "function", "function": {"name": "init"}}]}
         first = self.run_turn([sent_reply("Hi.")], texts=["hello"], knowledge=knowledge)
         second = self.run_turn([sent_reply("Yes.")], texts=["still there?"], knowledge=knowledge)
         self.assertEqual(first[0][0][0], second[0][0][0])
         self.assertEqual(first[0][1]["tools"], second[0][1]["tools"])
         names = {t["function"]["name"] for t in first[0][1]["tools"]}
-        self.assertLessEqual({"kt_read", "kt_init"}, names)
+        self.assertLessEqual({"read", "init"}, names)
 
     def test_explicit_send_ends_the_turn_with_done(self):
         self.run_turn([sent_reply("Morning.")], texts=["hi"])

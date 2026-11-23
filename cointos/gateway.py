@@ -327,12 +327,15 @@ def stable_tools(tools, agent: str, protocol: int = 1):
             tools = [deepcopy(tool) for tool in tools
                      if tool.get('function', {}).get('name') not in ('task', 'todowrite', 'skill')]
             # Knowledge lookup is universal; only maintenance roles need editing tools upfront.
+            # OpenCode flattens a server's tools as `<server>_<tool>`; the Kt MCP tools are
+            # unprefixed at the source (read, lookup, ...), so match the server prefix here.
+            knowledge_prefix = 'knowledgetrees_'
             knowledge = {'lookup', 'read'}
             if task.get('role') in ('integrator', 'manager', 'gardener', 'tree-auditor', 'operator'):
                 knowledge |= {'grep', 'add', 'rewrite', 'renew', 'prove', 'audit', 'status', 'mv', 'combine', 'rm'}
             tools = [tool for tool in tools
-                     if not tool.get('function', {}).get('name', '').startswith('knowledgetrees_kt_')
-                     or tool['function']['name'].removeprefix('knowledgetrees_kt_') in knowledge]
+                     if not tool.get('function', {}).get('name', '').startswith(knowledge_prefix)
+                     or tool['function']['name'].removeprefix(knowledge_prefix) in knowledge]
             # A role's CointOS tools must not split the common declarations.
             # Stable sorting retains each group's original order and schemas.
             tools.sort(key=owned)

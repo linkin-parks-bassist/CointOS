@@ -161,7 +161,7 @@ class AnyRole(unittest.TestCase):
 
 class CoinTools(unittest.TestCase):
     def test_coin_gets_every_knowledge_tool(self):
-        names = ["kt_read", "kt_rm", "kt_mv", "kt_undo", "kt_access_request", "kt_access_confirm", "kt_access_revoke"]
+        names = ["read", "rm", "mv", "undo", "access_request", "access_confirm", "access_revoke"]
         knowledge = {"tools": [{"function": {"name": n}} for n in names], "names": set(names)}
         _, tools = coin.system_prompt(knowledge)
         self.assertLessEqual(set(names), {t["function"]["name"] for t in tools})
