@@ -42,7 +42,7 @@ def servers() -> dict:
             server = dict(server)
             if 'disabled' in server:
                 server['enabled'] = not server.pop('disabled')
-            if server.get('enabled', True):
+            if server.get('enabled', True) or name in BASE:
                 normalized[name] = server
         return normalized
     return mcp
