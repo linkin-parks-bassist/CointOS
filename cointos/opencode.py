@@ -187,8 +187,10 @@ def write_paths(task: dict, directory: Path, store: Path | None = None) -> list[
     common = found.stdout.strip() if found.returncode == 0 else None
     rewrite_state = STATE / 'knowledge-rewrites'
     rewrite_state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    data = store or agent_data(task)
+    data.mkdir(parents=True, exist_ok=True, mode=0o700)
     paths = [checkout, directory.resolve(), rewrite_state.resolve(),
-             store or agent_data(task), Path('/tmp'), Path('/var/tmp'), Path('/dev/null')]
+             data, Path('/tmp'), Path('/var/tmp'), Path('/dev/null')]
     if common:
         paths.append(Path(common))
     if common and task['role'] != 'worker':

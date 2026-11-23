@@ -1,7 +1,7 @@
 ---
 status: green
 revised_at: "2026-11-06T11:29:54+11:00"
-checked_at: '2026-11-15T21:30:49+11:00'
+checked_at: '2026-11-23T13:19:44+11:00'
 expires_every: "7d"
 ---
 
