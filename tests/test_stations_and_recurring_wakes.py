@@ -338,6 +338,20 @@ class Stations(unittest.TestCase):
         servers = opencode.settings(tasks.CONFIG, 'key', self.stationed(), [])['mcp']
         self.assertTrue(servers['knowledgetrees']['enabled'], 'private XDG config needs an explicit base server')
 
+    def test_native_v2_servers_are_read_and_disabled_ones_are_excluded(self):
+        config = self.root / 'native.json'
+        config.write_text(json.dumps({'mcp': {'servers': {
+            'knowledgetrees': {'type': 'local', 'command': ['kt'], 'disabled': False},
+            'mail': {'type': 'local', 'command': ['mail'], 'disabled': False},
+            'cad': {'type': 'local', 'command': ['cad'], 'disabled': True}}}}))
+        with patch.object(stations, 'GLOBAL_CONFIG', config):
+            self.assertEqual(set(stations.servers()), {'knowledgetrees', 'mail'})
+            self.assertNotIn('disabled', stations.servers()['mail'])
+            self.assertTrue(stations.servers()['mail']['enabled'])
+            with self.assertRaisesRegex(ValueError, r"configured: \['mail'\]"):
+                tasks.request_operator('v2', 'Work.', None, None, None, None,
+                                       station={'tools': ['cad']})
+
     def test_requests_are_refused_with_what_would_work(self):
         with self.assertRaisesRegex(ValueError, r"configured: \['cad', 'mail'\]"):
             tasks.request_operator('a', 'Work.', None, None, None, None, station={'tools': ['nope']})

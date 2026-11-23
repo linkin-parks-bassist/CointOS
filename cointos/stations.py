@@ -13,18 +13,39 @@ from pathlib import Path
 from cointos.config import ROOT
 
 EVERYTHING = '*'
-GLOBAL_CONFIG = Path.home() / '.config/opencode/opencode.json'
+NATIVE_CONFIG = Path.home() / '.config/opencode2/opencode/opencode.json'
+LEGACY_CONFIG = Path.home() / '.config/opencode/opencode.json'
+GLOBAL_CONFIG = NATIVE_CONFIG if NATIVE_CONFIG.is_file() else LEGACY_CONFIG
 # Always present, so never a grant.
 BASE = frozenset(('knowledgetrees', 'cointos'))
 COIN = {'directory': str(Path.home()), 'tools': [EVERYTHING]}
 
 
 def servers() -> dict:
-    """The MCP servers the user has configured; a missing or unreadable config has none."""
+    """The MCP servers the user has configured; a missing or unreadable config has none.
+
+    OpenCode 2 stores them under `mcp.servers` and marks exclusions with `disabled`.
+    Its V1 shape uses `mcp.<name>` with `enabled`; both are accepted here.
+    """
     try:
-        return json.loads(GLOBAL_CONFIG.read_text()).get('mcp', {})
+        config = json.loads(GLOBAL_CONFIG.read_text())
     except (OSError, ValueError):
         return {}
+    mcp = config.get('mcp')
+    if not isinstance(mcp, dict):
+        return {}
+    if isinstance(mcp.get('servers'), dict):
+        normalized = {}
+        for name, server in mcp['servers'].items():
+            if not isinstance(server, dict):
+                continue
+            server = dict(server)
+            if 'disabled' in server:
+                server['enabled'] = not server.pop('disabled')
+            if server.get('enabled', True):
+                normalized[name] = server
+        return normalized
+    return mcp
 
 
 def tools(requested) -> list[str]:
