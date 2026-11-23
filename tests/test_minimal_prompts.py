@@ -15,13 +15,16 @@ class MinimalPrompts(unittest.TestCase):
             for stage in stages:
                 with self.subTest(role=role, stage=stage):
                     text = prompts.shared_launch_prefix({'role': role, 'stage': stage})
+                    # Size guard for the cache-reused shared prefix, not a runtime token budget.
                     self.assertLessEqual(len(text.split()), 260)
                     title = role.replace('-', ' ').title()
                     self.assertTrue(text.startswith(f'You are an autonomous CointOS {title}.\n\n# Your role\n\n'))
                     self.assertIn((prompts.ROLES / f'{role}.md').read_text(), text)
                     if role != 'supervisor':
                         self.assertIn('Write briefs in a few sentences', text)
-        self.assertLessEqual(len((prompts.ROLES / 'coin.md').read_text().split()), 260)
+        # Coin uses its own prompt path, not the shared launch prefix. Bound it against
+        # unbounded growth without forcing coordinator detail out to satisfy a task-prefix cap.
+        self.assertLessEqual(len((prompts.ROLES / 'coin.md').read_text().split()), 400)
 
     def test_supervisor_receives_only_its_current_job(self):
         ordinary = tasks.create('supervise', tasks.SYSTEM, 'check', 'Subject: p:work.', [1], supervises='p:work')
