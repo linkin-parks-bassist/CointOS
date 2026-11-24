@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-25T09:29:09+11:00"
+revised_at: "2026-11-25T10:47:44+11:00"
 ---
 
 Halogen monitoring paused. Resume on request: investigate near-tail prefix fallback (why/does/halogen/reread/a/large/context/after/each/generation/burst.md).
@@ -13,7 +13,7 @@ Remaining Cointel work (requirements: what/are/the/cointel/identities.md):
 3. Quietly reload staged gateway/Coin code for owner-tagged previews and period-specific report guidance. Profile journal watchers are installed. Replace shared status with three identity panels/viewers; qualify recurring reports by actual coverage.
 4. Qualify with the factory disabled: each bot replying within the stated window, a non-Telegram source accepted per identity, no cross-identity conversation or archive bleed, and a personal request answered without hosted content.
 
-Next: qualify native Coin-to-Operator execution, responsiveness and checked results with the factory disabled. Confirm implicit supervisors/recovery stay suspended; qualify explicit timer/reminder dispatch without background fanout.
+Next: settle standalone scheduler boundaries before extraction (what/are/the/requirements/for/the/standalone/scheduler.md). Retain native Coin-to-Operator and explicit timer/reminder qualification with the factory, automatic supervisors and recovery disabled.
 
 Factory qualification is paused until explicit re-enablement; preserve artifacts. Core scheduling and memory work remains relevant. how/to/disable/the/cointos/factory.md owns controls.
 
