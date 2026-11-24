@@ -1,6 +1,7 @@
 """Coin owns Telegram cursor and pending requested work in one durable transaction."""
 import copy
 import math
+import json
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -8,6 +9,13 @@ from pathlib import Path
 from cointos import config, privatejson, coin_attachments
 
 FILE = 'intake.json'
+# User-attributed events only; anonymous channel/poll state cannot establish authority.
+EVENTS = ('inline_query', 'chosen_inline_result', 'shipping_query', 'pre_checkout_query',
+          'poll_answer', 'chat_join_request', 'my_chat_member', 'chat_member',
+          'message_reaction', 'business_connection', 'purchased_paid_media')
+UPDATES = ['message', 'edited_message', 'business_message', 'edited_business_message',
+           'callback_query', *EVENTS]
+
 
 
 def _integer(value):
@@ -83,6 +91,40 @@ def accept(directory, update, allowed):
         raise ValueError('invalid Telegram update identity')
     ident = update['update_id']
     message = update.get('message', {})
+    for kind in ('edited_message', 'business_message', 'edited_business_message'):
+        if kind in update:
+            message = update[kind]
+    for kind in EVENTS:
+        if kind not in update:
+            continue
+        event = update[kind]
+        if not isinstance(event, dict):
+            raise ValueError('invalid Telegram event')
+        actor = event.get('from', event.get('user', {}))
+        if not isinstance(actor, dict):
+            raise ValueError('invalid Telegram event user')
+        if actor.get('id') in allowed:
+            message = {'from': actor, 'chat': event.get('chat', {'id': actor['id']}),
+                'text': '<cointos-telegram-event>' + json.dumps({'kind': kind, 'event': event})
+                        + '</cointos-telegram-event>'}
+        else:
+            message = {}
+    if 'callback_query' in update:
+        callback = update['callback_query']
+        if not isinstance(callback, dict) or not isinstance(callback.get('from'), dict):
+            raise ValueError('invalid Telegram callback identity')
+        if callback['from'].get('id') in allowed:
+            if not isinstance(callback.get('id'), str) or not callback['id']:
+                raise ValueError('invalid Telegram callback id')
+            original = callback.get('message') or {}
+            message = {'from': callback['from'], 'chat': original.get('chat', {'id': callback['from'].get('id')}),
+                'text': '<cointos-telegram-callback>' + json.dumps({key: callback[key] for key in
+                    ('id', 'data', 'game_short_name', 'inline_message_id') if key in callback})
+                    + '</cointos-telegram-callback>',
+                **({'reply_to_message': original} if original.get('message_id') and 'date' in original else {})}
+        else:
+            message = {}
+
     if not isinstance(message, dict) or not isinstance(message.get('from', {}), dict) or not isinstance(message.get('chat', {}), dict):
         raise ValueError('invalid Telegram message identity')
     user, chat = message.get('from', {}).get('id'), message.get('chat', {}).get('id')

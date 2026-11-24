@@ -26,7 +26,7 @@ import urllib.request
 from pathlib import Path
 
 from cointos import cli, config as configuration, kt_mcp, wakeups, coin_input, coin_attachments, coin_files, coin_requests, coin_routing, coin_notifications, coin_followups
-from cointos import coin_reports, coins, schema, stations, frontier
+from cointos import coin_reports, coins, schema, stations, frontier, coin_telegram
 from cointos.client import Unreachable, call, ledger
 from cointos.config import KEYS, ROOT, STATE
 
@@ -160,15 +160,15 @@ def ensure_state() -> None:
 
 
 def remember(user: int, role: str, content: str, *, at: float | None = None, input_id: int | None = None,
-             delivery_id: int | None = None, delivery_chat: int | None = None,
-             delivery_key: str | None = None) -> float:
+             delivery_id: int | None = None, delivery_chat: int | str | None = None,
+             delivery_key: str | None = None, telegram_receipt=None) -> float:
     if input_id is not None and (type(input_id) is not int or input_id < 0 or role != 'user'):
         raise ValueError('input identity requires a nonnegative user update ID')
     if delivery_id is not None and (type(delivery_id) is not int or delivery_id <= 0 or role != 'assistant'):
         raise ValueError('delivery identity requires a positive Telegram message ID')
     if delivery_id is not None:
         delivery_chat = user if delivery_chat is None else delivery_chat
-        if type(delivery_chat) is not int or delivery_chat == 0:
+        if not ((type(delivery_chat) is int and delivery_chat != 0) or (isinstance(delivery_chat, str) and delivery_chat.startswith('@'))):
             raise ValueError('delivery identity requires a Telegram chat ID')
     at = time.time() if at is None else at
     path = history_path(user)
@@ -198,6 +198,8 @@ def remember(user: int, role: str, content: str, *, at: float | None = None, inp
             entry = {"at": at, "role": role, "content": content}
             if delivery_key is not None:
                 entry['delivery_key'] = delivery_key
+            if telegram_receipt is not None:
+                entry['telegram_receipt'] = telegram_receipt
             if input_id is not None:
                 entry['input_id'] = input_id
             if delivery_id is not None:
@@ -256,6 +258,35 @@ def deliver_text(token, user, chat, text, *, input_ids=()):
                 metadata['at'] = receipt['date']
         remember(user, 'assistant', part, **metadata, **({'delivery_key': key} if key else {}))
     return receipt
+
+
+def telegram_tool(name, arguments, token, user, chat, *, input_ids=()):
+    """Archive accepted Telegram message receipts; replay reuses known delivery."""
+    method, parameters = coin_telegram.prepare(name, arguments, user, chat)
+    key = hashlib.sha256(json.dumps(['telegram', method, parameters, sorted(input_ids)], sort_keys=True).encode()).hexdigest() if input_ids and coin_telegram.is_delivery(method) else None
+    if key:
+        path = history_path(user)
+        for line in (path.read_bytes().splitlines(keepends=True) if path.exists() else []):
+            if line.endswith(b'\n'):
+                entry = json.loads(line)
+                if entry.get('delivery_key') == key:
+                    return {'ok': True, 'result': entry.get('telegram_receipt'), 'duplicate': True,
+                            'replied': entry.get('delivery_chat') == chat}
+    result = coin_telegram.request(token, method, parameters, SETTINGS['telegram_seconds'])
+    if result.get('ok') and coin_telegram.is_delivery(method):
+        payload = result['result']
+        receipts = payload if isinstance(payload, list) else [payload]
+        messages = [item for item in receipts if isinstance(item, dict) and type(item.get('message_id')) is int]
+        for index, message in enumerate(messages):
+            target = message.get('chat', {}).get('id', parameters.get('chat_id', chat))
+            text = message.get('text') or message.get('caption') or parameters.get('text') or parameters.get('caption') or ''
+            content = text + ('\n' if text else '') + '<cointos-outgoing-telegram>' + json.dumps(
+                {'method': method, 'message_id': message['message_id']}) + '</cointos-outgoing-telegram>'
+            remember(user, 'assistant', content, delivery_id=message['message_id'], delivery_chat=target,
+                     **({'delivery_key': key, 'telegram_receipt': payload} if key and index == len(messages) - 1 else {}))
+        result['replied'] = any(message.get('chat', {}).get('id', parameters.get('chat_id')) == chat
+                                for message in messages)
+    return result
 
 
 def recent(user: int, incoming: int = 0, *, exclude_inputs=()) -> list[dict]:
@@ -395,7 +426,7 @@ def tool(name: str, description: str, properties: dict | None = None, required: 
 INPUT_IDS, AGENT_PROPERTIES = schema.INPUT_IDS, schema.AGENT_PROPERTIES
 
 
-TOOLS = [
+TOOLS = [coin_telegram.DISCOVERY, coin_telegram.DOWNLOAD, *[coin_telegram.declaration(name) for name in coin_telegram.COMMON],
     tool('run_command', 'Run a Bash command as the local user for programs, services and filesystem changes. Prefer fs_search for searches. Shell filesystem searches have a five-second ceiling even if a longer timeout is requested. Other commands use the default command timeout. Timeout kills the command process group.',
          {'command': {'type': 'string'}, 'cwd': {'type': 'string'}, 'timeout': {'type': 'number', 'exclusiveMinimum': 0}}, ['command']),
     tool('attachment_route', 'Keep a standing rule to copy or move incoming captionless photos to a folder, creating the folder if needed. Ordinary batches run locally without model turns, quotas or repeated verification. The rule survives restart until changed or stopped. Current captioned attachments are included when establishing the rule.',
@@ -673,6 +704,18 @@ def wake_tool(name: str, arguments: dict, user: int, chat: int) -> dict:
 
 def invoke(name: str, arguments: dict, token: str, user: int, chat: int, knowledge: dict | None, *, inputs=()) -> dict:
     """Conversation-scoped tools derive identity from transport, never model arguments."""
+    if name == 'telegram_download_file':
+        target = Path(arguments['destination']).expanduser()
+        if not target.is_absolute():
+            raise ValueError('Telegram download needs an absolute destination')
+        response = coin_telegram.request(token, 'getFile', {'file_id': arguments['file_id']}, SETTINGS['telegram_seconds'])
+        if not response.get('ok'):
+            return response
+        metadata = response['result']
+        coin_files.publish(target, lambda stream: download(token, metadata['file_path'], stream))
+        return {'ok': True, 'file': coin_files.info(target)}
+    if name.startswith(coin_telegram.PREFIX) and name != 'telegram_tools':
+        return telegram_tool(name, arguments, token, user, chat, input_ids=[entry['id'] for entry in inputs if 'id' in entry])
     assignment = name in ('dispatch', 'queue_item', 'update_work') or (name == 'wake' and arguments.get('agent'))
     if assignment:
         wake_arguments = arguments if name == 'wake' else None
@@ -868,6 +911,7 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
     dispatched_context = None
     current_inputs = []
     awaiting_reply = False
+    unanswered_inputs = []
     sent_replies = set()
 
     def refresh_requests():
@@ -946,11 +990,13 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
         if new:
             direct = True
             completion_only = False
-            awaiting_reply = True
             if input_chat is not None:
                 chat = input_chat()
         for entry in new:
             current_inputs.append(entry if isinstance(entry, dict) else {'text': entry})
+            if coin_telegram.expects_reply(current_inputs[-1]):
+                unanswered_inputs.append(current_inputs[-1])
+                awaiting_reply = True
             text = input_text(token, entry)
             update_id = entry.get('id') if isinstance(entry, dict) else None
             at = remember(user, "user", text, at=entry.get("at") if isinstance(entry, dict) else None,
@@ -969,6 +1015,7 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                 deliver_text(token, user, chat, text,
                              input_ids=[entry['id'] for entry in current_inputs if 'id' in entry])
                 sent_replies.add(signature)
+            unanswered_inputs.clear()
             awaiting_reply = False
             return True
         return False
@@ -1034,6 +1081,15 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
             else:
                 if completion_only and name == 'wake':
                     result = {'ok': False, 'error': 'The service observes factory handoffs. Do not schedule product continuation checks; finish silently or report an exact verified result.'}
+                elif name == 'telegram_tools':
+                    try:
+                        result, selected_tools = coin_telegram.discover(arguments)
+                        existing = {entry['function']['name'] for entry in tools}
+                        tools.extend(entry for entry in selected_tools if entry['function']['name'] not in existing)
+                    except (TypeError, ValueError, KeyError) as error:
+                        result = {'ok': False, 'error': str(error)}
+                elif completion_only and name.startswith(coin_telegram.PREFIX):
+                    result = {'ok': False, 'error': 'Use report_result with verification evidence, or finish silently.'}
                 elif name == "send":
                     if completion_only:
                         result = {'ok': False, 'error': 'Use report_result with current verification evidence, or finish silently.'}
@@ -1060,21 +1116,30 @@ def turn(token: str, user: int, chat: int, texts: list[str | dict], arrivals, kn
                     result = {"ok": False, "error": "out of steps: only `send` and `done` now"}
                 else:
                     signature = name + json.dumps(arguments, sort_keys=True)
-                    if name in ('dispatch', 'queue_item', 'update_work', 'wake'):
+                    if name in ('dispatch', 'queue_item', 'update_work', 'wake') or name.startswith(coin_telegram.PREFIX):
                         signature += json.dumps(current_inputs, sort_keys=True)
                     report(True, name)
                     # Observations must reflect intervening writes (including other
                     # agents). Reusing a read can contradict fresh verification and
                     # trap the model in a retry loop. Keep effect deduplication.
-                    if signature in seen and name not in ('fs_read', 'fs_stat', 'fs_list', 'fs_search'):
+                    fresh = name in ('fs_read', 'fs_stat', 'fs_list', 'fs_search')
+                    if name.startswith(coin_telegram.PREFIX):
+                        fresh |= name.removeprefix(coin_telegram.PREFIX).startswith('get') or not seen.get(signature, {}).get('ok')
+                    if signature in seen and not fresh:
                         result = {**seen[signature], "note": "You already made this call; use this result."}
                     else:
                         try:
-                            result = invoke(name, arguments, token, user, chat, knowledge,
-                                            **({'inputs': current_inputs} if name in ('attachment_route', 'dispatch', 'queue_item', 'update_work', 'wake') else {}))
+                            result = invoke(name, arguments, token, user, chat, knowledge, inputs=current_inputs)
                         except Exception as error:  # a refusal or failure is a result the turn can use
                             result = {"ok": False, "error": f"{type(error).__name__}: {error}"}
                         seen[signature] = result
+                    if name.startswith(coin_telegram.PREFIX) and result.get('ok'):
+                        if result.get('replied'):
+                            unanswered_inputs.clear()
+                        else:
+                            unanswered_inputs[:] = [entry for entry in unanswered_inputs
+                                                    if not coin_telegram.answers(name, arguments, entry)]
+                        awaiting_reply = bool(unanswered_inputs)
                     if name in ('fs_read', 'run_command') and result.get('ok') is True:
                         result = {'evidence_call_id': request['id'], **result}
                         verification[request['id']] = {'tool': name, 'arguments': arguments, 'result': result}
@@ -1370,7 +1435,7 @@ def main() -> None:
             allowed.clear()
             allowed.update(current_allowed)
             updates = telegram(token, 'getUpdates', {'timeout': SETTINGS['long_poll_seconds'],
-                               'offset': coin_input.offset(directory), 'allowed_updates': ['message']})
+                               'offset': coin_input.offset(directory), 'allowed_updates': coin_input.UPDATES})
             for update in updates:
                 item = coin_input.accept(directory, update, allowed)
                 if item is not None:

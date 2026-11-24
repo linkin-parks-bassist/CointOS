@@ -1,6 +1,6 @@
 ---
 status: green
-revised_at: "2026-11-17T07:39:06+11:00"
+revised_at: "2026-11-25T09:29:09+11:00"
 ---
 
 Halogen monitoring paused. Resume on request: investigate near-tail prefix fallback (why/does/halogen/reread/a/large/context/after/each/generation/burst.md).
@@ -44,7 +44,7 @@ Observe deployed conditional upstream delivery, retaining acceptance on failure 
 16. Observe retained admission-refusal evidence through native conflict. Verify native bindings, maintenance boundaries, incomplete-response handling and truthful reporting. Resolve remaining route-correction publication from current authority, not stale failed task IDs. Observe the live recovery frontier without implementing managed products or refilling unchanged exhausted assignments; preserve bindings and raw failure counts.
 17. Qualify cache/backend behavior: filesystem locking, ranked-prefix and larger spilled-prefix fallback, snapshot capture/serialization/checksum/import, cleanup during spill/I/O and retired-namespace migration, transfer recovery/reclamation and fresh-peer latency. Requalify native size accounting after backend upgrades. Compare matched long Q4/Q8 and equivalent-sampling runs; short fixtures do not qualify sustained throughput.
 18. Measure sustained unattended reviewed landings, planning handoffs and useful generation. Check native single-turn summary reduction against retained work and fidelity. Compare batching with foreground blocking, noncanonical restart splicing and cache/pressure churn; exclude fixture pollution.
-19. Exercise remaining acceptance: loaded-model startup/recovery, interrupted compaction, Coin judgment/timing, Coin trigger titles, active-only card and viewer-slot handoff after a quiet reload, standing-route copy/move fidelity under actual uploads, note filing, tool-output growth and shared-lane behaviour. Reboot/halt need separate authority.
+19. Exercise acceptance: loaded-model startup/recovery, interrupted compaction, Coin judgment/timing, user-triggered Telegram callbacks/deadlines, trigger titles, active-only card/viewer-slot handoff after a quiet reload, standing-route copy/move fidelity under actual uploads, note filing, tool-output growth and shared-lane behaviour. Reboot/halt need separate authority.
 20. Exercise the dashboard's controls against the live daemon: forms, project controls, drawer reasoning and queue segments, armed cancel/clear and live GPU priority; browser interaction remains unverified.
 
 Open decisions: observe128k without auto-compaction; outcome-level First Responder recovery after context exhaustion/death still needs native acceptance. Select remaining capability fixes from what/are/the/cointos/agent/capability/gaps.md. Deliberate guards remain knowledge-leaf friction, reasoning caps, test-contract integrity and explicit user holds. Whether an Investigator role is needed before submission or outside product-test recovery. Whether dashboards should stop fetching the whole ledger every second (why/is/the/cointos/api/slow/while/dashboards/are/open.md).

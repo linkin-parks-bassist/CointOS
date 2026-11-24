@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Refresh Telegram method signatures from the official Bot API (requires bs4)."""
+import json
+import re
+import urllib.request
+from pathlib import Path
+from bs4 import BeautifulSoup
+
+URL = 'https://core.telegram.org/bots/api'
+# These operations would steal polling ownership or terminate the running bot.
+SERVICE_OWNED = {'getUpdates', 'setWebhook', 'deleteWebhook', 'logOut', 'close'}
+
+
+def generate(html):
+    soup = BeautifulSoup(html, 'html.parser')
+    methods, types = {}, {}
+    for heading in soup.find_all('h4'):
+        name = heading.get_text(strip=True)
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9]+', name):
+            continue
+        table = None
+        for node in heading.next_siblings:
+            if getattr(node, 'name', None) in ('h3', 'h4'):
+                break
+            if getattr(node, 'name', None) == 'table':
+                table = node
+                break
+        fields = {}
+        if table:
+            for row in table.select('tbody tr'):
+                cells = [cell.get_text(' ', strip=True) for cell in row.find_all('td', recursive=False)]
+                if len(cells) == 4:
+                    fields[cells[0]] = {'type': cells[1], 'required': cells[2] == 'Yes'}
+                elif len(cells) == 3:
+                    fields[cells[0]] = {'type': cells[1], 'required': not cells[2].startswith('Optional')}
+        if name[0].islower():
+            if name not in SERVICE_OWNED:
+                methods[name] = fields
+        elif fields:
+            types[name] = fields
+    if not {'sendPhoto', 'sendMessage', 'sendMediaGroup', 'getMe', 'answerCallbackQuery'} <= methods.keys():
+        raise ValueError('Telegram documentation structure changed')
+    return {'source': URL, 'excluded': sorted(SERVICE_OWNED), 'methods': methods, 'types': types}
+
+
+if __name__ == '__main__':
+    catalog = generate(urllib.request.urlopen(URL).read())
+    target = Path(__file__).resolve().parents[1] / 'cointos/telegram_methods.json'
+    target.write_text(json.dumps(catalog, indent=2) + '\n')
+    print(f"Generated {len(catalog['methods'])} methods and {len(catalog['types'])} types")

@@ -1,0 +1,16 @@
+---
+status: green
+revised_at: "2026-11-25T09:27:00+11:00"
+---
+
+All three Coin identities share the Telegram toolset in cointos/coin_telegram.py. Each Bot API method has a corresponding telegram_METHOD tool. Common media, poll, location, reaction and message-editing tools are advertised immediately; telegram_tools lists or searches the catalog and exposes selected method schemas for the rest of the turn. Discovery returns exact callable telegram_ names; call them directly, without MCP. type_name retrieves fields of nested Bot API types.
+
+cointos/telegram_methods.json contains 189 method signatures and 387 nested types generated from https://core.telegram.org/bots/api by scripts/update-telegram-tools (BeautifulSoup is a developer-only refresh dependency). Polling, webhook mutation, logOut and close remain service-owned because they would interrupt the running intake. This exclusion is explicit in discovery. Telegram permissions, account capabilities and user authority govern each operation; exposing spending or administration tools grants no authority to use them.
+
+Use telegram_sendPhoto(photo={"path":"/absolute/image.png"}, caption="…") or telegram_sendDocument(document={"path":"/absolute/report.pdf"}). Files can instead be Telegram file IDs or supported URLs. Explicit path objects work recursively in albums, thumbnails, stickers and nested media. JSON calls and streamed multipart uploads share credential-safe error handling. Files are spooled rather than accumulated in RAM. telegram_download_file(file_id, destination) downloads through the bot and atomically preserves existing destinations.
+
+chat_id defaults to the active chat (except inline-message edits) and user_id to the current user; explicit destinations remain available for authorized tasks. Successful message delivery to the active chat satisfies the reply obligation; edits, reactions, drafts and chat actions do not. Accepted message IDs and captions enter the identity's conversation history. Recorded input-keyed deliveries suppress identical replay; crashes before recording, unkeyed wakes, ambiguous network acceptance and partially archived albums can still repeat. Transport does not automatically retry effects. Failed same-turn calls remain retryable, while get operations execute afresh.
+
+Intake accepts authorized button callbacks, edited/business messages and user-attributed inline, payment, poll-answer, membership, reaction and business events. Callback query IDs/data and source message references reach the model through durable input. Successful callback/inline/payment answers satisfy only their matching query's reply obligation. Poll votes and other notification events can finish without an extra private-chat reply. Anonymous channel/poll-state events cannot establish user authority and are not admitted. Fast-expiring inline/payment/callback deadlines remain model-latency dependent. Internal completion wakes cannot bypass report_result through Telegram tools.
+
+tests/test_coin_telegram.py covers catalog discovery, multipart wire bytes, nested albums, download collisions, redaction/rate-limit responses, replay, event authority and turn integration. These fixtures establish mechanisms; installed/native qualification must be recorded separately.
